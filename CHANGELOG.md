@@ -4,7 +4,7 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [0.2.0] — 2026-08-07
+## [0.3.0] — 2026-08-23
 
 ### Changed
 - With no agent session visible, a pane inside tmux now keys its pad on the
@@ -12,6 +12,8 @@ All notable changes to `scratch` are documented here. The format follows
   shell-only tmux sessions open in one checkout used to collapse onto the
   directory pad and overwrite each other; they now get one pad each. The
   directory key remains for shells outside tmux.
+
+## [0.2.0] — 2026-08-07
 
 ### Added
 - The editor now **follows the agent session**. It re-resolves its pad once a
