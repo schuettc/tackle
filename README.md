@@ -12,8 +12,8 @@ session** when there is one:
 ```
 <store>/pads/<key>.md
 
-key    = the agent session id (Claude Code / Codex / Cursor), or
-         a flattened form of the working directory when no agent is present
+key    = the agent session id (Claude Code / Codex / Cursor), else
+         the tmux session name, else a flattened working directory
 store  = macOS    ~/Library/Application Support/scratch
          Linux    $XDG_CONFIG_HOME/scratch, else ~/.config/scratch
          Windows  %AppData%\scratch
@@ -28,7 +28,9 @@ working tree.
 `scratch` finds the session id from `$CLAUDE_CODE_SESSION_ID`, or — for a TUI
 running in a sibling tmux pane, which does not inherit the agent's environment
 — from the `@harness_session` tmux option, which a harness `SessionStart` hook
-is expected to stamp.
+is expected to stamp. With no agent at all, a pane inside tmux keys on its
+tmux session name (`#S`), so two shell-only sessions in one checkout still keep
+separate pads; only outside tmux does the directory decide.
 
 Two overrides, both absolute: `$SCRATCH_FILE` pins the exact file and skips all
 derivation; `$SCRATCH_DIR` relocates the store.

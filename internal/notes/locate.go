@@ -16,8 +16,10 @@ import (
 //
 // The key is the agent session when there is one, so a pad follows the
 // conversation: a resumed session keeps its UUID and so reopens its own pad,
-// even from a different pane, tab, or worktree. A shell with no agent falls
-// back to a key derived from its directory. Either way the file lands in the
+// even from a different pane, tab, or worktree. With no agent but inside
+// tmux, the key is the tmux session name — two shell-only sessions open in
+// one checkout are still two workspaces and get two pads. Only outside tmux
+// does the key come from the directory. Either way the file lands in the
 // store, never in the tree.
 const (
 	// EnvFile pins the exact pad file and skips all derivation. It is what
@@ -44,16 +46,18 @@ const (
 // injected so the derivation can be tested without a real tmux, a real
 // HOME, or a real agent session.
 type ambient struct {
-	getenv    func(string) string
-	tmuxOpt   func(string) string
-	configDir func() (string, error)
+	getenv      func(string) string
+	tmuxOpt     func(string) string
+	tmuxSession func() string
+	configDir   func() (string, error)
 }
 
 func realAmbient() ambient {
 	return ambient{
-		getenv:    os.Getenv,
-		tmuxOpt:   tmuxOption,
-		configDir: os.UserConfigDir,
+		getenv:      os.Getenv,
+		tmuxOpt:     tmuxOption,
+		tmuxSession: tmuxSessionName,
+		configDir:   os.UserConfigDir,
 	}
 }
 
@@ -93,10 +97,15 @@ func storeRoot(a ambient) (string, error) {
 }
 
 // padKey identifies the pad: the agent session if this process can see one,
-// otherwise the working directory.
+// else the tmux session it runs in, else the working directory.
 func padKey(cwd string, a ambient) string {
 	if id := sessionID(a); id != "" {
 		return safeKey(id)
+	}
+	if a.tmuxSession != nil {
+		if name := strings.TrimSpace(a.tmuxSession()); name != "" {
+			return safeKey(name)
+		}
 	}
 	return safeKey(dirKey(cwd))
 }
@@ -145,6 +154,20 @@ func safeKey(s string) string {
 		key = fmt.Sprintf("%s-%08x", key[:maxKey], h.Sum32())
 	}
 	return key
+}
+
+// tmuxSessionName is the name of the tmux session this process runs in, or
+// "" outside tmux. tmux resolves the session from $TMUX, so this is the
+// session that owns the calling pane, not whichever client is focused.
+func tmuxSessionName() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	out, err := exec.Command("tmux", "display-message", "-p", "#S").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // tmuxOption reads a tmux option for the current session, or "" when this
