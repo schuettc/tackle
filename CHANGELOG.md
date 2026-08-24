@@ -6,6 +6,13 @@ All notable changes to `scratch` are documented here. The format follows
 
 ## [0.2.0] — 2026-08-07
 
+### Changed
+- With no agent session visible, a pane inside tmux now keys its pad on the
+  **tmux session name** (`#S`) rather than the working directory. Two
+  shell-only tmux sessions open in one checkout used to collapse onto the
+  directory pad and overwrite each other; they now get one pad each. The
+  directory key remains for shells outside tmux.
+
 ### Added
 - The editor now **follows the agent session**. It re-resolves its pad once a
   second, so a TUI that started before the agent did — the usual case, since the

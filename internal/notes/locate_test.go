@@ -11,8 +11,9 @@ import (
 // environment a scratch invocation would see without touching the real one.
 func fakeAmbient(env map[string]string, tmux map[string]string, cfg string, cfgErr error) ambient {
 	return ambient{
-		getenv:  func(k string) string { return env[k] },
-		tmuxOpt: func(k string) string { return tmux[k] },
+		getenv:      func(k string) string { return env[k] },
+		tmuxOpt:     func(k string) string { return tmux[k] },
+		tmuxSession: func() string { return tmux[tmuxSessionKey] },
 		configDir: func() (string, error) {
 			if cfgErr != nil {
 				return "", cfgErr
@@ -21,6 +22,9 @@ func fakeAmbient(env map[string]string, tmux map[string]string, cfg string, cfgE
 		},
 	}
 }
+
+// tmuxSessionKey is the fake-tmux map slot that stands in for `#S`.
+const tmuxSessionKey = "#S"
 
 func padsDir(cfg string) string { return filepath.Join(cfg, "scratch", "pads") }
 
@@ -88,6 +92,32 @@ func TestResolveEnvBeatsTmux(t *testing.T) {
 		map[string]string{TmuxOption: "from-tmux"}, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join(padsDir("/cfg"), "from-env.md"); got != want {
+		t.Fatalf("resolve() = %q, want %q", got, want)
+	}
+}
+
+// No agent, but inside a named tmux session: the pad belongs to that tmux
+// session, so two shell-only sessions in one checkout do not share a pad.
+func TestResolveNoAgentUsesTmuxSessionName(t *testing.T) {
+	a := fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil)
+	got, _ := resolve("/work", a)
+	if want := filepath.Join(padsDir("/cfg"), "proj-html.md"); got != want {
+		t.Fatalf("resolve() = %q, want %q", got, want)
+	}
+}
+
+func TestResolveTwoTmuxSessionsOneDirDiffer(t *testing.T) {
+	one, _ := resolve("/work", fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil))
+	two, _ := resolve("/work", fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/admin-page"}, "/cfg", nil))
+	if one == two {
+		t.Fatalf("both sessions resolved to %q", one)
+	}
+}
+
+func TestResolveAgentBeatsTmuxSessionName(t *testing.T) {
+	a := fakeAmbient(nil, map[string]string{TmuxOption: "agent-id", tmuxSessionKey: "proj/html"}, "/cfg", nil)
+	got, _ := resolve("/work", a)
+	if want := filepath.Join(padsDir("/cfg"), "agent-id.md"); got != want {
 		t.Fatalf("resolve() = %q, want %q", got, want)
 	}
 }
