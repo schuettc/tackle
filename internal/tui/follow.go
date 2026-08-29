@@ -5,7 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/schuettc/scratch/internal/notes"
+	"github.com/schuettc/tackle/internal/notes"
 )
 
 // How often the editor re-asks which pad it should be showing. The pad is
