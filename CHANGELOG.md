@@ -4,6 +4,18 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-08-28
+
+### Changed
+- The pad key now prefers **`$AGENT_SESSION_ID`**, the harness-neutral session
+  id, over the Claude-specific `$CLAUDE_CODE_SESSION_ID`. A harness spawned
+  inside another agent's session — pi's claude-bridge runs real Claude Code
+  subprocesses for model calls, subagents and reviews — carries its own Claude
+  id plus the outer agent's `AGENT_SESSION_ID`, and the pad belongs to the
+  outer conversation. This also lets anything shelling out to `scratch` inside
+  a pi session resolve its pad from the environment alone, with no tmux
+  hand-off involved.
+
 ## [0.3.0] — 2026-08-23
 
 ### Changed
