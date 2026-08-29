@@ -1,61 +1,87 @@
 name: release
 
-# Every push to main IS a release — there is no knob to forget. The workflow
-# runs the tests, computes the next version from the latest v* tag (patch by
-# default; put "#minor" or "#major" in the head commit's SUBJECT line to bump
-# those — the body is deliberately ignored, since prose that merely mentions a
-# token must not trigger it), and publishes a GitHub release, which creates
-# the tag. `go install github.com/schuettc/scratch@latest` resolves the
-# highest semver tag, so consumers get the new code as soon as the release
-# lands.
+# Releases fire on a PREFIXED tag: <tool>/v<semver> (e.g. scratch/v0.15.1).
+# Pushing one tag builds and releases exactly one tool — the others are never
+# touched. The tag prefix names the tool; the semver is stripped of its leading
+# v for the asset filenames and the (future) /dl path + latest pointer.
 #
-# A push whose HEAD is already tagged (a re-run, or a tag pushed by hand)
-# releases nothing.
+# Assets follow the family distribution contract:
+#   <tool>_<os>_<arch>.tar.gz  +  <tool>_<os>_<arch>.tar.gz.sha256 (shasum format)
+#   <os> in {darwin,linux}, <arch> in {arm64,amd64}  (Go GOOS/GOARCH)
+# The GitHub release is also the invisible durable backing store for the binaries.
+#
+# NOT YET HERE (deferred): uploading these same assets to the tools-ops Downloads
+# S3 bucket under /dl/<tool>/<version>/ and updating /dl/<tool>/latest. That step
+# is added once tools-ops reports the bucket + environment:release role and muster
+# proves the recipe (muster thread #328). When added, the upload job declares
+# `environment: release` to assume the PutObject role.
+
 on:
   push:
-    branches: [main]
+    tags:
+      - "*/v*"
 
 permissions:
   contents: write
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history: version math needs the tags
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test
-        run: go test ./...
-      - name: Compute next version
-        id: ver
+
+      - name: Parse tool + version from the tag
+        id: tag
         run: |
           set -euo pipefail
-          if [ -n "$(git tag --points-at HEAD 'v*')" ]; then
-            echo "HEAD is already tagged ($(git tag --points-at HEAD 'v*' | tr '\n' ' ')) — nothing to release."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          ref="${GITHUB_REF#refs/tags/}"        # e.g. scratch/v0.15.1
+          tool="${ref%%/*}"                      # scratch
+          vertag="${ref#*/}"                     # v0.15.1
+          version="${vertag#v}"                  # 0.15.1
+          if [ ! -d "cmd/$tool" ]; then
+            echo "tag names tool '$tool' but cmd/$tool does not exist" >&2
+            exit 1
           fi
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          latest="$(git tag -l 'v*' --sort=-v:refname | head -1)"
-          latest="${latest:-v0.0.0}"
-          IFS=. read -r major minor patch <<< "${latest#v}"
-          msg="$(git log -1 --pretty=%s)"
-          case "$msg" in
-            *"#major"*) tag="v$((major + 1)).0.0" ;;
-            *"#minor"*) tag="v${major}.$((minor + 1)).0" ;;
-            *)          tag="v${major}.${minor}.$((patch + 1))" ;;
-          esac
-          echo "Releasing $tag (previous: $latest)"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Create release
-        if: steps.ver.outputs.skip == 'false'
+          echo "tool=$tool"       >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tool $version (tag $ref)"
+
+      - name: Cross-compile + package the four targets
+        id: build
+        env:
+          TOOL: ${{ steps.tag.outputs.tool }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for os in darwin linux; do
+            for arch in arm64 amd64; do
+              out="dist/${TOOL}_${os}_${arch}"
+              GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
+                go build -trimpath -o "$out/$TOOL" "./cmd/$TOOL"
+              tarball="dist/${TOOL}_${os}_${arch}.tar.gz"
+              tar -C "$out" -czf "$tarball" "$TOOL"
+              ( cd dist && shasum -a 256 "${TOOL}_${os}_${arch}.tar.gz" \
+                  > "${TOOL}_${os}_${arch}.tar.gz.sha256" )
+              rm -rf "$out"
+            done
+          done
+          ls -1 dist
+
+      - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          TOOL: ${{ steps.tag.outputs.tool }}
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
-          gh release create "${{ steps.ver.outputs.tag }}" \
-            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "scratch ${{ steps.ver.outputs.tag }}" --generate-notes
+          set -euo pipefail
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TOOL $VERSION" \
+            --generate-notes \
+            dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256
