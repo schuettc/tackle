@@ -29,6 +29,12 @@ const (
 	EnvFile = "SCRATCH_FILE"
 	// EnvDir overrides the store root.
 	EnvDir = "SCRATCH_DIR"
+	// EnvAgentSession is the harness-neutral session id. pi exports it into
+	// every subprocess it spawns — including the Claude Code children its
+	// model bridge runs, which is why it outranks the Claude-specific var:
+	// a bridge child carries both, and the pad belongs to the outer
+	// conversation, not the child.
+	EnvAgentSession = "AGENT_SESSION_ID"
 	// EnvClaudeSession is Claude Code's session UUID, present in the
 	// environment of the session process and anything it spawns.
 	EnvClaudeSession = "CLAUDE_CODE_SESSION_ID"
@@ -114,6 +120,9 @@ func padKey(cwd string, a ambient) string {
 // environment (this process is the agent or a child of it), then the tmux
 // session option (this process is a sibling pane and must be told).
 func sessionID(a ambient) string {
+	if id := strings.TrimSpace(a.getenv(EnvAgentSession)); id != "" {
+		return id
+	}
 	if id := strings.TrimSpace(a.getenv(EnvClaudeSession)); id != "" {
 		return id
 	}

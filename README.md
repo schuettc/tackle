@@ -25,7 +25,8 @@ get your notes back, while two sessions open in one checkout keep separate
 pads instead of overwriting each other. Nothing is ever written into your
 working tree.
 
-`scratch` finds the session id from `$CLAUDE_CODE_SESSION_ID`, or — for a TUI
+`scratch` finds the session id from `$AGENT_SESSION_ID` (harness-neutral; pi
+exports it into every subprocess), then `$CLAUDE_CODE_SESSION_ID`, or — for a TUI
 running in a sibling tmux pane, which does not inherit the agent's environment
 — from the `@harness_session` tmux option, which a harness `SessionStart` hook
 is expected to stamp. With no agent at all, a pane inside tmux keys on its

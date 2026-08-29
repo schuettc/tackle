@@ -53,6 +53,35 @@ func TestResolveKeysOnAgentSession(t *testing.T) {
 	}
 }
 
+// AGENT_SESSION_ID is the harness-neutral identifier (pi exports it into
+// every subprocess); it keys the pad exactly like the Claude-specific var.
+func TestResolveKeysOnGenericAgentSession(t *testing.T) {
+	a := fakeAmbient(map[string]string{EnvAgentSession: "01a0-pi-sess"}, nil, "/cfg", nil)
+	got, err := resolve("/work/repo", a)
+	if err != nil {
+		t.Fatalf("resolve() error = %v", err)
+	}
+	want := filepath.Join(padsDir("/cfg"), "01a0-pi-sess.md")
+	if got != want {
+		t.Fatalf("resolve() = %q, want %q", got, want)
+	}
+}
+
+// When both are present the generic var wins: a Claude process spawned
+// INSIDE another agent's session (pi's claude-bridge children) carries its
+// own CLAUDE_CODE_SESSION_ID plus the outer agent's AGENT_SESSION_ID, and
+// the pad belongs to the outer conversation.
+func TestResolveGenericAgentSessionBeatsClaude(t *testing.T) {
+	a := fakeAmbient(map[string]string{
+		EnvAgentSession:  "outer-agent",
+		EnvClaudeSession: "bridge-child",
+	}, nil, "/cfg", nil)
+	got, _ := resolve("/work", a)
+	if want := filepath.Join(padsDir("/cfg"), "outer-agent.md"); got != want {
+		t.Fatalf("resolve() = %q, want %q", got, want)
+	}
+}
+
 // The pad follows the conversation: same session id from a different
 // directory is the same pad. This is what makes a resumed session in a new
 // pane or worktree reopen its own notes.
