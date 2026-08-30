@@ -37,9 +37,12 @@ func resolveDir(socket, session, dir string) string {
 		for {
 			parent := filepath.Dir(d)
 			if parent == d {
-				break // reached "/"
+				break // reached "/" — same sentinel as bash; fall through
 			}
 			d = parent
+			if d == "/" {
+				break // "/" is a bash sentinel meaning "no useful ancestor"; fall through
+			}
 			if fi, err := os.Stat(d); err == nil && fi.IsDir() {
 				return d
 			}

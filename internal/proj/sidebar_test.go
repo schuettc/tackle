@@ -1,6 +1,7 @@
 package proj
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,9 +17,13 @@ func TestResolveDirFallback(t *testing.T) {
 	if got := resolveDir("", "", dead); got != real {
 		t.Fatalf("walk-up: %q want %q", got, real)
 	}
-	// empty/garbage → $HOME (no socket to query)
-	if got := resolveDir("", "", "/definitely/not/here/xyz"); got == "" {
+	// empty/garbage → $HOME (no socket to query); "/" must NEVER be returned
+	got := resolveDir("", "", "/definitely/not/here/xyz")
+	if got == "" {
 		t.Fatal("must never return empty")
+	}
+	if got == "/" {
+		t.Fatalf("resolveDir must not return /; got %q", got)
 	}
 }
 
@@ -27,8 +32,15 @@ func TestAppCommand(t *testing.T) {
 	if !strings.Contains(c, "cd ") || !strings.Contains(c, "exec ") {
 		t.Fatalf("shell cmd: %q", c)
 	}
-	if !strings.Contains(appCommand("yazi", "/tmp/x"), "yazi") {
-		t.Fatal("yazi passthrough")
+	if _, err := exec.LookPath("yazi"); err == nil {
+		if !strings.Contains(appCommand("yazi", "/tmp/x"), "yazi") {
+			t.Fatal("yazi passthrough: yazi on PATH but not in command")
+		}
+	} else {
+		// yazi not on PATH: appCommand degrades to a shell — still must exec something
+		if !strings.Contains(appCommand("yazi", "/tmp/x"), "exec ") {
+			t.Fatal("yazi degraded: expected exec shell fallback")
+		}
 	}
 }
 
