@@ -163,6 +163,35 @@ func TestInvalidWorkNameStaysInInput(t *testing.T) {
 	}
 }
 
+// TestSessionRowCopiesAttentionCounts verifies that Unread and ActionRequired
+// are preserved on Row when a session is built via newModel (the same code path
+// New() uses). No live tmux/muster dependency: rows are injected directly.
+func TestSessionRowCopiesAttentionCounts(t *testing.T) {
+	input := []Row{
+		{
+			Kind:           RowSession,
+			Label:          "bettor-help/data-lake",
+			Socket:         "proj-bettor-help",
+			Name:           "bettor-help/data-lake",
+			Project:        "bettor-help",
+			Unread:         3,
+			ActionRequired: 1,
+		},
+	}
+	m := newTestModel(input)
+	vis := m.visibleRows()
+	if len(vis) == 0 {
+		t.Fatal("expected at least one visible row")
+	}
+	row := vis[0]
+	if row.Unread != 3 {
+		t.Errorf("Unread: got %d, want 3", row.Unread)
+	}
+	if row.ActionRequired != 1 {
+		t.Errorf("ActionRequired: got %d, want 1", row.ActionRequired)
+	}
+}
+
 func TestViewRendersFooterHints(t *testing.T) {
 	m := newTestModel(nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

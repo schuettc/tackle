@@ -40,14 +40,16 @@ const (
 // carry Dir for the preview stub. Project is the owning project's name (used to
 // group a session under its project in the project view).
 type Row struct {
-	Kind    RowKind
-	Label   string
-	Socket  string
-	Name    string
-	Dir     string
-	Agent   string
-	State   string
-	Project string
+	Kind           RowKind
+	Label          string
+	Socket         string
+	Name           string
+	Dir            string
+	Agent          string
+	State          string
+	Project        string
+	Unread         int
+	ActionRequired int
 }
 
 // Result is what the user chose. Kind is "" (cancel), "jump", or "new".
@@ -126,14 +128,16 @@ func New() (Model, error) {
 		project := projectOf(s.Name)
 		hasSession[project] = true
 		sessions = append(sessions, Row{
-			Kind:    RowSession,
-			Label:   s.Name,
-			Socket:  s.Socket,
-			Name:    s.Name,
-			Dir:     s.Dir,
-			Agent:   s.Agent,
-			State:   s.State,
-			Project: project,
+			Kind:           RowSession,
+			Label:          s.Name,
+			Socket:         s.Socket,
+			Name:           s.Name,
+			Dir:            s.Dir,
+			Agent:          s.Agent,
+			State:          s.State,
+			Project:        project,
+			Unread:         s.Unread,
+			ActionRequired: s.ActionRequired,
 		})
 	}
 
