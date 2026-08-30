@@ -100,7 +100,7 @@ Each field comes from state proj can already reach:
 Auto-built 30%-wide column: **scratch** (notes, top) → **yazi** (files, middle) → **shell** (bottom), each pane tagged `@sidebar` so `prefix f` toggles the column. It is valued and used frequently. Kept, with three improvements:
 
 1. **Optional per session-launch.** New work builds it by default (config), but the `s` toggle starts a session without it; `prefix f` still summons/hides it anytime.
-2. **Configurable contents/sizes** via `config.toml` `[sidebar.layout]` (default `scratch, yazi, shell`).
+2. **Configurable contents/sizes** via `config.toml` `[sidebar_layout]` (default `scratch, yazi, shell`). (A separate top-level table, not `[sidebar.layout]` — TOML forbids `sidebar` being both a bool and a table parent.)
 3. **The probe-focus hack shrinks.** scratch is now `cmd/scratch` in this monorepo, so proj can invoke scratch in a "don't probe the terminal" startup mode and drop scratch's half of the focus-probe dance. yazi still needs it.
 
 **Load-bearing defenses ported faithfully** (each fixes a reproduced failure): anchor detection (insert the column above existing agent panes vs. split off a lone main pane), agent-pin hook suppression during the build (so `after-split-window` doesn't crush the fresh panes to 1 column), and the dead-path fallback. The builder becomes Go orchestrating tmux instead of `bin/proj-right-column.sh`.
@@ -115,7 +115,7 @@ Two machine-local, untracked files (never in the repo):
   default_agent = "pi"          # what new work launches; "none" = plain shell
   sidebar       = true          # auto-build the column on new work by default
 
-  [sidebar.layout]
+  [sidebar_layout]        # separate top-level table (sidebar bool can't also be a table parent)
   panes = ["scratch", "yazi", "shell"]
   sizes = { scratch = 12, shell = 10 }   # rows; middle (yazi) fills
 
