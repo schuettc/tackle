@@ -39,6 +39,16 @@ These are depended on by muster and by reproduced-bug defenses; they are spec, n
 - **Shape:** the binary is primarily the TUI. The shell surface collapses to a near-trivial `proj()` shim plus the precmd auto-join hook. Roots parsing, discovery, session naming, the picker, per-project-server logic, and the sidebar build all move into Go.
 - **Degradation is a first-class rule:** no muster → the attention column and its preview line don't render. No agent installed → new work opens a plain shell. Not a git repo → no git line. Nothing errors; columns come and go. (Same no-op philosophy as the `kempt status` nudge already in `proj()`.)
 
+### muster is optional — a hard guarantee
+
+proj has **zero hard dependency** on muster, enforced three ways:
+
+1. **No code dependency.** proj does not import any muster package. The alias derivation is ~2 lines — `TrimPrefix(socket, "proj-")` for the project, read the `@claude_task` tmux option for the label — which proj reimplements itself. There is no build-time link to muster.
+2. **Runtime feature-detect.** proj shells `muster status --json` only if `muster` is on `PATH` and supports it. muster absent, too old for the command, or the call failing → the ✉ column and its preview line don't render. No error, no prompt.
+3. **Fully functional without it.** The picker, drill-down, live sessions, agent presence/state, git, sidebar, new work, and the reattach all work identically with no muster installed. muster only ever *adds* the attention column.
+
+The symmetric direction already holds in muster (`ProjectFromSocket` returns `""` for non-proj sockets), so neither tool requires the other.
+
 ## The picker (TUI)
 
 Full-screen Bubble Tea, fuzzy-filter-as-you-type, keyboard-driven, live-refreshing, with a **preview pane** on the right. Two views with drill-down (mockup rendered during design):
