@@ -163,7 +163,7 @@ func (m Model) renderRow(r Row, selected bool, barW int) string {
 	var line string
 	switch r.Kind {
 	case RowSession:
-		dot := agentStyle.Render("●")
+		dot := lipgloss.NewStyle().Foreground(dotColor(r.State)).Render("●")
 		meta := ""
 		if r.Agent != "" {
 			meta = "  " + dimStyle.Render(r.Agent)
@@ -265,6 +265,19 @@ func (m Model) footer() string {
 		footer += "\n" + hintStyle.Render(m.footerHint)
 	}
 	return footer
+}
+
+// dotColor encodes a session's agent state in its ●: green working, amber
+// waiting (bell/attention), dim idle or no detected agent.
+func dotColor(state string) lipgloss.Color {
+	switch state {
+	case "working":
+		return colGreen
+	case "waiting":
+		return colYellow
+	default:
+		return colSubtext0
+	}
 }
 
 func onOff(b bool) string {
