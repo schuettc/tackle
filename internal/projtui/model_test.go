@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/schuettc/tackle/internal/proj"
 )
 
 // --- test shims: drive Update the way scratch's tui tests do ---
@@ -323,4 +325,39 @@ func TestViewRendersFooterHints(t *testing.T) {
 	if !strings.Contains(v, "proj") {
 		t.Fatalf("title bar should name the picker, got:\n%s", v)
 	}
+}
+
+func TestBuildRowsShowsProjectsWithSessions(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "tools-workspace"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "changeword"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	roots := proj.Roots{Roots: []string{root}}
+	live := []proj.Session{{Name: "tools-workspace/tackle", Socket: "proj-tools-workspace"}}
+
+	sessions, projects := buildRows(roots, live)
+	if len(sessions) != 1 || sessions[0].Label != "tools-workspace/tackle" {
+		t.Fatalf("sessions = %+v", sessions)
+	}
+	// The project that HAS a live session must still appear as a project row
+	// (so you can drill into it for home base / new work).
+	var names []string
+	for _, p := range projects {
+		names = append(names, p.Label)
+	}
+	if !contains(names, "tools-workspace") || !contains(names, "changeword") {
+		t.Fatalf("projects missing tools-workspace/changeword: %v", names)
+	}
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

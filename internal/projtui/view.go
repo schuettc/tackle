@@ -22,7 +22,9 @@ var (
 	titleInfoStyle  = lipgloss.NewStyle().Background(colSurface1).Foreground(colText)
 	titleBarStyle   = lipgloss.NewStyle().Background(colSurface1)
 
-	selectedStyle = lipgloss.NewStyle().Foreground(colMauve).Bold(true)
+	// The selected row is a full-width bar (surface background + bright bold
+	// text) so the cursor is unmistakable even in a long list.
+	selectedStyle = lipgloss.NewStyle().Background(colSurface1).Foreground(colText).Bold(true)
 	rowStyle      = lipgloss.NewStyle().Foreground(colText)
 	dimStyle      = lipgloss.NewStyle().Foreground(colSubtext0)
 	agentStyle    = lipgloss.NewStyle().Foreground(colGreen)
@@ -72,21 +74,91 @@ func (m Model) listPane() string {
 		b.WriteString(dimStyle.Render("  (no matches)"))
 		return b.String()
 	}
-	for i, r := range vis {
-		b.WriteString(m.renderRow(r, i == m.cursor))
-		if i < len(vis)-1 {
+
+	// Scroll a window around the cursor so a long list stays navigable and the
+	// cursor is always framed.
+	start, end := m.window(len(vis))
+
+	// Width of the highlight bar = widest row in the window (+ prefix), capped.
+	barW := 0
+	for i := start; i < end; i++ {
+		if w := lipgloss.Width(plainRow(vis[i])) + 2; w > barW {
+			barW = w
+		}
+	}
+
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(m.renderRow(vis[i], i == m.cursor, barW))
+		if i < end-1 {
 			b.WriteString("\n")
 		}
+	}
+	if end < len(vis) {
+		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(vis)-end)))
 	}
 	return b.String()
 }
 
-// renderRow formats a single row: sessions as "● name  agent·state", projects
-// as plain names, and the specials with their glyph labels.
-func (m Model) renderRow(r Row, selected bool) string {
-	prefix := "  "
+// window returns the [start,end) slice of rows to render, scrolled to keep the
+// cursor in view within the terminal height. Falls back to the whole list when
+// the height is unknown or the list fits.
+func (m Model) window(n int) (start, end int) {
+	avail := m.height - 8 // title + blanks + filter line + footer + margins
+	if avail < 4 {
+		avail = 4
+	}
+	if m.height <= 0 || n <= avail {
+		return 0, n
+	}
+	start = m.cursor - avail/2
+	if start < 0 {
+		start = 0
+	}
+	if start+avail > n {
+		start = n - avail
+	}
+	end = start + avail
+	if end > n {
+		end = n
+	}
+	return start, end
+}
+
+// plainRow is the row's text with no per-token styling — used to measure the
+// bar width and to fill the selected row's highlight bar uniformly.
+func plainRow(r Row) string {
+	switch r.Kind {
+	case RowSession:
+		s := "● " + r.Label
+		if r.Agent != "" {
+			s += "  " + r.Agent
+			if r.State != "" {
+				s += "·" + r.State
+			}
+		}
+		if r.Unread > 0 {
+			s += fmt.Sprintf("  ✉%d", r.Unread)
+		}
+		if r.ActionRequired > 0 {
+			s += " !"
+		}
+		return s
+	case RowProject:
+		return "○ " + r.Label
+	default:
+		return r.Label
+	}
+}
+
+// renderRow formats a single row. The selected row is a full-width highlight
+// bar (uniform bright text on a surface background, prefixed ▸); unselected
+// rows keep their per-token colors (● name  agent·state  ✉N).
+func (m Model) renderRow(r Row, selected bool, barW int) string {
 	if selected {
-		prefix = "▸ "
+		return selectedStyle.Width(barW).Render("▸ " + plainRow(r))
 	}
 	var line string
 	switch r.Kind {
@@ -105,10 +177,7 @@ func (m Model) renderRow(r Row, selected bool) string {
 	default: // RowNewWork, RowHomeBase
 		line = r.Label
 	}
-	if selected {
-		return selectedStyle.Render(prefix + line)
-	}
-	return rowStyle.Render(prefix) + line
+	return rowStyle.Render("  ") + line
 }
 
 // attentionMarkers renders the trailing "  ✉N !" markers for a session row.
