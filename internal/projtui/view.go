@@ -153,7 +153,14 @@ func (m Model) previewPane() string {
 			b.WriteString(agentStyle.Render(r.Agent) + dimStyle.Render(" — "+state) + "\n")
 		}
 		if r.Unread > 0 || r.ActionRequired > 0 {
-			b.WriteString(attnStyle.Render(fmt.Sprintf("✉%d unread · %d action-required", r.Unread, r.ActionRequired)) + "\n")
+			var segs []string
+			if r.Unread > 0 {
+				segs = append(segs, fmt.Sprintf("✉%d unread", r.Unread))
+			}
+			if r.ActionRequired > 0 {
+				segs = append(segs, fmt.Sprintf("%d action-required", r.ActionRequired))
+			}
+			b.WriteString(attnStyle.Render(strings.Join(segs, " · ")) + "\n")
 		}
 	}
 

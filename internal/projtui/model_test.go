@@ -280,6 +280,24 @@ func TestTickRefreshPreservesSelection(t *testing.T) {
 	}
 }
 
+// TestPreviewAttentionLineOmitsZeroSegments verifies that when Unread==0 and
+// ActionRequired>0, the preview attention line shows only "<N> action-required"
+// and does not include a "✉0" segment.
+func TestPreviewAttentionLineOmitsZeroSegments(t *testing.T) {
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 0, ActionRequired: 1},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.View()
+	if !strings.Contains(v, "1 action-required") {
+		t.Fatalf("preview should contain '1 action-required', got:\n%s", v)
+	}
+	if strings.Contains(v, "✉0") {
+		t.Fatalf("preview must not contain '✉0', got:\n%s", v)
+	}
+}
+
 func TestViewRendersFooterHints(t *testing.T) {
 	m := newTestModel(nil)
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
