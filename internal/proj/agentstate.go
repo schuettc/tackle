@@ -55,7 +55,7 @@ func looksLikeVersion(s string) bool {
 	return dot
 }
 
-const activeWithinSecs = 30 // pane_activity newer than this ⇒ "working"
+const activeWithinSecs = 45 // window_activity newer than this ⇒ "working"
 
 // classifyState maps (kind, bell, activity-age) to a coarse state.
 func classifyState(kind string, bell bool, ageSecs int64) string {
@@ -81,38 +81,52 @@ func classifyState(kind string, bell bool, ageSecs int64) string {
 // A shell or unknown pane is never "working"; a bell flag surfaces as
 // "waiting", recent activity as "working", otherwise "idle".
 func AgentIn(socket, session string) (kind, state string) {
-	paneID, cmd, activity := paneMain(socket, session)
+	paneID, cmd := mainPaneCmd(socket, session)
 	kind = classifyAgent(cmd)
 	if kind == "" || kind == "shell" {
 		return kind, classifyState(kind, false, -1)
 	}
 	bell := Query(socket, paneID, "#{window_bell_flag}") == "1"
 	age := int64(-1)
-	if activity > 0 {
-		age = time.Now().Unix() - activity
+	// window_activity is the last-activity epoch (tmux 3.7b has no
+	// pane_activity format var — it renders empty, which is what regressed
+	// detection). Window-level is coarse but present and reliable.
+	if a := int64(atoi(Query(socket, paneID, "#{window_activity}"))); a > 0 {
+		age = time.Now().Unix() - a
 	}
 	return kind, classifyState(kind, bell, age)
 }
 
-// paneMain returns the main pane's id, current command, and pane_activity
-// epoch — the leftmost pane, ties broken by tallest.
-func paneMain(socket, session string) (id, cmd string, activity int64) {
+// mainPane returns the leftmost (tie: tallest) pane's id and current command.
+//
+// Fields are separated by \x1f (unit separator), NOT spaces: an empty format
+// field (e.g. a version-string command, or a var absent on this tmux) must not
+// collapse under strings.Fields and shift the columns — that is exactly the bug
+// that blanked every agent when pane_activity rendered empty on tmux 3.7b.
+func mainPaneCmd(socket, session string) (id, cmd string) {
 	out, err := Run(socket, "list-panes", "-t", session, "-F",
-		"#{pane_left} #{pane_height} #{pane_id} #{pane_activity} #{pane_current_command}")
+		"#{pane_left}\x1f#{pane_height}\x1f#{pane_id}\x1f#{pane_current_command}")
 	if err != nil {
-		return "", "", 0
+		return "", ""
 	}
+	return pickMainPane(out)
+}
+
+// pickMainPane parses \x1f-delimited `left\x1fheight\x1fid\x1fcmd` lines and
+// returns the leftmost (tie: tallest) pane's id and command. Pure, so the
+// column-parsing (the part that regressed) is unit-tested without tmux.
+func pickMainPane(out string) (id, cmd string) {
 	bestLeft, bestH := 1<<30, -1
 	for _, ln := range splitLines(out) {
-		f := strings.Fields(ln)
-		if len(f) < 5 {
+		f := strings.Split(ln, "\x1f")
+		if len(f) < 4 {
 			continue
 		}
 		l, h := atoi(f[0]), atoi(f[1])
 		if l < bestLeft || (l == bestLeft && h > bestH) {
 			bestLeft, bestH = l, h
-			id, activity, cmd = f[2], int64(atoi(f[3])), f[4]
+			id, cmd = f[2], f[3]
 		}
 	}
-	return id, cmd, activity
+	return id, cmd
 }

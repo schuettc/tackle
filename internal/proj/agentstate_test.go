@@ -54,3 +54,20 @@ func TestClassifyAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestPickMainPane(t *testing.T) {
+	// Regression: a version-string command (claude, e.g. "2.1.248") with NO
+	// activity column must still parse — the old space-delimited 5-field format
+	// collapsed the empty pane_activity field and blanked every agent.
+	out := "0\x1f50\x1f%0\x1f2.1.248\n149\x1f11\x1f%1\x1fscratch\n149\x1f28\x1f%2\x1fyazi"
+	id, cmd := pickMainPane(out)
+	if id != "%0" || cmd != "2.1.248" {
+		t.Fatalf("pickMainPane = %q,%q want %%0,2.1.248", id, cmd)
+	}
+	if classifyAgent(cmd) != "claude" {
+		t.Fatalf("version cmd should classify as claude")
+	}
+	if eid, ecmd := pickMainPane(""); eid != "" || ecmd != "" {
+		t.Fatalf("empty output → empty, got %q,%q", eid, ecmd)
+	}
+}
