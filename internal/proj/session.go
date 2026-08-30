@@ -44,7 +44,9 @@ func EnsureSession(socket, name, dir, agent string) error {
 	}
 	// Move the pane into dir without touching #{session_path}. -k restarts the
 	// (freshly-created) shell in dir; harmless this early.
-	_, _ = Run(socket, "respawn-pane", "-k", "-t", "="+name+":", "-c", dir)
+	if _, err := Run(socket, "respawn-pane", "-k", "-t", "="+name+":", "-c", dir); err != nil {
+		return err
+	}
 	// label = the work segment (after the last '/'), for muster.
 	label := name
 	if i := strings.LastIndex(name, "/"); i >= 0 {
