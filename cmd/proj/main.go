@@ -62,6 +62,9 @@ func runPicker() int {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
 		}
+		if res.Sidebar {
+			SpawnSidebarDetached(res.Socket, res.Name, dir)
+		}
 		if err := proj.Goto(res.Socket, res.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
