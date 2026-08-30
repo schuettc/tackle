@@ -24,12 +24,14 @@ Returns:
   "projects": ["myapp", "dotfiles", "infra"],
   "sessions": [
     {
-      "name":    "myapp/feat-auth",
-      "project": "myapp",
-      "socket":  "myapp",
-      "agent":   "pi",
-      "state":   "running",
-      "dir":     "/Users/you/GitHub/myapp"
+      "name":           "myapp/feat-auth",
+      "project":        "myapp",
+      "socket":         "myapp",
+      "agent":          "pi",
+      "state":          "running",
+      "dir":            "/Users/you/GitHub/myapp",
+      "unread":         0,
+      "action_required": 0
     }
   ]
 }
@@ -40,6 +42,7 @@ Returns:
   - `agent` — which agent is attached (`pi`, `claude`, `cursor`, or blank).
   - `state` — last-known tmux state (`running`, `idle`, etc.).
   - `dir` — working directory of the session's active pane.
+  - `unread` / `action_required` — muster attention counts for the session; both are `0` when muster isn't running.
 
 ### What session am I in right now?
 

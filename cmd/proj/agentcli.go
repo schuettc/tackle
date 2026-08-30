@@ -32,12 +32,14 @@ func parseNewTarget(s string) (project, work string, err error) {
 
 // sessionJSON is the per-session shape emitted by `proj list --json`.
 type sessionJSON struct {
-	Name    string `json:"name"`
-	Project string `json:"project"`
-	Socket  string `json:"socket"`
-	Agent   string `json:"agent"`
-	State   string `json:"state"`
-	Dir     string `json:"dir"`
+	Name           string `json:"name"`
+	Project        string `json:"project"`
+	Socket         string `json:"socket"`
+	Agent          string `json:"agent"`
+	State          string `json:"state"`
+	Dir            string `json:"dir"`
+	Unread         int    `json:"unread"`
+	ActionRequired int    `json:"action_required"`
 }
 
 // listJSON is the top-level shape emitted by `proj list --json`.
@@ -67,12 +69,14 @@ func cmdList(args []string) int {
 	}
 	for _, s := range proj.LiveSessions() {
 		out.Sessions = append(out.Sessions, sessionJSON{
-			Name:    s.Name,
-			Project: proj.ProjectFromSocket(s.Socket),
-			Socket:  s.Socket,
-			Agent:   s.Agent,
-			State:   s.State,
-			Dir:     s.Dir,
+			Name:           s.Name,
+			Project:        proj.ProjectFromSocket(s.Socket),
+			Socket:         s.Socket,
+			Agent:          s.Agent,
+			State:          s.State,
+			Dir:            s.Dir,
+			Unread:         s.Unread,
+			ActionRequired: s.ActionRequired,
 		})
 	}
 	return emitJSON(out)
