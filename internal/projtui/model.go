@@ -181,6 +181,39 @@ func New() (Model, error) {
 	return newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar), nil
 }
 
+// NewFor is like New but, when project is non-empty, starts drilled into that
+// project's view, and, when agent is non-empty, preselects that agent in the
+// cycle (used by the auto-join hook and `proj [--claude|--pi|--cursor] <project>`).
+func NewFor(project, agent string) (Model, error) {
+	roots, err := proj.LoadRoots()
+	if err != nil {
+		return Model{}, err
+	}
+	cfg := proj.LoadConfig()
+
+	sessions, projects := buildRows(roots, proj.LiveSessions())
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar)
+	if agent != "" {
+		m = m.selectAgent(agent)
+	}
+	if project != "" {
+		m = m.drillInto(project)
+	}
+	return m, nil
+}
+
+// selectAgent moves the agent cycle to agent when it is one of the choices;
+// otherwise the current selection is left unchanged.
+func (m Model) selectAgent(agent string) Model {
+	for i, a := range m.agentChoices {
+		if a == agent {
+			m.agentIndex = i
+			break
+		}
+	}
+	return m
+}
+
 // tickCmd schedules the next live-refresh tick.
 func tickCmd() tea.Cmd {
 	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return tickMsg{} })

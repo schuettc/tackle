@@ -161,6 +161,20 @@ func TestTabCyclesAgentAndSTogglesSidebar(t *testing.T) {
 	}
 }
 
+func TestSelectAgentPreselectsChoice(t *testing.T) {
+	// config default "pi" is first; selecting "claude" should move the cycle.
+	m := newTestModel(nil).selectAgent("claude")
+	if got := m.agentChoice(); got != "claude" {
+		t.Fatalf("agentChoice: got %q, want %q", got, "claude")
+	}
+	// an agent not in the cycle leaves the selection unchanged.
+	m2 := newTestModel(nil)
+	before := m2.agentChoice()
+	if got := m2.selectAgent("nope").agentChoice(); got != before {
+		t.Fatalf("unknown agent changed selection: got %q, want %q", got, before)
+	}
+}
+
 func TestInvalidWorkNameStaysInInput(t *testing.T) {
 	m := newProjectModel("tools-workspace", nil)
 	m = press(m, "enter") // open input

@@ -1,6 +1,9 @@
 package proj
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 type Action struct {
 	Kind  string   // "switch" | "detach" | "print"
@@ -27,6 +30,9 @@ func Goto(targetSocket, name string) error {
 	a := PlanGoto(CurrentServer(), targetSocket, name)
 	switch a.Kind {
 	case "print":
+		if p := os.Getenv("PROJ_EXEC"); p != "" {
+			return os.WriteFile(p, []byte(a.Print+"\n"), 0o644)
+		}
 		fmt.Println(a.Print)
 		return nil
 	default:

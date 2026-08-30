@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/schuettc/tackle/internal/proj"
@@ -14,7 +15,7 @@ func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
 	if len(args) == 0 {
-		return runPicker()
+		return runPicker("", "")
 	}
 	switch args[0] {
 	case "list":
@@ -25,16 +26,73 @@ func run(args []string) int {
 		return cmdNew(args[1:])
 	case "sidebar":
 		return cmdSidebar(args[1:])
+	case "__autojoin-project":
+		return cmdAutojoinProject()
 	default:
-		fmt.Fprintf(os.Stderr, "proj: unknown command %q\n", args[0])
-		return 2
+		// Not a known subcommand: treat args as
+		// `proj [--claude|--pi|--cursor] <project>` — open that project's view
+		// with the agent preselected.
+		project, agent, err := parseProjectArgs(args)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
+			return 2
+		}
+		return runPicker(project, agent)
 	}
+}
+
+// parseProjectArgs parses `[--claude|--pi|--cursor] <project>`, returning the
+// project name and (optional) preselected agent. At most one project positional
+// is allowed; unknown flags or extra positionals are errors.
+func parseProjectArgs(args []string) (project, agent string, err error) {
+	for _, a := range args {
+		switch a {
+		case "--claude":
+			agent = "claude"
+		case "--pi":
+			agent = "pi"
+		case "--cursor":
+			agent = "cursor"
+		default:
+			if strings.HasPrefix(a, "-") {
+				return "", "", fmt.Errorf("unknown flag %q", a)
+			}
+			if project != "" {
+				return "", "", fmt.Errorf("unexpected argument %q", a)
+			}
+			project = a
+		}
+	}
+	return project, agent, nil
+}
+
+// cmdAutojoinProject is the hidden `proj __autojoin-project` helper used by the
+// shell auto-join hook: it prints the name of the project containing $PWD and
+// exits 0, or prints nothing and exits 1 when $PWD is outside every root.
+func cmdAutojoinProject() int {
+	roots, err := proj.LoadRoots()
+	if err != nil {
+		return 1
+	}
+	wd := os.Getenv("PWD")
+	if wd == "" {
+		wd, err = os.Getwd()
+		if err != nil {
+			return 1
+		}
+	}
+	name, ok := roots.NameForDir(wd)
+	if !ok {
+		return 1
+	}
+	fmt.Println(name)
+	return 0
 }
 
 // runPicker builds the Bubble Tea model, runs it, and executes the user's
 // Result: "new" → EnsureSession then Goto; "jump" → Goto.
-func runPicker() int {
-	m, err := projtui.New()
+func runPicker(project, agent string) int {
+	m, err := projtui.NewFor(project, agent)
 	if err != nil {
 		if errors.Is(err, proj.ErrNoRoots) {
 			printNoRootsGuidance()
