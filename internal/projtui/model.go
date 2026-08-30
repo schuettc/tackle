@@ -124,13 +124,13 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool) Model
 }
 
 // buildRows converts live sessions and project dirs into session/project rows.
-// Session rows are grouped under their project (name before the first '/');
-// project rows are every project dir minus those that already have a session.
+// Session rows are grouped under their project (name before the first '/').
+// EVERY project (including one that already has a live session) gets a project
+// row too, so you can always drill into a project's view — jump to a live
+// session up top, or select the project itself to reach its home base / new
+// work. Duplicate dir basenames across roots are de-duped.
 func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row) {
-	hasSession := map[string]bool{}
 	for _, s := range live {
-		project := projectOf(s.Name)
-		hasSession[project] = true
 		sessions = append(sessions, Row{
 			Kind:           RowSession,
 			Label:          s.Name,
@@ -139,7 +139,7 @@ func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row)
 			Dir:            s.Dir,
 			Agent:          s.Agent,
 			State:          s.State,
-			Project:        project,
+			Project:        projectOf(s.Name),
 			Unread:         s.Unread,
 			ActionRequired: s.ActionRequired,
 		})
@@ -148,7 +148,7 @@ func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row)
 	seen := map[string]bool{}
 	for _, dir := range roots.AllProjectDirs() {
 		name := baseName(dir)
-		if name == "" || seen[name] || hasSession[name] {
+		if name == "" || seen[name] {
 			continue
 		}
 		seen[name] = true
