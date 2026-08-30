@@ -10,3 +10,6 @@
 
 # release build output (written by the release workflow)
 /dist/
+
+# proj binary
+/proj
