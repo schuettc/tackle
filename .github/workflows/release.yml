@@ -10,11 +10,13 @@ name: release
 #   <os> in {darwin,linux}, <arch> in {arm64,amd64}  (Go GOOS/GOARCH)
 # The GitHub release is also the invisible durable backing store for the binaries.
 #
-# NOT YET HERE (deferred): uploading these same assets to the tools-ops Downloads
-# S3 bucket under /dl/<tool>/<version>/ and updating /dl/<tool>/latest. That step
-# is added once tools-ops reports the bucket + environment:release role and muster
-# proves the recipe (muster thread #328). When added, the upload job declares
-# `environment: release` to assume the PutObject role.
+# Assets are ALSO published to the tools-ops Downloads bucket under
+# tackle.tools/dl/<tool>/<version>/ (+ a /dl/<tool>/latest pointer for real
+# releases), so `curl tackle.tools/install.sh | sh` can fetch them. The upload
+# job assumes the tools-ops ReleaseRole via OIDC — trust is scoped to the
+# `release` GitHub environment (declared on the job), not a ref, so it works
+# with the prefixed-tag trigger. A prerelease tag (version with a '-', e.g.
+# scratch/v1.0.0-rc.1) publishes its versioned path but NEVER moves latest.
 
 on:
   push:
@@ -23,10 +25,12 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
     runs-on: macos-latest
+    environment: release
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,3 +89,41 @@ jobs:
             --title "$TOOL $VERSION" \
             --generate-notes \
             dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256
+
+      - name: Configure AWS credentials (downloads)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.TACKLE_RELEASE_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Publish binaries to tackle.tools/dl
+        env:
+          BUCKET: ${{ secrets.TACKLE_DOWNLOADS_BUCKET }}
+          TOOL: ${{ steps.tag.outputs.tool }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          for f in dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256; do
+            base="$(basename "$f")"
+            ct=application/gzip
+            case "$base" in *.sha256) ct=text/plain ;; esac
+            aws s3 cp "$f" "s3://$BUCKET/dl/$TOOL/$VERSION/$base" \
+              --cache-control 'public,max-age=31536000,immutable' --content-type "$ct"
+          done
+
+      - name: Update latest pointer + invalidate (real releases only)
+        env:
+          BUCKET: ${{ secrets.TACKLE_DOWNLOADS_BUCKET }}
+          TOOL: ${{ steps.tag.outputs.tool }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A prerelease version (contains '-', e.g. 1.0.0-rc.1) publishes its
+          # versioned path but must never regress/hijack the latest pointer.
+          case "$VERSION" in
+            *-*) echo "prerelease $VERSION — leaving /dl/$TOOL/latest untouched"; exit 0 ;;
+          esac
+          printf '%s' "$VERSION" | aws s3 cp - "s3://$BUCKET/dl/$TOOL/latest" \
+            --content-type text/plain --cache-control 'public,max-age=60,must-revalidate'
+          aws cloudfront create-invalidation \
+            --distribution-id E1W6J149JZCAEG --paths "/dl/$TOOL/latest"
