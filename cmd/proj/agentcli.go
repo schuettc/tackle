@@ -122,8 +122,8 @@ func cmdCurrent(args []string) int {
 //
 // Detached by contract — an agent mints a workspace but never switches the
 // operator's client. This handler therefore calls EnsureSession only and NEVER
-// calls Goto (spec boundary). --no-sidebar is validated for interface stability
-// but has no effect until Phase 3.
+// calls Goto (spec boundary). --no-sidebar suppresses sidebar spawn; otherwise
+// sidebar is spawned when Config.SidebarFor(project) is true.
 func cmdNew(args []string) int {
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)
 	agent := fs.String("agent", "", "agent to launch (defaults to config)")
@@ -142,8 +142,6 @@ func cmdNew(args []string) int {
 			rest = rest[1:]
 		}
 	}
-	_ = *noSidebar // honored in Phase 3
-
 	if len(positional) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: proj new <project>/<work> [--agent X] [--no-sidebar]")
 		return 2
@@ -166,9 +164,10 @@ func cmdNew(args []string) int {
 		return 1
 	}
 
+	cfg := proj.LoadConfig()
 	a := *agent
 	if a == "" {
-		a = proj.LoadConfig().AgentFor(project)
+		a = cfg.AgentFor(project)
 	}
 
 	name := proj.SessionName(project, work)
@@ -177,7 +176,77 @@ func cmdNew(args []string) int {
 		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 		return 1
 	}
+	if !*noSidebar && cfg.SidebarFor(project) {
+		SpawnSidebarDetached(socket, name, dir)
+	}
 	fmt.Println(name)
+	return 0
+}
+
+// sidebarArgs holds the parsed result of parseSidebarArgs.
+type sidebarArgs struct {
+	session string
+	socket  string
+	dir     string
+}
+
+// parseSidebarArgs parses `sidebar <session> [--socket S] [--dir D]`.
+func parseSidebarArgs(args []string) (sidebarArgs, error) {
+	fs := flag.NewFlagSet("sidebar", flag.ContinueOnError)
+	socket := fs.String("socket", "", "tmux socket name")
+	dir := fs.String("dir", "", "working directory for sidebar panes")
+
+	var positional []string
+	rest := args
+	for len(rest) > 0 {
+		if err := fs.Parse(rest); err != nil {
+			return sidebarArgs{}, err
+		}
+		rest = fs.Args()
+		if len(rest) > 0 {
+			positional = append(positional, rest[0])
+			rest = rest[1:]
+		}
+	}
+
+	if len(positional) != 1 {
+		return sidebarArgs{}, fmt.Errorf("usage: proj sidebar <session> [--socket S] [--dir D]")
+	}
+	return sidebarArgs{session: positional[0], socket: *socket, dir: *dir}, nil
+}
+
+// cmdSidebar implements `proj sidebar <session> [--socket S] [--dir D]`.
+// Socket resolution order: --socket → CurrentServer() (if non-empty) →
+// FindServer(session). If none resolve, exits 1. Dir defaults to the session's
+// #{pane_current_path} when --dir is absent. Layout comes from LoadConfig().
+func cmdSidebar(args []string) int {
+	sa, err := parseSidebarArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proj:", err)
+		return 2
+	}
+
+	socket := sa.socket
+	if socket == "" {
+		socket = proj.CurrentServer()
+	}
+	if socket == "" {
+		if s, ok := proj.FindServer(sa.session); ok {
+			socket = s
+		}
+	}
+	if socket == "" {
+		fmt.Fprintf(os.Stderr, "proj: cannot resolve socket for session %q\n", sa.session)
+		return 1
+	}
+
+	dir := sa.dir
+	if dir == "" {
+		dir = proj.Query(socket, sa.session, "#{pane_current_path}")
+	}
+
+	layout := proj.LoadConfig().SidebarLayout
+	proj.BuildSidebar(socket, sa.session, dir, layout)
 	return 0
 }
 

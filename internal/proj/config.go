@@ -39,10 +39,13 @@ func configPath() string {
 
 func defaults() Config {
 	return Config{
-		DefaultAgent:  "pi",
-		Sidebar:       true,
-		SidebarLayout: Layout{Panes: []string{"scratch", "yazi", "shell"}},
-		Projects:      map[string]ProjectOverride{},
+		DefaultAgent: "pi",
+		Sidebar:      true,
+		SidebarLayout: Layout{
+			Panes: []string{"scratch", "yazi", "shell"},
+			Sizes: map[string]int{"scratch": 12, "shell": 10},
+		},
+		Projects: map[string]ProjectOverride{},
 	}
 }
 
@@ -64,6 +67,16 @@ func LoadConfig() Config {
 	}
 	if len(seeded.SidebarLayout.Panes) == 0 {
 		seeded.SidebarLayout.Panes = defaults().SidebarLayout.Panes
+	}
+	// Seed default Sizes only where the user has not specified them explicitly.
+	if seeded.SidebarLayout.Sizes == nil {
+		seeded.SidebarLayout.Sizes = defaults().SidebarLayout.Sizes
+	} else {
+		for k, v := range defaults().SidebarLayout.Sizes {
+			if _, ok := seeded.SidebarLayout.Sizes[k]; !ok {
+				seeded.SidebarLayout.Sizes[k] = v
+			}
+		}
 	}
 	return seeded
 }

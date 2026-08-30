@@ -23,6 +23,8 @@ func run(args []string) int {
 		return cmdCurrent(args[1:])
 	case "new":
 		return cmdNew(args[1:])
+	case "sidebar":
+		return cmdSidebar(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "proj: unknown command %q\n", args[0])
 		return 2
@@ -59,6 +61,9 @@ func runPicker() int {
 		if err := proj.EnsureSession(res.Socket, res.Name, dir, res.Agent); err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
+		}
+		if res.Sidebar {
+			SpawnSidebarDetached(res.Socket, res.Name, dir)
 		}
 		if err := proj.Goto(res.Socket, res.Name); err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
