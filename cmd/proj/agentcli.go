@@ -109,7 +109,9 @@ func cmdCurrent(args []string) int {
 			label := proj.Query(socket, name, "#{"+proj.LabelOption()+"}")
 			cur.Project = project
 			cur.Work = label
-			cur.Alias = proj.AliasFor(socketPath, label)
+			if label != "" {
+				cur.Alias = proj.AliasFor(socketPath, label)
+			}
 			cur.Dir = proj.Query(socket, name, "#{pane_current_path}")
 		}
 	}
