@@ -17,9 +17,12 @@ func run(args []string) int {
 		return runPicker()
 	}
 	switch args[0] {
-	case "list", "current", "new":
-		fmt.Fprintf(os.Stderr, "proj %s: not implemented yet\n", args[0])
-		return 1
+	case "list":
+		return cmdList(args[1:])
+	case "current":
+		return cmdCurrent(args[1:])
+	case "new":
+		return cmdNew(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "proj: unknown command %q\n", args[0])
 		return 2
