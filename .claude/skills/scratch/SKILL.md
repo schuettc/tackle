@@ -19,7 +19,7 @@ depth, in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
 ## Layout
 
 ```
-main.go                     CLI dispatch: run(cwd, args, stdout) int
+cmd/scratch/main.go         CLI dispatch: run(cwd, args, stdout) int
 internal/notes/             pure file layer (no TUI deps) — the easy-to-test core
   notes.go                    Path, Read, Write (atomic), Append, Classify
   notes_test.go
@@ -90,7 +90,7 @@ parts (each has a test in `model_test.go`):
   runs the program. It **degrades gracefully** — if the watcher can't be created, the
   editor still runs (just without live auto-reload); `WatchCmd` is nil-safe throughout.
 
-### `main.go` — CLI
+### `cmd/scratch/main.go` — CLI
 `run(cwd, args, stdout) int` (injectable for tests). Subcommands: `path` (print the
 resolved file path), `print` (file → stdout), `append "…"` (atomic append). No args →
 `tui.Run`. Exit codes: 0 success, 1 runtime error, 2 usage/unknown.
@@ -105,8 +105,8 @@ type to edit · `ctrl+s` save · `ctrl+r` reload from disk · `ctrl+x` clear (`y
 go build ./...            # compile
 go test ./...             # unit tests (notes = pure logic; tui = drives Update())
 go vet ./...              # keep clean before committing
-go run .                  # run the TUI on this session's pad (see `scratch path`)
-go install github.com/schuettc/scratch@latest   # install the published binary
+go run ./cmd/scratch      # run the TUI on this session's pad (see `scratch path`)
+go install github.com/schuettc/tackle/cmd/scratch@main   # install the published binary
 ```
 
 The TUI can't be asserted headlessly by unit tests alone; the `tui` tests drive
@@ -114,16 +114,19 @@ The TUI can't be asserted headlessly by unit tests alone; the `tui` tests drive
 For real end-to-end confidence, drive the binary through a PTY that answers the
 terminal's startup probes (background-color / cursor-position), or just run it.
 
-**Releasing:** commit with a clear message → `git tag -a vX.Y.Z -m "…"` → `git push
-origin main --tags` → `gh release create vX.Y.Z --notes "…"`. Update `CHANGELOG.md`.
-The dotfiles `install.sh` installs via `go install …@latest`, so a new tag propagates
-to fresh machines. Keep every numeric default a knob and every release note explaining
-*what changed and why*.
+**Releasing:** commit with a clear message → cut a release by pushing a **prefixed**
+tag `scratch/vX.Y.Z` (e.g. `git tag scratch/v0.16.0 && git push origin
+scratch/v0.16.0`). That tag triggers `.github/workflows/release.yml`, which builds
+only scratch (darwin/linux × arm64/amd64) and publishes
+`scratch_<os>_<arch>.tar.gz` + `.sha256` assets. Update `CHANGELOG.md`. The dotfiles
+reference installs scratch via the tackle module path
+(`go install github.com/schuettc/tackle/cmd/scratch@main`). Keep every numeric
+default a knob and every release note explaining *what changed and why*.
 
 ## Where to change things
 - New file behavior / atomicity / the reload rule → `internal/notes` (add a unit test).
 - Keybinds, autosave/save-state machine, chrome → `internal/tui/model.go`
   (add a `model_test.go` case that drives `Update()`).
 - Watching / startup / graceful degradation → `internal/tui/watcher.go`.
-- A new subcommand → `main.go` `run()` + `main_test.go`.
+- A new subcommand → `cmd/scratch/main.go` `run()` + `cmd/scratch/main_test.go`.
 - The design rationale for any of the above → `docs/superpowers/specs/`.

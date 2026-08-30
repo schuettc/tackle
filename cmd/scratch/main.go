@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/schuettc/scratch/internal/notes"
-	"github.com/schuettc/scratch/internal/tui"
+	"github.com/schuettc/tackle/internal/notes"
+	"github.com/schuettc/tackle/internal/tui"
 )
 
 func run(cwd string, args []string, stdout io.Writer) int {

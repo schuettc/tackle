@@ -1,4 +1,4 @@
-module github.com/schuettc/scratch
+module github.com/schuettc/tackle
 
 go 1.26.4
 

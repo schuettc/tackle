@@ -4,3 +4,9 @@
 
 # scratch binary
 /scratch
+
+# git worktrees
+.worktrees/
+
+# release build output (written by the release workflow)
+/dist/
