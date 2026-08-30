@@ -55,6 +55,34 @@ func TestConfigSidebarLayoutDefaults(t *testing.T) {
 	}
 }
 
+func TestConfigDefaultSizes(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "none"))
+	c := LoadConfig()
+	if got := c.SidebarLayout.Sizes["scratch"]; got != 12 {
+		t.Fatalf("expected Sizes[scratch]==12, got %d", got)
+	}
+	if got := c.SidebarLayout.Sizes["shell"]; got != 10 {
+		t.Fatalf("expected Sizes[shell]==10, got %d", got)
+	}
+}
+
+func TestConfigUserSizesPreserved(t *testing.T) {
+	writeConfig(t, `
+[sidebar_layout]
+sizes = {scratch = 20}
+`)
+	c := LoadConfig()
+	// User-specified scratch must be preserved.
+	if got := c.SidebarLayout.Sizes["scratch"]; got != 20 {
+		t.Fatalf("expected user Sizes[scratch]==20, got %d", got)
+	}
+	// Shell not specified by user — should be seeded with default.
+	if got := c.SidebarLayout.Sizes["shell"]; got != 10 {
+		t.Fatalf("expected default Sizes[shell]==10, got %d", got)
+	}
+}
+
 func TestConfigMalformedFile(t *testing.T) {
 	writeConfig(t, `this is not valid toml ===`)
 	c := LoadConfig()

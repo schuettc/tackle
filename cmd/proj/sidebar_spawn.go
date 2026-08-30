@@ -25,6 +25,12 @@ func SpawnSidebarDetached(socket, session, dir string) {
 	argv := sidebarArgv(exe, socket, session, dir)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Redirect child stdio to /dev/null so the detached process does not
+	// inherit the operator's terminal. Best-effort: proceed even on error.
+	if devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0); err == nil {
+		cmd.Stdout = devNull
+		cmd.Stderr = devNull
+	}
 	// Ignore Start errors: sidebar is best-effort.
 	_ = cmd.Start()
 }
