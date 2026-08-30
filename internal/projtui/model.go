@@ -283,6 +283,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "enter":
 		return m.activate()
+	case "ctrl+e":
+		m.footerHint = "roots editing lands in a later phase"
+		return m, nil
 	case "esc", "left":
 		if m.view == viewProject {
 			return m.rebuildEntrance(), nil

@@ -102,7 +102,7 @@ func (m Model) renderRow(r Row, selected bool) string {
 		line = r.Label
 	}
 	if selected {
-		return selectedStyle.Render(prefix + r.Label)
+		return selectedStyle.Render(prefix + line)
 	}
 	return rowStyle.Render(prefix) + line
 }
