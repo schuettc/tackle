@@ -12,11 +12,18 @@ package projtui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/schuettc/tackle/internal/proj"
 )
+
+// refreshInterval is how often the live-refresh tick re-runs discovery.
+const refreshInterval = 1500 * time.Millisecond
+
+// tickMsg is delivered by the live-refresh tick command.
+type tickMsg struct{}
 
 // viewState selects which of the two views is on screen.
 type viewState int
@@ -95,6 +102,11 @@ type Model struct {
 	width  int
 	height int
 
+	// refresh re-runs discovery and returns fresh session/project rows. It
+	// defaults to defaultRefresh (the real proj.* calls); tests inject a
+	// fixture.
+	refresh func() (sessions, projects []Row)
+
 	Result Result
 }
 
@@ -106,24 +118,16 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool) Model
 		projects:      projects,
 		agentChoices:  agentChoicesFrom(defaultAgent),
 		sidebarChoice: sidebar,
+		refresh:       defaultRefresh,
 	}
 	return m.rebuildEntrance()
 }
 
-// New loads roots, config and live sessions, builds the entrance rows, and
-// returns a ready-to-run model. It surfaces proj.ErrNoRoots so the caller can
-// print the zsh-parity guidance.
-func New() (Model, error) {
-	roots, err := proj.LoadRoots()
-	if err != nil {
-		return Model{}, err
-	}
-	cfg := proj.LoadConfig()
-	live := proj.LiveSessions()
-
-	// Session rows, grouped under their project (name before the first '/').
+// buildRows converts live sessions and project dirs into session/project rows.
+// Session rows are grouped under their project (name before the first '/');
+// project rows are every project dir minus those that already have a session.
+func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row) {
 	hasSession := map[string]bool{}
-	var sessions []Row
 	for _, s := range live {
 		project := projectOf(s.Name)
 		hasSession[project] = true
@@ -141,8 +145,6 @@ func New() (Model, error) {
 		})
 	}
 
-	// Project rows: every project dir minus those that already have a session.
-	var projects []Row
 	seen := map[string]bool{}
 	for _, dir := range roots.AllProjectDirs() {
 		name := baseName(dir)
@@ -152,11 +154,39 @@ func New() (Model, error) {
 		seen[name] = true
 		projects = append(projects, Row{Kind: RowProject, Label: name, Dir: dir, Project: name})
 	}
+	return sessions, projects
+}
 
+// defaultRefresh re-runs discovery via the real proj package and converts the
+// results into rows. On a roots load error it returns no rows.
+func defaultRefresh() (sessions, projects []Row) {
+	roots, err := proj.LoadRoots()
+	if err != nil {
+		return nil, nil
+	}
+	return buildRows(roots, proj.LiveSessions())
+}
+
+// New loads roots, config and live sessions, builds the entrance rows, and
+// returns a ready-to-run model. It surfaces proj.ErrNoRoots so the caller can
+// print the zsh-parity guidance.
+func New() (Model, error) {
+	roots, err := proj.LoadRoots()
+	if err != nil {
+		return Model{}, err
+	}
+	cfg := proj.LoadConfig()
+
+	sessions, projects := buildRows(roots, proj.LiveSessions())
 	return newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar), nil
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+// tickCmd schedules the next live-refresh tick.
+func tickCmd() tea.Cmd {
+	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+func (m Model) Init() tea.Cmd { return tickCmd() }
 
 // rebuildEntrance sets rows to live sessions followed by projects and resets to
 // the entrance view.
@@ -225,6 +255,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, nil
+
+	case tickMsg:
+		return m.tick()
 
 	case tea.KeyMsg:
 		if m.inputting {
@@ -364,6 +397,33 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
+}
+
+// tick re-runs discovery and rebuilds the session/project rows, preserving the
+// current view, filter and (clamped) cursor. While a name is being typed the
+// refresh is skipped so the input is not disturbed; the tick is always re-armed.
+func (m Model) tick() (tea.Model, tea.Cmd) {
+	if m.inputting || m.refresh == nil {
+		return m, tickCmd()
+	}
+
+	sessions, projects := m.refresh()
+	m.sessions = sessions
+	m.projects = projects
+
+	// Rebuild rows for the active view, preserving view/filter/cursor.
+	view, filter, cursor, project := m.view, m.filter, m.cursor, m.project
+	if view == viewProject {
+		m = m.drillInto(project)
+	} else {
+		m = m.rebuildEntrance()
+	}
+	m.view = view
+	m.filter = filter
+	m.project = project
+	m.cursor = cursor
+	m.clampCursor()
+	return m, tickCmd()
 }
 
 func (m *Model) clampCursor() {
