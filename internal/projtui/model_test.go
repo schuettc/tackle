@@ -1,6 +1,9 @@
 package projtui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -189,6 +192,48 @@ func TestSessionRowCopiesAttentionCounts(t *testing.T) {
 	}
 	if row.ActionRequired != 1 {
 		t.Errorf("ActionRequired: got %d, want 1", row.ActionRequired)
+	}
+}
+
+// TestRowShowsAttention verifies a session row renders the ✉ marker plus its
+// agent and state in the list pane.
+func TestRowShowsAttention(t *testing.T) {
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 2},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.View()
+	for _, want := range []string{"✉2", "pi", "working"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("view missing %q, got:\n%s", want, v)
+		}
+	}
+}
+
+// TestPreviewShowsGit highlights a session row whose Dir is a real git repo and
+// asserts the preview pane names the branch. Skipped when git is absent.
+func TestPreviewShowsGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	run := func(a ...string) { exec.Command("git", append([]string{"-C", dir}, a...)...).Run() }
+	run("init", "-b", "main")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	run("add", ".")
+	run("commit", "-m", "one")
+
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Dir: dir},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.previewPane()
+	if !strings.Contains(v, "main") {
+		t.Fatalf("preview missing branch name, got:\n%s", v)
 	}
 }
 
