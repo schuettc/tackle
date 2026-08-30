@@ -181,6 +181,73 @@ func cmdNew(args []string) int {
 	return 0
 }
 
+// sidebarArgs holds the parsed result of parseSidebarArgs.
+type sidebarArgs struct {
+	session string
+	socket  string
+	dir     string
+}
+
+// parseSidebarArgs parses `sidebar <session> [--socket S] [--dir D]`.
+func parseSidebarArgs(args []string) (sidebarArgs, error) {
+	fs := flag.NewFlagSet("sidebar", flag.ContinueOnError)
+	socket := fs.String("socket", "", "tmux socket name")
+	dir := fs.String("dir", "", "working directory for sidebar panes")
+
+	var positional []string
+	rest := args
+	for len(rest) > 0 {
+		if err := fs.Parse(rest); err != nil {
+			return sidebarArgs{}, err
+		}
+		rest = fs.Args()
+		if len(rest) > 0 {
+			positional = append(positional, rest[0])
+			rest = rest[1:]
+		}
+	}
+
+	if len(positional) != 1 {
+		return sidebarArgs{}, fmt.Errorf("usage: proj sidebar <session> [--socket S] [--dir D]")
+	}
+	return sidebarArgs{session: positional[0], socket: *socket, dir: *dir}, nil
+}
+
+// cmdSidebar implements `proj sidebar <session> [--socket S] [--dir D]`.
+// Socket resolution order: --socket → CurrentServer() (if non-empty) →
+// FindServer(session). If none resolve, exits 1. Dir defaults to the session's
+// #{pane_current_path} when --dir is absent. Layout comes from LoadConfig().
+func cmdSidebar(args []string) int {
+	sa, err := parseSidebarArgs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "proj:", err)
+		return 2
+	}
+
+	socket := sa.socket
+	if socket == "" {
+		socket = proj.CurrentServer()
+	}
+	if socket == "" {
+		if s, ok := proj.FindServer(sa.session); ok {
+			socket = s
+		}
+	}
+	if socket == "" {
+		fmt.Fprintf(os.Stderr, "proj: cannot resolve socket for session %q\n", sa.session)
+		return 1
+	}
+
+	dir := sa.dir
+	if dir == "" {
+		dir = proj.Query(socket, sa.session, "#{pane_current_path}")
+	}
+
+	layout := proj.LoadConfig().SidebarLayout
+	proj.BuildSidebar(socket, sa.session, dir, layout)
+	return 0
+}
+
 // emitJSON writes v as indented JSON to stdout, returning the process exit code.
 func emitJSON(v any) int {
 	b, err := json.MarshalIndent(v, "", "  ")

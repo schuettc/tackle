@@ -23,6 +23,8 @@ func run(args []string) int {
 		return cmdCurrent(args[1:])
 	case "new":
 		return cmdNew(args[1:])
+	case "sidebar":
+		return cmdSidebar(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "proj: unknown command %q\n", args[0])
 		return 2
