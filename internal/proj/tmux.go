@@ -4,8 +4,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
+
+// atoi parses s as an int, returning 0 on any error. Used for parsing tmux
+// numeric format fields where a bad value should degrade gracefully.
+func atoi(s string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(s))
+	return n
+}
+
+// splitLines splits s on "\n". A trailing newline yields no empty final
+// element because Run already trims one trailing newline.
+func splitLines(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
 
 // Run executes tmux against an explicit socket ("" = default server), trimming
 // one trailing newline. Any error is returned to callers that care; most use
