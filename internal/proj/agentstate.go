@@ -1,6 +1,9 @@
 package proj
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // classifyAgent maps a tmux pane_current_command to an agent kind.
 //
@@ -52,52 +55,64 @@ func looksLikeVersion(s string) bool {
 	return dot
 }
 
+const activeWithinSecs = 30 // pane_activity newer than this ⇒ "working"
+
+// classifyState maps (kind, bell, activity-age) to a coarse state.
+func classifyState(kind string, bell bool, ageSecs int64) string {
+	if kind == "" {
+		return ""
+	}
+	if kind == "shell" {
+		return "idle"
+	}
+	switch {
+	case bell:
+		return "waiting"
+	case ageSecs >= 0 && ageSecs <= activeWithinSecs:
+		return "working"
+	default:
+		return "idle"
+	}
+}
+
 // AgentIn returns the agent kind and coarse state of session's main pane.
 //
 // kind ∈ {pi, claude, cursor, shell, ""}; state ∈ {working, waiting, idle, ""}.
 // A shell or unknown pane is never "working"; a bell flag surfaces as
 // "waiting", recent activity as "working", otherwise "idle".
 func AgentIn(socket, session string) (kind, state string) {
-	cmd := paneMainCommand(socket, session)
+	paneID, cmd, activity := paneMain(socket, session)
 	kind = classifyAgent(cmd)
-	if kind == "" {
-		return "", ""
+	if kind == "" || kind == "shell" {
+		return kind, classifyState(kind, false, -1)
 	}
-	if kind == "shell" {
-		return kind, "idle"
+	bell := Query(socket, paneID, "#{window_bell_flag}") == "1"
+	age := int64(-1)
+	if activity > 0 {
+		age = time.Now().Unix() - activity
 	}
-	act := Query(socket, session, "#{pane_activity}")
-	bell := Query(socket, session, "#{window_bell_flag}")
-	switch {
-	case bell == "1":
-		state = "waiting"
-	case act != "" && act != "0":
-		state = "working"
-	default:
-		state = "idle"
-	}
-	return kind, state
+	return kind, classifyState(kind, bell, age)
 }
 
-// paneMainCommand returns the pane_current_command of a session's main pane,
-// defined as the leftmost pane, breaking ties by tallest. This tracks the
-// agent's primary pane even when helper panes are split off to the right.
-func paneMainCommand(socket, session string) string {
+// paneMain returns the main pane's id, current command, and pane_activity
+// epoch — the leftmost pane, ties broken by tallest.
+func paneMain(socket, session string) (id, cmd string, activity int64) {
 	out, err := Run(socket, "list-panes", "-t", session, "-F",
-		"#{pane_left} #{pane_height} #{pane_current_command}")
+		"#{pane_left} #{pane_height} #{pane_id} #{pane_activity} #{pane_current_command}")
 	if err != nil {
-		return ""
+		return "", "", 0
 	}
-	best, bestLeft, bestH := "", 1<<30, -1
+	bestLeft, bestH := 1<<30, -1
 	for _, ln := range splitLines(out) {
 		f := strings.Fields(ln)
-		if len(f) < 3 {
+		if len(f) < 5 {
 			continue
 		}
 		l, h := atoi(f[0]), atoi(f[1])
 		if l < bestLeft || (l == bestLeft && h > bestH) {
-			bestLeft, bestH, best = l, h, f[2]
+			bestLeft, bestH = l, h
+			id, activity, cmd = f[2], int64(atoi(f[3])), f[4]
 		}
 	}
-	return best
+	return id, cmd, activity
 }

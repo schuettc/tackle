@@ -11,6 +11,26 @@ import "testing"
 //   - Claude Code renames its process to its version string (e.g. "2.1.248"),
 //     so version-looking commands classify as claude.
 //   - cursor-agent → cursor is ASSUMED (no cursor session was live to observe).
+func TestClassifyState(t *testing.T) {
+	cases := []struct {
+		kind    string
+		bell    bool
+		ageSecs int64
+		want    string
+	}{
+		{"pi", true, 999, "waiting"},    // bell wins
+		{"pi", false, 3, "working"},     // recent activity
+		{"claude", false, 3600, "idle"}, // stale activity
+		{"shell", false, 1, "idle"},     // shells never work
+		{"", false, 1, ""},              // unknown stays empty
+	}
+	for _, c := range cases {
+		if got := classifyState(c.kind, c.bell, c.ageSecs); got != c.want {
+			t.Errorf("classifyState(%q,%v,%d)=%q want %q", c.kind, c.bell, c.ageSecs, got, c.want)
+		}
+	}
+}
+
 func TestClassifyAgent(t *testing.T) {
 	cases := []struct {
 		cmd  string

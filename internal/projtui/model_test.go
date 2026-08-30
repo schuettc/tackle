@@ -1,6 +1,9 @@
 package projtui
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -32,6 +35,14 @@ func newProjectModel(project string, sessions []Row) Model {
 		}
 	}
 	return newModel(sessions, nil, "pi", true).drillInto(project)
+}
+
+// newTestModelWithRefresh builds an entrance model from injected rows and
+// installs a custom refresh function used by the live-refresh tick.
+func newTestModelWithRefresh(rows []Row, refresh func() (sessions, projects []Row)) Model {
+	m := newTestModel(rows)
+	m.refresh = refresh
+	return m
 }
 
 func press(m Model, key string) Model {
@@ -160,6 +171,130 @@ func TestInvalidWorkNameStaysInInput(t *testing.T) {
 	}
 	if !m.inputting {
 		t.Fatal("invalid submit should keep the input open")
+	}
+}
+
+// TestSessionRowCopiesAttentionCounts verifies that Unread and ActionRequired
+// are preserved on Row when a session is built via newModel (the same code path
+// New() uses). No live tmux/muster dependency: rows are injected directly.
+func TestSessionRowCopiesAttentionCounts(t *testing.T) {
+	input := []Row{
+		{
+			Kind:           RowSession,
+			Label:          "bettor-help/data-lake",
+			Socket:         "proj-bettor-help",
+			Name:           "bettor-help/data-lake",
+			Project:        "bettor-help",
+			Unread:         3,
+			ActionRequired: 1,
+		},
+	}
+	m := newTestModel(input)
+	vis := m.visibleRows()
+	if len(vis) == 0 {
+		t.Fatal("expected at least one visible row")
+	}
+	row := vis[0]
+	if row.Unread != 3 {
+		t.Errorf("Unread: got %d, want 3", row.Unread)
+	}
+	if row.ActionRequired != 1 {
+		t.Errorf("ActionRequired: got %d, want 1", row.ActionRequired)
+	}
+}
+
+// TestRowShowsAttention verifies a session row renders the ✉ marker plus its
+// agent and state in the list pane.
+func TestRowShowsAttention(t *testing.T) {
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 2},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.View()
+	for _, want := range []string{"✉2", "pi", "working"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("view missing %q, got:\n%s", want, v)
+		}
+	}
+}
+
+// TestPreviewShowsGit highlights a session row whose Dir is a real git repo and
+// asserts the preview pane names the branch. Skipped when git is absent.
+func TestPreviewShowsGit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	dir := t.TempDir()
+	run := func(a ...string) { exec.Command("git", append([]string{"-C", dir}, a...)...).Run() }
+	run("init", "-b", "main")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	run("add", ".")
+	run("commit", "-m", "one")
+
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Dir: dir},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.previewPane()
+	if !strings.Contains(v, "main") {
+		t.Fatalf("preview missing branch name, got:\n%s", v)
+	}
+}
+
+// TestTickRefreshPreservesSelection verifies the live-refresh tick re-runs
+// discovery, rebuilds rows, and keeps the view/filter and a clamped cursor.
+func TestTickRefreshPreservesSelection(t *testing.T) {
+	m := newTestModelWithRefresh(
+		[]Row{{Kind: RowSession, Label: "p/w1", Name: "p/w1"}},
+		func() (s, p []Row) {
+			return []Row{
+				{Kind: RowSession, Label: "p/w2", Name: "p/w2"},
+				{Kind: RowSession, Label: "p/w1", Name: "p/w1"},
+			}, nil
+		},
+	)
+	m.cursor = 1
+
+	next, cmd := m.Update(tickMsg{})
+	m = next.(Model)
+
+	if cmd == nil {
+		t.Fatal("tick should re-arm the tick command")
+	}
+	if m.cursor < 0 || m.cursor >= len(m.visibleRows()) {
+		t.Fatalf("cursor not clamped after refresh: %d of %d", m.cursor, len(m.visibleRows()))
+	}
+	if m.view != viewEntrance {
+		t.Fatal("view changed on tick")
+	}
+	if m.filter != "" {
+		t.Fatalf("filter changed on tick: %q", m.filter)
+	}
+	vis := m.visibleRows()
+	if len(vis) != 2 || vis[0].Name != "p/w2" {
+		t.Fatalf("rows not refreshed: %+v", vis)
+	}
+}
+
+// TestPreviewAttentionLineOmitsZeroSegments verifies that when Unread==0 and
+// ActionRequired>0, the preview attention line shows only "<N> action-required"
+// and does not include a "✉0" segment.
+func TestPreviewAttentionLineOmitsZeroSegments(t *testing.T) {
+	m := newTestModel([]Row{
+		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 0, ActionRequired: 1},
+	})
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(Model)
+	v := m.View()
+	if !strings.Contains(v, "1 action-required") {
+		t.Fatalf("preview should contain '1 action-required', got:\n%s", v)
+	}
+	if strings.Contains(v, "✉0") {
+		t.Fatalf("preview must not contain '✉0', got:\n%s", v)
 	}
 }
 

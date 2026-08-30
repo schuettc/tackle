@@ -1,9 +1,12 @@
 package projtui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/schuettc/tackle/internal/proj"
 )
 
 // Catppuccin Mocha palette, matching scratch's internal/tui chrome.
@@ -27,6 +30,7 @@ var (
 	hintStyle     = lipgloss.NewStyle().Foreground(colYellow)
 	previewStyle  = lipgloss.NewStyle().Foreground(colText)
 	previewHead   = lipgloss.NewStyle().Foreground(colMauve).Bold(true)
+	attnStyle     = lipgloss.NewStyle().Foreground(colYellow).Bold(true)
 )
 
 func (m Model) View() string {
@@ -95,7 +99,7 @@ func (m Model) renderRow(r Row, selected bool) string {
 				meta += dimStyle.Render("·" + r.State)
 			}
 		}
-		line = dot + " " + r.Label + meta
+		line = dot + " " + r.Label + meta + attentionMarkers(r)
 	case RowProject:
 		line = dimStyle.Render("○") + " " + r.Label
 	default: // RowNewWork, RowHomeBase
@@ -107,8 +111,23 @@ func (m Model) renderRow(r Row, selected bool) string {
 	return rowStyle.Render(prefix) + line
 }
 
-// previewPane is a Phase-1 STUB: it shows only the highlighted row's name and
-// directory. The rich preview (git status, agent transcript) is Phase 2.
+// attentionMarkers renders the trailing "  ✉N !" markers for a session row.
+// ✉N appears only when Unread>0; the amber "!" only when ActionRequired>0.
+func attentionMarkers(r Row) string {
+	var out string
+	if r.Unread > 0 {
+		out += "  " + attnStyle.Render(fmt.Sprintf("✉%d", r.Unread))
+	}
+	if r.ActionRequired > 0 {
+		out += " " + attnStyle.Render("!")
+	}
+	return out
+}
+
+// previewPane renders the rich preview for the highlighted row: name, agent +
+// state, an attention line (only when there is any unread/action-required), and
+// a git line (only for a real repo). GitStatus is computed lazily HERE, only for
+// the highlighted row, and skipped when Dir is empty.
 func (m Model) previewPane() string {
 	vis := m.visibleRows()
 	if len(vis) == 0 || m.cursor >= len(vis) {
@@ -120,13 +139,39 @@ func (m Model) previewPane() string {
 		name = r.Name
 	}
 	dir := r.Dir
-	if dir == "" {
-		dir = "—"
-	}
+
 	var b strings.Builder
 	b.WriteString(previewHead.Render("preview") + "\n\n")
 	b.WriteString(previewStyle.Render(name) + "\n")
-	b.WriteString(dimStyle.Render(dir))
+
+	if r.Kind == RowSession {
+		if r.Agent != "" {
+			state := r.State
+			if state == "" {
+				state = "—"
+			}
+			b.WriteString(agentStyle.Render(r.Agent) + dimStyle.Render(" — "+state) + "\n")
+		}
+		if r.Unread > 0 || r.ActionRequired > 0 {
+			var segs []string
+			if r.Unread > 0 {
+				segs = append(segs, fmt.Sprintf("✉%d unread", r.Unread))
+			}
+			if r.ActionRequired > 0 {
+				segs = append(segs, fmt.Sprintf("%d action-required", r.ActionRequired))
+			}
+			b.WriteString(attnStyle.Render(strings.Join(segs, " · ")) + "\n")
+		}
+	}
+
+	if dir != "" {
+		if g := proj.GitStatus(dir); g.Repo {
+			b.WriteString(dimStyle.Render(fmt.Sprintf("git %s ↑%d ↓%d ●%d", g.Branch, g.Ahead, g.Behind, g.Dirty)) + "\n")
+		}
+		b.WriteString(dimStyle.Render(dir))
+	} else {
+		b.WriteString(dimStyle.Render("—"))
+	}
 	return b.String()
 }
 
