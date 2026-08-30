@@ -35,7 +35,7 @@ live tmux session across all per-project servers. Each row shows:
 - a **muster attention** indicator (glows when an agent wants a response)
 
 A **preview pane** on the right shows the session's live terminal output.  A
-configurable **sidebar** (width, layout, position) sits beside the main editor
+configurable **sidebar** (pane layout, per-project toggle) sits beside the main editor
 pane inside the chosen session.
 
 Sessions live on **per-project tmux servers** (one server per project root), so
@@ -72,23 +72,16 @@ One project root per line (blank lines and `#` comments ignored). Example:
     ~/.config/proj/config.toml
 
 ```toml
-# Default agent to preselect when opening the picker.
-default_agent = "pi"          # "pi" | "claude" | "cursor" | "none"
-
-# Sidebar: built automatically when you attach to a session.
-sidebar = true
+default_agent = "pi"          # what new work launches; "none" for a plain shell
+sidebar       = true          # auto-build the sidebar column on new work
 
 [sidebar_layout]
-width  = 90                   # columns
-side   = "right"              # "left" | "right"
+panes = ["scratch", "yazi", "shell"]   # top → bottom
+sizes = { scratch = 12, shell = 10 }   # rows; the middle pane fills
 
-# Per-project overrides — key is the project name (last component of the root).
-[project."myapp"]
+[project."bettor-help"]        # optional per-project overrides
 default_agent = "claude"
 sidebar       = false
-
-[project."infra"]
-sidebar_layout.width = 120
 ```
 
 All keys are optional; unset keys fall back to built-in defaults.
