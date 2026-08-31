@@ -59,14 +59,20 @@ jobs:
         id: build
         env:
           TOOL: ${{ steps.tag.outputs.tool }}
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
+          # Stamp the shared internal/version vars (per-tool build, from this tag).
+          COMMIT="$(git rev-parse --short HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%d)"
+          VPKG=github.com/schuettc/tackle/internal/version
+          LDFLAGS="-X ${VPKG}.version=${VERSION} -X ${VPKG}.commit=${COMMIT} -X ${VPKG}.date=${BUILD_DATE}"
           for os in darwin linux; do
             for arch in arm64 amd64; do
               out="dist/${TOOL}_${os}_${arch}"
               GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-                go build -trimpath -o "$out/$TOOL" "./cmd/$TOOL"
+                go build -trimpath -ldflags "$LDFLAGS" -o "$out/$TOOL" "./cmd/$TOOL"
               tarball="dist/${TOOL}_${os}_${arch}.tar.gz"
               tar -C "$out" -czf "$tarball" "$TOOL"
               ( cd dist && shasum -a 256 "${TOOL}_${os}_${arch}.tar.gz" \
