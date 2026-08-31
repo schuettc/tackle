@@ -3,20 +3,44 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/schuettc/tackle/internal/proj"
 	"github.com/schuettc/tackle/internal/projtui"
+	"github.com/schuettc/tackle/internal/version"
+	"github.com/schuettc/tools-common"
 )
 
 func main() { os.Exit(run(os.Args[1:])) }
 
 func run(args []string) int {
+	app := tools.New(tools.Config{
+		Name:   "proj",
+		Domain: "tackle.tools",
+		Version: tools.Version{
+			Number: version.Number(),
+			Commit: version.Commit(),
+			Date:   version.Date(),
+		},
+	})
+	// Register the real subcommands so `help`/usage lists them alongside the
+	// built-in version/help/update. They are executed via direct interception
+	// below to preserve their exact output and exit codes (the handlers print
+	// their own diagnostics and return an int).
+	app.Register(tools.Command{Name: "list", Summary: "list projects and live sessions (--json)", Run: wrapInt(cmdList)})
+	app.Register(tools.Command{Name: "current", Summary: "identify the ambient proj session (--json)", Run: wrapInt(cmdCurrent)})
+	app.Register(tools.Command{Name: "new", Summary: "create/open a project session", Run: wrapInt(cmdNew)})
+	app.Register(tools.Command{Name: "sidebar", Summary: "open the project sidebar", Run: wrapInt(cmdSidebar)})
+
+	// PRESERVE the special routes BEFORE delegating to Dispatch.
+	// No args → the Bubble Tea picker.
 	if len(args) == 0 {
 		return runPicker("", "")
 	}
+	// Real subcommands: execute directly, returning their exact exit codes.
 	switch args[0] {
 	case "list":
 		return cmdList(args[1:])
@@ -28,10 +52,14 @@ func run(args []string) int {
 		return cmdSidebar(args[1:])
 	case "__autojoin-project":
 		return cmdAutojoinProject()
-	default:
-		// Not a known subcommand: treat args as
-		// `proj [--claude|--pi|--cursor] <project>` — open that project's view
-		// with the agent preselected.
+	// Built-ins from tools-common: version/help/update (+ aliases).
+	case "version", "--version", "-v", "help", "--help", "-h", "update":
+		return app.Dispatch(args, os.Stdout, os.Stderr)
+	}
+	// `proj [--claude|--pi|--cursor] <project>` — open that project's view
+	// with the agent preselected (the no-subcommand flag-route).
+	if args[0] == "--claude" || args[0] == "--pi" || args[0] == "--cursor" ||
+		!strings.HasPrefix(args[0], "-") {
 		project, agent, err := parseProjectArgs(args)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
@@ -39,7 +67,25 @@ func run(args []string) int {
 		}
 		return runPicker(project, agent)
 	}
+	// Unknown flag/command → let Dispatch report it (exit 2).
+	return app.Dispatch(args, os.Stdout, os.Stderr)
 }
+
+// wrapInt adapts an existing `func([]string) int` handler to the tools.Command
+// Run shape used by the help listing. The handlers print their own diagnostics,
+// so a non-zero code maps to a silent error carrying the exit code.
+func wrapInt(h func([]string) int) func([]string, io.Writer, io.Writer) error {
+	return func(a []string, out, errw io.Writer) error {
+		if code := h(a); code != 0 {
+			return errExit{code}
+		}
+		return nil
+	}
+}
+
+type errExit struct{ code int }
+
+func (e errExit) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // parseProjectArgs parses `[--claude|--pi|--cursor] <project>`, returning the
 // project name and (optional) preselected agent. At most one project positional
