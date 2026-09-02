@@ -10,6 +10,7 @@ type Session struct {
 // its working directory, agent kind/state, and muster attention counts.
 func LiveSessions() []Session {
 	counts := MusterCounts()
+	device := MusterDevice()
 	var out []Session
 	for _, sock := range Servers() {
 		names, err := Run(sock, "list-sessions", "-F", "#{session_name}")
@@ -23,7 +24,7 @@ func LiveSessions() []Session {
 			dir := Query(sock, name, "#{pane_current_path}")
 			agent, state := AgentIn(sock, name)
 			label := Query(sock, name, "#{"+LabelOption()+"}")
-			a := counts[AliasFor(sock, label)]
+			a := AttentionFor(counts, device, AliasFor(sock, label))
 			out = append(out, Session{
 				Name:           name,
 				Socket:         sock,

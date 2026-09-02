@@ -31,3 +31,26 @@ func TestMusterCountsAbsentBinary(t *testing.T) {
 		t.Fatal("absent muster → empty map, no error")
 	}
 }
+
+func TestAttentionForDevicePrefix(t *testing.T) {
+	counts := map[string]Attention{
+		"personal-tools-workspace/tackle": {Unread: 2, ActionRequired: 1},
+		"tools-workspace/muster":          {Unread: 5},
+	}
+	// device-prefixed match (device known)
+	if a := AttentionFor(counts, "personal", "tools-workspace/tackle"); a.Unread != 2 || a.ActionRequired != 1 {
+		t.Fatalf("device-prefix match: %+v", a)
+	}
+	// bare/unprefixed row still matches
+	if a := AttentionFor(counts, "personal", "tools-workspace/muster"); a.Unread != 5 {
+		t.Fatalf("bare match: %+v", a)
+	}
+	// no device known → only exact bare match
+	if a := AttentionFor(counts, "", "tools-workspace/tackle"); a.Unread != 0 {
+		t.Fatalf("no device, no bare row: %+v", a)
+	}
+	// missing → zero
+	if a := AttentionFor(counts, "personal", "nope/x"); a.Unread != 0 {
+		t.Fatalf("missing: %+v", a)
+	}
+}
