@@ -3,10 +3,53 @@ package proj
 import (
 	"encoding/json"
 	"os/exec"
+	"strings"
 )
 
 type Attention struct {
 	Unread, ActionRequired int
+}
+
+// MusterDevice returns this machine's muster device name (e.g. "personal"), or
+// "" if muster is absent or the name is unset. muster prefixes every roster
+// alias registered from this machine with "<device>-", so proj needs it to map
+// its socket-derived "<project>/<label>" alias to muster's
+// "<device>-<project>/<label>". `muster device` prints `name=<device> (...)`.
+func MusterDevice() string {
+	if _, err := exec.LookPath("muster"); err != nil {
+		return ""
+	}
+	out, err := exec.Command("muster", "device").Output()
+	if err != nil {
+		return ""
+	}
+	for _, f := range strings.Fields(string(out)) {
+		if rest, ok := strings.CutPrefix(f, "name="); ok {
+			if rest == "(unset)" || rest == "" {
+				return ""
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
+// AttentionFor looks up a proj-derived alias ("<project>/<label>") in muster's
+// counts. muster roster aliases from this machine are device-prefixed
+// ("<device>-<project>/<label>", e.g. "personal-tools-workspace/tackle"), so
+// the device-prefixed key is tried first, then the bare alias (for unprefixed
+// rows or when the device name is unknown). No fuzzy matching — project names
+// contain hyphens, so a suffix match would be ambiguous.
+func AttentionFor(counts map[string]Attention, device, alias string) Attention {
+	if alias == "" {
+		return Attention{}
+	}
+	if device != "" {
+		if a, ok := counts[device+"-"+alias]; ok {
+			return a
+		}
+	}
+	return counts[alias]
 }
 
 type musterRow struct {
