@@ -32,10 +32,10 @@ jobs:
     runs-on: macos-latest
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -97,7 +97,7 @@ jobs:
             dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256
 
       - name: Configure AWS credentials (downloads)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.TACKLE_RELEASE_ROLE_ARN }}
           aws-region: us-east-1
