@@ -7,6 +7,7 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
 
 - **scratch** — per-directory scratch notes with a live TUI.
 - **proj** — agent-aware tmux session picker; the way *in* to a work session.
+- **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it.
 
 ## Install
 
@@ -15,11 +16,13 @@ Prebuilt binaries are published per tool on each GitHub release
 
     curl -fsSL https://tackle.tools/install.sh | sh -s scratch
     curl -fsSL https://tackle.tools/install.sh | sh -s proj
+    curl -fsSL https://tackle.tools/install.sh | sh -s creel
 
 Dev/fallback (requires a Go toolchain):
 
     go install github.com/schuettc/tackle/cmd/scratch@main
     go install github.com/schuettc/tackle/cmd/proj@main
+    go install github.com/schuettc/tackle/cmd/creel@main
 
 ## proj
 
