@@ -70,7 +70,7 @@ func run(cwd string, argv []string, stdout, stderr io.Writer) int {
 
 	if len(argv) > 0 {
 		switch argv[0] {
-		case "version", "--version", "-v", "help", "--help", "-h", "update":
+		case "version", "--version", "-v", "help", "--help", "-h", "update", "man", "commands":
 			return app.Dispatch(argv, stdout, stderr)
 		}
 	}

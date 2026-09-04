@@ -76,7 +76,7 @@ func run(args []string) int {
 	// come before that fallback or "proj list" would be read as project "list".
 	// Built-ins from tools-common: version/help/update (+ aliases).
 	case "list", "current", "new", "sidebar",
-		"version", "--version", "-v", "help", "--help", "-h", "update":
+		"version", "--version", "-v", "help", "--help", "-h", "update", "man", "commands":
 		return app.Dispatch(args, os.Stdout, os.Stderr)
 	}
 	// `proj [--claude|--pi|--cursor] <project>` — open that project's view

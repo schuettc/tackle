@@ -35,21 +35,21 @@ func run(cwd string, args []string, stdout io.Writer) int {
 		Summary:  "print the notes file path",
 		Synopsis: "path",
 		Help:     "Prints the file path of the notes pad associated with the current Claude Code session.",
-		Run:      cmdPath(cwd, path),
+		Run:      cmdPath(cwd),
 	})
 	app.Register(tools.Command{
 		Name:     "print",
 		Summary:  "print the notes file contents",
 		Synopsis: "print",
 		Help:     "Prints the contents of the notes pad associated with the current Claude Code session.",
-		Run:      cmdPrint(cwd, path),
+		Run:      cmdPrint(cwd),
 	})
 	app.Register(tools.Command{
 		Name:     "append",
 		Summary:  "append text to the notes file",
 		Synopsis: "append <text>",
 		Help:     "Appends text to the notes pad associated with the current Claude Code session.",
-		Run:      cmdAppend(cwd, path),
+		Run:      cmdAppend(cwd),
 	})
 
 	// PRESERVE the TUI entry: no args → the notes TUI.
@@ -63,19 +63,14 @@ func run(cwd string, args []string, stdout io.Writer) int {
 		})
 	}
 
-	// Route path/print/append through Dispatch so -h renders and exit codes map
-	// correctly. Built-ins from tools-common: version/help/update (+ aliases).
-	switch args[0] {
-	case "path", "print", "append",
-		"version", "--version", "-v", "help", "--help", "-h", "update":
-		return app.Dispatch(args, stdout, os.Stderr)
-	default:
-		return app.Dispatch(args, stdout, os.Stderr)
-	}
+	// Everything else — path/print/append, built-ins, and unknown commands —
+	// flows through Dispatch, which parses flags, calls Run, and maps
+	// UsageError/ExitError to the right exit code.
+	return app.Dispatch(args, stdout, os.Stderr)
 }
 
 // cmdPath returns the Run function for the path subcommand.
-func cmdPath(cwd, initialPath string) func([]string, io.Writer, io.Writer) error {
+func cmdPath(cwd string) func([]string, io.Writer, io.Writer) error {
 	return func(args []string, out, errw io.Writer) error {
 		path, err := notes.Path(cwd)
 		if err != nil {
@@ -87,7 +82,7 @@ func cmdPath(cwd, initialPath string) func([]string, io.Writer, io.Writer) error
 }
 
 // cmdPrint returns the Run function for the print subcommand.
-func cmdPrint(cwd, initialPath string) func([]string, io.Writer, io.Writer) error {
+func cmdPrint(cwd string) func([]string, io.Writer, io.Writer) error {
 	return func(args []string, out, errw io.Writer) error {
 		path, err := notes.Path(cwd)
 		if err != nil {
@@ -103,7 +98,7 @@ func cmdPrint(cwd, initialPath string) func([]string, io.Writer, io.Writer) erro
 }
 
 // cmdAppend returns the Run function for the append subcommand.
-func cmdAppend(cwd, initialPath string) func([]string, io.Writer, io.Writer) error {
+func cmdAppend(cwd string) func([]string, io.Writer, io.Writer) error {
 	return func(args []string, out, errw io.Writer) error {
 		if len(args) < 1 {
 			return tools.UsageError{Msg: "usage: scratch append <text>"}
