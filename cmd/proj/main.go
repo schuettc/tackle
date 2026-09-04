@@ -2,8 +2,8 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -26,34 +26,57 @@ func run(args []string) int {
 			Date:   version.Date(),
 		},
 	})
-	// Register the real subcommands so `help`/usage lists them alongside the
-	// built-in version/help/update. They are executed via direct interception
-	// below to preserve their exact output and exit codes (the handlers print
-	// their own diagnostics and return an int).
-	app.Register(tools.Command{Name: "list", Summary: "list projects and live sessions (--json)", Run: wrapInt(cmdList)})
-	app.Register(tools.Command{Name: "current", Summary: "identify the ambient proj session (--json)", Run: wrapInt(cmdCurrent)})
-	app.Register(tools.Command{Name: "new", Summary: "create/open a project session", Run: wrapInt(cmdNew)})
-	app.Register(tools.Command{Name: "sidebar", Summary: "open the project sidebar", Run: wrapInt(cmdSidebar)})
+	// Register the real subcommands. Dispatch is now their execution path (not
+	// just the help listing): each carries NewFlags so -h/help render richly and
+	// ExitError/UsageError from Run map to the right exit code.
+	app.Register(tools.Command{
+		Name:     "list",
+		Summary:  "list projects and live sessions (--json)",
+		Synopsis: "list --json",
+		Help:     "Lists configured project names and every live session across proj's per-project tmux servers.",
+		NewFlags: func() *flag.FlagSet { fs, _ := newListFlags(); return fs },
+		Run:      cmdList,
+	})
+	app.Register(tools.Command{
+		Name:     "current",
+		Summary:  "identify the ambient proj session (--json)",
+		Synopsis: "current --json",
+		Help:     "Identifies the ambient proj session from $TMUX. All fields are empty when run outside a proj session.",
+		NewFlags: func() *flag.FlagSet { fs, _ := newCurrentFlags(); return fs },
+		Run:      cmdCurrent,
+	})
+	app.Register(tools.Command{
+		Name:     "new",
+		Summary:  "create/open a project session",
+		Synopsis: "new <project>/<work> [--agent X] [--no-sidebar]",
+		Help:     "Creates or resumes the tmux session for <project>/<work>. Detached by contract: mints the session but never switches the caller's client.",
+		NewFlags: func() *flag.FlagSet { fs, _ := newNewFlags(); return fs },
+		Run:      cmdNew,
+	})
+	app.Register(tools.Command{
+		Name:     "sidebar",
+		Summary:  "open the project sidebar",
+		Synopsis: "sidebar <session> [--socket S] [--dir D]",
+		Help:     "Opens the sidebar panes for an existing session. Socket resolves from --socket, then the ambient server, then a server search by session name.",
+		NewFlags: func() *flag.FlagSet { fs, _ := newSidebarFlags(); return fs },
+		Run:      cmdSidebar,
+	})
 
 	// PRESERVE the special routes BEFORE delegating to Dispatch.
 	// No args → the Bubble Tea picker.
 	if len(args) == 0 {
 		return runPicker("", "")
 	}
-	// Real subcommands: execute directly, returning their exact exit codes.
 	switch args[0] {
-	case "list":
-		return cmdList(args[1:])
-	case "current":
-		return cmdCurrent(args[1:])
-	case "new":
-		return cmdNew(args[1:])
-	case "sidebar":
-		return cmdSidebar(args[1:])
 	case "__autojoin-project":
 		return cmdAutojoinProject()
+	// list/current/new/sidebar now flow through Dispatch (which parses their
+	// flags, calls Run, and maps UsageError/ExitError to the right exit code)
+	// instead of the bare-project fallback below — a name match here MUST
+	// come before that fallback or "proj list" would be read as project "list".
 	// Built-ins from tools-common: version/help/update (+ aliases).
-	case "version", "--version", "-v", "help", "--help", "-h", "update":
+	case "list", "current", "new", "sidebar",
+		"version", "--version", "-v", "help", "--help", "-h", "update":
 		return app.Dispatch(args, os.Stdout, os.Stderr)
 	}
 	// `proj [--claude|--pi|--cursor] <project>` — open that project's view
@@ -70,22 +93,6 @@ func run(args []string) int {
 	// Unknown flag/command → let Dispatch report it (exit 2).
 	return app.Dispatch(args, os.Stdout, os.Stderr)
 }
-
-// wrapInt adapts an existing `func([]string) int` handler to the tools.Command
-// Run shape used by the help listing. The handlers print their own diagnostics,
-// so a non-zero code maps to a silent error carrying the exit code.
-func wrapInt(h func([]string) int) func([]string, io.Writer, io.Writer) error {
-	return func(a []string, out, errw io.Writer) error {
-		if code := h(a); code != 0 {
-			return errExit{code}
-		}
-		return nil
-	}
-}
-
-type errExit struct{ code int }
-
-func (e errExit) Error() string { return fmt.Sprintf("exit %d", e.code) }
 
 // parseProjectArgs parses `[--claude|--pi|--cursor] <project>`, returning the
 // project name and (optional) preselected agent. At most one project positional
