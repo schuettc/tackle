@@ -63,6 +63,26 @@ func EnsureSession(socket, name, dir, agent string) error {
 	return nil
 }
 
+// KillSession terminates the tmux session `name` on `socket`.
+func KillSession(socket, name string) error {
+	_, err := Run(socket, "kill-session", "-t", "="+name)
+	return err
+}
+
+// CurrentSessionName returns the name of the tmux session this process is
+// attached to (via $TMUX), or "" when not inside tmux. Used to refuse reaping
+// the session hosting the picker.
+func CurrentSessionName() string {
+	if os.Getenv("TMUX") == "" {
+		return ""
+	}
+	name, err := Run("", "display-message", "-p", "#S")
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
 // agentLaunchCmd returns the shell command to type into the pane, or "" if the
 // agent binary is absent (degradation → plain shell).
 //

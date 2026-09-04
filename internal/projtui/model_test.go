@@ -62,6 +62,12 @@ func press(m Model, key string) Model {
 		msg = tea.KeyMsg{Type: tea.KeyTab}
 	case "backspace":
 		msg = tea.KeyMsg{Type: tea.KeyBackspace}
+	case "ctrl+s":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+a":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlA}
+	case "ctrl+x":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlX}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
@@ -75,6 +81,13 @@ func typeString(m Model, s string) Model {
 }
 
 func visibleCount(m Model) int { return len(m.visibleRows()) }
+
+// sessionsScope flips the entrance to its live-sessions scope (the entrance
+// defaults to folders), for tests that exercise session rows at the entrance.
+func sessionsScope(m Model) Model {
+	m.scope = scopeSessions
+	return m.rebuildEntrance()
+}
 
 func firstRowKind(m Model) RowKind {
 	vis := m.visibleRows()
@@ -121,19 +134,10 @@ func TestEntranceSessionJump(t *testing.T) {
 		{Kind: RowSession, Label: "bettor-help/data-lake", Socket: "proj-bettor-help", Name: "bettor-help/data-lake"},
 		{Kind: RowProject, Label: "tools-workspace"},
 	})
+	m = sessionsScope(m)
 	m = press(m, "enter") // cursor on the first row (the session)
 	if m.Result.Kind != "jump" || m.Result.Name != "bettor-help/data-lake" || m.Result.Socket != "proj-bettor-help" {
 		t.Fatalf("jump result = %+v", m.Result)
-	}
-}
-
-func TestProjectHomeBaseProducesHomeResult(t *testing.T) {
-	m := newProjectModel("tools-workspace", nil)
-	m = press(m, "down")  // move off "+ new work…" onto "🏠 home base"
-	m = press(m, "enter") // select home base
-	r := m.Result
-	if r.Kind != "new" || r.Project != "tools-workspace" || r.Work != "" || r.Name != "tools-workspace" {
-		t.Fatalf("home result = %+v", r)
 	}
 }
 
@@ -149,17 +153,186 @@ func TestEscFromProjectReturnsToEntrance(t *testing.T) {
 	}
 }
 
-func TestTabCyclesAgentAndSTogglesSidebar(t *testing.T) {
+func TestTabTogglesEntranceScope(t *testing.T) {
 	m := newTestModel(nil)
+	if m.scope != scopeFolders {
+		t.Fatal("entrance should default to the folders scope")
+	}
+	m = press(m, "tab")
+	if m.scope != scopeSessions {
+		t.Fatal("tab should switch the entrance to sessions")
+	}
+	m = press(m, "tab")
+	if m.scope != scopeFolders {
+		t.Fatal("tab should switch the entrance back to folders")
+	}
+}
+
+func TestTabCyclesAgentInNewWorkInput(t *testing.T) {
+	m := newProjectModel("tools-workspace", nil)
+	m = press(m, "enter") // open the "+ new work…" input
+	if m.inputKind != inputNewWork {
+		t.Fatal("enter on + new work should open the input")
+	}
 	first := m.agentChoice()
 	m = press(m, "tab")
 	if m.agentChoice() == first {
-		t.Fatal("tab should cycle the agent choice")
+		t.Fatal("tab should cycle the agent while naming new work")
 	}
+}
+
+func TestCtrlSTogglesSidebarInNewWorkInput(t *testing.T) {
+	m := newProjectModel("tools-workspace", nil)
+	m = press(m, "enter") // open the "+ new work…" input
 	before := m.sidebarChoice
-	m = press(m, "s") // filter empty -> command
+	m = press(m, "ctrl+s")
 	if m.sidebarChoice == before {
-		t.Fatal("s should toggle the sidebar choice")
+		t.Fatal("ctrl+s should toggle the sidebar while naming new work")
+	}
+}
+
+func TestBrowseFooterOmitsAgentAndSidebar(t *testing.T) {
+	m := newProjectModel("tools-workspace", nil)
+	m.help.ShowAll = true
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
+	m = next.(Model)
+	v := m.View()
+	if strings.Contains(v, "agent:") || strings.Contains(v, "sidebar:") {
+		t.Fatalf("browse footer must not show agent/sidebar, got:\n%s", v)
+	}
+}
+
+func TestAddRootFlow(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".config", "proj")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "roots"), []byte("~/code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	if err := os.MkdirAll(filepath.Join(home, "code", "alpha"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "more", "beta"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inject a tmux-free refresh: rebuild project rows from roots alone.
+	refresh := func() (sessions, projects []Row) {
+		r, err := proj.LoadRoots()
+		if err != nil {
+			return nil, nil
+		}
+		return buildRows(r, nil)
+	}
+	m := newTestModelWithRefresh(nil, refresh)
+	m = press(m, "ctrl+a")
+	if m.inputKind != inputAddRoot {
+		t.Fatal("ctrl+a should open the add-root input")
+	}
+	m = typeString(m, filepath.Join(home, "more"))
+	m = press(m, "enter")
+	if m.inputKind != inputNone {
+		t.Fatalf("valid submit should close the input, kind=%d", m.inputKind)
+	}
+
+	found := false
+	for _, r := range m.visibleRows() {
+		if r.Label == "beta" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("newly added root's project (beta) should appear in the entrance")
+	}
+}
+
+func TestAddRootRejectsBadPath(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".config", "proj")
+	if err := os.MkdirAll(cfg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg, "roots"), []byte("~/code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	m := newTestModel(nil)
+	m = press(m, "ctrl+a")
+	m = typeString(m, filepath.Join(home, "does-not-exist"))
+	m = press(m, "enter")
+	if m.inputKind != inputAddRoot {
+		t.Fatal("invalid path should keep the add-root input open")
+	}
+	if m.footerHint == "" {
+		t.Fatal("invalid path should surface a footer hint")
+	}
+}
+
+func TestReapConfirmAndKill(t *testing.T) {
+	t.Setenv("TMUX", "") // CurrentSessionName() returns "" so nothing is guarded
+	sess := Row{Kind: RowSession, Label: "alpha", Name: "alpha", Socket: "s1", Project: "alpha"}
+	m := sessionsScope(newTestModel([]Row{sess}))
+	killed := ""
+	m.kill = func(socket, name string) error { killed = name; return nil }
+	m.refresh = func() (sessions, projects []Row) { return nil, nil } // session gone after kill
+
+	m = press(m, "ctrl+x")
+	if m.reapConfirm != "alpha" {
+		t.Fatalf("first ^x should arm confirm, got %q", m.reapConfirm)
+	}
+	if killed != "" {
+		t.Fatal("first ^x must not kill")
+	}
+
+	m = press(m, "ctrl+x")
+	if killed != "alpha" {
+		t.Fatalf("second ^x should kill, killed=%q", killed)
+	}
+	if m.reapConfirm != "" {
+		t.Fatal("confirm should clear after the kill")
+	}
+	for _, r := range m.visibleRows() {
+		if r.Kind == RowSession {
+			t.Fatal("session row should be gone after reap")
+		}
+	}
+}
+
+func TestReapCancelledByOtherKey(t *testing.T) {
+	t.Setenv("TMUX", "")
+	sess := Row{Kind: RowSession, Label: "alpha", Name: "alpha", Socket: "s1", Project: "alpha"}
+	m := sessionsScope(newTestModel([]Row{sess}))
+	killed := false
+	m.kill = func(socket, name string) error { killed = true; return nil }
+
+	m = press(m, "ctrl+x")
+	if m.reapConfirm == "" {
+		t.Fatal("^x should arm confirm")
+	}
+	m = press(m, "down") // any other key cancels
+	if m.reapConfirm != "" {
+		t.Fatal("a non-^x key should cancel the pending reap")
+	}
+	m = press(m, "ctrl+x") // re-arms, does not kill
+	if killed {
+		t.Fatal("reap must not execute without a confirming second ^x")
+	}
+}
+
+func TestReapIgnoresNonSessionRow(t *testing.T) {
+	t.Setenv("TMUX", "")
+	m := newProjectModel("tools-workspace", nil) // cursor on "+ new work…"
+	killed := false
+	m.kill = func(socket, name string) error { killed = true; return nil }
+	m = press(m, "ctrl+x")
+	if killed || m.reapConfirm != "" {
+		t.Fatal("reaping a non-session row should be a no-op")
 	}
 }
 
@@ -185,7 +358,7 @@ func TestInvalidWorkNameStaysInInput(t *testing.T) {
 	if m.Result.Kind != "" {
 		t.Fatalf("invalid work name must not produce a result, got %+v", m.Result)
 	}
-	if !m.inputting {
+	if m.inputKind == inputNone {
 		t.Fatal("invalid submit should keep the input open")
 	}
 }
@@ -205,7 +378,7 @@ func TestSessionRowCopiesAttentionCounts(t *testing.T) {
 			ActionRequired: 1,
 		},
 	}
-	m := newTestModel(input)
+	m := sessionsScope(newTestModel(input))
 	vis := m.visibleRows()
 	if len(vis) == 0 {
 		t.Fatal("expected at least one visible row")
@@ -222,9 +395,9 @@ func TestSessionRowCopiesAttentionCounts(t *testing.T) {
 // TestRowShowsAttention verifies a session row renders the ✉ marker plus its
 // agent and state in the list pane.
 func TestRowShowsAttention(t *testing.T) {
-	m := newTestModel([]Row{
+	m := sessionsScope(newTestModel([]Row{
 		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 2},
-	})
+	}))
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next.(Model)
 	v := m.View()
@@ -250,12 +423,12 @@ func TestPreviewShowsGit(t *testing.T) {
 	run("add", ".")
 	run("commit", "-m", "one")
 
-	m := newTestModel([]Row{
+	m := sessionsScope(newTestModel([]Row{
 		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Dir: dir},
-	})
+	}))
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next.(Model)
-	v := m.previewPane()
+	v := m.previewPane(34)
 	if !strings.Contains(v, "main") {
 		t.Fatalf("preview missing branch name, got:\n%s", v)
 	}
@@ -273,6 +446,7 @@ func TestTickRefreshPreservesSelection(t *testing.T) {
 			}, nil
 		},
 	)
+	m = sessionsScope(m)
 	m.cursor = 1
 
 	next, cmd := m.Update(tickMsg{})
@@ -300,10 +474,10 @@ func TestTickRefreshPreservesSelection(t *testing.T) {
 // ActionRequired>0, the preview attention line shows only "<N> action-required"
 // and does not include a "✉0" segment.
 func TestPreviewAttentionLineOmitsZeroSegments(t *testing.T) {
-	m := newTestModel([]Row{
+	m := sessionsScope(newTestModel([]Row{
 		{Kind: RowSession, Label: "p/w", Agent: "pi", State: "working", Unread: 0, ActionRequired: 1},
-	})
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	}))
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24}) // wide enough to show preview
 	m = next.(Model)
 	v := m.View()
 	if !strings.Contains(v, "1 action-required") {
@@ -315,12 +489,14 @@ func TestPreviewAttentionLineOmitsZeroSegments(t *testing.T) {
 }
 
 func TestViewRendersFooterHints(t *testing.T) {
-	m := newTestModel(nil)
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	// Agent/sidebar are shown in the new-work input footer, where they apply.
+	m := newProjectModel("tools-workspace", nil)
+	m = press(m, "enter") // open "+ new work…"
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 24})
 	m = next.(Model)
 	v := m.View()
 	if !strings.Contains(v, "agent:") || !strings.Contains(v, "sidebar:") {
-		t.Fatalf("footer should show agent/sidebar state, got:\n%s", v)
+		t.Fatalf("new-work footer should show agent/sidebar state, got:\n%s", v)
 	}
 	if !strings.Contains(v, "proj") {
 		t.Fatalf("title bar should name the picker, got:\n%s", v)
@@ -343,7 +519,7 @@ func TestBuildRowsShowsProjectsWithSessions(t *testing.T) {
 		t.Fatalf("sessions = %+v", sessions)
 	}
 	// The project that HAS a live session must still appear as a project row
-	// (so you can drill into it for home base / new work).
+	// (so you can drill into it for new work).
 	var names []string
 	for _, p := range projects {
 		names = append(names, p.Label)

@@ -3,6 +3,7 @@ package proj
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,61 @@ func rootsPath() string {
 		return filepath.Join(x, "proj", "roots")
 	}
 	return filepath.Join(os.Getenv("HOME"), ".config", "proj", "roots")
+}
+
+// RootsPath is the path to the roots config file.
+func RootsPath() string { return rootsPath() }
+
+// EnsureRootsFile creates the roots file (and its parent dir) if missing and
+// returns its path, so an editor always has a file to open.
+func EnsureRootsFile() (string, error) {
+	p := rootsPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			return "", err
+		}
+	}
+	return p, nil
+}
+
+// AddRoot appends dir to the roots file as a root (its children become
+// projects). The path must resolve to an existing directory. The raw input is
+// stored verbatim (preserving ~ / $VAR); a line already resolving to the same
+// directory is a no-op.
+func AddRoot(dir string) error {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return errors.New("empty path")
+	}
+	target := expand(dir)
+	if fi, err := os.Stat(target); err != nil || !fi.IsDir() {
+		return fmt.Errorf("not a directory: %s", dir)
+	}
+	p, err := EnsureRootsFile()
+	if err != nil {
+		return err
+	}
+	if existing, err := LoadRoots(); err == nil {
+		for _, root := range existing.Roots {
+			if root == target {
+				return nil
+			}
+		}
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	b.Write(data)
+	if len(data) > 0 && !strings.HasSuffix(string(data), "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString(dir + "\n")
+	return os.WriteFile(p, []byte(b.String()), 0o644)
 }
 
 // expand applies leading ~ then $VAR expansion, strips a trailing slash.

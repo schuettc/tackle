@@ -3,17 +3,20 @@
 //
 // The two views:
 //   - entrance: live sessions first, then projects that have no live session.
-//   - project:  a synthetic "+ new work…" (TOP), then "🏠 home base", then that
-//     project's live sessions.
+//   - project:  a synthetic "+ new work…" (TOP), then that project's live
+//     sessions.
 //
 // The model never touches tmux directly beyond the proj package; it records the
 // user's choice in Result and quits, and the caller (cmd/proj) executes it.
 package projtui
 
 import (
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/schuettc/tackle/internal/proj"
@@ -25,6 +28,18 @@ const refreshInterval = 1500 * time.Millisecond
 // tickMsg is delivered by the live-refresh tick command.
 type tickMsg struct{}
 
+// rootsEditedMsg is delivered when the external $EDITOR (^e) exits.
+type rootsEditedMsg struct{ err error }
+
+// inputKind selects what the inline text input is capturing.
+type inputKind int
+
+const (
+	inputNone    inputKind = iota // no input active
+	inputNewWork                  // naming a new work session
+	inputAddRoot                  // typing a path to add as a root (^a)
+)
+
 // viewState selects which of the two views is on screen.
 type viewState int
 
@@ -33,14 +48,22 @@ const (
 	viewProject
 )
 
+// entranceScope selects what the entrance view lists: folders (projects, the
+// default launcher view) or live sessions. Toggled with tab at the entrance.
+type entranceScope int
+
+const (
+	scopeFolders entranceScope = iota
+	scopeSessions
+)
+
 // RowKind tags a row so the renderer and enter-handler know how to treat it.
 type RowKind int
 
 const (
-	RowSession  RowKind = iota // a live tmux session
-	RowProject                 // a project with no live session (entrance only)
-	RowNewWork                 // synthetic "+ new work…" (project view, TOP)
-	RowHomeBase                // synthetic "🏠 home base" (project view)
+	RowSession RowKind = iota // a live tmux session
+	RowProject                // a project with no live session (entrance only)
+	RowNewWork                // synthetic "+ new work…" (project view, TOP)
 )
 
 // Row is one selectable line. Sessions carry Socket/Name for jumping; projects
@@ -93,9 +116,12 @@ type Model struct {
 	agentChoices  []string
 	agentIndex    int
 	sidebarChoice bool
+	scope         entranceScope
 
-	inputting bool
+	inputKind inputKind
 	input     textinput.Model
+
+	help help.Model
 
 	footerHint string
 
@@ -106,6 +132,12 @@ type Model struct {
 	// defaults to defaultRefresh (the real proj.* calls); tests inject a
 	// fixture.
 	refresh func() (sessions, projects []Row)
+
+	// kill terminates a session; defaults to proj.KillSession, injected in
+	// tests. reapConfirm holds the highlighted session name awaiting a second
+	// ^x to confirm the reap.
+	kill        func(socket, name string) error
+	reapConfirm string
 
 	Result Result
 }
@@ -119,6 +151,8 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool) Model
 		agentChoices:  agentChoicesFrom(defaultAgent),
 		sidebarChoice: sidebar,
 		refresh:       defaultRefresh,
+		kill:          proj.KillSession,
+		help:          newHelp(),
 	}
 	return m.rebuildEntrance()
 }
@@ -127,7 +161,7 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool) Model
 // Session rows are grouped under their project (name before the first '/').
 // EVERY project (including one that already has a live session) gets a project
 // row too, so you can always drill into a project's view — jump to a live
-// session up top, or select the project itself to reach its home base / new
+// session up top, or select the project itself to reach its new
 // work. Duplicate dir basenames across roots are de-duped.
 func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row) {
 	for _, s := range live {
@@ -221,23 +255,23 @@ func tickCmd() tea.Cmd {
 
 func (m Model) Init() tea.Cmd { return tickCmd() }
 
-// rebuildEntrance sets rows to live sessions followed by projects and resets to
-// the entrance view.
+// rebuildEntrance sets the entrance rows from the active scope (folders by
+// default, or live sessions) and resets to the entrance view.
 func (m Model) rebuildEntrance() Model {
 	m.view = viewEntrance
 	m.project = ""
 	m.filter = ""
 	m.cursor = 0
-	rows := make([]Row, 0, len(m.sessions)+len(m.projects))
-	rows = append(rows, m.sessions...)
-	rows = append(rows, m.projects...)
-	m.rows = rows
+	if m.scope == scopeSessions {
+		m.rows = append([]Row(nil), m.sessions...)
+	} else {
+		m.rows = append([]Row(nil), m.projects...)
+	}
 	return m
 }
 
-// drillInto switches to the project view for project: "+ new work…" first,
-// then "🏠 home base", then that project's live sessions (excluding the home
-// session, which "🏠 home base" already represents).
+// drillInto switches to the project view for project: "+ new work…" first, then
+// that project's live sessions.
 func (m Model) drillInto(project string) Model {
 	m.view = viewProject
 	m.project = project
@@ -245,10 +279,9 @@ func (m Model) drillInto(project string) Model {
 	m.cursor = 0
 	rows := []Row{
 		{Kind: RowNewWork, Label: "+ new work…", Project: project},
-		{Kind: RowHomeBase, Label: "🏠 home base", Project: project},
 	}
 	for _, s := range m.sessions {
-		if s.Project == project && s.Name != project {
+		if s.Project == project {
 			rows = append(rows, s)
 		}
 	}
@@ -257,14 +290,14 @@ func (m Model) drillInto(project string) Model {
 }
 
 // visibleRows applies the fuzzy substring filter. The synthetic specials
-// (new work / home base) are always visible so "+ new work…" stays at the top.
+// (new work) are always visible so "+ new work…" stays at the top.
 func (m Model) visibleRows() []Row {
 	if m.filter == "" {
 		return m.rows
 	}
 	var out []Row
 	for _, r := range m.rows {
-		if r.Kind == RowNewWork || r.Kind == RowHomeBase {
+		if r.Kind == RowNewWork {
 			out = append(out, r)
 			continue
 		}
@@ -292,8 +325,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m.tick()
 
+	case tea.MouseMsg:
+		if m.inputKind != inputNone {
+			return m, nil
+		}
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			if m.cursor < len(m.visibleRows())-1 {
+				m.cursor++
+			}
+		}
+		return m, nil
+
+	case rootsEditedMsg:
+		if msg.err != nil {
+			m.footerHint = "edit roots: " + msg.err.Error()
+		} else {
+			m = m.reloadRoots()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
-		if m.inputting {
+		if m.inputKind != inputNone {
 			return m.updateInput(msg)
 		}
 		return m.updateList(msg)
@@ -301,15 +358,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateInput drives the inline "+ new work…" text entry.
+// updateInput drives the inline text entry for new work ("+ new work…") and
+// for adding a root (^a).
 func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		m.inputting = false
+		m.inputKind = inputNone
 		m.input.Blur()
 		m.footerHint = ""
 		return m, nil
+	case "tab":
+		// While naming new work, tab cycles the agent that will launch into it.
+		if m.inputKind == inputNewWork && len(m.agentChoices) > 0 {
+			m.agentIndex = (m.agentIndex + 1) % len(m.agentChoices)
+		}
+		return m, nil
+	case "ctrl+s":
+		// While naming new work, ^s toggles whether the sidebar is built.
+		if m.inputKind == inputNewWork {
+			m.sidebarChoice = !m.sidebarChoice
+		}
+		return m, nil
 	case "enter":
+		if m.inputKind == inputAddRoot {
+			return m.submitAddRoot()
+		}
 		work := proj.SlugWork(m.input.Value())
 		if work == "" || !proj.ValidWork(work) {
 			m.footerHint = "invalid work name (use letters, digits, - _)"
@@ -333,13 +406,42 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // updateList drives navigation, filtering and selection in both list views.
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A pending reap is confirmed only by a second ^x; any other key cancels it
+	// and is consumed, so the cancelling key never also triggers its normal
+	// action (e.g. esc dropping out of the picker).
+	if m.reapConfirm != "" && msg.String() != "ctrl+x" {
+		m.reapConfirm = ""
+		m.footerHint = ""
+		return m, nil
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "tab":
-		if len(m.agentChoices) > 0 {
-			m.agentIndex = (m.agentIndex + 1) % len(m.agentChoices)
+		// tab toggles the entrance scope; agent/sidebar are new-session settings
+		// and live in the new-work input, not the browse view.
+		if m.view == viewEntrance {
+			if m.scope == scopeFolders {
+				m.scope = scopeSessions
+			} else {
+				m.scope = scopeFolders
+			}
+			return m.rebuildEntrance(), nil
 		}
+		return m, nil
+	case "ctrl+a":
+		ti := textinput.New()
+		ti.Placeholder = "path whose children are projects (~ ok)"
+		ti.Prompt = "› "
+		ti.Focus()
+		m.input = ti
+		m.inputKind = inputAddRoot
+		m.footerHint = ""
+		return m, textinput.Blink
+	case "ctrl+x":
+		return m.reap()
+	case "?":
+		m.help.ShowAll = !m.help.ShowAll
 		return m, nil
 	case "up", "ctrl+p":
 		if m.cursor > 0 {
@@ -354,8 +456,7 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.activate()
 	case "ctrl+e":
-		m.footerHint = "roots editing lands in a later phase"
-		return m, nil
+		return m, editRootsCmd()
 	case "esc", "left":
 		if m.view == viewProject {
 			return m.rebuildEntrance(), nil
@@ -369,26 +470,9 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Command keys act only when the filter is empty; once the user starts
-	// filtering, every printable rune goes to the filter so words containing
-	// s/a/x/q still type through.
-	text := runeText(msg)
-	if m.filter == "" && len(text) == 1 {
-		switch text {
-		case "q":
-			return m, tea.Quit
-		case "s":
-			m.sidebarChoice = !m.sidebarChoice
-			return m, nil
-		case "a":
-			m.footerHint = "roots editing lands in a later phase"
-			return m, nil
-		case "x":
-			m.footerHint = "reap lands in a later phase"
-			return m, nil
-		}
-	}
-	if text != "" {
+	// Every printable rune goes to the filter; commands live on ctrl+ chords
+	// (above) so a search term can start with any letter, including s/a/x/q.
+	if text := runeText(msg); text != "" {
 		m.filter += text
 		m.clampCursor()
 	}
@@ -414,20 +498,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		ti.Prompt = "› "
 		ti.Focus()
 		m.input = ti
-		m.inputting = true
+		m.inputKind = inputNewWork
 		m.footerHint = ""
 		return m, textinput.Blink
-	case RowHomeBase:
-		m.Result = Result{
-			Kind:    "new",
-			Project: m.project,
-			Work:    "",
-			Agent:   m.agentChoice(),
-			Sidebar: m.sidebarChoice,
-			Socket:  proj.SocketFor(m.project),
-			Name:    m.project,
-		}
-		return m, tea.Quit
 	}
 	return m, nil
 }
@@ -436,15 +509,42 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 // current view, filter and (clamped) cursor. While a name is being typed the
 // refresh is skipped so the input is not disturbed; the tick is always re-armed.
 func (m Model) tick() (tea.Model, tea.Cmd) {
-	if m.inputting || m.refresh == nil {
+	if m.inputKind != inputNone || m.refresh == nil {
 		return m, tickCmd()
 	}
+	return m.refreshRows(), tickCmd()
+}
 
-	sessions, projects := m.refresh()
-	m.sessions = sessions
-	m.projects = projects
+// submitAddRoot validates the typed path, appends it to the roots file, and
+// reloads the entrance so the new projects appear immediately.
+func (m Model) submitAddRoot() (tea.Model, tea.Cmd) {
+	path := strings.TrimSpace(m.input.Value())
+	if err := proj.AddRoot(path); err != nil {
+		m.footerHint = "add root: " + err.Error()
+		return m, nil
+	}
+	m.inputKind = inputNone
+	m.input.Blur()
+	m = m.reloadRoots()
+	m.footerHint = "added root: " + path
+	return m, nil
+}
 
-	// Rebuild rows for the active view, preserving view/filter/cursor.
+// reloadRoots re-runs discovery and returns to the entrance view.
+func (m Model) reloadRoots() Model {
+	if m.refresh != nil {
+		m.sessions, m.projects = m.refresh()
+	}
+	return m.rebuildEntrance()
+}
+
+// refreshRows re-runs discovery and rebuilds the ACTIVE view, preserving
+// view/filter/project and clamping the cursor.
+func (m Model) refreshRows() Model {
+	if m.refresh == nil {
+		return m
+	}
+	m.sessions, m.projects = m.refresh()
 	view, filter, cursor, project := m.view, m.filter, m.cursor, m.project
 	if view == viewProject {
 		m = m.drillInto(project)
@@ -456,7 +556,65 @@ func (m Model) tick() (tea.Model, tea.Cmd) {
 	m.project = project
 	m.cursor = cursor
 	m.clampCursor()
-	return m, tickCmd()
+	return m
+}
+
+// reap kills the highlighted session. The first ^x arms a confirmation; a
+// second ^x on the same session carries it out. It refuses non-session rows and
+// the session hosting the picker.
+func (m Model) reap() (tea.Model, tea.Cmd) {
+	vis := m.visibleRows()
+	if len(vis) == 0 || m.cursor >= len(vis) {
+		return m, nil
+	}
+	row := vis[m.cursor]
+	if row.Kind != RowSession {
+		m.reapConfirm = ""
+		m.footerHint = "nothing to reap here"
+		return m, nil
+	}
+	if row.Name == proj.CurrentSessionName() {
+		m.reapConfirm = ""
+		m.footerHint = "can't reap the session you're in"
+		return m, nil
+	}
+	if m.reapConfirm != row.Name {
+		m.reapConfirm = row.Name
+		m.footerHint = "reap " + row.Name + "? ^x to confirm · any key cancels"
+		return m, nil
+	}
+	m.reapConfirm = ""
+	if m.kill != nil {
+		if err := m.kill(row.Socket, row.Name); err != nil {
+			m.footerHint = "reap: " + err.Error()
+			return m, nil
+		}
+	}
+	m = m.refreshRows()
+	m.footerHint = "reaped " + row.Name
+	return m, nil
+}
+
+// editRootsCmd suspends the TUI, opens the roots file in $EDITOR (then $VISUAL,
+// then vi), and reports completion via rootsEditedMsg.
+func editRootsCmd() tea.Cmd {
+	path, err := proj.EnsureRootsFile()
+	if err != nil {
+		return func() tea.Msg { return rootsEditedMsg{err} }
+	}
+	fields := editorFields()
+	c := exec.Command(fields[0], append(fields[1:], path)...)
+	return tea.ExecProcess(c, func(err error) tea.Msg { return rootsEditedMsg{err} })
+}
+
+// editorFields splits $EDITOR/$VISUAL into command + args, defaulting to vi.
+func editorFields() []string {
+	for _, env := range []string{"EDITOR", "VISUAL"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return strings.Fields(v)
+		}
+	}
+	return []string{"vi"}
 }
 
 func (m *Model) clampCursor() {

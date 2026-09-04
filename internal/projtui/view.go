@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/schuettc/tackle/internal/proj"
@@ -17,6 +19,7 @@ var (
 	colSubtext0 = lipgloss.Color("#a6adc8")
 	colText     = lipgloss.Color("#cdd6f4")
 	colSurface1 = lipgloss.Color("#45475a")
+	colOverlay0 = lipgloss.Color("#6c7086")
 
 	titleLabelStyle = lipgloss.NewStyle().Background(colSurface1).Foreground(colMauve).Bold(true)
 	titleInfoStyle  = lipgloss.NewStyle().Background(colSurface1).Foreground(colText)
@@ -28,40 +31,104 @@ var (
 	rowStyle      = lipgloss.NewStyle().Foreground(colText)
 	dimStyle      = lipgloss.NewStyle().Foreground(colSubtext0)
 	agentStyle    = lipgloss.NewStyle().Foreground(colGreen)
-	footerStyle   = lipgloss.NewStyle().Foreground(colSubtext0)
 	hintStyle     = lipgloss.NewStyle().Foreground(colYellow)
 	previewStyle  = lipgloss.NewStyle().Foreground(colText)
 	previewHead   = lipgloss.NewStyle().Foreground(colMauve).Bold(true)
 	attnStyle     = lipgloss.NewStyle().Foreground(colYellow).Bold(true)
+
+	// 1-col left/right breathing room around the whole picker.
+	appStyle = lipgloss.NewStyle().Padding(0, 1)
+	// A mauve left-edge accent on the selected row.
+	accentStyle = lipgloss.NewStyle().Foreground(colMauve)
+	// A rounded frame around the preview pane, giving the layout structure.
+	previewFrame = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colOverlay0).
+			Padding(0, 1)
 )
 
-func (m Model) View() string {
-	title := m.titleBar()
-	body := lipgloss.JoinHorizontal(lipgloss.Top, m.listPane(), "  ", m.previewPane())
-	footer := m.footer()
-	return lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", footer)
+// newHelp builds the help component themed to the Catppuccin palette.
+func newHelp() help.Model {
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(colGreen)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(colSubtext0)
+	h.Styles.ShortSeparator = lipgloss.NewStyle().Foreground(colSurface1)
+	h.Styles.FullKey = h.Styles.ShortKey
+	h.Styles.FullDesc = h.Styles.ShortDesc
+	h.Styles.FullSeparator = h.Styles.ShortSeparator
+	h.Styles.Ellipsis = lipgloss.NewStyle().Foreground(colSurface1)
+	return h
 }
 
-func (m Model) titleBar() string {
+func (m Model) View() string {
+	iw := m.width - 2 // account for appStyle's 1-col side padding
+	if iw < 20 {
+		iw = m.width
+	}
+	listW, previewW, showPreview := m.layout(iw)
+
+	list := lipgloss.NewStyle().Width(listW).Render(m.listPane(listW))
+	body := list
+	if showPreview {
+		// previewFrame adds a 1-col horizontal pad inside its Width, so the text
+		// area is previewW-2.
+		preview := previewFrame.Width(previewW).Render(m.previewPane(previewW - 2))
+		body = lipgloss.JoinHorizontal(lipgloss.Top, list, "  ", preview)
+	}
+
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		m.titleBar(iw), "", body, "", m.footerView(iw))
+	return appStyle.Render(content)
+}
+
+// layout splits the inner width into the list column and (when the terminal is
+// wide enough) a preview column sized to ~42% of the width, hiding the preview
+// on narrow terminals. previewW is the frame's Width value; its text area is
+// previewW-2 (the frame's horizontal padding) and its outer footprint is
+// previewW+2 (the border).
+func (m Model) layout(iw int) (listW, previewW int, showPreview bool) {
+	if iw < 80 {
+		if iw <= 0 {
+			iw = 40
+		}
+		return iw, 0, false
+	}
+	outer := iw * 42 / 100
+	if outer < 36 {
+		outer = 36
+	}
+	if outer > 66 {
+		outer = 66
+	}
+	return iw - outer - 2, outer - 2, true
+}
+
+func (m Model) titleBar(width int) string {
 	label := " proj "
-	info := "· all projects "
+	info := "· folders "
+	if m.scope == scopeSessions {
+		info = "· sessions "
+	}
 	if m.view == viewProject {
 		info = "· " + m.project + " "
 	}
 	title := titleLabelStyle.Render(label) + titleInfoStyle.Render(info)
-	width := m.width
 	if width < lipgloss.Width(title) {
 		width = lipgloss.Width(title)
 	}
 	return titleBarStyle.Width(width).Render(title)
 }
 
-func (m Model) listPane() string {
+func (m Model) listPane(width int) string {
 	var b strings.Builder
 
 	// Filter / input line.
-	if m.inputting {
-		b.WriteString(hintStyle.Render("new work: ") + m.input.View() + "\n")
+	if m.inputKind != inputNone {
+		label := "new work: "
+		if m.inputKind == inputAddRoot {
+			label = "add root: "
+		}
+		b.WriteString(hintStyle.Render(label) + m.input.View() + "\n")
 	} else if m.filter != "" {
 		b.WriteString(dimStyle.Render("/"+m.filter) + "\n")
 	} else {
@@ -71,7 +138,7 @@ func (m Model) listPane() string {
 
 	vis := m.visibleRows()
 	if len(vis) == 0 {
-		b.WriteString(dimStyle.Render("  (no matches)"))
+		b.WriteString(m.emptyMessage())
 		return b.String()
 	}
 
@@ -79,19 +146,11 @@ func (m Model) listPane() string {
 	// cursor is always framed.
 	start, end := m.window(len(vis))
 
-	// Width of the highlight bar = widest row in the window (+ prefix), capped.
-	barW := 0
-	for i := start; i < end; i++ {
-		if w := lipgloss.Width(plainRow(vis[i])) + 2; w > barW {
-			barW = w
-		}
-	}
-
 	if start > 0 {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
 	}
 	for i := start; i < end; i++ {
-		b.WriteString(m.renderRow(vis[i], i == m.cursor, barW))
+		b.WriteString(m.renderRow(vis[i], i == m.cursor, width))
 		if i < end-1 {
 			b.WriteString("\n")
 		}
@@ -100,6 +159,23 @@ func (m Model) listPane() string {
 		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(vis)-end)))
 	}
 	return b.String()
+}
+
+// emptyMessage returns the guidance shown when no rows are visible — tuned so a
+// first-run user (no roots yet) is told exactly how to proceed.
+func (m Model) emptyMessage() string {
+	var msg string
+	switch {
+	case m.filter != "":
+		msg = "no matches — esc to clear the filter"
+	case m.scope == scopeSessions:
+		msg = "no live sessions — tab for folders"
+	case len(m.projects) == 0:
+		msg = "no projects yet — ^a to add a root, ^e to edit roots"
+	default:
+		msg = "no folders match"
+	}
+	return dimStyle.Render("  " + msg)
 }
 
 // window returns the [start,end) slice of rows to render, scrolled to keep the
@@ -154,11 +230,17 @@ func plainRow(r Row) string {
 }
 
 // renderRow formats a single row. The selected row is a full-width highlight
-// bar (uniform bright text on a surface background, prefixed ▸); unselected
-// rows keep their per-token colors (● name  agent·state  ✉N).
-func (m Model) renderRow(r Row, selected bool, barW int) string {
+// bar (mauve left accent + uniform bright text on a surface background);
+// unselected rows keep their per-token colors (● name  agent·state  ✉N). Both
+// are truncated to width so a long name/path never breaks the layout.
+func (m Model) renderRow(r Row, selected bool, width int) string {
 	if selected {
-		return selectedStyle.Width(barW).Render("▸ " + plainRow(r))
+		barW := width - 1 // 1 col for the accent edge
+		if barW < 1 {
+			barW = 1
+		}
+		bar := selectedStyle.Width(barW).MaxWidth(barW).Render(" " + plainRow(r))
+		return accentStyle.Render("▎") + bar
 	}
 	var line string
 	switch r.Kind {
@@ -174,8 +256,11 @@ func (m Model) renderRow(r Row, selected bool, barW int) string {
 		line = dot + " " + r.Label + meta + attentionMarkers(r)
 	case RowProject:
 		line = dimStyle.Render("○") + " " + r.Label
-	default: // RowNewWork, RowHomeBase
+	default: // RowNewWork
 		line = r.Label
+	}
+	if width > 0 {
+		return lipgloss.NewStyle().MaxWidth(width).Render("  " + line)
 	}
 	return rowStyle.Render("  ") + line
 }
@@ -197,7 +282,7 @@ func attentionMarkers(r Row) string {
 // state, an attention line (only when there is any unread/action-required), and
 // a git line (only for a real repo). GitStatus is computed lazily HERE, only for
 // the highlighted row, and skipped when Dir is empty.
-func (m Model) previewPane() string {
+func (m Model) previewPane(width int) string {
 	vis := m.visibleRows()
 	if len(vis) == 0 || m.cursor >= len(vis) {
 		return previewStyle.Render("")
@@ -210,8 +295,9 @@ func (m Model) previewPane() string {
 	dir := r.Dir
 
 	var b strings.Builder
-	b.WriteString(previewHead.Render("preview") + "\n\n")
-	b.WriteString(previewStyle.Render(name) + "\n")
+	b.WriteString(previewHead.Render("preview") + "\n")
+	b.WriteString(dimStyle.Render(strings.Repeat("─", width)) + "\n")
+	b.WriteString(previewStyle.Render(trunc(name, width)) + "\n")
 
 	if r.Kind == RowSession {
 		if r.Agent != "" {
@@ -235,36 +321,103 @@ func (m Model) previewPane() string {
 
 	if dir != "" {
 		if g := proj.GitStatus(dir); g.Repo {
-			b.WriteString(dimStyle.Render(fmt.Sprintf("git %s ↑%d ↓%d ●%d", g.Branch, g.Ahead, g.Behind, g.Dirty)) + "\n")
+			b.WriteString(dimStyle.Render(trunc(fmt.Sprintf("git %s ↑%d ↓%d ●%d", g.Branch, g.Ahead, g.Behind, g.Dirty), width)) + "\n")
 		}
-		b.WriteString(dimStyle.Render(dir))
+		b.WriteString(dimStyle.Render(trunc(dir, width)))
 	} else {
 		b.WriteString(dimStyle.Render("—"))
 	}
 	return b.String()
 }
 
-func (m Model) footer() string {
-	var parts []string
-	if m.inputting {
-		parts = append(parts, "enter save", "esc cancel")
+// footerView renders the key legend via the help component (“?” toggles the full
+// legend) plus any transient hint. Descriptions carry live state (scope, agent,
+// sidebar) so the footer stays informative.
+func (m Model) footerView(width int) string {
+	m.help.Width = width
+	var legend string
+	if m.inputKind == inputAddRoot {
+		legend = m.help.ShortHelpView([]key.Binding{
+			bind("enter", "save"),
+			bind("esc", "cancel"),
+		})
+	} else if m.inputKind == inputNewWork {
+		legend = m.help.ShortHelpView([]key.Binding{
+			bind("enter", "create"),
+			bind("tab", "agent:"+m.agentChoice()),
+			bind("^s", "sidebar:"+onOff(m.sidebarChoice)),
+			bind("esc", "cancel"),
+		})
+	} else if m.help.ShowAll {
+		legend = m.help.FullHelpView(m.fullHelp())
 	} else {
-		parts = append(parts,
-			"enter select",
-			"esc back",
-			"tab agent:"+m.agentChoice(),
-			"s sidebar:"+onOff(m.sidebarChoice),
-			"a roots",
-			"^e edit",
-			"x reap",
-			"q quit",
-		)
+		legend = m.help.ShortHelpView(m.shortHelp())
 	}
-	footer := footerStyle.Render(strings.Join(parts, "  ·  "))
-	if m.footerHint != "" {
-		footer += "\n" + hintStyle.Render(m.footerHint)
+	if m.footerHint == "" {
+		return legend
 	}
-	return footer
+	return hintStyle.Render(m.footerHint) + "\n" + legend
+}
+
+func bind(k, desc string) key.Binding {
+	return key.NewBinding(key.WithKeys(k), key.WithHelp(k, desc))
+}
+
+// shortHelp is the compact browse legend; fullHelp (“?”) is the grouped one.
+// Agent/sidebar are new-session settings and appear only in the new-work input,
+// never while browsing or jumping to an existing session.
+func (m Model) shortHelp() []key.Binding {
+	if m.view == viewEntrance {
+		return []key.Binding{
+			bind("↵", "open"),
+			bind("tab", otherScopeLabel(m.scope)),
+			bind("^x", "reap"),
+			bind("?", "keys"),
+		}
+	}
+	return []key.Binding{
+		bind("↵", "open"),
+		bind("esc", "back"),
+		bind("^x", "reap"),
+		bind("?", "keys"),
+	}
+}
+
+func (m Model) fullHelp() [][]key.Binding {
+	nav := []key.Binding{
+		bind("↑↓", "move"),
+		bind("↵", "open"),
+		bind("esc", "back"),
+	}
+	if m.view == viewEntrance {
+		nav = append(nav, bind("tab", otherScopeLabel(m.scope)))
+	}
+	return [][]key.Binding{
+		nav,
+		{
+			bind("^a", "add root"),
+			bind("^e", "edit roots"),
+		},
+		{
+			bind("^x", "reap"),
+			bind("^c", "quit"),
+		},
+	}
+}
+
+// trunc shortens s to at most width display columns, adding an ellipsis.
+func trunc(s string, width int) string {
+	if width <= 0 || lipgloss.Width(s) <= width {
+		return s
+	}
+	if width <= 1 {
+		return "…"
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > width {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
 }
 
 // dotColor encodes a session's agent state in its ●: green working, amber
@@ -278,6 +431,14 @@ func dotColor(state string) lipgloss.Color {
 	default:
 		return colSubtext0
 	}
+}
+
+// otherScopeLabel names the scope tab will switch TO (an action label).
+func otherScopeLabel(s entranceScope) string {
+	if s == scopeSessions {
+		return "folders"
+	}
+	return "sessions"
 }
 
 func onOff(b bool) string {
