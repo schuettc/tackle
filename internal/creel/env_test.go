@@ -177,13 +177,13 @@ func TestEnsureGitignored(t *testing.T) {
 
 func TestDetect(t *testing.T) {
 	cases := map[string]string{
-		"sk-ant-abc":       "looks like an Anthropic key",
-		"sk-proj-abc":      "looks like an OpenAI key",
-		"ghp_abc":          "looks like a GitHub token",
-		"AKIAIOSFODNN7":    "looks like an AWS access key",
-		"xoxb-1-2":         "looks like a Slack token",
-		"AIzaSyabc":        "looks like a Google API key",
-		"totally-random":   "",
+		"sk-ant-abc":     "looks like an Anthropic key",
+		"sk-proj-abc":    "looks like an OpenAI key",
+		"ghp_abc":        "looks like a GitHub token",
+		"AKIAIOSFODNN7":  "looks like an AWS access key",
+		"xoxb-1-2":       "looks like a Slack token",
+		"AIzaSyabc":      "looks like a Google API key",
+		"totally-random": "",
 	}
 	for in, want := range cases {
 		if got := Detect(in); got != want {

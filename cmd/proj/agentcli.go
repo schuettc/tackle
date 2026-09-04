@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -9,7 +10,24 @@ import (
 	"strings"
 
 	"github.com/schuettc/tackle/internal/proj"
+	tools "github.com/schuettc/tools-common"
 )
+
+// parseAgentFlags parses a proj subcommand's flag set through the shared family
+// helper, so -h/--help prints the command's flags to stdout and exits cleanly
+// (rather than the old bare "Usage of list:" on stderr with exit 2). handled is
+// true when the caller should return code immediately; false means parsing
+// succeeded and the caller continues.
+func parseAgentFlags(fs *flag.FlagSet, args []string) (handled bool, code int) {
+	if err := tools.ParseFlags(fs, args, os.Stdout); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return true, 0
+		}
+		fmt.Fprintf(os.Stderr, "proj %s: %v\n", fs.Name(), err)
+		return true, 2
+	}
+	return false, 0
+}
 
 // parseNewTarget splits "<project>/<work>" on the FIRST '/', slugging and
 // validating the work segment. It errors on a missing '/' or an invalid work
@@ -53,8 +71,8 @@ type listJSON struct {
 func cmdList(args []string) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if handled, code := parseAgentFlags(fs, args); handled {
+		return code
 	}
 	if !*asJSON {
 		fmt.Fprintln(os.Stderr, "proj list: only --json is supported")
@@ -95,8 +113,8 @@ type currentJSON struct {
 func cmdCurrent(args []string) int {
 	fs := flag.NewFlagSet("current", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "emit JSON")
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if handled, code := parseAgentFlags(fs, args); handled {
+		return code
 	}
 	if !*asJSON {
 		fmt.Fprintln(os.Stderr, "proj current: only --json is supported")
@@ -137,8 +155,8 @@ func cmdNew(args []string) int {
 	var positional []string
 	rest := args
 	for len(rest) > 0 {
-		if err := fs.Parse(rest); err != nil {
-			return 2
+		if handled, code := parseAgentFlags(fs, rest); handled {
+			return code
 		}
 		rest = fs.Args()
 		if len(rest) > 0 {
@@ -203,7 +221,9 @@ func parseSidebarArgs(args []string) (sidebarArgs, error) {
 	var positional []string
 	rest := args
 	for len(rest) > 0 {
-		if err := fs.Parse(rest); err != nil {
+		// ParseFlags surfaces -h as flag.ErrHelp (after printing the flags);
+		// cmdSidebar turns that into a clean exit.
+		if err := tools.ParseFlags(fs, rest, os.Stdout); err != nil {
 			return sidebarArgs{}, err
 		}
 		rest = fs.Args()
@@ -226,6 +246,9 @@ func parseSidebarArgs(args []string) (sidebarArgs, error) {
 func cmdSidebar(args []string) int {
 	sa, err := parseSidebarArgs(args)
 	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		fmt.Fprintln(os.Stderr, "proj:", err)
 		return 2
 	}
