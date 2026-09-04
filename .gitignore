@@ -2,6 +2,9 @@
 .superpowers/
 .claude/settings.local.json
 
+# SDD design docs (plans/specs) — kept local, not committed
+docs/superpowers/
+
 # scratch binary
 /scratch
 
