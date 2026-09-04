@@ -148,7 +148,7 @@ func runPicker(project, agent string) int {
 		return 1
 	}
 
-	final, err := tea.NewProgram(m).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion()).Run()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 		return 1

@@ -3,6 +3,7 @@ package proj
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,61 @@ func TestLoadRootsMissingFile(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "x"))
 	if _, err := LoadRoots(); err != ErrNoRoots {
 		t.Fatalf("want ErrNoRoots, got %v", err)
+	}
+}
+
+func TestAddRoot(t *testing.T) {
+	home := writeRoots(t, "~/code\n")
+	mustMkdir(t, filepath.Join(home, "code", "alpha"))
+	mustMkdir(t, filepath.Join(home, "more", "beta"))
+
+	// non-directory input is rejected and the file is untouched.
+	if err := AddRoot(filepath.Join(home, "nope")); err == nil {
+		t.Fatal("AddRoot(nonexistent) should error")
+	}
+
+	if err := AddRoot("~/more"); err != nil {
+		t.Fatalf("AddRoot(~/more): %v", err)
+	}
+	// the raw ~ form is preserved in the file.
+	data, _ := os.ReadFile(RootsPath())
+	if !contains(strings.Split(string(data), "\n"), "~/more") {
+		t.Fatalf("roots file missing ~/more:\n%s", data)
+	}
+
+	// adding the same dir again (different spelling) is a no-op.
+	if err := AddRoot(filepath.Join(home, "more")); err != nil {
+		t.Fatalf("AddRoot(dup): %v", err)
+	}
+	r, err := LoadRoots()
+	if err != nil {
+		t.Fatalf("LoadRoots: %v", err)
+	}
+	dirs := r.AllProjectDirs()
+	if !contains(dirs, filepath.Join(home, "code", "alpha")) ||
+		!contains(dirs, filepath.Join(home, "more", "beta")) {
+		t.Fatalf("AllProjectDirs after AddRoot: %v", dirs)
+	}
+	n := 0
+	for _, root := range r.Roots {
+		if root == filepath.Join(home, "more") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("~/more appears %d times, want 1", n)
+	}
+}
+
+func TestEnsureRootsFileCreates(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "cfg"))
+	p, err := EnsureRootsFile()
+	if err != nil {
+		t.Fatalf("EnsureRootsFile: %v", err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("roots file not created: %v", err)
 	}
 }
 
