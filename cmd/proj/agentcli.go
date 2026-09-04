@@ -187,7 +187,7 @@ func cmdNew(args []string, out, errw io.Writer) error {
 
 	project, work, err := parseNewTarget(positional[0])
 	if err != nil {
-		return tools.Exitf(1, "%v", err)
+		return tools.UsageError{Msg: err.Error()}
 	}
 
 	roots, err := proj.LoadRoots()
@@ -226,9 +226,8 @@ type sidebarArgs struct {
 
 // parseSidebarArgs parses `sidebar <session> [--socket S] [--dir D]`.
 func parseSidebarArgs(args []string) (sidebarArgs, error) {
-	fs := flag.NewFlagSet("sidebar", flag.ContinueOnError)
-	socket := fs.String("socket", "", "tmux socket name")
-	dir := fs.String("dir", "", "working directory for sidebar panes")
+	fs, f := newSidebarFlags()
+	socket, dir := f.socket, f.dir
 
 	var positional []string
 	rest := args
@@ -251,8 +250,9 @@ func parseSidebarArgs(args []string) (sidebarArgs, error) {
 	return sidebarArgs{session: positional[0], socket: *socket, dir: *dir}, nil
 }
 
-// sidebarFlags holds `proj sidebar`'s flags, for -h/help rendering. Actual
-// parsing goes through parseSidebarArgs, whose signature is pinned by tests.
+// sidebarFlags holds `proj sidebar`'s flags. The single declaration is shared
+// by parseSidebarArgs (actual parsing) and the registry's NewFlags (-h/help
+// and man rendering), so the two never drift apart.
 type sidebarFlags struct {
 	socket *string
 	dir    *string

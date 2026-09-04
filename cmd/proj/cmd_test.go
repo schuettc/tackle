@@ -56,6 +56,15 @@ func TestRunNewRequiresTarget(t *testing.T) {
 	}
 }
 
+func TestRunNewMalformedTarget(t *testing.T) {
+	// Fails at parseNewTarget (missing '/') before any LoadRoots/tmux call, so
+	// this needs no live server. A malformed target is a usage error (exit 2),
+	// matching pre-migration behavior.
+	if code := run([]string{"new", "noslash"}); code != 2 {
+		t.Fatalf("proj new noslash: got exit %d, want 2", code)
+	}
+}
+
 func TestRunListHelp(t *testing.T) {
 	out, code := captureStdout(t, func() int { return run([]string{"list", "-h"}) })
 	if code != 0 {
