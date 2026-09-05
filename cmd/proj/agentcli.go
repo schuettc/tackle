@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,22 +12,6 @@ import (
 	"github.com/schuettc/tackle/internal/proj"
 	tools "github.com/schuettc/tools-common"
 )
-
-// parseAgentFlags parses a proj subcommand's flag set through the shared family
-// helper, so -h/--help prints the command's flags to stdout and exits cleanly
-// (rather than the old bare "Usage of list:" on stderr with exit 2). handled is
-// true when the caller should return code immediately; false means parsing
-// succeeded and the caller continues.
-func parseAgentFlags(fs *flag.FlagSet, args []string) (handled bool, code int) {
-	if err := tools.ParseFlags(fs, args, os.Stdout); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return true, 0
-		}
-		fmt.Fprintf(os.Stderr, "proj %s: %v\n", fs.Name(), err)
-		return true, 2
-	}
-	return false, 0
-}
 
 // parseNewTarget splits "<project>/<work>" on the FIRST '/', slugging and
 // validating the work segment. It errors on a missing '/' or an invalid work
@@ -66,27 +50,40 @@ type listJSON struct {
 	Sessions []sessionJSON `json:"sessions"`
 }
 
+// listFlags holds `proj list`'s parsed flags.
+type listFlags struct {
+	json *bool
+}
+
+// newListFlags is proj list's side-effect-free flag constructor, used both to
+// parse and to render -h/help.
+func newListFlags() (*flag.FlagSet, *listFlags) {
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	f := &listFlags{json: fs.Bool("json", false, "emit JSON")}
+	tools.SetUsage(fs, "proj list --json",
+		"Lists configured project names and every live session across proj's per-project tmux servers.")
+	return fs, f
+}
+
 // cmdList implements `proj list --json`: the configured project names plus every
 // live session across the per-project servers.
-func cmdList(args []string) int {
-	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	asJSON := fs.Bool("json", false, "emit JSON")
-	if handled, code := parseAgentFlags(fs, args); handled {
-		return code
+func cmdList(args []string, out, errw io.Writer) error {
+	fs, f := newListFlags()
+	if err := tools.ParseFlags(fs, args, out); err != nil {
+		return err
 	}
-	if !*asJSON {
-		fmt.Fprintln(os.Stderr, "proj list: only --json is supported")
-		return 2
+	if !*f.json {
+		return tools.UsageError{Msg: "only --json is supported"}
 	}
 
-	out := listJSON{Projects: []string{}, Sessions: []sessionJSON{}}
+	payload := listJSON{Projects: []string{}, Sessions: []sessionJSON{}}
 	if roots, err := proj.LoadRoots(); err == nil {
 		for _, dir := range roots.AllProjectDirs() {
-			out.Projects = append(out.Projects, filepath.Base(dir))
+			payload.Projects = append(payload.Projects, filepath.Base(dir))
 		}
 	}
 	for _, s := range proj.LiveSessions() {
-		out.Sessions = append(out.Sessions, sessionJSON{
+		payload.Sessions = append(payload.Sessions, sessionJSON{
 			Name:           s.Name,
 			Project:        proj.ProjectFromSocket(s.Socket),
 			Socket:         s.Socket,
@@ -97,7 +94,7 @@ func cmdList(args []string) int {
 			ActionRequired: s.ActionRequired,
 		})
 	}
-	return emitJSON(out)
+	return writeJSON(out, payload)
 }
 
 // currentJSON is the shape emitted by `proj current --json`.
@@ -108,17 +105,29 @@ type currentJSON struct {
 	Dir     string `json:"dir"`
 }
 
+// currentFlags holds `proj current`'s parsed flags.
+type currentFlags struct {
+	json *bool
+}
+
+// newCurrentFlags is proj current's side-effect-free flag constructor.
+func newCurrentFlags() (*flag.FlagSet, *currentFlags) {
+	fs := flag.NewFlagSet("current", flag.ContinueOnError)
+	f := &currentFlags{json: fs.Bool("json", false, "emit JSON")}
+	tools.SetUsage(fs, "proj current --json",
+		"Identifies the ambient proj session from $TMUX. All fields are empty when run outside a proj session.")
+	return fs, f
+}
+
 // cmdCurrent implements `proj current --json`: the identity of the ambient proj
 // session derived from $TMUX. All fields are empty when outside a proj session.
-func cmdCurrent(args []string) int {
-	fs := flag.NewFlagSet("current", flag.ContinueOnError)
-	asJSON := fs.Bool("json", false, "emit JSON")
-	if handled, code := parseAgentFlags(fs, args); handled {
-		return code
+func cmdCurrent(args []string, out, errw io.Writer) error {
+	fs, f := newCurrentFlags()
+	if err := tools.ParseFlags(fs, args, out); err != nil {
+		return err
 	}
-	if !*asJSON {
-		fmt.Fprintln(os.Stderr, "proj current: only --json is supported")
-		return 2
+	if !*f.json {
+		return tools.UsageError{Msg: "only --json is supported"}
 	}
 
 	var cur currentJSON
@@ -137,7 +146,27 @@ func cmdCurrent(args []string) int {
 			cur.Dir = proj.Query(socket, name, "#{pane_current_path}")
 		}
 	}
-	return emitJSON(cur)
+	return writeJSON(out, cur)
+}
+
+// newFlags holds `proj new`'s parsed flags.
+type newFlags struct {
+	agent     *string
+	noSidebar *bool
+}
+
+// newNewFlags is proj new's side-effect-free flag constructor.
+func newNewFlags() (*flag.FlagSet, *newFlags) {
+	fs := flag.NewFlagSet("new", flag.ContinueOnError)
+	f := &newFlags{
+		agent:     fs.String("agent", "", "agent to launch (defaults to config)"),
+		noSidebar: fs.Bool("no-sidebar", false, "suppress the sidebar (Phase 3)"),
+	}
+	tools.SetUsage(fs, "new <project>/<work> [--agent X] [--no-sidebar]",
+		"Creates or resumes the tmux session for <project>/<work>. Detached by contract: "+
+			"mints the session but never switches the caller's client. --no-sidebar suppresses "+
+			"the sidebar; otherwise it spawns when the project's config enables it.")
+	return fs, f
 }
 
 // cmdNew implements `proj new <project>/<work> [--agent X] [--no-sidebar]`.
@@ -146,48 +175,32 @@ func cmdCurrent(args []string) int {
 // operator's client. This handler therefore calls EnsureSession only and NEVER
 // calls Goto (spec boundary). --no-sidebar suppresses sidebar spawn; otherwise
 // sidebar is spawned when Config.SidebarFor(project) is true.
-func cmdNew(args []string) int {
-	fs := flag.NewFlagSet("new", flag.ContinueOnError)
-	agent := fs.String("agent", "", "agent to launch (defaults to config)")
-	noSidebar := fs.Bool("no-sidebar", false, "suppress the sidebar (Phase 3)")
-
-	// Allow flags interspersed with the positional target.
-	var positional []string
-	rest := args
-	for len(rest) > 0 {
-		if handled, code := parseAgentFlags(fs, rest); handled {
-			return code
-		}
-		rest = fs.Args()
-		if len(rest) > 0 {
-			positional = append(positional, rest[0])
-			rest = rest[1:]
-		}
+func cmdNew(args []string, out, errw io.Writer) error {
+	fs, f := newNewFlags()
+	flagArgs, positional := tools.SplitArgs(fs, args)
+	if err := tools.ParseFlags(fs, flagArgs, out); err != nil {
+		return err
 	}
 	if len(positional) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: proj new <project>/<work> [--agent X] [--no-sidebar]")
-		return 2
+		return tools.UsageError{Msg: "usage: proj new <project>/<work> [--agent X] [--no-sidebar]"}
 	}
 
 	project, work, err := parseNewTarget(positional[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
-		return 2
+		return tools.UsageError{Msg: err.Error()}
 	}
 
 	roots, err := proj.LoadRoots()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
-		return 1
+		return tools.Exitf(1, "%v", err)
 	}
 	dir, ok := roots.DirForName(project)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "proj: unknown project %q\n", project)
-		return 1
+		return tools.Exitf(1, "unknown project %q", project)
 	}
 
 	cfg := proj.LoadConfig()
-	a := *agent
+	a := *f.agent
 	if a == "" {
 		a = cfg.AgentFor(project)
 	}
@@ -195,14 +208,13 @@ func cmdNew(args []string) int {
 	name := proj.SessionName(project, work)
 	socket := proj.SocketFor(project)
 	if err := proj.EnsureSession(socket, name, dir, a); err != nil {
-		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
-		return 1
+		return tools.Exitf(1, "%v", err)
 	}
-	if !*noSidebar && cfg.SidebarFor(project) {
+	if !*f.noSidebar && cfg.SidebarFor(project) {
 		SpawnSidebarDetached(socket, name, dir)
 	}
-	fmt.Println(name)
-	return 0
+	fmt.Fprintln(out, name)
+	return nil
 }
 
 // sidebarArgs holds the parsed result of parseSidebarArgs.
@@ -214,9 +226,8 @@ type sidebarArgs struct {
 
 // parseSidebarArgs parses `sidebar <session> [--socket S] [--dir D]`.
 func parseSidebarArgs(args []string) (sidebarArgs, error) {
-	fs := flag.NewFlagSet("sidebar", flag.ContinueOnError)
-	socket := fs.String("socket", "", "tmux socket name")
-	dir := fs.String("dir", "", "working directory for sidebar panes")
+	fs, f := newSidebarFlags()
+	socket, dir := f.socket, f.dir
 
 	var positional []string
 	rest := args
@@ -239,18 +250,36 @@ func parseSidebarArgs(args []string) (sidebarArgs, error) {
 	return sidebarArgs{session: positional[0], socket: *socket, dir: *dir}, nil
 }
 
+// sidebarFlags holds `proj sidebar`'s flags. The single declaration is shared
+// by parseSidebarArgs (actual parsing) and the registry's NewFlags (-h/help
+// and man rendering), so the two never drift apart.
+type sidebarFlags struct {
+	socket *string
+	dir    *string
+}
+
+// newSidebarFlags is proj sidebar's side-effect-free flag constructor.
+func newSidebarFlags() (*flag.FlagSet, *sidebarFlags) {
+	fs := flag.NewFlagSet("sidebar", flag.ContinueOnError)
+	f := &sidebarFlags{
+		socket: fs.String("socket", "", "tmux socket name"),
+		dir:    fs.String("dir", "", "working directory for sidebar panes"),
+	}
+	tools.SetUsage(fs, "sidebar <session> [--socket S] [--dir D]",
+		"Opens the sidebar panes for an existing session. Socket resolves from --socket, "+
+			"then the ambient server, then a server search by session name. --dir defaults to "+
+			"the session's current pane directory.")
+	return fs, f
+}
+
 // cmdSidebar implements `proj sidebar <session> [--socket S] [--dir D]`.
 // Socket resolution order: --socket → CurrentServer() (if non-empty) →
 // FindServer(session). If none resolve, exits 1. Dir defaults to the session's
 // #{pane_current_path} when --dir is absent. Layout comes from LoadConfig().
-func cmdSidebar(args []string) int {
+func cmdSidebar(args []string, out, errw io.Writer) error {
 	sa, err := parseSidebarArgs(args)
 	if err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			return 0
-		}
-		fmt.Fprintln(os.Stderr, "proj:", err)
-		return 2
+		return tools.UsageError{Msg: err.Error()}
 	}
 
 	socket := sa.socket
@@ -263,8 +292,7 @@ func cmdSidebar(args []string) int {
 		}
 	}
 	if socket == "" {
-		fmt.Fprintf(os.Stderr, "proj: cannot resolve socket for session %q\n", sa.session)
-		return 1
+		return tools.Exitf(1, "cannot resolve socket for session %q", sa.session)
 	}
 
 	dir := sa.dir
@@ -274,16 +302,16 @@ func cmdSidebar(args []string) int {
 
 	layout := proj.LoadConfig().SidebarLayout
 	proj.BuildSidebar(socket, sa.session, dir, layout)
-	return 0
+	return nil
 }
 
-// emitJSON writes v as indented JSON to stdout, returning the process exit code.
-func emitJSON(v any) int {
+// writeJSON writes v as indented JSON to out, wrapping a marshal failure as a
+// runtime (exit 1) error.
+func writeJSON(out io.Writer, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "proj: %v\n", err)
-		return 1
+		return tools.Exitf(1, "%v", err)
 	}
-	fmt.Println(string(b))
-	return 0
+	fmt.Fprintln(out, string(b))
+	return nil
 }
