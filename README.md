@@ -195,3 +195,7 @@ leaving every other tool untouched.
     go build ./cmd/scratch
     go build ./cmd/proj
     go test ./...
+
+## License
+
+[MIT](LICENSE) © 2026 Court Schuett
