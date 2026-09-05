@@ -1,12 +1,10 @@
-package main
+package creel
 
 import (
 	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/schuettc/tackle/internal/creel"
 )
 
 func TestParseArgs(t *testing.T) {
@@ -71,7 +69,7 @@ func TestFinishWritesToken(t *testing.T) {
 	status := filepath.Join(dir, "s")
 	var errbuf bytes.Buffer
 
-	code := finish(&errbuf, status, creel.Result{Action: creel.Added, Name: "K", Dest: "/tmp/.env"})
+	code := finish(&errbuf, status, Result{Action: Added, Name: "K", Dest: "/tmp/.env"})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}

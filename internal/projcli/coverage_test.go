@@ -1,4 +1,4 @@
-package main
+package projcli
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestCommandsJSONCoversEveryCommand(t *testing.T) {
-	out, code := captureStdout(t, func() int { return run([]string{"commands", "--json"}) })
+	out, code := captureStdout(t, []string{"commands", "--json"})
 	if code != 0 {
 		t.Fatalf("proj commands --json: got exit %d, want 0", code)
 	}
@@ -27,7 +27,7 @@ func TestCommandsJSONCoversEveryCommand(t *testing.T) {
 }
 
 func TestManRenders(t *testing.T) {
-	out, code := captureStdout(t, func() int { return run([]string{"man"}) })
+	out, code := captureStdout(t, []string{"man"})
 	if code != 0 {
 		t.Fatalf("proj man: got exit %d, want 0", code)
 	}

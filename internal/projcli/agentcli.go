@@ -1,4 +1,4 @@
-package main
+package projcli
 
 import (
 	"encoding/json"
