@@ -23,6 +23,12 @@ func LiveSessions() []Session {
 			}
 			dir := Query(sock, name, "#{pane_current_path}")
 			agent, state := AgentIn(sock, name)
+			// A recorded @proj_agent wins over pane process detection: the pane's
+			// foreground process may be a launcher (e.g. hail running the shim),
+			// not the agent itself. State still comes from AgentIn.
+			if rec := Query(sock, name, "#{"+AgentOption()+"}"); rec != "" {
+				agent = rec
+			}
 			label := Query(sock, name, "#{"+LabelOption()+"}")
 			a := AttentionFor(counts, device, AliasFor(sock, label))
 			out = append(out, Session{

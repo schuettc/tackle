@@ -153,6 +153,7 @@ func cmdCurrent(args []string, out, errw io.Writer) error {
 type newFlags struct {
 	agent     *string
 	noSidebar *bool
+	json      *bool
 }
 
 // newNewFlags is proj new's side-effect-free flag constructor.
@@ -161,12 +162,49 @@ func newNewFlags() (*flag.FlagSet, *newFlags) {
 	f := &newFlags{
 		agent:     fs.String("agent", "", "agent to launch (defaults to config)"),
 		noSidebar: fs.Bool("no-sidebar", false, "suppress the sidebar (Phase 3)"),
+		json:      fs.Bool("json", false, "emit one JSON object {name,project,work,socket,dir,pane,created}"),
 	}
-	tools.SetUsage(fs, "new <project>/<work> [--agent X] [--no-sidebar]",
+	tools.SetUsage(fs, "new <project>/<work> [--agent X] [--no-sidebar] [--json] [--command argv…]",
 		"Creates or resumes the tmux session for <project>/<work>. Detached by contract: "+
 			"mints the session but never switches the caller's client. --no-sidebar suppresses "+
-			"the sidebar; otherwise it spawns when the project's config enables it.")
+			"the sidebar; otherwise it spawns when the project's config enables it. --json prints "+
+			"the session as one JSON object instead of its name. Everything after --command (or "+
+			"--) runs directly in the working pane (no shell); on a reused session --command is "+
+			"ignored and the exit code is 3.")
 	return fs, f
+}
+
+// newJSON is the single object `proj new --json` prints on success.
+type newJSON struct {
+	Name    string `json:"name"`
+	Project string `json:"project"`
+	Work    string `json:"work"`
+	Socket  string `json:"socket"`
+	Dir     string `json:"dir"`
+	Pane    string `json:"pane"`
+	Created bool   `json:"created"`
+}
+
+// encodeNewJSON writes j as one compact line — the shape the hail bridge parses.
+func encodeNewJSON(w io.Writer, j newJSON) error {
+	b, err := json.Marshal(j)
+	if err != nil {
+		return tools.Exitf(1, "%v", err)
+	}
+	fmt.Fprintln(w, string(b))
+	return nil
+}
+
+// splitCommandTail separates args at the first "--command" or "--" token: head
+// is parsed as flags+positional, command is the verbatim argv after it. hasCmd
+// is true when the token was present (even with an empty tail).
+func splitCommandTail(args []string) (head, command []string, hasCmd bool) {
+	for i, a := range args {
+		if a == "--command" || a == "--" {
+			return args[:i], append([]string{}, args[i+1:]...), true
+		}
+	}
+	return args, nil, false
 }
 
 // cmdNew implements `proj new <project>/<work> [--agent X] [--no-sidebar]`.
@@ -176,13 +214,18 @@ func newNewFlags() (*flag.FlagSet, *newFlags) {
 // calls Goto (spec boundary). --no-sidebar suppresses sidebar spawn; otherwise
 // sidebar is spawned when Config.SidebarFor(project) is true.
 func cmdNew(args []string, out, errw io.Writer) error {
+	head, command, hasCmd := splitCommandTail(args)
+	if hasCmd && len(command) == 0 {
+		return tools.UsageError{Msg: "--command requires a command to run"}
+	}
+
 	fs, f := newNewFlags()
-	flagArgs, positional := tools.SplitArgs(fs, args)
+	flagArgs, positional := tools.SplitArgs(fs, head)
 	if err := tools.ParseFlags(fs, flagArgs, out); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return tools.UsageError{Msg: "usage: proj new <project>/<work> [--agent X] [--no-sidebar]"}
+		return tools.UsageError{Msg: "usage: proj new <project>/<work> [--agent X] [--no-sidebar] [--json] [--command argv…]"}
 	}
 
 	project, work, err := parseNewTarget(positional[0])
@@ -207,13 +250,34 @@ func cmdNew(args []string, out, errw io.Writer) error {
 
 	name := proj.SessionName(project, work)
 	socket := proj.SocketFor(project)
-	if err := proj.EnsureSession(socket, name, dir, a); err != nil {
+	created, err := proj.EnsureSession(socket, name, dir, a, command)
+	if err != nil {
 		return tools.Exitf(1, "%v", err)
 	}
+
+	// Emit identity first (JSON object or bare name), so callers get it even on
+	// the reuse+command exit-3 path below.
+	if *f.json {
+		pane := proj.Query(socket, "="+name+":", "#{pane_id}")
+		if err := encodeNewJSON(out, newJSON{
+			Name: name, Project: project, Work: work,
+			Socket: socket, Dir: dir, Pane: pane, Created: created,
+		}); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(out, name)
+	}
+
+	// A command against a reused session is refused so hail never clobbers a
+	// pane the user is working in. Exit 3; identity was already printed.
+	if len(command) > 0 && !created {
+		return tools.Exitf(3, "session exists; --command ignored")
+	}
+
 	if !*f.noSidebar && cfg.SidebarFor(project) {
 		SpawnSidebarDetached(socket, name, dir)
 	}
-	fmt.Fprintln(out, name)
 	return nil
 }
 

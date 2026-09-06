@@ -15,6 +15,25 @@ func LabelOption() string {
 	return "@claude_task"
 }
 
+// AgentOption is the tmux user-option proj writes to record the agent a session
+// was launched with. `proj list` prefers it over pane process-name detection,
+// so a session whose foreground process is not the agent (e.g. hail running the
+// shim under --command) still reports the right agent.
+func AgentOption() string { return "@proj_agent" }
+
+// runner is the tmux exec seam for EnsureSession's option/query/pane commands;
+// tests override it to capture the exact argv. It defaults to Run.
+var runner = Run
+
+// newSessionHome creates the detached session from $HOME (so both the server
+// cwd and #{session_path} are $HOME — the cwd-poison defense). It is a seam so
+// tests can drive EnsureSession's create path without a real tmux server.
+var newSessionHome = func(socket, name string) error {
+	c := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", name)
+	c.Dir = os.Getenv("HOME")
+	return c.Run()
+}
+
 // EnsureSession makes the tmux session `name` exist on `socket`, launching
 // `agent` into its pane. It is a no-op if the session already exists.
 //
@@ -31,36 +50,59 @@ func LabelOption() string {
 // the session_path==$HOME contract. respawn-pane -c is what keeps both the
 // session_path==$HOME and pane_current_path==dir contracts true. See
 // task-6-report.md.
-func EnsureSession(socket, name, dir, agent string) error {
-	if _, err := Run(socket, "has-session", "-t", "="+name); err == nil {
-		return nil // exists
+// EnsureSession makes the tmux session `name` exist on `socket`. It reports
+// whether it created the session (created=false when has-session already
+// succeeded, i.e. the session was reused).
+//
+// When command is non-empty and the session is newly created, the command is
+// run directly in the working pane via `respawn-pane -k -c dir -- command…`
+// (no shell, no send-keys). When command is empty, `agent` is launched by
+// typing its command into the pane (the historical behaviour). Either way, the
+// chosen agent (if any) is recorded in the AgentOption user option so
+// `proj list` reports it regardless of the pane's foreground process.
+//
+// A reused session is left untouched: neither command nor agent is re-applied,
+// so proj never clobbers a pane the user is working in.
+func EnsureSession(socket, name, dir, agent string, command []string) (created bool, err error) {
+	if _, err := runner(socket, "has-session", "-t", "="+name); err == nil {
+		return false, nil // exists → reuse
 	}
 	// Create from $HOME (no -c) so the server cwd and #{session_path} are both
 	// $HOME and never pin to a dir that may later be deleted (worktree).
-	c := exec.Command("tmux", "-L", socket, "new-session", "-d", "-s", name)
-	c.Dir = os.Getenv("HOME")
-	if err := c.Run(); err != nil {
-		return err
+	if err := newSessionHome(socket, name); err != nil {
+		return false, err
 	}
 	// Move the pane into dir without touching #{session_path}. -k restarts the
-	// (freshly-created) shell in dir; harmless this early.
-	if _, err := Run(socket, "respawn-pane", "-k", "-t", "="+name+":", "-c", dir); err != nil {
-		return err
+	// pane in dir; with a command it runs that command directly instead of a
+	// shell. #{session_path} stays $HOME (set at new-session), so the
+	// session_path==$HOME invariant holds.
+	respawn := []string{"respawn-pane", "-k", "-t", "=" + name + ":", "-c", dir}
+	if len(command) > 0 {
+		respawn = append(respawn, "--")
+		respawn = append(respawn, command...)
+	}
+	if _, err := runner(socket, respawn...); err != nil {
+		return false, err
 	}
 	// label = the work segment (after the last '/'), for muster.
 	label := name
 	if i := strings.LastIndex(name, "/"); i >= 0 {
 		label = name[i+1:]
 	}
-	_, _ = Run(socket, "set-option", "-t", name, LabelOption(), label)
+	_, _ = runner(socket, "set-option", "-t", name, LabelOption(), label)
 
 	if agent != "" && agent != "none" {
-		if cmd := agentLaunchCmd(agent, name); cmd != "" {
-			// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
-			_, _ = Run(socket, "send-keys", "-t", "="+name+":", cmd, "Enter")
+		_, _ = runner(socket, "set-option", "-t", name, AgentOption(), agent)
+		// Only type an agent launch command when no explicit command was given;
+		// with a command the pane already runs it directly.
+		if len(command) == 0 {
+			if cmd := agentLaunchCmd(agent, name); cmd != "" {
+				// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
+				_, _ = runner(socket, "send-keys", "-t", "="+name+":", cmd, "Enter")
+			}
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // KillSession terminates the tmux session `name` on `socket`.
