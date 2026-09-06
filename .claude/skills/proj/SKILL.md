@@ -87,6 +87,8 @@ Options:
 |------|--------|
 | `--agent <name>` | Override the configured agent (`pi`, `claude`, `cursor`, `none`). Required when you want a specific agent. |
 | `--no-sidebar` | Suppress sidebar spawn even if configured. |
+| `--json` | Print one JSON object instead of the session name (see below). |
+| `--command <argv…>` | Run `argv` directly in the working pane (no shell, no `send-keys`); everything after `--command` (or `--`) is the command. |
 
 Example — spin up a pi agent for a new feature branch:
 
@@ -94,6 +96,31 @@ Example — spin up a pi agent for a new feature branch:
 proj new myapp/feat-payments --agent pi
 # → myapp/feat-payments
 ```
+
+### `--json`
+
+With `--json`, `proj new` prints one object and nothing else on stdout (errors
+stay on stderr with a non-zero exit):
+
+```json
+{"name":"myapp/feat-payments","project":"myapp","work":"feat-payments","socket":"proj-myapp","dir":"/Users/you/code/myapp","pane":"%12","created":true}
+```
+
+- `socket` is the `tmux -L` value (`proj-<project>`); `pane` is the working
+  pane's `#{pane_id}`.
+- `created` is `false` when the session already existed (reused).
+
+### `--command`
+
+`--command` runs its argv directly in the working pane instead of launching a
+shell and typing the agent command — used by hail to spawn a task without
+typing into a shell. With `--agent` it still records the agent (so `proj list`
+reports it) even though the pane's foreground process is the command.
+
+Against an **existing** session `--command` is **not** applied — proj never
+clobbers a pane you are working in. It exits `3` with `session exists; --command
+ignored` on stderr (the `--json` object, with `created:false`, is still printed
+so a caller can detect the reuse).
 
 ## The real flow: spawn then delegate
 

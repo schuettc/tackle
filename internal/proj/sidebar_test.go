@@ -49,7 +49,7 @@ func TestBuildSidebarTagsPanes(t *testing.T) {
 	sock := "proj-p3-test"
 	defer Run(sock, "kill-server")
 	dir := t.TempDir()
-	if err := EnsureSession(sock, "proj-p3-test/w", dir, "none"); err != nil {
+	if _, err := EnsureSession(sock, "proj-p3-test/w", dir, "none", nil); err != nil {
 		t.Fatal(err)
 	}
 	BuildSidebar(sock, "proj-p3-test/w", dir, Layout{Panes: []string{"scratch", "shell", "shell"}})

@@ -49,8 +49,8 @@ func Dispatch(args []string, out, errw io.Writer) int {
 	app.Register(tools.Command{
 		Name:     "new",
 		Summary:  "create/open a project session",
-		Synopsis: "new <project>/<work> [--agent X] [--no-sidebar]",
-		Help:     "Creates or resumes the tmux session for <project>/<work>. Detached by contract: mints the session but never switches the caller's client.",
+		Synopsis: "new <project>/<work> [--agent X] [--no-sidebar] [--json] [--command argv…]",
+		Help:     "Creates or resumes the tmux session for <project>/<work>. Detached by contract: mints the session but never switches the caller's client. --json prints the session as one JSON object {name,project,work,socket,dir,pane,created}. Everything after --command (or --) runs directly in the working pane (no shell); against a reused session --command is ignored and the exit code is 3.",
 		NewFlags: func() *flag.FlagSet { fs, _ := newNewFlags(); return fs },
 		Run:      cmdNew,
 	})
@@ -170,7 +170,7 @@ func runPicker(project, agent string) int {
 			fmt.Fprintf(os.Stderr, "proj: unknown project %q\n", res.Project)
 			return 1
 		}
-		if err := proj.EnsureSession(res.Socket, res.Name, dir, res.Agent); err != nil {
+		if _, err := proj.EnsureSession(res.Socket, res.Name, dir, res.Agent, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
 		}
