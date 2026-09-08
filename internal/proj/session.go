@@ -126,16 +126,23 @@ func CurrentSessionName() string {
 }
 
 // agentLaunchCmd returns the shell command to type into the pane, or "" if the
-// agent binary is absent (degradation → plain shell).
+// agent binary is absent (degradation → plain shell). This is the sole home of
+// the launch shape; it used to live in the zsh __pi_launch_cmd /
+// __claude_launch_cmd helpers, which have since been removed.
 //
-// The argument shape mirrors the zsh __pi_launch_cmd / __claude_launch_cmd in
-// ~/dotfiles/config/zsh/04-aliases.zsh, which bake load-bearing flags:
+// Each launch bakes load-bearing flags:
 //   - pi:     `pi --name <session>` (--name sets pi's session display name so
 //     its identity matches the pane; no trailing `--` needed).
 //   - claude: `claude --name <session> --` (the trailing `--` is load-bearing:
 //     a bare `claude` opens agent view rather than starting a session; --name
 //     carries the conversation display name).
-//   - cursor: bare `cursor-agent` (no zsh analog carries flags).
+//   - cursor: bare `cursor-agent` (no analog carries flags).
+//
+// The command is TYPED into an interactive shell, so the claude()/pi wrappers
+// in ~/dotfiles/config/zsh/04-aliases.zsh still run: they are what prepend the
+// development-channel flags (galley/muster) to this launch. That is why --name
+// here must reach that wrapper as an interactive launch — anything the wrapper
+// treats as passthrough would arrive channel-less.
 //
 // The session name is quoted the same way zsh's ${(qq)n} does, guarding names
 // with shell metacharacters when typed into the pane.

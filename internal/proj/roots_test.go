@@ -50,6 +50,35 @@ func TestParseRootsAndLookups(t *testing.T) {
 	}
 }
 
+// Negative and exclusion cases ported from the retired zsh proj-roots test:
+// a dir under no root has no name, a root dir is not itself a project, unknown
+// names do not resolve, and a root pointing at a non-existent dir is dropped.
+func TestRootsNegativeCasesAndExclusions(t *testing.T) {
+	home := writeRoots(t, "~/code\nproject:~/dotfiles\n~/missing-root\n")
+	mustMkdir(t, filepath.Join(home, "code", "alpha"))
+	mustMkdir(t, filepath.Join(home, "dotfiles"))
+	// ~/missing-root is deliberately never created.
+
+	r, err := LoadRoots()
+	if err != nil {
+		t.Fatalf("LoadRoots: %v", err)
+	}
+	if _, ok := r.NameForDir(filepath.Join(home, "Downloads", "stuff")); ok {
+		t.Error("NameForDir under no root/project should be false")
+	}
+	if _, ok := r.NameForDir(filepath.Join(home, "code")); ok {
+		t.Error("NameForDir on the root dir itself should be false")
+	}
+	if _, ok := r.DirForName("nope"); ok {
+		t.Error("DirForName(nope) should be false")
+	}
+	for _, p := range r.Roots {
+		if filepath.Base(p) == "missing-root" {
+			t.Errorf("a root at a non-existent dir must be excluded, roots = %v", r.Roots)
+		}
+	}
+}
+
 func TestLoadRootsMissingFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "x"))
