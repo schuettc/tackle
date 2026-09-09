@@ -19,6 +19,7 @@ type Layout struct {
 // ProjectOverride holds optional per-project overrides.
 type ProjectOverride struct {
 	DefaultAgent *string `toml:"default_agent"`
+	DefaultModel *string `toml:"default_model"`
 	Sidebar      *bool   `toml:"sidebar"`
 }
 
@@ -28,6 +29,10 @@ type Config struct {
 	Sidebar       bool                       `toml:"sidebar"`
 	SidebarLayout Layout                     `toml:"sidebar_layout"`
 	Projects      map[string]ProjectOverride `toml:"project"`
+	// ModelProviders maps a proj agent to the ordered pi providers whose models
+	// feed that agent's model picker. Only "pi" is meaningful today; claude's
+	// models are built in (see claudeModels). List order is picker order.
+	ModelProviders map[string][]string `toml:"model_providers"`
 }
 
 func configPath() string {
@@ -87,6 +92,22 @@ func (c Config) AgentFor(project string) string {
 		return *o.DefaultAgent
 	}
 	return c.DefaultAgent
+}
+
+// ModelProvidersFor returns the ordered pi providers configured to feed agent's
+// model picker, or nil when none are configured.
+func (c Config) ModelProvidersFor(agent string) []string {
+	return c.ModelProviders[agent]
+}
+
+// ModelFor returns the per-project default model pin, or "" when unset. It is
+// agent-agnostic: the caller applies it only when it matches the effective
+// agent's available models.
+func (c Config) ModelFor(project string) string {
+	if o, ok := c.Projects[project]; ok && o.DefaultModel != nil {
+		return *o.DefaultModel
+	}
+	return ""
 }
 
 // SidebarFor returns the effective sidebar visibility for the given project.

@@ -25,7 +25,7 @@ func newTestModel(rows []Row) Model {
 			projects = append(projects, r)
 		}
 	}
-	return newModel(sessions, projects, "pi", true)
+	return newModel(sessions, projects, "pi", true, nil)
 }
 
 // newProjectModel builds a model already drilled into project, with the given
@@ -36,7 +36,7 @@ func newProjectModel(project string, sessions []Row) Model {
 			sessions[i].Project = project
 		}
 	}
-	return newModel(sessions, nil, "pi", true).drillInto(project)
+	return newModel(sessions, nil, "pi", true, nil).drillInto(project)
 }
 
 // newTestModelWithRefresh builds an entrance model from injected rows and
@@ -60,6 +60,8 @@ func press(m Model, key string) Model {
 		msg = tea.KeyMsg{Type: tea.KeyDown}
 	case "tab":
 		msg = tea.KeyMsg{Type: tea.KeyTab}
+	case "shift+tab":
+		msg = tea.KeyMsg{Type: tea.KeyShiftTab}
 	case "backspace":
 		msg = tea.KeyMsg{Type: tea.KeyBackspace}
 	case "ctrl+s":

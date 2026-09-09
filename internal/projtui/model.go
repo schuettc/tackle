@@ -35,9 +35,10 @@ type rootsEditedMsg struct{ err error }
 type inputKind int
 
 const (
-	inputNone    inputKind = iota // no input active
-	inputNewWork                  // naming a new work session
-	inputAddRoot                  // typing a path to add as a root (^a)
+	inputNone        inputKind = iota // no input active
+	inputNewWork                      // naming a new work session
+	inputAddRoot                      // typing a path to add as a root (^a)
+	inputSelectModel                  // choosing a model from a filterable list
 )
 
 // viewState selects which of the two views is on screen.
@@ -91,6 +92,7 @@ type Result struct {
 	Project string
 	Work    string
 	Agent   string
+	Model   string
 	Sidebar bool
 	Socket  string
 	Name    string
@@ -113,10 +115,22 @@ type Model struct {
 
 	project string
 
-	agentChoices  []string
-	agentIndex    int
+	agentChoices []string
+	agentIndex   int
+	modelChoices []string
+	modelIndex   int
+	// modelFilter/modelCursor drive the inputSelectModel overlay — a filterable
+	// list of the current agent's models, opened with Shift-Tab while naming
+	// new work. They are transient: reset each time the overlay opens.
+	modelFilter   string
+	modelCursor   int
 	sidebarChoice bool
 	scope         entranceScope
+
+	// models resolves an agent to its model menu (index 0 = default). It
+	// defaults to proj.ModelsForAgent closed over the loaded config; tests
+	// inject a fixture so they never shell out to `pi --list-models`.
+	models func(agent string) []string
 
 	inputKind inputKind
 	input     textinput.Model
@@ -143,17 +157,24 @@ type Model struct {
 }
 
 // newModel builds an entrance model from pre-split session and project rows,
-// seeding the agent cycle from the config default and the sidebar toggle.
-func newModel(sessions, projects []Row, defaultAgent string, sidebar bool) Model {
+// seeding the agent cycle from the config default and the sidebar toggle. The
+// models resolver maps an agent to its model menu; a nil resolver means no
+// agent offers models.
+func newModel(sessions, projects []Row, defaultAgent string, sidebar bool, models func(string) []string) Model {
+	if models == nil {
+		models = func(string) []string { return nil }
+	}
 	m := Model{
 		sessions:      sessions,
 		projects:      projects,
 		agentChoices:  agentChoicesFrom(defaultAgent),
 		sidebarChoice: sidebar,
+		models:        models,
 		refresh:       defaultRefresh,
 		kill:          proj.KillSession,
 		help:          newHelp(),
 	}
+	m = m.reseedModels()
 	return m.rebuildEntrance()
 }
 
@@ -212,7 +233,13 @@ func New() (Model, error) {
 	cfg := proj.LoadConfig()
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
-	return newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar), nil
+	return newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)), nil
+}
+
+// modelsResolver closes ModelsForAgent over cfg so the picker can look up any
+// agent's model menu on demand.
+func modelsResolver(cfg proj.Config) func(string) []string {
+	return func(agent string) []string { return proj.ModelsForAgent(cfg, agent) }
 }
 
 // NewFor is like New but, when project is non-empty, starts drilled into that
@@ -226,9 +253,12 @@ func NewFor(project, agent string) (Model, error) {
 	cfg := proj.LoadConfig()
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
-	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar)
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
 	if agent != "" {
 		m = m.selectAgent(agent)
+	}
+	if mdl := cfg.ModelFor(project); mdl != "" {
+		m = m.selectModel(mdl)
 	}
 	if project != "" {
 		m = m.drillInto(project)
@@ -236,12 +266,33 @@ func NewFor(project, agent string) (Model, error) {
 	return m, nil
 }
 
-// selectAgent moves the agent cycle to agent when it is one of the choices;
-// otherwise the current selection is left unchanged.
+// selectAgent moves the agent cycle to agent when it is one of the choices and
+// reseeds the model menu for it; otherwise the current selection is unchanged.
 func (m Model) selectAgent(agent string) Model {
 	for i, a := range m.agentChoices {
 		if a == agent {
 			m.agentIndex = i
+			return m.reseedModels()
+		}
+	}
+	return m
+}
+
+// reseedModels replaces the model menu with the current agent's models and
+// resets the selection to that agent's default (index 0). Called whenever the
+// agent changes so the model always belongs to the agent it will launch.
+func (m Model) reseedModels() Model {
+	m.modelChoices = m.models(m.agentChoice())
+	m.modelIndex = 0
+	return m
+}
+
+// selectModel moves the model cycle to model when it is one of the current
+// choices; otherwise the selection is left unchanged.
+func (m Model) selectModel(model string) Model {
+	for i, x := range m.modelChoices {
+		if x == model {
+			m.modelIndex = i
 			break
 		}
 	}
@@ -315,6 +366,13 @@ func (m Model) agentChoice() string {
 	return m.agentChoices[m.agentIndex%len(m.agentChoices)]
 }
 
+func (m Model) modelChoice() string {
+	if len(m.modelChoices) == 0 {
+		return ""
+	}
+	return m.modelChoices[m.modelIndex%len(m.modelChoices)]
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -350,6 +408,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.inputKind == inputSelectModel {
+			return m.updateModelSelect(msg)
+		}
 		if m.inputKind != inputNone {
 			return m.updateInput(msg)
 		}
@@ -368,9 +429,20 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.footerHint = ""
 		return m, nil
 	case "tab":
-		// While naming new work, tab cycles the agent that will launch into it.
+		// While naming new work, tab cycles the agent that will launch into it,
+		// reseeding the model menu to the new agent's models.
 		if m.inputKind == inputNewWork && len(m.agentChoices) > 0 {
 			m.agentIndex = (m.agentIndex + 1) % len(m.agentChoices)
+			m = m.reseedModels()
+		}
+		return m, nil
+	case "shift+tab":
+		// Shift-tab opens the model list for the current agent (a cycle would not
+		// scale to pi's dozens of models). No-op for agents with no models.
+		if m.inputKind == inputNewWork && len(m.modelChoices) > 0 {
+			m.inputKind = inputSelectModel
+			m.modelFilter = ""
+			m.modelCursor = m.modelIndex // start on the current choice
 		}
 		return m, nil
 	case "ctrl+s":
@@ -393,6 +465,7 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Project: m.project,
 			Work:    work,
 			Agent:   m.agentChoice(),
+			Model:   m.modelChoice(),
 			Sidebar: m.sidebarChoice,
 			Socket:  proj.SocketFor(m.project),
 			Name:    proj.SessionName(m.project, work),
@@ -402,6 +475,59 @@ func (m Model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
+}
+
+// visibleModels applies the overlay's substring filter to the current agent's
+// model menu.
+func (m Model) visibleModels() []string {
+	if m.modelFilter == "" {
+		return m.modelChoices
+	}
+	var out []string
+	for _, x := range m.modelChoices {
+		if fuzzyMatch(m.modelFilter, x) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// updateModelSelect drives the inputSelectModel overlay: type to filter, arrows
+// to move, enter to choose (returns to naming with that model), esc to cancel.
+func (m Model) updateModelSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "shift+tab":
+		m.inputKind = inputNewWork // back to naming, model unchanged
+		return m, nil
+	case "up", "ctrl+p":
+		if m.modelCursor > 0 {
+			m.modelCursor--
+		}
+		return m, nil
+	case "down", "ctrl+n":
+		if m.modelCursor < len(m.visibleModels())-1 {
+			m.modelCursor++
+		}
+		return m, nil
+	case "enter":
+		vis := m.visibleModels()
+		if len(vis) > 0 && m.modelCursor < len(vis) {
+			m = m.selectModel(vis[m.modelCursor])
+		}
+		m.inputKind = inputNewWork
+		return m, nil
+	case "backspace":
+		if r := []rune(m.modelFilter); len(r) > 0 {
+			m.modelFilter = string(r[:len(r)-1])
+			m.modelCursor = 0
+		}
+		return m, nil
+	}
+	if text := runeText(msg); text != "" {
+		m.modelFilter += text
+		m.modelCursor = 0
+	}
+	return m, nil
 }
 
 // updateList drives navigation, filtering and selection in both list views.

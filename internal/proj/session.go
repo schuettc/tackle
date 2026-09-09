@@ -63,7 +63,7 @@ var newSessionHome = func(socket, name string) error {
 //
 // A reused session is left untouched: neither command nor agent is re-applied,
 // so proj never clobbers a pane the user is working in.
-func EnsureSession(socket, name, dir, agent string, command []string) (created bool, err error) {
+func EnsureSession(socket, name, dir, agent, model string, command []string) (created bool, err error) {
 	if _, err := runner(socket, "has-session", "-t", "="+name); err == nil {
 		return false, nil // exists → reuse
 	}
@@ -96,7 +96,7 @@ func EnsureSession(socket, name, dir, agent string, command []string) (created b
 		// Only type an agent launch command when no explicit command was given;
 		// with a command the pane already runs it directly.
 		if len(command) == 0 {
-			if cmd := agentLaunchCmd(agent, name); cmd != "" {
+			if cmd := agentLaunchCmd(agent, name, model); cmd != "" {
 				// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
 				_, _ = runner(socket, "send-keys", "-t", "="+name+":", cmd, "Enter")
 			}
@@ -131,12 +131,16 @@ func CurrentSessionName() string {
 // __claude_launch_cmd helpers, which have since been removed.
 //
 // Each launch bakes load-bearing flags:
-//   - pi:     `pi --name <session>` (--name sets pi's session display name so
-//     its identity matches the pane; no trailing `--` needed).
-//   - claude: `claude --name <session> --` (the trailing `--` is load-bearing:
-//     a bare `claude` opens agent view rather than starting a session; --name
-//     carries the conversation display name).
+//   - pi:     `pi [--model <provider/id>] --name <session>` (--name sets pi's
+//     session display name so its identity matches the pane; no trailing `--`).
+//   - claude: `claude [--model <id>] --name <session> --` (the trailing `--` is
+//     load-bearing: a bare `claude` opens agent view rather than starting a
+//     session; --name carries the conversation display name).
 //   - cursor: bare `cursor-agent` (no analog carries flags).
+//
+// model is the picker's choice for agents that accept one (pi, claude); ""
+// omits the flag so the agent falls back to its own default. cursor and none
+// ignore it.
 //
 // The command is TYPED into an interactive shell, so the claude()/pi wrappers
 // in ~/dotfiles/config/zsh/04-aliases.zsh still run: they are what prepend the
@@ -146,16 +150,22 @@ func CurrentSessionName() string {
 //
 // The session name is quoted the same way zsh's ${(qq)n} does, guarding names
 // with shell metacharacters when typed into the pane.
-func agentLaunchCmd(agent, name string) string {
+func agentLaunchCmd(agent, name, model string) string {
 	switch agent {
 	case "pi":
 		if !hasBin("pi") {
 			return ""
 		}
+		if model != "" {
+			return "pi --model " + shellQuote(model) + " --name " + shellQuote(name)
+		}
 		return "pi --name " + shellQuote(name)
 	case "claude":
 		if !hasBin("claude") {
 			return ""
+		}
+		if model != "" {
+			return "claude --model " + shellQuote(model) + " --name " + shellQuote(name) + " --"
 		}
 		return "claude --name " + shellQuote(name) + " --"
 	case "cursor":

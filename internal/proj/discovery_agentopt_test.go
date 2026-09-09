@@ -9,7 +9,7 @@ func TestLiveSessionsPrefersProjAgentOption(t *testing.T) {
 	sock := "proj-agentopt-test"
 	defer Run(sock, "kill-server")
 
-	created, err := EnsureSession(sock, "proj-agentopt-test/w", t.TempDir(), "none", nil)
+	created, err := EnsureSession(sock, "proj-agentopt-test/w", t.TempDir(), "none", "", nil)
 	if err != nil || !created {
 		t.Fatalf("EnsureSession created=%v err=%v", created, err)
 	}

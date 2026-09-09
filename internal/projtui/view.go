@@ -66,6 +66,9 @@ func (m Model) View() string {
 		iw = m.width
 	}
 	listW, previewW, showPreview := m.layout(iw)
+	if m.inputKind == inputSelectModel {
+		showPreview = false // the model list wants the full width
+	}
 
 	list := lipgloss.NewStyle().Width(listW).Render(m.listPane(listW))
 	body := list
@@ -120,6 +123,9 @@ func (m Model) titleBar(width int) string {
 }
 
 func (m Model) listPane(width int) string {
+	if m.inputKind == inputSelectModel {
+		return m.modelSelectPane(width)
+	}
 	var b strings.Builder
 
 	// Filter / input line.
@@ -181,7 +187,11 @@ func (m Model) emptyMessage() string {
 // window returns the [start,end) slice of rows to render, scrolled to keep the
 // cursor in view within the terminal height. Falls back to the whole list when
 // the height is unknown or the list fits.
-func (m Model) window(n int) (start, end int) {
+func (m Model) window(n int) (start, end int) { return m.windowFor(m.cursor, n) }
+
+// windowFor scrolls a height-bounded window around cursor over n rows, keeping
+// the cursor framed. Shared by the main list and the model overlay.
+func (m Model) windowFor(cursor, n int) (start, end int) {
 	avail := m.height - 8 // title + blanks + filter line + footer + margins
 	if avail < 4 {
 		avail = 4
@@ -189,7 +199,7 @@ func (m Model) window(n int) (start, end int) {
 	if m.height <= 0 || n <= avail {
 		return 0, n
 	}
-	start = m.cursor - avail/2
+	start = cursor - avail/2
 	if start < 0 {
 		start = 0
 	}
@@ -201,6 +211,47 @@ func (m Model) window(n int) (start, end int) {
 		end = n
 	}
 	return start, end
+}
+
+// modelSelectPane renders the inputSelectModel overlay: a filter line and the
+// current agent's models as a windowed list with the cursor framed, styled the
+// same as the main picker's rows.
+func (m Model) modelSelectPane(width int) string {
+	var b strings.Builder
+	b.WriteString(hintStyle.Render("select model — type to filter"))
+	if m.modelFilter != "" {
+		b.WriteString(dimStyle.Render("  /" + m.modelFilter))
+	}
+	b.WriteString("\n\n")
+
+	vis := m.visibleModels()
+	if len(vis) == 0 {
+		b.WriteString(dimStyle.Render("  no models match"))
+		return b.String()
+	}
+	start, end := m.windowFor(m.modelCursor, len(vis))
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		if i == m.modelCursor {
+			barW := width - 1
+			if barW < 1 {
+				barW = 1
+			}
+			bar := selectedStyle.Width(barW).MaxWidth(barW).Render(" " + vis[i])
+			b.WriteString(accentStyle.Render("▎") + bar)
+		} else {
+			b.WriteString(lipgloss.NewStyle().MaxWidth(width).Render("  " + vis[i]))
+		}
+		if i < end-1 {
+			b.WriteString("\n")
+		}
+	}
+	if end < len(vis) {
+		b.WriteString("\n" + dimStyle.Render(fmt.Sprintf("  ↓ %d more", len(vis)-end)))
+	}
+	return b.String()
 }
 
 // plainRow is the row's text with no per-token styling — used to measure the
@@ -342,10 +393,23 @@ func (m Model) footerView(width int) string {
 			bind("esc", "cancel"),
 		})
 	} else if m.inputKind == inputNewWork {
-		legend = m.help.ShortHelpView([]key.Binding{
+		binds := []key.Binding{
 			bind("enter", "create"),
 			bind("tab", "agent:"+m.agentChoice()),
+		}
+		// The model cycle only appears for agents that offer one (claude, pi).
+		if len(m.modelChoices) > 0 {
+			binds = append(binds, bind("S-tab", "model:"+m.modelChoice()))
+		}
+		binds = append(binds,
 			bind("^s", "sidebar:"+onOff(m.sidebarChoice)),
+			bind("esc", "cancel"),
+		)
+		legend = m.help.ShortHelpView(binds)
+	} else if m.inputKind == inputSelectModel {
+		legend = m.help.ShortHelpView([]key.Binding{
+			bind("↑↓", "move"),
+			bind("enter", "select"),
 			bind("esc", "cancel"),
 		})
 	} else if m.help.ShowAll {

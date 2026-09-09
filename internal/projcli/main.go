@@ -170,7 +170,7 @@ func runPicker(project, agent string) int {
 			fmt.Fprintf(os.Stderr, "proj: unknown project %q\n", res.Project)
 			return 1
 		}
-		if _, err := proj.EnsureSession(res.Socket, res.Name, dir, res.Agent, nil); err != nil {
+		if _, err := proj.EnsureSession(res.Socket, res.Name, dir, res.Agent, res.Model, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
 		}

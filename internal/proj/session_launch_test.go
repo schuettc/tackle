@@ -25,19 +25,25 @@ func TestAgentLaunchCmd(t *testing.T) {
 	stubBins(t, "claude", "pi", "cursor-agent")
 
 	cases := []struct {
-		agent, name, want string
+		agent, name, model, want string
 	}{
 		// The trailing `--` is load-bearing: without it a bare `claude` opens
 		// agent view instead of starting a session. It must survive refactors.
-		{"claude", "repo/nfl-4", "claude --name 'repo/nfl-4' --"},
-		{"pi", "repo/nfl-4", "pi --name 'repo/nfl-4'"},
-		{"cursor", "repo/nfl-4", "cursor-agent"},
-		{"none", "repo/nfl-4", ""},
-		{"", "repo/nfl-4", ""},
+		{"claude", "repo/nfl-4", "", "claude --name 'repo/nfl-4' --"},
+		{"pi", "repo/nfl-4", "", "pi --name 'repo/nfl-4'"},
+		{"cursor", "repo/nfl-4", "", "cursor-agent"},
+		{"none", "repo/nfl-4", "", ""},
+		{"", "repo/nfl-4", "", ""},
+		// With a model, --model precedes --name; claude keeps its trailing --.
+		{"claude", "repo/nfl-4", "claude-opus-4-8", "claude --model 'claude-opus-4-8' --name 'repo/nfl-4' --"},
+		{"pi", "repo/nfl-4", "openai-codex/gpt-5.6-sol", "pi --model 'openai-codex/gpt-5.6-sol' --name 'repo/nfl-4'"},
+		// cursor and none never carry a model even when one is passed.
+		{"cursor", "repo/nfl-4", "whatever", "cursor-agent"},
+		{"none", "repo/nfl-4", "whatever", ""},
 	}
 	for _, c := range cases {
-		if got := agentLaunchCmd(c.agent, c.name); got != c.want {
-			t.Errorf("agentLaunchCmd(%q,%q) = %q, want %q", c.agent, c.name, got, c.want)
+		if got := agentLaunchCmd(c.agent, c.name, c.model); got != c.want {
+			t.Errorf("agentLaunchCmd(%q,%q,%q) = %q, want %q", c.agent, c.name, c.model, got, c.want)
 		}
 	}
 }
@@ -46,7 +52,7 @@ func TestAgentLaunchCmd(t *testing.T) {
 // typed into the pane as ONE argument — the same guarantee zsh's ${(qq)n} gives.
 func TestAgentLaunchCmdQuotesName(t *testing.T) {
 	stubBins(t, "claude")
-	got := agentLaunchCmd("claude", "a'b c")
+	got := agentLaunchCmd("claude", "a'b c", "")
 	want := `claude --name 'a'\''b c' --`
 	if got != want {
 		t.Errorf("agentLaunchCmd quoting = %q, want %q", got, want)
@@ -58,7 +64,7 @@ func TestAgentLaunchCmdQuotesName(t *testing.T) {
 func TestAgentLaunchCmdMissingBinDegrades(t *testing.T) {
 	t.Setenv("PATH", t.TempDir()) // empty dir: nothing resolvable
 	for _, agent := range []string{"claude", "pi", "cursor"} {
-		if got := agentLaunchCmd(agent, "x"); got != "" {
+		if got := agentLaunchCmd(agent, "x", ""); got != "" {
 			t.Errorf("agentLaunchCmd(%q) with no bin = %q, want \"\"", agent, got)
 		}
 	}

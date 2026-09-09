@@ -82,12 +82,28 @@ sidebar       = true          # auto-build the sidebar column on new work
 panes = ["scratch", "yazi", "shell"]   # top → bottom
 sizes = { scratch = 12, shell = 10 }   # rows; the middle pane fills
 
+[model_providers]              # models offered in the new-work model list (Shift-Tab)
+pi = ["claude-bridge", "openai-codex"]  # pi's menu = these providers' models,
+                               #   discovered from `pi --list-models` (cached ~24h)
+                               #   and launched as `pi --model <provider/id>`.
+                               # claude's menu is built in (Anthropic models);
+                               #   cursor/none take no model.
+
 [project."bettor-help"]        # optional per-project overrides
 default_agent = "claude"
+default_model = "claude-sonnet-4-6"    # pin this project's model (matched
+                               #   against the effective agent's menu)
 sidebar       = false
 ```
 
 All keys are optional; unset keys fall back to built-in defaults.
+
+**Picking a model.** While naming new work, `Tab` cycles the agent (only a few)
+and `Shift-Tab` opens a filterable list of that agent's models — type to filter,
+`↑`/`↓` to move, `enter` to pick, `esc` to keep the current one. The new-work
+footer shows the chosen model. Changing the agent re-seeds the model to that
+agent's default. Claude Code only accepts Anthropic models, so its menu is a
+built-in list; pi's menu is whatever providers you list under `[model_providers]`.
 
 ### Shell shim + auto-join hook
 

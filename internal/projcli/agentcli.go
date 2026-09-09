@@ -247,10 +247,13 @@ func cmdNew(args []string, out, errw io.Writer) error {
 	if a == "" {
 		a = cfg.AgentFor(project)
 	}
+	// A per-project default_model pin still applies on this non-interactive path
+	// (there is no --model flag); the picker's choice only exists interactively.
+	model := cfg.ModelFor(project)
 
 	name := proj.SessionName(project, work)
 	socket := proj.SocketFor(project)
-	created, err := proj.EnsureSession(socket, name, dir, a, command)
+	created, err := proj.EnsureSession(socket, name, dir, a, model, command)
 	if err != nil {
 		return tools.Exitf(1, "%v", err)
 	}

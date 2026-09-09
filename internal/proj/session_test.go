@@ -16,7 +16,7 @@ func TestEnsureSessionFromHomeSetsLabel(t *testing.T) {
 	if r, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = r
 	}
-	if _, err := EnsureSession(sock, "proj-phase1-sess/w", dir, "none", nil); err != nil {
+	if _, err := EnsureSession(sock, "proj-phase1-sess/w", dir, "none", "", nil); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 	// pane dir is the requested dir...
@@ -32,7 +32,7 @@ func TestEnsureSessionFromHomeSetsLabel(t *testing.T) {
 		t.Fatalf("@claude_task = %q want w", got)
 	}
 	// idempotent — reused, so created=false
-	if created, err := EnsureSession(sock, "proj-phase1-sess/w", dir, "none", nil); err != nil {
+	if created, err := EnsureSession(sock, "proj-phase1-sess/w", dir, "none", "", nil); err != nil {
 		t.Fatalf("second EnsureSession: %v", err)
 	} else if created {
 		t.Fatal("second EnsureSession reported created=true; want false (reuse)")

@@ -42,7 +42,7 @@ func find(calls []recordedCall, verb string) *recordedCall {
 func TestEnsureSessionCommandRunsInPaneAndSkipsSendKeys(t *testing.T) {
 	calls := withFakeRun(t)
 	cmd := []string{"hail", "shim", "--id", "arg with spaces", "-x"}
-	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "pi", cmd)
+	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "pi", "", cmd)
 	if err != nil || !created {
 		t.Fatalf("created=%v err=%v; want true,nil", created, err)
 	}
@@ -74,7 +74,7 @@ func TestEnsureSessionNoCommandDoesNotAppendArgv(t *testing.T) {
 	calls := withFakeRun(t)
 	// agent "none" keeps send-keys deterministic (agentLaunchCmd returns "" and
 	// the send-keys branch is gated on agent != none anyway).
-	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "none", nil)
+	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "none", "", nil)
 	if err != nil || !created {
 		t.Fatalf("created=%v err=%v; want true,nil", created, err)
 	}
@@ -99,7 +99,7 @@ func TestEnsureSessionReuseIsUntouched(t *testing.T) {
 		calls = append(calls, recordedCall{socket, append([]string(nil), args...)})
 		return "", nil // has-session succeeds -> reuse
 	}
-	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "pi", []string{"hail", "shim"})
+	created, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "pi", "", []string{"hail", "shim"})
 	if err != nil {
 		t.Fatalf("err=%v", err)
 	}
