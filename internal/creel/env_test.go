@@ -3,6 +3,7 @@ package creel
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -203,6 +204,37 @@ func TestWriteStatus(t *testing.T) {
 	}
 	if got := readFile(t, p); got != "updated\n" {
 		t.Fatalf("status = %q", got)
+	}
+}
+
+func TestWriteEvent(t *testing.T) {
+	dir := t.TempDir()
+	// Empty path, a cancel, and an error each write nothing.
+	if err := WriteEvent("", Result{Action: Added, Name: "K", Dest: ".env"}); err != nil {
+		t.Fatalf("empty path should be a no-op, got %v", err)
+	}
+	cancel := filepath.Join(dir, "cancel.json")
+	_ = WriteEvent(cancel, Result{Action: Cancelled, Name: "K", Dest: ".env"})
+	errp := filepath.Join(dir, "err.json")
+	_ = WriteEvent(errp, Result{Err: os.ErrPermission, Name: "K", Dest: ".env"})
+	for _, p := range []string{cancel, errp} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s should not exist (err=%v)", p, err)
+		}
+	}
+	// A real save records name+dest+action and no value field.
+	p := filepath.Join(dir, "e.json")
+	if err := WriteEvent(p, Result{Action: Added, Name: "API_KEY", Dest: "/x/.env"}); err != nil {
+		t.Fatal(err)
+	}
+	got := readFile(t, p)
+	for _, want := range []string{`"name":"API_KEY"`, `"dest":"/x/.env"`, `"action":"added"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("event %q missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "value") {
+		t.Fatalf("event %q must not carry a value field", got)
 	}
 }
 

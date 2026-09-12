@@ -6,6 +6,7 @@
 package creel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -209,6 +210,33 @@ func WriteStatus(path, token string) error {
 		return nil
 	}
 	return os.WriteFile(path, []byte(token+"\n"), 0o600)
+}
+
+// Event is the value-free record creel writes to --event-file after a save, so
+// a keybind/harness watcher can tell the agent WHAT was captured. It carries
+// the env-var name, the destination, and the action, and never the value.
+type Event struct {
+	Name   string `json:"name"`
+	Dest   string `json:"dest"`
+	Action string `json:"action"` // "added" or "updated"
+}
+
+// WriteEvent writes a value-free {name,dest,action} JSON line to path (0600).
+// It is a no-op when path is empty, when the capture errored, or when nothing
+// was actually written (a cancel is not an event) so a watcher only ever sees
+// real saves.
+func WriteEvent(path string, res Result) error {
+	if path == "" || res.Err != nil {
+		return nil
+	}
+	if res.Action != Added && res.Action != Updated {
+		return nil
+	}
+	b, err := json.Marshal(Event{Name: res.Name, Dest: res.Dest, Action: string(res.Action)})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 func atomicWrite(path, content string, mode os.FileMode) error {

@@ -20,6 +20,11 @@ func TestParseArgs(t *testing.T) {
 			args{name: "K", dest: "config/.env", statusFile: "/tmp/s"}, false},
 		{"eq form", []string{"K", "--dest=.env", "--status-file=/tmp/s"},
 			args{name: "K", dest: ".env", statusFile: "/tmp/s"}, false},
+		{"event-file", []string{"K", "--event-file", "/tmp/e.json"},
+			args{name: "K", eventFile: "/tmp/e.json"}, false},
+		{"event-file eq", []string{"K", "--event-file=/tmp/e.json"},
+			args{name: "K", eventFile: "/tmp/e.json"}, false},
+		{"dangling event-file", []string{"--event-file"}, args{}, true},
 		{"flags before name", []string{"--dest", ".env", "K"}, args{name: "K", dest: ".env"}, false},
 		{"dangling dest", []string{"--dest"}, args{}, true},
 		{"unknown flag", []string{"--nope"}, args{}, true},
@@ -69,12 +74,38 @@ func TestFinishWritesToken(t *testing.T) {
 	status := filepath.Join(dir, "s")
 	var errbuf bytes.Buffer
 
-	code := finish(&errbuf, status, Result{Action: Added, Name: "K", Dest: "/tmp/.env"})
+	code := finish(&errbuf, status, "", Result{Action: Added, Name: "K", Dest: "/tmp/.env"})
 	if code != 0 {
 		t.Fatalf("exit = %d, want 0", code)
 	}
 	b, _ := os.ReadFile(status)
 	if string(b) != "added\n" {
 		t.Fatalf("token = %q, want added", string(b))
+	}
+}
+
+func TestFinishWritesEventOnSaveNotOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	var errbuf bytes.Buffer
+
+	// A real save writes a value-free event with name, dest, and action.
+	evt := filepath.Join(dir, "save.json")
+	finish(&errbuf, "", evt, Result{Action: Updated, Name: "STRIPE_KEY", Dest: "/p/.env"})
+	b, err := os.ReadFile(evt)
+	if err != nil {
+		t.Fatalf("event not written: %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{`"name":"STRIPE_KEY"`, `"dest":"/p/.env"`, `"action":"updated"`} {
+		if !bytes.Contains(b, []byte(want)) {
+			t.Fatalf("event %q missing %q", got, want)
+		}
+	}
+
+	// A cancel is not a save: no event file.
+	cancelEvt := filepath.Join(dir, "cancel.json")
+	finish(&errbuf, "", cancelEvt, Result{Action: Cancelled, Name: "K", Dest: "/p/.env"})
+	if _, err := os.Stat(cancelEvt); !os.IsNotExist(err) {
+		t.Fatalf("cancel wrote an event file, want none (err=%v)", err)
 	}
 }
