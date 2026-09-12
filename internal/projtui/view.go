@@ -234,15 +234,19 @@ func (m Model) modelSelectPane(width int) string {
 		b.WriteString(dimStyle.Render(fmt.Sprintf("  ↑ %d more", start)) + "\n")
 	}
 	for i := start; i < end; i++ {
+		label := vis[i]
+		if label == m.defaultModel {
+			label += "  ★ default"
+		}
 		if i == m.modelCursor {
 			barW := width - 1
 			if barW < 1 {
 				barW = 1
 			}
-			bar := selectedStyle.Width(barW).MaxWidth(barW).Render(" " + vis[i])
+			bar := selectedStyle.Width(barW).MaxWidth(barW).Render(" " + label)
 			b.WriteString(accentStyle.Render("▎") + bar)
 		} else {
-			b.WriteString(lipgloss.NewStyle().MaxWidth(width).Render("  " + vis[i]))
+			b.WriteString(lipgloss.NewStyle().MaxWidth(width).Render("  " + label))
 		}
 		if i < end-1 {
 			b.WriteString("\n")
@@ -410,6 +414,7 @@ func (m Model) footerView(width int) string {
 		legend = m.help.ShortHelpView([]key.Binding{
 			bind("↑↓", "move"),
 			bind("enter", "select"),
+			bind("^d", "set default"),
 			bind("esc", "cancel"),
 		})
 	} else if m.help.ShowAll {

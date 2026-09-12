@@ -1,6 +1,7 @@
 package projtui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -144,5 +145,49 @@ func TestFooterShowsModelPerAgentAndOverlay(t *testing.T) {
 	m = press(m, "tab") // claude → cursor
 	if v := m.View(); strings.Contains(v, "model:") {
 		t.Fatalf("cursor footer must omit the model, got:\n%s", v)
+	}
+}
+
+// Ctrl-D in the model overlay sets the highlighted model as the global default:
+// it persists via the injected saveDefault, selects it, updates the live
+// default marker, and confirms in the footer.
+func TestCtrlDSetsGlobalDefault(t *testing.T) {
+	m := openNewWork(t, newModelProjectModel(t, "pi", "repo-a"))
+	var saved string
+	m.saveDefault = func(model string) error { saved = model; return nil }
+	m = press(m, "shift+tab")
+	m = press(m, "down") // highlight openai-codex/gpt-5.6-sol
+	m = press(m, "ctrl+d")
+
+	if saved != "openai-codex/gpt-5.6-sol" {
+		t.Fatalf("saveDefault got %q", saved)
+	}
+	if m.defaultModel != "openai-codex/gpt-5.6-sol" {
+		t.Fatalf("live default = %q", m.defaultModel)
+	}
+	if m.modelChoice() != "openai-codex/gpt-5.6-sol" {
+		t.Fatalf("^d should also select it, got %q", m.modelChoice())
+	}
+	if m.inputKind != inputSelectModel {
+		t.Fatal("^d should keep the overlay open")
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	if v := next.(Model).View(); !strings.Contains(v, "default model set") || !strings.Contains(v, "★ default") {
+		t.Fatalf("overlay should confirm and mark the default, got:\n%s", v)
+	}
+}
+
+// A failing saveDefault surfaces the error and does not move the live default.
+func TestCtrlDSaveErrorSurfaces(t *testing.T) {
+	m := openNewWork(t, newModelProjectModel(t, "pi", "repo-a"))
+	m.saveDefault = func(string) error { return errors.New("boom") }
+	m = press(m, "shift+tab")
+	m = press(m, "ctrl+d")
+	if m.defaultModel != "" {
+		t.Fatalf("default must not move on save error, got %q", m.defaultModel)
+	}
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	if v := next.(Model).View(); !strings.Contains(v, "could not save default") {
+		t.Fatalf("save error should surface, got:\n%s", v)
 	}
 }

@@ -76,6 +76,9 @@ One project root per line (blank lines and `#` comments ignored). Example:
 
 ```toml
 default_agent = "pi"          # what new work launches; "none" for a plain shell
+default_model = "claude-bridge/claude-opus-4-8"  # global default in the model
+                               #   picker (^d sets this live); a matching per-
+                               #   project pin below wins over it
 sidebar       = true          # auto-build the sidebar column on new work
 
 [sidebar_layout]
@@ -100,10 +103,14 @@ All keys are optional; unset keys fall back to built-in defaults.
 
 **Picking a model.** While naming new work, `Tab` cycles the agent (only a few)
 and `Shift-Tab` opens a filterable list of that agent's models — type to filter,
-`↑`/`↓` to move, `enter` to pick, `esc` to keep the current one. The new-work
+`↑`/`↓` to move, `enter` to pick, `esc` to keep the current one. `^d` sets the
+highlighted model as the global `default_model` (written to config.toml, marked
+`★ default` in the list), so the picker opens on it next time. The new-work
 footer shows the chosen model. Changing the agent re-seeds the model to that
 agent's default. Claude Code only accepts Anthropic models, so its menu is a
 built-in list; pi's menu is whatever providers you list under `[model_providers]`.
+Selection order on open: a per-project `default_model` pin, else the global
+`default_model`, else the menu's first entry.
 
 ### Shell shim + auto-join hook
 

@@ -1,8 +1,10 @@
 package proj
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -26,6 +28,7 @@ type ProjectOverride struct {
 // Config is the in-memory representation of config.toml.
 type Config struct {
 	DefaultAgent  string                     `toml:"default_agent"`
+	DefaultModel  string                     `toml:"default_model"`
 	Sidebar       bool                       `toml:"sidebar"`
 	SidebarLayout Layout                     `toml:"sidebar_layout"`
 	Projects      map[string]ProjectOverride `toml:"project"`
@@ -108,6 +111,74 @@ func (c Config) ModelFor(project string) string {
 		return *o.DefaultModel
 	}
 	return ""
+}
+
+// SaveDefaultModel upserts the top-level `default_model` key in config.toml,
+// preserving the rest of the file (comments, tables, and other keys) rather
+// than re-marshaling the whole config. A missing file is created with just the
+// key. When the key is absent, it is inserted at the end of the top-level
+// section (before the first table header) so it stays grouped with the other
+// top-level keys like default_agent.
+func SaveDefaultModel(model string) error {
+	p := configPath()
+	line := fmt.Sprintf("default_model = %q", model)
+
+	b, err := os.ReadFile(p)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(p, []byte(line+"\n"), 0o644)
+	}
+
+	lines := strings.Split(string(b), "\n")
+	firstTable := -1 // index of the first table header line
+	for i, ln := range lines {
+		t := strings.TrimSpace(ln)
+		if strings.HasPrefix(t, "[") {
+			firstTable = i
+			break
+		}
+	}
+	topEnd := len(lines)
+	if firstTable >= 0 {
+		topEnd = firstTable
+	}
+	// Replace an existing top-level key in place.
+	for i := 0; i < topEnd; i++ {
+		if isTopKey(lines[i], "default_model") {
+			lines[i] = line
+			return os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o644)
+		}
+	}
+	// Insert at the end of the top-level section. Trim trailing blank lines in
+	// that section so the new key sits directly after the last top-level content.
+	ins := topEnd
+	for ins > 0 && strings.TrimSpace(lines[ins-1]) == "" {
+		ins--
+	}
+	out := make([]string, 0, len(lines)+2)
+	out = append(out, lines[:ins]...)
+	out = append(out, line)
+	if firstTable >= 0 {
+		out = append(out, "") // blank line before the first table
+	}
+	out = append(out, lines[ins:]...)
+	return os.WriteFile(p, []byte(strings.Join(out, "\n")), 0o644)
+}
+
+// isTopKey reports whether line is an assignment of the given bare key
+// (`key = ...`), ignoring surrounding whitespace. Used to find a top-level key
+// for in-place replacement without a TOML round-trip.
+func isTopKey(line, key string) bool {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, key) {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(t[len(key):]), "=")
 }
 
 // SidebarFor returns the effective sidebar visibility for the given project.

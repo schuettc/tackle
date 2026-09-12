@@ -132,6 +132,14 @@ type Model struct {
 	// inject a fixture so they never shell out to `pi --list-models`.
 	models func(agent string) []string
 
+	// defaultModel is the config's global default_model id, used to preselect
+	// the picker on open and to mark the default row in the overlay. ^d in the
+	// overlay updates it (live) and persists via saveDefault.
+	defaultModel string
+	// saveDefault persists a new global default_model to config.toml; defaults
+	// to proj.SaveDefaultModel, injected in tests so they never touch real disk.
+	saveDefault func(model string) error
+
 	inputKind inputKind
 	input     textinput.Model
 
@@ -172,6 +180,7 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool, model
 		models:        models,
 		refresh:       defaultRefresh,
 		kill:          proj.KillSession,
+		saveDefault:   proj.SaveDefaultModel,
 		help:          newHelp(),
 	}
 	m = m.reseedModels()
@@ -233,7 +242,12 @@ func New() (Model, error) {
 	cfg := proj.LoadConfig()
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
-	return newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)), nil
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	m.defaultModel = cfg.DefaultModel
+	if cfg.DefaultModel != "" {
+		m = m.selectModel(cfg.DefaultModel)
+	}
+	return m, nil
 }
 
 // modelsResolver closes ModelsForAgent over cfg so the picker can look up any
@@ -254,11 +268,15 @@ func NewFor(project, agent string) (Model, error) {
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
 	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	m.defaultModel = cfg.DefaultModel
 	if agent != "" {
 		m = m.selectAgent(agent)
 	}
+	// A per-project pin wins; otherwise fall back to the global default.
 	if mdl := cfg.ModelFor(project); mdl != "" {
 		m = m.selectModel(mdl)
+	} else if cfg.DefaultModel != "" {
+		m = m.selectModel(cfg.DefaultModel)
 	}
 	if project != "" {
 		m = m.drillInto(project)
@@ -515,6 +533,23 @@ func (m Model) updateModelSelect(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m = m.selectModel(vis[m.modelCursor])
 		}
 		m.inputKind = inputNewWork
+		return m, nil
+	case "ctrl+d":
+		// Set the highlighted model as the global default: select it for this
+		// launch and persist it to config.toml. The overlay stays open so the
+		// confirmation (and the updated ★ marker) is visible.
+		vis := m.visibleModels()
+		if len(vis) == 0 || m.modelCursor >= len(vis) {
+			return m, nil
+		}
+		id := vis[m.modelCursor]
+		m = m.selectModel(id)
+		if err := m.saveDefault(id); err != nil {
+			m.footerHint = "could not save default: " + err.Error()
+			return m, nil
+		}
+		m.defaultModel = id
+		m.footerHint = "default model set: " + id
 		return m, nil
 	case "backspace":
 		if r := []rune(m.modelFilter); len(r) > 0 {
