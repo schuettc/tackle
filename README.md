@@ -7,7 +7,7 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
 
 - **scratch** — per-directory scratch notes with a live TUI.
 - **proj** — agent-aware tmux session picker; the way *in* to a work session.
-- **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it.
+- **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it. Consume a captured key with `creel exec NAME -- <command>`, which runs the command with the value in its environment only — never printed, never in the agent's context.
 
 ## Install
 

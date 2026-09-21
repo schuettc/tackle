@@ -69,6 +69,32 @@ func TestRunRejectsInvalidNameAndWritesStatus(t *testing.T) {
 	}
 }
 
+func TestRunRoutesExecAndSurfacesIt(t *testing.T) {
+	dir := t.TempDir()
+	writeEnv(t, filepath.Join(dir, ".env"), "K=v\n")
+	cap := withCapturedExec(t)
+
+	// `creel exec ...` is routed by run() to runExec (not the capture TUI).
+	var out, errbuf bytes.Buffer
+	if code := run(dir, []string{"exec", "K", "--", "true"}, &out, &errbuf); code != 0 {
+		t.Fatalf("creel exec: exit %d (%s)", code, errbuf.String())
+	}
+	if !cap.called {
+		t.Fatal("run() did not route exec to runExec")
+	}
+
+	// It is surfaced in help, commands, and man.
+	for _, argv := range [][]string{{"help", "exec"}, {"commands"}, {"man"}} {
+		var o, e bytes.Buffer
+		if code := run(dir, argv, &o, &e); code != 0 {
+			t.Fatalf("creel %v: exit %d (%s)", argv, code, e.String())
+		}
+		if !bytes.Contains(o.Bytes(), []byte("exec")) {
+			t.Fatalf("creel %v output does not mention exec: %s", argv, o.String())
+		}
+	}
+}
+
 func TestFinishWritesToken(t *testing.T) {
 	dir := t.TempDir()
 	status := filepath.Join(dir, "s")

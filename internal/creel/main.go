@@ -77,9 +77,27 @@ func run(cwd string, argv []string, stdout, stderr io.Writer) int {
 			Date:   version.Date(),
 		},
 	})
+	// exec is self-routed: run() dispatches it directly (below) so the child's
+	// argv — including any --help/--json/--dest of its own — passes through
+	// untouched. Registering it here (Run nil) only surfaces it in
+	// help/commands/man.
+	app.Register(tools.Command{
+		Name:     "exec",
+		Summary:  "run a command with secrets from .env in its environment (never printed)",
+		Synopsis: "exec NAME[,NAME2,...] [--dest PATH] -- <command> [args...]",
+		Help: "Read each NAME's value from a cwd-confined .env (default .env; --dest\n" +
+			"to point elsewhere) and exec <command> with those values in its\n" +
+			"environment ONLY. The value is never printed, never placed in argv, and\n" +
+			"never included in an error — errors name only a missing KEY. A requested\n" +
+			"name absent from .env is a hard error (exit 2), not a silent skip. This is\n" +
+			"how an agent consumes a key captured mid-session without the harness ever\n" +
+			"seeing it; prefer it to reading .env yourself.",
+	})
 
 	if len(argv) > 0 {
 		switch argv[0] {
+		case "exec":
+			return runExec(cwd, argv[1:], stdout, stderr)
 		case "version", "--version", "-v", "help", "--help", "-h", "update", "man", "commands":
 			return app.Dispatch(argv, stdout, stderr)
 		}
