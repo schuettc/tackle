@@ -189,6 +189,58 @@ func TestRefreshRateLimitStopsFetching(t *testing.T) {
 	}
 }
 
+func TestRefreshLookupStopsOnRateLimit(t *testing.T) {
+	// 45 repo keys → two batches (40 + 5). First batch returns RATE_LIMITED.
+	// After the fix, exactly one lookup call should be made and the second
+	// batch must not be attempted, leaving prev Refs intact.
+	prev := NewGitHub()
+	prev.Refs["repo:z/z45"] = Ref{Exists: true} // key in second batch; must survive
+
+	var keys []item.Key
+	for i := 0; i < 45; i++ {
+		keys = append(keys, item.RepoKey(fmt.Sprintf("org/repo%d", i)))
+	}
+	keys = append(keys, item.RepoKey("z/z45")) // 46th key, also in second batch
+
+	gh := &fakeGh{handle: func(a []string) (string, error) {
+		j := strings.Join(a, " ")
+		switch {
+		case j == "api user --jq .login":
+			return "schuettc", nil
+		case isQuery(a, "repositoryOwner"):
+			return fmt.Sprintf(ownerPage, false, ""), nil
+		case isQuery(a, "search("):
+			return `{"data":{"search":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}`, nil
+		case isQuery(a, "k0:"):
+			return `{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}`, &GhError{Code: 1}
+		}
+		return "", fmt.Errorf("unexpected gh %s", j)
+	}}
+
+	g, rep := Refresh(ctx, gh, prev, RefreshOptions{
+		Owners: []string{"schuettc"},
+		Keys:   keys,
+		Now:    time.Now(),
+	})
+
+	// Count calls whose query contains "k0:" (lookup batch calls).
+	lookupCalls := 0
+	for _, c := range gh.calls {
+		if isQuery(c, "k0:") {
+			lookupCalls++
+		}
+	}
+	if !rep.RateLimited {
+		t.Fatalf("expected RateLimited=true")
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("expected exactly 1 lookup call with k0:, got %d", lookupCalls)
+	}
+	if r := g.Refs["repo:z/z45"]; r != (Ref{Exists: true}) {
+		t.Errorf("prev Ref was mutated or lost: %+v", r)
+	}
+}
+
 func TestRefreshWithoutGh(t *testing.T) {
 	prev := NewGitHub()
 	prev.Owners["acme"] = &Owner{Login: "acme", Reachable: true, Repos: []RepoObs{{Repo: "acme/x"}}}

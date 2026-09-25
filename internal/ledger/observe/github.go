@@ -409,6 +409,8 @@ func lookupRefs(ctx context.Context, r Runner, g *GitHub, keys []item.Key, now t
 		if json.Unmarshal(out, &resp) != nil || resp.Data == nil {
 			if rateLimited(err, resp.Errors) {
 				rep.RateLimited = true
+				fail("looking up %d items: %s", len(batch), errText(err, resp.Errors))
+				return // stop: remaining keys keep their previous Refs
 			}
 			fail("looking up %d items: %s", len(batch), errText(err, resp.Errors))
 			continue
