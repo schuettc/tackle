@@ -1,0 +1,51 @@
+# kempt manifest for docket — kept separate from any dotfiles manifest.
+#
+#   kempt apply   -manifest cmd/docket/kempt.toml -packages docket
+#   kempt upgrade -manifest cmd/docket/kempt.toml -packages docket
+#
+# -packages docket is required: without it kempt applies the selection saved by
+# your dotfiles `kempt init`, which does not contain "docket".
+# After the first apply: `docket init <your private data repo remote>` and
+# `docket hooks install` (see internal/docket/FORMAT.md). Needs kempt >= 0.5.3.
+
+[kempt]
+spec = 1
+
+[packages.docket]
+description = "docket: the fate of every repo, PR, issue, branch and worktree; journals git/gh activity"
+only = { os = "darwin" }
+
+  # The binary, from the family download contract (verified against .sha256).
+  [[packages.docket.download]]
+  site = "tackle.tools"
+  tool = "docket"
+  bin = "docket"
+
+  # Claude Code: journal Bash tool calls; brief the session on its repo.
+  [[packages.docket.json-merge]]
+  file = "~/.claude/settings.json"
+  merge = { hooks = { PostToolUse = [ { matcher = "Bash", hooks = [ { type = "command", command = "~/.local/bin/docket record --harness claude" } ] } ] } }
+
+  [[packages.docket.json-merge]]
+  file = "~/.claude/settings.json"
+  merge = { hooks = { SessionStart = [ { matcher = "startup|resume", hooks = [ { type = "command", command = "~/.local/bin/docket brief" } ] } ] } }
+
+  # pi: journal bash tool calls with the pi session id, brief the first turn,
+  # background `docket sync --no-github` at session start/end.
+  [[packages.docket.install]]
+  pi = ["npm:pi-docket"]
+
+  # Full sync (including the GitHub refresh) every 30 minutes.
+  [[packages.docket.service]]
+  label = "tools.tackle.docket.sync"
+  program = ["/bin/zsh", "-lc", "exec \"$HOME/.local/bin/docket\" sync"]
+  keep-alive = false
+  run-at-load = true
+  start-interval = 1800
+  process-type = "Background"
+  session-type = "Aqua"
+  stdout = "~/.local/state/docket/sync.log"
+  stderr = "~/.local/state/docket/sync.log"
+
+  [[packages.docket.verify]]
+  command-exists = "docket"
