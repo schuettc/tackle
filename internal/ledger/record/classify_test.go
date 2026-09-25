@@ -73,6 +73,7 @@ func TestActionsNeverRecordSecrets(t *testing.T) {
 		`gh release create v1 --notes SECRET_BODY --title SECRET_TITLE`,
 		`GH_TOKEN=SECRET_TOK gh repo delete a/b --yes`,
 		`echo SECRET_ECHO | git commit -F -`,
+		`gh api -X POST https://x-access-token:SECRET_TOK@api.github.com/repos/a/b/issues -f body=SECRET_BODY`,
 	}
 	for _, c := range cmds {
 		b, _ := json.Marshal(Classify(c))

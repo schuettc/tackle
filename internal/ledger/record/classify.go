@@ -379,7 +379,8 @@ func classifyGhAPI(a journal.Action, args []string) (journal.Action, bool) {
 			continue
 		}
 		if !strings.HasPrefix(args[i], "-") && endpoint == "" {
-			endpoint, _, _ = strings.Cut(args[i], "?")
+			raw, _, _ := strings.Cut(args[i], "?")
+			endpoint = journal.RedactURL(raw)
 		}
 	}
 	if endpoint == "graphql" {
