@@ -8,8 +8,8 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
 - **scratch** — per-directory scratch notes with a live TUI.
 - **proj** — agent-aware tmux session picker; the way *in* to a work session.
 - **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it. Consume a captured key with `creel exec NAME -- <command>`, which runs the command with the value in its environment only — never printed, never in the agent's context.
-- **ledger** — records the intended fate of every repo, pull request, issue, branch and worktree you own or touch, journals git/gh activity from any agent or terminal, and shows what needs attention. Its data lives in your own private git repo. (Preview.)
-  Install: `kempt apply -manifest cmd/ledger/kempt.toml -packages ledger`, then `ledger init <private-repo-remote>` and `ledger hooks install`.
+- **docket** — records the intended fate of every repo, pull request, issue, branch and worktree you own or touch, journals git/gh activity from any agent or terminal, and shows what needs attention. Its data lives in your own private git repo. (Preview.)
+  Install: `kempt apply -manifest cmd/docket/kempt.toml -packages docket`, then `docket init <private-repo-remote>` and `docket hooks install`.
 
 ## Install
 
