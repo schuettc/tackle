@@ -4,10 +4,10 @@ package notes
 
 import (
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
+
+	tools "github.com/schuettc/tools-common"
 )
 
 // Path resolution — which pad file this invocation uses — lives in
@@ -31,36 +31,11 @@ func Read(path string) (string, error) {
 // file is cleaned up; on rename failure the temp file is kept and its path is
 // reported so no content is lost.
 func Write(path, content string) error {
-	dir := filepath.Dir(path)
 	// The store is created on first write rather than at resolution time, so
 	// merely asking where a pad lives never leaves a directory behind.
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".scratch-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-
-	write := func() error {
-		if _, err := tmp.WriteString(content); err != nil {
-			return err
-		}
-		if err := tmp.Sync(); err != nil {
-			return err
-		}
-		return tmp.Close()
-	}
-	if err := write(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename %s to %s (temp kept): %w", tmpName, path, err)
-	}
-	return nil
+	// tools.WriteFileAtomic is this function's old body promoted to the
+	// family: unique temp, fsync, rename, temp kept if the rename fails.
+	return tools.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // Append atomically adds line (with a trailing newline) to the file,

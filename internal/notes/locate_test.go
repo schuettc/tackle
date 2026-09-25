@@ -5,13 +5,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/schuettc/tools-common/harness"
 )
 
 // fakeAmbient builds an ambient from plain maps so a test can describe the
-// environment a scratch invocation would see without touching the real one.
-func fakeAmbient(env map[string]string, tmux map[string]string, cfg string, cfgErr error) ambient {
+// environment a scratch invocation would see. The session id goes through the
+// real tools-common/harness rule: the three identity variables are pinned
+// from env with t.Setenv (absent means empty) when the session is asked for,
+// so the developer's own session never leaks in.
+func fakeAmbient(t *testing.T, env map[string]string, tmux map[string]string, cfg string, cfgErr error) ambient {
+	t.Helper()
 	return ambient{
-		getenv:      func(k string) string { return env[k] },
+		getenv: func(k string) string { return env[k] },
+		session: func() string {
+			for _, k := range []string{EnvAgentSession, EnvClaudeSession, EnvAgentChild} {
+				t.Setenv(k, env[k])
+			}
+			return harness.FromEnv().SessionID
+		},
 		tmuxOpt:     func(k string) string { return tmux[k] },
 		tmuxSession: func() string { return tmux[tmuxSessionKey] },
 		configDir: func() (string, error) {
@@ -29,7 +41,7 @@ const tmuxSessionKey = "#S"
 func padsDir(cfg string) string { return filepath.Join(cfg, "scratch", "pads") }
 
 func TestResolvePrefersExplicitFile(t *testing.T) {
-	a := fakeAmbient(
+	a := fakeAmbient(t, 
 		map[string]string{EnvFile: "/tmp/pinned.md", EnvClaudeSession: "sess-1", EnvDir: "/tmp/store"},
 		map[string]string{TmuxOption: "sess-2"}, "/cfg", nil)
 	got, err := resolve("/work", a)
@@ -42,7 +54,7 @@ func TestResolvePrefersExplicitFile(t *testing.T) {
 }
 
 func TestResolveKeysOnAgentSession(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvClaudeSession: "abc-123"}, nil, "/cfg", nil)
+	a := fakeAmbient(t, map[string]string{EnvClaudeSession: "abc-123"}, nil, "/cfg", nil)
 	got, err := resolve("/work/repo", a)
 	if err != nil {
 		t.Fatalf("resolve() error = %v", err)
@@ -56,7 +68,7 @@ func TestResolveKeysOnAgentSession(t *testing.T) {
 // AGENT_SESSION_ID is the harness-neutral identifier (pi exports it into
 // every subprocess); it keys the pad exactly like the Claude-specific var.
 func TestResolveKeysOnGenericAgentSession(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvAgentSession: "01a0-pi-sess"}, nil, "/cfg", nil)
+	a := fakeAmbient(t, map[string]string{EnvAgentSession: "01a0-pi-sess"}, nil, "/cfg", nil)
 	got, err := resolve("/work/repo", a)
 	if err != nil {
 		t.Fatalf("resolve() error = %v", err)
@@ -67,18 +79,29 @@ func TestResolveKeysOnGenericAgentSession(t *testing.T) {
 	}
 }
 
-// When both are present the generic var wins: a Claude process spawned
-// INSIDE another agent's session (pi's claude-bridge children) carries its
-// own CLAUDE_CODE_SESSION_ID plus the outer agent's AGENT_SESSION_ID, and
-// the pad belongs to the outer conversation.
-func TestResolveGenericAgentSessionBeatsClaude(t *testing.T) {
-	a := fakeAmbient(map[string]string{
-		EnvAgentSession:  "outer-agent",
-		EnvClaudeSession: "bridge-child",
-	}, nil, "/cfg", nil)
-	got, _ := resolve("/work", a)
-	if want := filepath.Join(padsDir("/cfg"), "outer-agent.md"); got != want {
-		t.Fatalf("resolve() = %q, want %q", got, want)
+// With both ids present, the harness rule decides whose pad it is: a
+// pi-claude-bridge child (marker set) writes to the outer pi conversation's
+// pad; a Claude session started from inside pi (no marker) is its own
+// conversation. Each id alone keys the pad directly.
+func TestResolveSessionRule(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"bridge child: both ids and the marker", map[string]string{
+			EnvAgentSession: "outer-pi", EnvClaudeSession: "bridge-child", EnvAgentChild: "1"}, "outer-pi"},
+		{"claude launched from pi: both ids, no marker", map[string]string{
+			EnvAgentSession: "outer-pi", EnvClaudeSession: "own-claude"}, "own-claude"},
+		{"claude only", map[string]string{EnvClaudeSession: "only-claude"}, "only-claude"},
+		{"agent only", map[string]string{EnvAgentSession: "only-pi"}, "only-pi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, _ := resolve("/work", fakeAmbient(t, tc.env, nil, "/cfg", nil))
+			if want := filepath.Join(padsDir("/cfg"), tc.want+".md"); got != want {
+				t.Fatalf("resolve() = %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -86,7 +109,7 @@ func TestResolveGenericAgentSessionBeatsClaude(t *testing.T) {
 // directory is the same pad. This is what makes a resumed session in a new
 // pane or worktree reopen its own notes.
 func TestResolveSameSessionDifferentDirs(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvClaudeSession: "abc-123"}, nil, "/cfg", nil)
+	a := fakeAmbient(t, map[string]string{EnvClaudeSession: "abc-123"}, nil, "/cfg", nil)
 	one, _ := resolve("/work/repo", a)
 	two, _ := resolve("/somewhere/else/entirely", a)
 	if one != two {
@@ -98,8 +121,8 @@ func TestResolveSameSessionDifferentDirs(t *testing.T) {
 // checkout must not share a pad.
 func TestResolveTwoSessionsOneDirDiffer(t *testing.T) {
 	dir := "/work/shared-checkout"
-	one, _ := resolve(dir, fakeAmbient(map[string]string{EnvClaudeSession: "sess-a"}, nil, "/cfg", nil))
-	two, _ := resolve(dir, fakeAmbient(map[string]string{EnvClaudeSession: "sess-b"}, nil, "/cfg", nil))
+	one, _ := resolve(dir, fakeAmbient(t, map[string]string{EnvClaudeSession: "sess-a"}, nil, "/cfg", nil))
+	two, _ := resolve(dir, fakeAmbient(t, map[string]string{EnvClaudeSession: "sess-b"}, nil, "/cfg", nil))
 	if one == two {
 		t.Fatalf("both sessions resolved to %q", one)
 	}
@@ -109,7 +132,7 @@ func TestResolveTwoSessionsOneDirDiffer(t *testing.T) {
 // is the only way it learns the session — but a real env var wins when both
 // are present.
 func TestResolveFallsBackToTmuxOption(t *testing.T) {
-	a := fakeAmbient(nil, map[string]string{TmuxOption: "tmux-sess"}, "/cfg", nil)
+	a := fakeAmbient(t, nil, map[string]string{TmuxOption: "tmux-sess"}, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join(padsDir("/cfg"), "tmux-sess.md"); got != want {
 		t.Fatalf("resolve() = %q, want %q", got, want)
@@ -117,7 +140,7 @@ func TestResolveFallsBackToTmuxOption(t *testing.T) {
 }
 
 func TestResolveEnvBeatsTmux(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvClaudeSession: "from-env"},
+	a := fakeAmbient(t, map[string]string{EnvClaudeSession: "from-env"},
 		map[string]string{TmuxOption: "from-tmux"}, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join(padsDir("/cfg"), "from-env.md"); got != want {
@@ -128,7 +151,7 @@ func TestResolveEnvBeatsTmux(t *testing.T) {
 // No agent, but inside a named tmux session: the pad belongs to that tmux
 // session, so two shell-only sessions in one checkout do not share a pad.
 func TestResolveNoAgentUsesTmuxSessionName(t *testing.T) {
-	a := fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil)
+	a := fakeAmbient(t, nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join(padsDir("/cfg"), "proj-html.md"); got != want {
 		t.Fatalf("resolve() = %q, want %q", got, want)
@@ -136,15 +159,15 @@ func TestResolveNoAgentUsesTmuxSessionName(t *testing.T) {
 }
 
 func TestResolveTwoTmuxSessionsOneDirDiffer(t *testing.T) {
-	one, _ := resolve("/work", fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil))
-	two, _ := resolve("/work", fakeAmbient(nil, map[string]string{tmuxSessionKey: "proj/admin-page"}, "/cfg", nil))
+	one, _ := resolve("/work", fakeAmbient(t, nil, map[string]string{tmuxSessionKey: "proj/html"}, "/cfg", nil))
+	two, _ := resolve("/work", fakeAmbient(t, nil, map[string]string{tmuxSessionKey: "proj/admin-page"}, "/cfg", nil))
 	if one == two {
 		t.Fatalf("both sessions resolved to %q", one)
 	}
 }
 
 func TestResolveAgentBeatsTmuxSessionName(t *testing.T) {
-	a := fakeAmbient(nil, map[string]string{TmuxOption: "agent-id", tmuxSessionKey: "proj/html"}, "/cfg", nil)
+	a := fakeAmbient(t, nil, map[string]string{TmuxOption: "agent-id", tmuxSessionKey: "proj/html"}, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join(padsDir("/cfg"), "agent-id.md"); got != want {
 		t.Fatalf("resolve() = %q, want %q", got, want)
@@ -152,7 +175,7 @@ func TestResolveAgentBeatsTmuxSessionName(t *testing.T) {
 }
 
 func TestResolveNoSessionUsesDirKey(t *testing.T) {
-	a := fakeAmbient(nil, nil, "/cfg", nil)
+	a := fakeAmbient(t, nil, nil, "/cfg", nil)
 	got, _ := resolve("/Users/c/dotfiles", a)
 	if !strings.HasPrefix(got, padsDir("/cfg")) {
 		t.Fatalf("resolve() = %q, want it inside the store", got)
@@ -167,7 +190,7 @@ func TestResolveNoSessionUsesDirKey(t *testing.T) {
 
 // Two different directories with no agent session must not collide.
 func TestResolveDistinctDirsDistinctPads(t *testing.T) {
-	a := fakeAmbient(nil, nil, "/cfg", nil)
+	a := fakeAmbient(t, nil, nil, "/cfg", nil)
 	one, _ := resolve("/work/alpha", a)
 	two, _ := resolve("/work/beta", a)
 	if one == two {
@@ -176,7 +199,7 @@ func TestResolveDistinctDirsDistinctPads(t *testing.T) {
 }
 
 func TestResolveHonorsStoreOverride(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvDir: "/custom/store", EnvClaudeSession: "s1"}, nil, "/cfg", nil)
+	a := fakeAmbient(t, map[string]string{EnvDir: "/custom/store", EnvClaudeSession: "s1"}, nil, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if want := filepath.Join("/custom/store", "pads", "s1.md"); got != want {
 		t.Fatalf("resolve() = %q, want %q", got, want)
@@ -187,7 +210,7 @@ func TestResolveHonorsStoreOverride(t *testing.T) {
 // into the working directory — landing a pad in the repo is the exact
 // outcome this design removes.
 func TestResolveErrorsWhenStoreUnknown(t *testing.T) {
-	a := fakeAmbient(nil, nil, "", errors.New("no home"))
+	a := fakeAmbient(t, nil, nil, "", errors.New("no home"))
 	got, err := resolve("/work/repo", a)
 	if err == nil {
 		t.Fatalf("resolve() = %q, want an error", got)
@@ -215,7 +238,7 @@ func TestSafeKeyContainsTraversal(t *testing.T) {
 }
 
 func TestSafeKeyTraversalStaysInStore(t *testing.T) {
-	a := fakeAmbient(map[string]string{EnvClaudeSession: "../../../../etc/passwd"}, nil, "/cfg", nil)
+	a := fakeAmbient(t, map[string]string{EnvClaudeSession: "../../../../etc/passwd"}, nil, "/cfg", nil)
 	got, _ := resolve("/work", a)
 	if !strings.HasPrefix(filepath.Clean(got), filepath.Clean(padsDir("/cfg"))) {
 		t.Fatalf("resolve() = %q, escaped the store", got)
@@ -225,7 +248,7 @@ func TestSafeKeyTraversalStaysInStore(t *testing.T) {
 // Deep directories must not produce a filename the filesystem rejects.
 func TestSafeKeyBoundsLength(t *testing.T) {
 	long := "/" + strings.Repeat("verylongsegment/", 60)
-	a := fakeAmbient(nil, nil, "/cfg", nil)
+	a := fakeAmbient(t, nil, nil, "/cfg", nil)
 	got, _ := resolve(long, a)
 	if base := filepath.Base(got); len(base) > maxKey+16 {
 		t.Fatalf("base name is %d chars, want bounded near %d", len(base), maxKey)
@@ -235,7 +258,7 @@ func TestSafeKeyBoundsLength(t *testing.T) {
 // Truncation must not collapse two different long paths into one pad.
 func TestSafeKeyLongPathsStayDistinct(t *testing.T) {
 	prefix := "/" + strings.Repeat("segment/", 60)
-	a := fakeAmbient(nil, nil, "/cfg", nil)
+	a := fakeAmbient(t, nil, nil, "/cfg", nil)
 	one, _ := resolve(prefix+"alpha", a)
 	two, _ := resolve(prefix+"beta", a)
 	if one == two {
