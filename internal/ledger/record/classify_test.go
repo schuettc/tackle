@@ -15,6 +15,7 @@ func TestClassify(t *testing.T) {
 		want []journal.Action
 	}{
 		{`git push -u --force-with-lease origin feat/x`, []journal.Action{{Tool: "git", Verb: "push", Refs: []string{"origin", "feat/x"}, Flags: []string{"-u", "--force-with-lease"}}}},
+		{`git push --signed origin main`, []journal.Action{{Tool: "git", Verb: "push", Refs: []string{"origin", "main"}, Flags: []string{"--signed"}}}},
 		{`git -C /w/hail branch -D old`, []journal.Action{{Tool: "git", Verb: "branch", Dir: "/w/hail", Refs: []string{"old"}, Flags: []string{"-D"}}}},
 		{`git branch`, nil},
 		{`git branch --list 'feat/*'`, nil},

@@ -28,7 +28,7 @@ type verbSpec struct {
 var gitGlobalVal = []string{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env"}
 
 var gitVerbs = map[string]verbSpec{
-	"push":        {valFlags: []string{"-o", "--push-option", "--repo", "--receive-pack", "--exec", "--signed"}, keep: []string{"-f", "--force", "--force-with-lease", "--force-if-includes", "-u", "--set-upstream", "-d", "--delete", "--tags", "--all", "--mirror", "--no-verify", "--atomic", "--prune"}},
+	"push":        {valFlags: []string{"-o", "--push-option", "--repo", "--receive-pack", "--exec"}, keep: []string{"-f", "--force", "--force-with-lease", "--force-if-includes", "-u", "--set-upstream", "-d", "--delete", "--tags", "--all", "--mirror", "--no-verify", "--atomic", "--prune", "--signed"}},
 	"pull":        {valFlags: []string{"-s", "--strategy", "-X", "--strategy-option", "--depth"}, keep: []string{"--rebase", "--ff-only", "--no-ff", "--force"}},
 	"fetch":       {valFlags: []string{"--depth", "--shallow-since", "--upload-pack", "-j", "--jobs", "-o", "--server-option"}, keep: []string{"--prune", "-p", "--all", "--tags", "--force", "-f", "--unshallow"}},
 	"merge":       {valFlags: []string{"-m", "-F", "--file", "-s", "--strategy", "-X", "--strategy-option", "--into-name"}, keep: []string{"--ff-only", "--no-ff", "--squash", "--abort", "--continue"}},
