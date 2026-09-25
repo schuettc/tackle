@@ -61,7 +61,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 func open() (*app.App, error) {
 	a, err := app.Open(newRunner())
 	if errors.Is(err, config.ErrNotInitialized) {
-		return nil, tools.Exitf(1, "docket is not initialized on this machine").WithHint("docket init git@github.com:<you>/docket-data.git")
+		return nil, tools.Exitf(1, "docket is not initialized on this machine").WithHint("docket init")
 	}
 	return a, err
 }

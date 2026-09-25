@@ -26,9 +26,9 @@ func TestOpenUninitialized(t *testing.T) {
 
 func TestInitIsIdempotent(t *testing.T) {
 	r := newRig(t)
-	cfg, err := Init(ctx, InitOptions{Remote: r.remote, Machine: "mbp", User: "schuettc"}, &fakeGh{})
-	if err != nil || cfg.Roots[0] != r.root {
-		t.Fatalf("re-init: %+v %v (must keep the existing config)", cfg, err)
+	res, err := Init(ctx, InitOptions{Remote: r.remote, Machine: "mbp", User: "schuettc"}, &fakeGh{})
+	if err != nil || res.Config.Roots[0] != r.root {
+		t.Fatalf("re-init: %+v %v (must keep the existing config)", res.Config, err)
 	}
 }
 

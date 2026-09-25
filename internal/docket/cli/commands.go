@@ -36,7 +36,7 @@ func commands(stdin io.Reader) []tools.Command {
 	ctx := context.Background()
 	return []tools.Command{
 		{
-			Name: "init", Group: "setup", Synopsis: "init <docket-repo-remote> [--machine M] [--user U] [--root DIR]...",
+			Name: "init", Group: "setup", Synopsis: "init [<docket-repo-remote>] [--no-create] [--machine M] [--user U] [--root DIR]...",
 			Summary:  "set up this machine: config plus a clone of the docket repo",
 			NewFlags: initFlags,
 			Run: func(args []string, out, errw io.Writer) error {
@@ -45,15 +45,23 @@ func commands(stdin io.Reader) []tools.Command {
 				if err != nil {
 					return err
 				}
-				o := app.InitOptions{Machine: fs.Lookup("machine").Value.String(), User: fs.Lookup("user").Value.String(), Roots: *fs.Lookup("root").Value.(*multi)}
+				o := app.InitOptions{
+					Machine:  fs.Lookup("machine").Value.String(),
+					User:     fs.Lookup("user").Value.String(),
+					Roots:    *fs.Lookup("root").Value.(*multi),
+					NoCreate: boolFlag(fs, "no-create"),
+				}
 				if len(pos) > 0 {
 					o.Remote = pos[0]
 				}
-				cfg, err := app.Init(ctx, o, newRunner())
+				res, err := app.Init(ctx, o, newRunner())
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(out, "docket initialized: machine %s, user %s, repo %s\nnext: docket hooks install && docket sync\n", cfg.Machine, cfg.User, cfg.DocketRepo)
+				if res.Created != "" {
+					fmt.Fprintf(out, "created private GitHub repo %s\n", res.Created)
+				}
+				fmt.Fprintf(out, "docket initialized: machine %s, user %s, repo %s\nnext: docket hooks install && docket sync\n", res.Config.Machine, res.Config.User, res.Config.DocketRepo)
 				return nil
 			},
 		},
@@ -414,7 +422,8 @@ func openKey(pos []string) (*app.App, item.Key, error) {
 }
 
 func initFlags() *flag.FlagSet {
-	return flags("init", "docket init <remote> [flags]", "Idempotent. The first machine bootstraps an empty remote.", func(fs *flag.FlagSet) {
+	return flags("init", "docket init [remote] [flags]", "Idempotent. With no remote, uses <your GitHub login>/docket-data, creating it as a PRIVATE repo if it doesn't exist (refuses a public one). The first machine bootstraps an empty repo.", func(fs *flag.FlagSet) {
+		fs.Bool("no-create", false, "fail instead of creating a missing GitHub repo")
 		fs.String("machine", "", "machine name (default: short host name)")
 		fs.String("user", "", "your GitHub login (default: gh's)")
 		fs.Var(new(multi), "root", "directory to scan for clones (repeatable; default ~/GitHub and ~/dotfiles)")

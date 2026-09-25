@@ -46,45 +46,92 @@ func Open(gh observe.Runner) (*App, error) {
 // InitOptions configures a first init. Empty fields take defaults; User
 // defaults to gh's login.
 type InitOptions struct {
-	Remote  string
-	Machine string
-	User    string
-	Roots   []string
+	Remote   string
+	Machine  string
+	User     string
+	Roots    []string
+	NoCreate bool // never create a missing GitHub repo
+}
+
+// InitResult reports what Init did.
+type InitResult struct {
+	Config  config.Config
+	Created string // "owner/name" of a GitHub repo Init created, or ""
 }
 
 // Init writes this machine's config (unless one exists, which is kept) and
 // clones or bootstraps the docket repo. Safe to re-run.
-func Init(ctx context.Context, o InitOptions, gh observe.Runner) (config.Config, error) {
+func Init(ctx context.Context, o InitOptions, gh observe.Runner) (InitResult, error) {
 	cfg, err := config.Load()
+	var created string
 	switch {
 	case err == nil:
 		if o.Remote != "" && cfg.DocketRemote != o.Remote {
-			return cfg, fmt.Errorf("already initialized with remote %s (edit %s to change it)", cfg.DocketRemote, config.Path())
+			return InitResult{Config: cfg}, fmt.Errorf("already initialized with remote %s (edit %s to change it)", cfg.DocketRemote, config.Path())
 		}
 	case errors.Is(err, config.ErrNotInitialized):
-		if o.Remote == "" {
-			return cfg, fmt.Errorf("init needs the docket repo remote, e.g. git@github.com:<you>/docket-data.git")
-		}
 		user := o.User
 		if user == "" {
 			out, gerr := gh.Gh(ctx, "api", "user", "--jq", ".login")
 			user = strings.TrimSpace(string(out))
 			if gerr != nil || user == "" {
-				return cfg, fmt.Errorf("could not read your GitHub login from gh (%v); pass --user", gerr)
+				return InitResult{}, fmt.Errorf("could not read your GitHub login from gh (%v); pass --user", gerr)
 			}
 		}
-		cfg = config.Config{Machine: o.Machine, User: user, DocketRemote: o.Remote, Roots: o.Roots}
+		remote := o.Remote
+		if remote == "" {
+			remote = defaultRemote(user)
+		}
+		if repo := observe.GitHubRepo(remote); repo != "" {
+			ok, gerr := ensurePrivateRepo(ctx, gh, repo, !o.NoCreate)
+			if gerr != nil {
+				return InitResult{}, gerr
+			}
+			if ok {
+				created = repo
+			}
+		}
+		cfg = config.Config{Machine: o.Machine, User: user, DocketRemote: remote, Roots: o.Roots}
 		cfg.Defaults()
 		if err := config.Save(cfg); err != nil {
-			return cfg, err
+			return InitResult{}, err
 		}
 	default:
-		return cfg, err
+		return InitResult{}, err
 	}
 	if _, err := store.Init(ctx, cfg.DocketRepo, cfg.DocketRemote); err != nil {
-		return cfg, err
+		return InitResult{Config: cfg}, err
 	}
-	return cfg, nil
+	return InitResult{Config: cfg, Created: created}, nil
+}
+
+// defaultRemote returns the default docket data remote for the given GitHub login.
+func defaultRemote(login string) string {
+	return "git@github.com:" + login + "/docket-data.git"
+}
+
+// ensurePrivateRepo checks that repo exists on GitHub and is private.
+// If the repo does not exist and create is true, it creates it as private.
+// Non-GitHub remotes should be filtered out by the caller before calling this.
+func ensurePrivateRepo(ctx context.Context, gh observe.Runner, repo string, create bool) (created bool, err error) {
+	out, err := gh.Gh(ctx, "api", "repos/"+repo, "--jq", ".private")
+	if err != nil {
+		var ge *observe.GhError
+		if errors.As(err, &ge) && (strings.Contains(ge.Stderr, "HTTP 404") || strings.Contains(ge.Stderr, "Not Found")) {
+			if !create {
+				return false, fmt.Errorf("%s does not exist on GitHub (run docket init without --no-create to create it as a private repo)", repo)
+			}
+			if _, cerr := gh.Gh(ctx, "repo", "create", repo, "--private", "--description", "docket data (written by the docket binary)"); cerr != nil {
+				return false, fmt.Errorf("creating %s on GitHub: %w", repo, cerr)
+			}
+			return true, nil
+		}
+		return false, fmt.Errorf("checking %s on GitHub: %w", repo, err)
+	}
+	if strings.TrimSpace(string(out)) != "true" {
+		return false, fmt.Errorf("%s is public; docket data names your private repos — make it private or pass a different remote", repo)
+	}
+	return false, nil
 }
 
 func (a *App) snapshots() ([]observe.Snapshot, error) {

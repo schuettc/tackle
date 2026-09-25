@@ -5,8 +5,8 @@
 #
 # -packages docket is required: without it kempt applies the selection saved by
 # your dotfiles `kempt init`, which does not contain "docket".
-# After the first apply: `docket init <your private data repo remote>` and
-# `docket hooks install` (see internal/docket/FORMAT.md). Needs kempt >= 0.5.3.
+# After the first apply: `docket init` (defaults to, and if needed creates, a private `<you>/docket-data`)
+# and `docket hooks install` (see internal/docket/FORMAT.md). Needs kempt >= 0.5.3.
 
 [kempt]
 spec = 1
