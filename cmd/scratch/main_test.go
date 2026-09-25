@@ -21,6 +21,8 @@ func isolate(t *testing.T) string {
 	t.Setenv(notes.EnvDir, store)
 	t.Setenv(notes.EnvFile, "")
 	t.Setenv(notes.EnvClaudeSession, "")
+	t.Setenv(notes.EnvAgentSession, "")
+	t.Setenv(notes.EnvAgentChild, "")
 	t.Setenv("TMUX", "")
 	return store
 }

@@ -57,7 +57,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip = %q, want %q", got, content)
 	}
 	// No temp files left behind after a successful write.
-	tmps, _ := filepath.Glob(filepath.Join(dir, ".scratch-*.tmp"))
+	tmps, _ := filepath.Glob(filepath.Join(dir, ".*.tmp"))
 	if len(tmps) != 0 {
 		t.Fatalf("leftover temp files: %v", tmps)
 	}
@@ -76,7 +76,7 @@ func TestWriteRenameFailureKeepsTemp(t *testing.T) {
 		t.Fatal("Write() to a directory path should fail on rename")
 	}
 	// The temp file must be kept (not cleaned up) so no content is lost.
-	tmps, _ := filepath.Glob(filepath.Join(dir, ".scratch-*.tmp"))
+	tmps, _ := filepath.Glob(filepath.Join(dir, ".*.tmp"))
 	if len(tmps) != 1 {
 		t.Fatalf("rename failure should keep exactly 1 temp file, found %d: %v", len(tmps), tmps)
 	}

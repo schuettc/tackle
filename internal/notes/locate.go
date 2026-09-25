@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/schuettc/tools-common/harness"
 )
 
 // Pad files live in a per-user store outside any repository. Keying them by
@@ -29,15 +31,15 @@ const (
 	EnvFile = "SCRATCH_FILE"
 	// EnvDir overrides the store root.
 	EnvDir = "SCRATCH_DIR"
-	// EnvAgentSession is the harness-neutral session id. pi exports it into
-	// every subprocess it spawns — including the Claude Code children its
-	// model bridge runs, which is why it outranks the Claude-specific var:
-	// a bridge child carries both, and the pad belongs to the outer
-	// conversation, not the child.
-	EnvAgentSession = "AGENT_SESSION_ID"
-	// EnvClaudeSession is Claude Code's session UUID, present in the
-	// environment of the session process and anything it spawns.
+	// EnvAgentSession is the harness-neutral session id (pi exports it into
+	// its commands; pi-claude-bridge stamps it on the Claude Code children it
+	// runs). EnvClaudeSession is Claude Code's session UUID. EnvAgentChild=1
+	// is the bridge's declaration that a child belongs to the AGENT_SESSION_ID
+	// session. tools-common/harness turns the three into one session id (see
+	// sessionID); they are named here so tests can pin them.
+	EnvAgentSession  = "AGENT_SESSION_ID"
 	EnvClaudeSession = "CLAUDE_CODE_SESSION_ID"
+	EnvAgentChild    = "AGENT_SESSION_CHILD"
 	// TmuxOption is the tmux session option a harness SessionStart hook
 	// stamps with the agent's session id. It is how a scratch pane — a
 	// SIBLING of the agent's pane, which therefore does not inherit the
@@ -53,6 +55,7 @@ const (
 // HOME, or a real agent session.
 type ambient struct {
 	getenv      func(string) string
+	session     func() string
 	tmuxOpt     func(string) string
 	tmuxSession func() string
 	configDir   func() (string, error)
@@ -61,6 +64,7 @@ type ambient struct {
 func realAmbient() ambient {
 	return ambient{
 		getenv:      os.Getenv,
+		session:     func() string { return harness.FromEnv().SessionID },
 		tmuxOpt:     tmuxOption,
 		tmuxSession: tmuxSessionName,
 		configDir:   os.UserConfigDir,
@@ -119,11 +123,13 @@ func padKey(cwd string, a ambient) string {
 // sessionID finds the agent session two ways, in order of directness: the
 // environment (this process is the agent or a child of it), then the tmux
 // session option (this process is a sibling pane and must be told).
+//
+// The environment answer is the family rule in tools-common/harness: a
+// pi-claude-bridge child (both ids plus AGENT_SESSION_CHILD=1) writes to the
+// outer pi conversation's pad; a Claude session started from inside pi (both
+// ids, no marker) is its own conversation and gets its own pad.
 func sessionID(a ambient) string {
-	if id := strings.TrimSpace(a.getenv(EnvAgentSession)); id != "" {
-		return id
-	}
-	if id := strings.TrimSpace(a.getenv(EnvClaudeSession)); id != "" {
+	if id := strings.TrimSpace(a.session()); id != "" {
 		return id
 	}
 	return strings.TrimSpace(a.tmuxOpt(TmuxOption))

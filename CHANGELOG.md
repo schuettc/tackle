@@ -4,6 +4,18 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- The pad key's session id now comes from tools-common's shared harness rule.
+  A pi-claude-bridge child (which pi-claude-bridge now marks with
+  `AGENT_SESSION_CHILD=1` next to the `AGENT_SESSION_ID` it stamps) still
+  writes to the outer pi conversation's pad. A Claude session started from
+  inside pi (both ids, no marker) now gets **its own** pad instead of pi's.
+  The `@harness_session` tmux-option fallback is unchanged.
+- Pads are written through tools-common's `WriteFileAtomic`: same fsync and
+  kept-temp-on-rename-failure behaviour, temp files now named `.<pad>-*.tmp`.
+
 ## [0.4.0] — 2026-08-28
 
 ### Changed
