@@ -35,7 +35,7 @@ func commands(stdin io.Reader) []tools.Command {
 	ctx := context.Background()
 	return []tools.Command{
 		{
-			Name: "init", Group: "setup", Synopsis: "<ledger-repo-remote> [--machine M] [--user U] [--root DIR]...",
+			Name: "init", Group: "setup", Synopsis: "init <ledger-repo-remote> [--machine M] [--user U] [--root DIR]...",
 			Summary:  "set up this machine: config plus a clone of the ledger repo",
 			NewFlags: initFlags,
 			Run: func(args []string, out, errw io.Writer) error {
@@ -104,7 +104,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "show", Group: "observe", Synopsis: "<key>", Summary: "one item: decision, observation, flags and recent history",
+			Name: "show", Group: "observe", Synopsis: "show <key>", Summary: "one item: decision, observation, flags and recent history",
 			NewFlags: jsonFlags("show"),
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := jsonFlags("show")()
@@ -137,7 +137,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "history", Group: "observe", Synopsis: "<key>", Summary: "every recorded action and decision for an item",
+			Name: "history", Group: "observe", Synopsis: "history <key>", Summary: "every recorded action and decision for an item",
 			NewFlags: jsonFlags("history"),
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := jsonFlags("history")()
@@ -168,7 +168,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "decide", Group: "decide", Synopsis: "<key> <disposition> [--until C] [--note N]  |  --from <file>",
+			Name: "decide", Group: "decide", Synopsis: "decide <key> <disposition> [--until C] [--note N]  |  decide --from <file>",
 			Summary:  "record a decision (one commit, pushed at once)",
 			Help:     "Dispositions: keep archive close delete merge wait watch ignore (wait/watch need --until).\nuntil: date(YYYY-MM-DD) merged(<pr>) closed(<pr|issue>) inactive(90d) released(<repo>)",
 			NewFlags: decideFlags,
@@ -299,7 +299,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "hooks", Group: "setup", Synopsis: "install|uninstall|status [--json]",
+			Name: "hooks", Group: "setup", Synopsis: "hooks install|uninstall|status [--json]",
 			Summary:  "manage the global git hook shims that journal git activity",
 			NewFlags: jsonFlags("hooks"),
 			Run: func(args []string, out, errw io.Writer) error {
@@ -392,7 +392,7 @@ func commands(stdin io.Reader) []tools.Command {
 				return nil
 			},
 		},
-		{Name: "hook", Group: "plumbing", Synopsis: "<git-hook-name> [args]", Summary: "called by the git hook shims (never fails)"},
+		{Name: "hook", Group: "plumbing", Synopsis: "hook <git-hook-name> [args]", Summary: "called by the git hook shims (never fails)"},
 	}
 }
 

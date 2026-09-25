@@ -178,4 +178,7 @@ func TestEndToEnd(t *testing.T) {
 	if code, out, _ := e.run("", "commands", "--json"); code != 0 || !strings.Contains(out, `"record"`) || !strings.Contains(out, `"hook"`) {
 		t.Errorf("commands: %d %s", code, out)
 	}
+	if _, out, _ := e.run("", "help", "show"); !strings.Contains(out, "Usage: ledger show <key>") {
+		t.Errorf("help show usage: %q", out)
+	}
 }
