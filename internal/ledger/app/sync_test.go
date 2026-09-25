@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -110,6 +111,52 @@ func TestSyncKeepsSpoolWhenCommitFails(t *testing.T) {
 	defer b.Close()
 	if len(b.Events) != 1 {
 		t.Fatalf("spool lost the event: %d", len(b.Events))
+	}
+}
+
+func TestSyncBusy(t *testing.T) {
+	r := newRig(t)
+	// Queue an event that must survive the rejected sync.
+	ev := journal.Event{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone}
+	if err := spool.Append(config.SpoolDir(), ev); err != nil {
+		t.Fatal(err)
+	}
+	// Hold the sync lock ourselves (non-blocking LOCK_EX), simulating a
+	// concurrent sync on this machine.
+	lockPath := filepath.Join(config.StateDir(), "sync.lock")
+	if err := os.MkdirAll(config.StateDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lf, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lf.Close()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal("could not acquire test lock:", err)
+	}
+	// Sync must fail with ErrSyncBusy.
+	_, serr := r.app.Sync(ctx, SyncOptions{NoGitHub: true, NoPush: true})
+	if !errors.Is(serr, ErrSyncBusy) {
+		t.Fatalf("expected ErrSyncBusy, got %v", serr)
+	}
+	// The spooled event must still be present.
+	b, _ := spool.Drain(config.SpoolDir())
+	if len(b.Events) != 1 {
+		b.Close()
+		t.Fatalf("spool should still have 1 event, got %d", len(b.Events))
+	}
+	b.Close()
+	// Release and confirm sync now succeeds.
+	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	lf.Close()
+	// Re-append the event (Drain consumed it).
+	if err := spool.Append(config.SpoolDir(), ev); err != nil {
+		t.Fatal(err)
+	}
+	_, serr = r.app.Sync(ctx, SyncOptions{NoGitHub: true, NoPush: true})
+	if serr != nil {
+		t.Fatalf("sync after lock release: %v", serr)
 	}
 }
 

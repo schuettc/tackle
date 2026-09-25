@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -69,6 +70,10 @@ func commands(stdin io.Reader) []tools.Command {
 					return err
 				}
 				rep, err := a.Sync(ctx, app.SyncOptions{NoGitHub: boolFlag(fs, "no-github"), NoPush: boolFlag(fs, "no-push")})
+				if errors.Is(err, app.ErrSyncBusy) {
+					fmt.Fprintln(out, "another ledger sync is running; skipped")
+					return nil
+				}
 				if err != nil {
 					return err
 				}

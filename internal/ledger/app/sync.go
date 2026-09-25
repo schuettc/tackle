@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 
 	"github.com/schuettc/tackle/internal/ledger/config"
 	"github.com/schuettc/tackle/internal/ledger/engine"
@@ -15,7 +17,12 @@ import (
 	"github.com/schuettc/tackle/internal/ledger/spool"
 	"github.com/schuettc/tackle/internal/ledger/store"
 	"github.com/schuettc/tackle/internal/ledger/view"
+	tools "github.com/schuettc/tools-common"
 )
+
+// ErrSyncBusy is returned by Sync when another sync is already running on this
+// machine (detected via an exclusive file lock on the sync lock file).
+var ErrSyncBusy = errors.New("another ledger sync is running")
 
 // SyncOptions controls a sync.
 type SyncOptions struct {
@@ -40,8 +47,25 @@ type SyncReport struct {
 }
 
 // Sync pulls, records, observes, rebuilds the views, commits and pushes.
+// At most one Sync may run on this machine at a time; concurrent callers
+// receive ErrSyncBusy immediately.
 func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	var rep SyncReport
+	// Acquire a machine-level exclusive lock so that concurrent triggers
+	// (launchd, pi session events, manual) cannot collide on git and github.json.
+	lockDir := tools.StateDir(config.Tool)
+	if err := tools.EnsureDir(lockDir); err != nil {
+		return rep, err
+	}
+	lf, err := os.OpenFile(filepath.Join(lockDir, "sync.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return rep, err
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		lf.Close()
+		return rep, ErrSyncBusy
+	}
+	defer func() { syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); lf.Close() }() //nolint:errcheck
 	if !o.NoPush {
 		if err := a.remoteSync(ctx, &rep); err != nil {
 			return rep, err

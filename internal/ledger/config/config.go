@@ -37,6 +37,8 @@ var ErrNotInitialized = errors.New("ledger is not initialized on this machine")
 func Path() string { return filepath.Join(tools.ConfigDir(Tool), "config.toml") }
 
 // SpoolDir is the machine-local queue of journal events awaiting sync.
+// StateDir returns the ledger XDG state directory.
+func StateDir() string { return tools.StateDir(Tool) }
 func SpoolDir() string { return filepath.Join(tools.StateDir(Tool), "spool") }
 
 // CachePath is the machine-local GitHub observation cache.
