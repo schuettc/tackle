@@ -41,7 +41,7 @@ const tmuxSessionKey = "#S"
 func padsDir(cfg string) string { return filepath.Join(cfg, "scratch", "pads") }
 
 func TestResolvePrefersExplicitFile(t *testing.T) {
-	a := fakeAmbient(t, 
+	a := fakeAmbient(t,
 		map[string]string{EnvFile: "/tmp/pinned.md", EnvClaudeSession: "sess-1", EnvDir: "/tmp/store"},
 		map[string]string{TmuxOption: "sess-2"}, "/cfg", nil)
 	got, err := resolve("/work", a)

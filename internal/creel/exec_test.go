@@ -227,9 +227,9 @@ func TestRunExecUsageErrorsExit2(t *testing.T) {
 	dir := t.TempDir()
 	cap := withCapturedExec(t)
 	for _, argv := range [][]string{
-		{"KEY"},          // no boundary
-		{"KEY", "--"},    // no command
-		{"--", "run"},    // no names
+		{"KEY"},       // no boundary
+		{"KEY", "--"}, // no command
+		{"--", "run"}, // no names
 		{"BAD-NAME", "--", "run"},
 	} {
 		var out, errb bytes.Buffer
