@@ -58,9 +58,9 @@ Allowed dispositions per kind:
 
 One JSON object per line. Each machine writes only its own directory. Fields:
 - `v` (1), `ts`, `src` (`git-hook`, `claude` or `pi`)
-- `hook`, `args` and `stdin` (whitespace-split lines, at most 200) for git hooks
+- `hook`, `args` and `stdin` (whitespace-split lines, at most 200; `truncated` true when stdin was cut at 200 lines) for git hooks
 - `cwd`, `git_dir`
-- `claude_id`, `agent_id`, `child` (raw harness ids)
+- `claude_id`, `agent_id` (raw harness session ids), `child` (true when the process belongs to the agent session in `agent_id`)
 - `actions` (`tool`, `verb`, `dir`, `repo`, `number`, `refs`, `flags`)
 - `exit_code`, `repo`, `machine`
 
