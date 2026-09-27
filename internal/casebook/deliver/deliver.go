@@ -614,12 +614,17 @@ func (q *Queue) Interrupt(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var id int64
-		rows.Scan(&id)
+		if err := rows.Scan(&id); err != nil {
+			return 0, err
+		}
 		ids = append(ids, id)
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
 	for _, id := range ids {
 		if err := q.end(ctx, id, Stopped, Interrupted); err != nil {
 			return 0, err
