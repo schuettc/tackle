@@ -290,9 +290,13 @@ func TestCheckSkippedFilesReported(t *testing.T) {
 	writeFile(t, root, "pkg/broken_test.go", "package pkg\n\nfunc TestBroken( {\n")
 
 	f := &fakeEval{}
-	report, err := Run(context.Background(), f, Options{Path: root})
+	var stderr bytes.Buffer
+	report, err := Run(context.Background(), f, Options{Path: root, Stderr: &stderr})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(stderr.String(), "cull: skipped pkg/broken_test.go: parse") {
+		t.Errorf("stderr = %q, want a skip line for pkg/broken_test.go", stderr.String())
 	}
 	found := false
 	for _, s := range report.Skipped {
@@ -457,5 +461,30 @@ func TestSubPathDotDotPrefixedDir(t *testing.T) {
 	}
 	if got, _ := subPath(root, filepath.Dir(root)); got != "" {
 		t.Errorf("subPath(parent) = %q, want \"\"", got)
+	}
+}
+
+// TestCheckNoTypescriptReported (RF3): with no typescript available, TS
+// files are skipped and said so on stderr (dry-run too); Go still runs.
+func TestCheckNoTypescriptReported(t *testing.T) {
+	t.Setenv("CULL_TS", "")
+	root := t.TempDir()
+	goModule(t, root)
+	writeFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
+	writeFile(t, root, "web/calc.test.ts", "test('adds', () => { expect(1).toBe(1); });\n")
+	var stdout, stderr bytes.Buffer
+	report, err := Run(context.Background(), nil, Options{Path: root, DryRun: true, Stdout: &stdout, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), `"test_name":"TestA"`) {
+		t.Errorf("stdout = %q, want TestA state", stdout.String())
+	}
+	if len(report.Skipped) != 1 || report.Skipped[0].File != "web/calc.test.ts" {
+		t.Fatalf("skipped = %+v", report.Skipped)
+	}
+	line := "cull: skipped web/calc.test.ts: " + report.Skipped[0].Reason + "\n"
+	if stderr.String() != line {
+		t.Errorf("stderr = %q, want %q", stderr.String(), line)
 	}
 }

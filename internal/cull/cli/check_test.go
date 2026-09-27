@@ -316,3 +316,31 @@ func TestCheckJSONOutput(t *testing.T) {
 		t.Errorf("report = %v", report)
 	}
 }
+
+// TestCheckSkippedShownNotFatal: a skipped file appears on stderr and in the
+// table's skipped section, and does not change the exit code.
+func TestCheckSkippedShownNotFatal(t *testing.T) {
+	checkEnv(t, "k")
+	(&checkFake{}).start(t)
+	root := oneTestRepo(t)
+	ckWriteFile(t, root, "pkg/broken_test.go", "package pkg\n\nfunc TestBroken( {\n")
+
+	code, out, errw := run(t, "", "check", root)
+	if code != 0 {
+		t.Fatalf("code %d, out %q, errw %q", code, out, errw)
+	}
+	if !strings.Contains(errw, "cull: skipped pkg/broken_test.go: parse") {
+		t.Errorf("errw = %q, want a skip line", errw)
+	}
+	if !strings.Contains(out, "\nskipped\n  pkg/broken_test.go  parse") {
+		t.Errorf("out = %q, want a skipped section", out)
+	}
+
+	code, out, errw = run(t, "", "check", root, "--dry-run")
+	if code != 0 || !strings.Contains(out, `"test_name":"TestA"`) || strings.Contains(out, "skipped") {
+		t.Fatalf("dry-run: code %d, out %q", code, out)
+	}
+	if !strings.Contains(errw, "cull: skipped pkg/broken_test.go: parse") {
+		t.Errorf("dry-run errw = %q, want a skip line", errw)
+	}
+}

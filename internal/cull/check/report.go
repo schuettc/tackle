@@ -119,7 +119,9 @@ func summarize(tests []TestResult, groups []GroupResult, skipped []extract.Skipp
 	return s
 }
 
-// WriteTable renders a human table: one section per file, tests then groups.
+// WriteTable renders a human table: one section per file, tests then
+// groups, then a "skipped" section listing every file that could not be
+// extracted and why.
 func WriteTable(w io.Writer, r Report) {
 	byFile := map[string][]TestResult{}
 	groupsByFile := map[string][]GroupResult{}
@@ -159,6 +161,14 @@ func WriteTable(w io.Writer, r Report) {
 				continue
 			}
 			fmt.Fprintf(w, "  %s  %d tests: %s\n", g.Verdict, len(g.Members), strings.Join(g.Members, ", "))
+		}
+	}
+	if len(r.Skipped) > 0 {
+		sk := append([]extract.Skipped(nil), r.Skipped...)
+		sort.Slice(sk, func(i, j int) bool { return sk[i].File < sk[j].File })
+		fmt.Fprintf(w, "skipped\n")
+		for _, s := range sk {
+			fmt.Fprintf(w, "  %s  %s\n", s.File, s.Reason)
 		}
 	}
 }

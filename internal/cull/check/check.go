@@ -34,7 +34,7 @@ type Options struct {
 	DryRun  bool
 	Refresh bool
 	Stdout  io.Writer // dry-run states go here (as `cull judge --dry-run`); defaults to io.Discard
-	Stderr  io.Writer // diagnostics; defaults to io.Discard
+	Stderr  io.Writer // one "cull: skipped <file>: <reason>" line per skipped file (dry-run too); defaults to io.Discard
 }
 
 // ResolveConfig finds the project root for path and loads its .cull.toml,
@@ -70,6 +70,10 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	stdout := opt.Stdout
 	if stdout == nil {
 		stdout = io.Discard
+	}
+	stderr := opt.Stderr
+	if stderr == nil {
+		stderr = io.Discard
 	}
 
 	p := opt.Path
@@ -109,6 +113,9 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	allCases, skipped, err := extractAll(root, files, cfg.MaxContextBytes)
 	if err != nil {
 		return Report{}, err
+	}
+	for _, sk := range skipped {
+		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
 	}
 
 	keptCases := allCases
