@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/schuettc/tackle/internal/cull/cases"
 	"github.com/schuettc/tackle/internal/cull/jev"
@@ -178,6 +179,9 @@ func readItems(r io.Reader, kind string, capBytes int) ([]judgeItem, error) {
 			}
 			if tc.ID == "" {
 				return nil, fmt.Errorf("line %d: missing id", n)
+			}
+			if strings.TrimSpace(tc.Body) == "" {
+				return nil, fmt.Errorf("line %d: test %q has no body (a group line? pass --kind group)", n, tc.ID)
 			}
 			items = append(items, judgeItem{id: tc.ID, state: judge.StateFor(tc), truncated: tc.Truncated})
 		case rubric.KindGroup:

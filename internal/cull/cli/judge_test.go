@@ -275,3 +275,43 @@ func TestJudgeReadsFileArgument(t *testing.T) {
 		t.Fatalf("exit %d, errw %q", code, errw)
 	}
 }
+
+// I1: group JSONL judged as tests would send empty test states to Jev.
+func TestJudgeTestRejectsEmptyBody(t *testing.T) {
+	judgeEnv(t, "k")
+	f := &fakeJev{}
+	f.start(t)
+	code, _, errw := run(t, groupLine("g", "test_a", "test_b")+"\n", "judge", "--egress")
+	if code != 2 || !strings.Contains(errw, "line 1") || !strings.Contains(errw, "--kind group") {
+		t.Fatalf("exit %d, errw %q", code, errw)
+	}
+	if f.n.Load() != 0 {
+		t.Errorf("server saw %d requests", f.n.Load())
+	}
+}
+
+// I2: truncation must reach the policy and force review, for groups and tests.
+func TestJudgeTruncatedGroupIsReview(t *testing.T) {
+	judgeEnv(t, "k")
+	(&fakeJev{}).start(t)
+	code, out, errw := run(t, groupLine("g", "test_a", "test_b", "test_c")+"\n", "judge", "--kind", "group", "--egress", "--max-context-bytes", "70")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errw)
+	}
+	if r := lines(t, out)[0]; r["verdict"] != "review" || r["rule"] != "truncated" {
+		t.Fatalf("row = %v", r)
+	}
+}
+
+func TestJudgeTruncatedTestIsReview(t *testing.T) {
+	judgeEnv(t, "k")
+	(&fakeJev{}).start(t)
+	b, _ := json.Marshal(map[string]any{"id": "go:a_test.go:TestA", "lang": "go", "name": "TestA", "body": "func TestA(){}", "truncated": true})
+	code, out, errw := run(t, string(b)+"\n", "judge", "--egress")
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, errw)
+	}
+	if r := lines(t, out)[0]; r["verdict"] != "review" || r["rule"] != "truncated" {
+		t.Fatalf("row = %v", r)
+	}
+}
