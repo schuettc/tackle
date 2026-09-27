@@ -16,9 +16,9 @@ import (
 	"strings"
 
 	"github.com/schuettc/tackle/internal/cull/cases"
+	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/policy"
 	"github.com/schuettc/tackle/internal/cull/rubric"
 	tools "github.com/schuettc/tools-common"
 )
@@ -124,11 +124,13 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		defer stop()
 		conc, _ := strconv.Atoi(str(fs, "concurrency"))
 		states := make([]any, len(items))
+		truncated := make([]bool, len(items))
 		for i, it := range items {
 			states[i] = it.state
+			truncated[i] = it.truncated
 		}
-		js, err := judge.JudgeAll(ctx, jev.NewClient(key), states, judge.Options{
-			Model: str(fs, "model"), Rubric: r, Concurrency: conc, Refresh: boolFlag(fs, "refresh"),
+		js, results, err := check.JudgeAndDecide(ctx, jev.NewClient(key), states, truncated, r, judge.Options{
+			Model: str(fs, "model"), Concurrency: conc, Refresh: boolFlag(fs, "refresh"),
 			Cache: &judge.Cache{Dir: filepath.Join(tools.CacheDir("cull"), "answers")},
 		})
 		if errors.Is(err, jev.ErrUnauthorized) {
@@ -144,7 +146,7 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			j := js[i]
 			line := judgeLine{ID: it.id, Kind: kind, Rubric: r.Version, Model: j.Model, Answers: j.Answers, Cached: j.Cached, Err: j.Err}
 			if j.Err == "" {
-				res := policy.Decide(r, j.Answers, it.truncated)
+				res := results[i]
 				line.Verdict, line.Rule, line.Reasons, line.ExactDuplicate = string(res.Verdict), res.Rule, res.Reasons, res.ExactDuplicate
 			} else {
 				failed++
