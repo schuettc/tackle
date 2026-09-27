@@ -263,3 +263,25 @@ func TestTruncation(t *testing.T) {
 		t.Errorf("want callees cut with maxContext=10, got %+v", tc.Callees)
 	}
 }
+
+// TestSubtestSetupCountsAgainstBudget covers a subtest whose enclosing
+// setup (the table_test.go TestTable for-loop preamble, 121 bytes) alone
+// already exceeds maxContext=100, even though the subtest's one callee
+// (Add, 75 bytes) would fit under 100 on its own. The setup must count
+// against the same budget walkContext uses for same-file context/callees:
+// Truncated must be true (proving the setup bytes were counted, not just
+// the callee), and since the budget is already spent by setup alone, Add
+// must not be pulled in as a callee either.
+func TestSubtestSetupCountsAgainstBudget(t *testing.T) {
+	res := extractAll(t, testdataDir, 100)
+	tc := caseByID(t, res, "go:table_test.go:TestTable/[tc.name]")
+	if !tc.Truncated {
+		t.Errorf("want Truncated true: setup alone (121 bytes) already exceeds maxContext=100")
+	}
+	if !strings.Contains(tc.Context, "cases := []struct") {
+		t.Errorf("Context = %q, want it to still contain the full setup source", tc.Context)
+	}
+	if len(tc.Callees) != 0 {
+		t.Errorf("want Add excluded once the setup bytes exhaust the budget, got %+v", tc.Callees)
+	}
+}

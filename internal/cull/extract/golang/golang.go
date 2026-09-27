@@ -313,10 +313,15 @@ func (st *extractState) assignID(base string) string {
 // or in-module-imported-package production decls referenced become
 // Callees, in call order, deduped. selfName (if non-empty) is excluded from
 // Context so a top-level test doesn't reference its own declaration.
-func (fw *fileWalk) walkContext(body ast.Node, selfName string) (context string, callees []cases.Callee, truncated bool) {
+// initialSize seeds the size budget so callers that prepend bytes outside
+// this walk (e.g. a subtest's enclosing setup text) count those bytes
+// against the same maxContext budget: if initialSize alone already exceeds
+// maxContext, truncated is true even when nothing else is added.
+func (fw *fileWalk) walkContext(body ast.Node, selfName string, initialSize int) (context string, callees []cases.Callee, truncated bool) {
 	var ctxParts []string
 	seenCtx, seenCallee := map[string]bool{}, map[string]bool{}
-	size := 0
+	size := initialSize
+	truncated = size > fw.state.maxContext
 	add := func(d decl, isCtx bool, sym string) {
 		if size+len(d.src) > fw.state.maxContext {
 			truncated = true
@@ -383,7 +388,7 @@ func (fw *fileWalk) walkTest(fn *ast.FuncDecl, res *extract.Result) {
 		startOff := fw.fset.Position(start).Offset
 		endOff := fw.fset.Position(fn.End()).Offset
 		body := string(fw.src[startOff:endOff])
-		ctx, callees, trunc := fw.walkContext(fn.Body, fn.Name.Name)
+		ctx, callees, trunc := fw.walkContext(fn.Body, fn.Name.Name, 0)
 		res.Cases = append(res.Cases, cases.TestCase{
 			ID:        fw.state.assignID(baseID),
 			Hash:      cases.HashBody(body),
@@ -417,7 +422,7 @@ func (fw *fileWalk) walkSubtest(lit *ast.FuncLit, parentID, name, setup string, 
 		startOff := fw.fset.Position(lit.Pos()).Offset
 		endOff := fw.fset.Position(lit.End()).Offset
 		body := string(fw.src[startOff:endOff])
-		ctx, callees, trunc := fw.walkContext(lit.Body, "")
+		ctx, callees, trunc := fw.walkContext(lit.Body, "", len(setup))
 		full := setup
 		if ctx != "" {
 			if full != "" {
