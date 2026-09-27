@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,11 +17,17 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/serve"
 )
 
+// mcp is a test MCP client. resps receives JSON-RPC responses (have "id");
+// notifs receives notifications (have "method", no "id"). Separating the two
+// queues ensures that notifications arriving during m.call are not silently
+// discarded: they stay in notifs for the test to inspect.
 type mcp struct {
-	t  *testing.T
-	w  io.WriteCloser
-	sc *bufio.Scanner
-	id int
+	t      *testing.T
+	w      io.WriteCloser
+	sc     *bufio.Scanner
+	id     int
+	resps  chan map[string]any
+	notifs chan map[string]any
 }
 
 // start runs the channel over pipes and performs the MCP handshake.
@@ -33,7 +40,25 @@ func start(t *testing.T, ch *Channel) *mcp {
 	t.Cleanup(func() { cancel(); serverIn.Close() })
 	sc := bufio.NewScanner(serverOut)
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
-	m := &mcp{t: t, w: serverIn, sc: sc}
+	m := &mcp{t: t, w: serverIn, sc: sc, resps: make(chan map[string]any, 256), notifs: make(chan map[string]any, 256)}
+	go func() {
+		for m.sc.Scan() {
+			var v map[string]any
+			if err := json.Unmarshal(m.sc.Bytes(), &v); err != nil {
+				m.t.Logf("mcp reader: bad json: %v", err)
+				continue
+			}
+			// Route: messages with an "id" and no "method" are responses;
+			// messages with a "method" and no "id" (or id==null) are notifications.
+			if v["method"] != nil && v["id"] == nil {
+				m.notifs <- v
+			} else {
+				m.resps <- v
+			}
+		}
+		close(m.resps)
+		close(m.notifs)
+	}()
 	res := m.call("initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "t", "version": "1"}})
 	if !strings.Contains(string(res["instructions"].(string)), "settle EVERY message with casebook_reply") {
 		t.Fatalf("instructions %v", res["instructions"])
@@ -41,38 +66,52 @@ func start(t *testing.T, ch *Channel) *mcp {
 	return m
 }
 
+// next reads one notification, fataling on timeout.
 func (m *mcp) next(timeout time.Duration) map[string]any {
 	m.t.Helper()
-	done := make(chan bool, 1)
-	go func() { done <- m.sc.Scan() }()
 	select {
-	case ok := <-done:
+	case v, ok := <-m.notifs:
 		if !ok {
 			m.t.Fatal("channel closed its output")
 		}
+		return v
 	case <-time.After(timeout):
 		m.t.Fatal("nothing from the channel")
+		return nil
 	}
-	var v map[string]any
-	if err := json.Unmarshal(m.sc.Bytes(), &v); err != nil {
-		m.t.Fatalf("%q: %v", m.sc.Text(), err)
-	}
-	return v
 }
 
-// call sends a request and returns its result, skipping notifications.
+// nextTimeout reads one notification, returning nil on timeout (non-fatal).
+func (m *mcp) nextTimeout(timeout time.Duration) map[string]any {
+	m.t.Helper()
+	select {
+	case v, ok := <-m.notifs:
+		if !ok {
+			return nil
+		}
+		return v
+	case <-time.After(timeout):
+		return nil
+	}
+}
+
+// call sends a request and returns its result. Responses and notifications are
+// in separate queues, so call reads only from resps without skipping anything.
 func (m *mcp) call(method string, params any) map[string]any {
 	m.t.Helper()
 	m.id++
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.id, "method": method, "params": params})
 	io.WriteString(m.w, string(b)+"\n")
-	for {
-		v := m.next(10 * time.Second)
-		if v["method"] != nil {
-			continue
+	select {
+	case v, ok := <-m.resps:
+		if !ok {
+			m.t.Fatal("channel closed its output")
 		}
 		res, _ := v["result"].(map[string]any)
 		return res
+	case <-time.After(10 * time.Second):
+		m.t.Fatal("nothing from the channel")
+		return nil
 	}
 }
 
@@ -240,6 +279,17 @@ func TestServeRestartIsAnnounced(t *testing.T) {
 	ch.Retry, ch.Poll = 50*time.Millisecond, time.Second
 	m := start(t, ch)
 	time.Sleep(300 * time.Millisecond) // the loop reaches the first serve
+	// Guard: in the window before the first serve is stopped, no "restarted"
+	// event should arrive — the !seen.IsZero() guard in loop prevents it.
+	// Because notifications land in m.notifs (separate from responses), any
+	// spurious restarted event emitted during the MCP handshake is still here.
+	if v := m.nextTimeout(200 * time.Millisecond); v != nil {
+		if v["method"] == "notifications/claude/channel" {
+			if v["params"].(map[string]any)["meta"].(map[string]any)["event"] == "restarted" {
+				t.Fatal("spurious restarted event before first restart")
+			}
+		}
+	}
 	first.stop()
 	time.Sleep(10 * time.Millisecond) // StartedAt must differ
 	startServe(t, r)
@@ -256,6 +306,119 @@ func TestServeRestartIsAnnounced(t *testing.T) {
 		return
 	}
 	t.Fatal("no restart event")
+}
+
+// TestToolCallCancelledWhenRunEnds proves that an in-flight tool call is
+// cancelled when the Run context ends. The client points at an httptest server
+// whose /api/agent/status handler blocks until its request context is done;
+// other paths (presence, wait) return 204 immediately so they don't interfere.
+// We wait for the status request to reach the server, then cancel the context
+// passed to Run (which cancels ch.runCtx, the context the Call closure holds),
+// and assert that the blocking handler observes the cancellation promptly.
+//
+// Failure on the old code: the Call closure used context.Background(), which
+// is never cancelled — the handler blocks forever and the assertion times out.
+func TestToolCallCancelledWhenRunEnds(t *testing.T) {
+	cancelled := make(chan struct{})
+	statusReached := make(chan struct{}, 1)
+	var closeOnce sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/status" {
+			// Presence, wait and any other loop requests complete immediately
+			// so they do not hold open connections that would block ts.Close.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		select {
+		case statusReached <- struct{}{}:
+		default:
+		}
+		<-r.Context().Done()
+		closeOnce.Do(func() { close(cancelled) })
+	}))
+	// CloseClientConnections ensures ts.Close does not hang when the test
+	// fails (old code never cancels the handler; the TCP close unblocks it).
+	t.Cleanup(func() { ts.CloseClientConnections(); ts.Close() })
+
+	c := &Client{
+		HTTP: &http.Client{Timeout: 90 * time.Second},
+		Find: func() (serve.Advert, error) {
+			return serve.Advert{Base: ts.URL, Token: "tok"}, nil
+		},
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+
+	clientOut, serverIn := io.Pipe()
+	serverOut, clientIn := io.Pipe()
+	// ctx is the context passed to Run; ch.runCtx is derived from it.
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { _ = ch.Run(ctx, clientOut, clientIn) }()
+	t.Cleanup(func() { cancel(); serverIn.Close(); clientIn.Close() })
+
+	scanner := bufio.NewScanner(serverOut)
+	scanner.Buffer(make([]byte, 1<<20), 1<<24)
+	rawMsgs := make(chan map[string]any, 64)
+	go func() {
+		for scanner.Scan() {
+			var v map[string]any
+			_ = json.Unmarshal(scanner.Bytes(), &v)
+			rawMsgs <- v
+		}
+		close(rawMsgs)
+	}()
+	readRaw := func(timeout time.Duration) map[string]any {
+		select {
+		case v, ok := <-rawMsgs:
+			if !ok {
+				t.Fatal("channel closed")
+			}
+			return v
+		case <-time.After(timeout):
+			t.Fatal("timeout waiting for MCP message")
+			return nil
+		}
+	}
+
+	// MCP handshake.
+	id := 0
+	send := func(method string, params any) {
+		id++
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		_, _ = io.WriteString(serverIn, string(b)+"\n")
+	}
+	send("initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "t", "version": "1"},
+	})
+	for {
+		v := readRaw(5 * time.Second)
+		if _, hasID := v["id"]; hasID {
+			break
+		}
+	}
+
+	// Start a casebook_status tool call; it blocks inside the ts handler.
+	send("tools/call", map[string]any{"name": "casebook_status", "arguments": map[string]any{}})
+
+	select {
+	case <-statusReached:
+	case <-time.After(5 * time.Second):
+		t.Fatal("casebook_status request did not reach the test server")
+	}
+
+	// Cancel the context given to Run. ch.runCtx is derived from it, so the
+	// in-flight HTTP request (which holds ch.runCtx as its context) is
+	// immediately cancelled. Also close serverIn so Run can exit cleanly.
+	cancel()
+	serverIn.Close()
+
+	select {
+	case <-cancelled:
+		// The status handler saw r.Context().Done() — tool call was cancelled.
+	case <-time.After(3 * time.Second):
+		t.Fatal("tool call HTTP request was not cancelled when Run ended")
+	}
 }
 
 func TestNoSessionIsReadOnly(t *testing.T) {
