@@ -99,11 +99,44 @@ func nonNil[T any](s []T) []T {
 	return s
 }
 
+// decideOneKey records one decision with NoPush, supersedes other pending
+// proposals for the key except keep (the proposal being accepted), and returns
+// the normalized key. By defaults to s.App.Cfg.User.
+func (s *Server) decideOneKey(ctx context.Context, key, disposition string, o app.DecideOptions, keep int64) (string, error) {
+	o.NoPush = true
+	if o.By == "" {
+		o.By = s.App.Cfg.User
+	}
+	if _, _, err := s.App.Decide(ctx, key, disposition, o); err != nil {
+		return "", err
+	}
+	k, _ := item.ParseKey(key)
+	_ = s.Props.SupersedeKey(ctx, k.String(), keep)
+	return k.String(), nil
+}
+
+// finishDecides pushes once (ErrOffline is not an error) and rebuilds the
+// index once when n > 0. A rebuild error is appended to errs and not returned
+// as a failure: decisions are already durable and the watch loop rebuilds on
+// the moved HEAD.
+func (s *Server) finishDecides(ctx context.Context, n int, errs []string) (bool, []string) {
+	if n == 0 {
+		return false, errs
+	}
+	pushed, err := s.App.Push(ctx)
+	if err != nil && !errors.Is(err, store.ErrOffline) {
+		errs = append(errs, err.Error())
+	}
+	if err := s.rebuild(ctx); err != nil {
+		errs = append(errs, err.Error())
+	}
+	return pushed, errs
+}
+
 // decideAll records decisions (one commit each), pushes once, retires the
 // pending proposals for those keys (except keep, the one being accepted),
 // rebuilds the index and announces it.
 func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, bool, error) {
-	o.NoPush = true
 	if o.By == "" {
 		o.By = s.App.Cfg.User
 	}
@@ -111,28 +144,18 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 	var errs []string
 	var done []string
 	for _, key := range keys {
-		d, _, err := s.App.Decide(ctx, key, disposition, o)
+		k, err := s.decideOneKey(ctx, key, disposition, o, keep)
 		if err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}
-		k, _ := item.ParseKey(key)
-		_ = s.Props.SupersedeKey(ctx, k.String(), keep)
-		done = append(done, k.String())
+		done = append(done, k)
 		n++
-		_ = d
 	}
-	pushed := false
 	if n > 0 {
-		var err error
-		if pushed, err = s.App.Push(ctx); err != nil && !errors.Is(err, store.ErrOffline) {
-			errs = append(errs, err.Error())
-		}
 		s.Bus.Publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
-		if err := s.rebuild(ctx); err != nil {
-			return n, errs, pushed, err
-		}
 	}
+	pushed, errs := s.finishDecides(ctx, n, errs)
 	return n, errs, pushed, nil
 }
 
@@ -172,26 +195,29 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	total, pushed := 0, false
+	total := 0
 	var errs []string
+	by := s.App.Cfg.User
 	for _, id := range in.IDs {
 		p, err := s.Props.Get(ctx, id)
 		if err != nil || p.State != propose.Pending {
 			errs = append(errs, fmt.Sprintf("proposal %d is not pending", id))
 			continue
 		}
-		n, e, pu, err := s.decideAll(ctx, []string{p.Key}, p.Disposition, proposalOpts(p), p.ID)
-		errs = append(errs, e...)
-		if err != nil {
-			reply(w, nil, err)
-			return
+		if _, err := s.decideOneKey(ctx, p.Key, p.Disposition, proposalOpts(p), p.ID); err != nil {
+			errs = append(errs, err.Error())
+			continue
 		}
-		if n == 1 {
-			_ = s.Props.Settle(ctx, id, propose.Accepted, "")
-			total++
-			pushed = pushed || pu
-		}
+		_ = s.Props.Settle(ctx, id, propose.Accepted, "")
+		s.Bus.Publish(ctx, "decided", map[string]any{
+			"keys":        []string{p.Key},
+			"disposition": p.Disposition,
+			"by":          by,
+			"proposed_by": p.Source,
+		})
+		total++
 	}
+	pushed, errs := s.finishDecides(ctx, total, errs)
 	s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
 	reply(w, map[string]any{"accepted": total, "errors": nonNil(errs), "pushed": pushed}, nil)
 }

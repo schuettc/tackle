@@ -409,6 +409,83 @@ func eventually(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+func TestAcceptManyDecidesOncePerRequest(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// Propose two keys with different dispositions from session s1.
+	var res1 struct {
+		Proposals []struct{ ID int64 } `json:"proposals"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session": "s1", "keys": []string{"pr:schuettc/hail#3"}, "disposition": "close",
+	}, &res1); c != 200 || len(res1.Proposals) != 1 {
+		t.Fatalf("propose1 %d %+v", c, res1)
+	}
+	var res2 struct {
+		Proposals []struct{ ID int64 } `json:"proposals"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session": "s1", "keys": []string{"issue:schuettc/hail#4"}, "disposition": "keep",
+	}, &res2); c != 200 || len(res2.Proposals) != 1 {
+		t.Fatalf("propose2 %d %+v", c, res2)
+	}
+	p1, p2 := res1.Proposals[0].ID, res2.Proposals[0].ID
+
+	// Snapshot the bus cursor before the accept request.
+	_, before, _ := r.s.Bus.Since(ctx, 0, 10000)
+
+	// Accept both proposals in a single request.
+	var acc map[string]any
+	if c := r.do(t, "POST", "/api/proposals/accept", map[string]any{"ids": []int64{p1, p2}}, &acc); c != 200 {
+		t.Fatalf("accept %d %v", c, acc)
+	}
+	if acc["accepted"].(float64) != 2 {
+		t.Fatalf("want accepted=2, got %v", acc)
+	}
+
+	// Both decision files carry their own disposition and ProposedBy.
+	d1, _ := r.App.Repo.ReadDecision(item.PRKey("schuettc/hail", 3))
+	if d1 == nil || d1.Disposition != "close" || string(d1.ProposedBy) != "pi:s1" {
+		t.Fatalf("decision pr#3 %+v", d1)
+	}
+	d2, _ := r.App.Repo.ReadDecision(item.IssueKey("schuettc/hail", 4))
+	if d2 == nil || d2.Disposition != "keep" || string(d2.ProposedBy) != "pi:s1" {
+		t.Fatalf("decision issue#4 %+v", d2)
+	}
+
+	// Both proposals are now settled as accepted.
+	prop1, _ := r.s.Props.Get(ctx, p1)
+	if prop1.State != "accepted" {
+		t.Fatalf("proposal %d state %q, want accepted", p1, prop1.State)
+	}
+	prop2, _ := r.s.Props.Get(ctx, p2)
+	if prop2.State != "accepted" {
+		t.Fatalf("proposal %d state %q, want accepted", p2, prop2.State)
+	}
+
+	// The remote's main has both decision commits.
+	log, err := git(t, r.Remote, "log", "-5", "--format=%s", "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(log, "pr:schuettc/hail#3") || !strings.Contains(log, "issue:schuettc/hail#4") {
+		t.Fatalf("remote log missing commits: %q", log)
+	}
+
+	// Exactly one "index" event was published by the request.
+	events, _, _ := r.s.Bus.Since(ctx, before, 10000)
+	indexCount := 0
+	for _, e := range events {
+		if e.Type == "index" {
+			indexCount++
+		}
+	}
+	if indexCount != 1 {
+		t.Fatalf("want exactly 1 index event from the accept request, got %d", indexCount)
+	}
+}
+
 func TestPageOpenFollowsTheStream(t *testing.T) {
 	r := newRig(t)
 	r.do(t, "POST", "/api/agent/presence", map[string]any{"id": "s1", "harness": "pi"}, nil)
