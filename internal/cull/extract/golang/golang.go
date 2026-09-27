@@ -111,9 +111,43 @@ func pkgDecls(root, dir string, tests bool) map[string]decl {
 	return out
 }
 
-// modulePath reads the module path from root/go.mod.
-func modulePath(root string) (string, error) {
-	b, err := os.ReadFile(filepath.Join(root, "go.mod"))
+// module is the Go module a test file belongs to: its directory and path.
+type module struct {
+	dir, path string
+	err       error
+}
+
+// findModule returns the module owning dir: the nearest go.mod at or above
+// dir, never looking above root. No go.mod is an error (the file is
+// skipped, not fatal), as is a go.mod that can't be read or has no module
+// line. Results are cached per directory.
+func (st *extractState) findModule(dir string) module {
+	if m, ok := st.modCache[dir]; ok {
+		return m
+	}
+	var m module
+	root := filepath.Clean(st.root)
+	for d := dir; ; {
+		gomod := filepath.Join(d, "go.mod")
+		if _, err := os.Stat(gomod); err == nil {
+			path, err := modulePath(d)
+			m = module{dir: d, path: path, err: err}
+			break
+		}
+		parent := filepath.Dir(d)
+		if d == root || parent == d {
+			m = module{err: fmt.Errorf("no go.mod")}
+			break
+		}
+		d = parent
+	}
+	st.modCache[dir] = m
+	return m
+}
+
+// modulePath reads the module path from dir/go.mod.
+func modulePath(dir string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "go.mod"))
 	if err != nil {
 		return "", fmt.Errorf("read go.mod: %w", err)
 	}
@@ -129,7 +163,7 @@ func modulePath(root string) (string, error) {
 // extractState is the shared, per-Extract-call context the walk needs.
 type extractState struct {
 	root       string
-	modPath    string
+	modCache   map[string]module // test file dir -> its module
 	maxContext int
 	idCount    map[string]int
 	pkgCache   map[string]map[string]decl // import dir -> its prod decls
@@ -140,14 +174,9 @@ func (golangExtractor) Extract(root string, relpaths []string, maxContext int) (
 	if maxContext <= 0 {
 		maxContext = defaultMaxContext
 	}
-	modPath, err := modulePath(root)
-	if err != nil {
-		return extract.Result{}, fmt.Errorf("extract/golang: %w", err)
-	}
-
 	st := &extractState{
 		root:       root,
-		modPath:    modPath,
+		modCache:   map[string]module{},
 		maxContext: maxContext,
 		idCount:    map[string]int{},
 		pkgCache:   map[string]map[string]decl{},
@@ -173,6 +202,11 @@ func (golangExtractor) Extract(root string, relpaths []string, maxContext int) (
 		}
 
 		dir := filepath.Dir(p)
+		mod := st.findModule(dir)
+		if mod.err != nil {
+			res.Skipped = append(res.Skipped, extract.Skipped{File: relSlash, Reason: mod.err.Error()})
+			continue
+		}
 		testDecls, ok := dirTestDecls[dir]
 		if !ok {
 			testDecls = pkgDecls(root, dir, true)
@@ -187,14 +221,14 @@ func (golangExtractor) Extract(root string, relpaths []string, maxContext int) (
 		imports := map[string]string{}
 		for _, im := range f.Imports {
 			path := strings.Trim(im.Path.Value, `"`)
-			if !strings.HasPrefix(path, modPath+"/") {
+			if !strings.HasPrefix(path, mod.path+"/") {
 				continue
 			}
 			name := filepath.Base(path)
 			if im.Name != nil {
 				name = im.Name.Name
 			}
-			imports[name] = filepath.Join(root, strings.TrimPrefix(path, modPath+"/"))
+			imports[name] = filepath.Join(mod.dir, strings.TrimPrefix(path, mod.path+"/"))
 		}
 
 		fw := &fileWalk{

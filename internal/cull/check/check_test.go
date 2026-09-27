@@ -488,3 +488,31 @@ func TestCheckNoTypescriptReported(t *testing.T) {
 		t.Errorf("stderr = %q, want %q", stderr.String(), line)
 	}
 }
+
+// TestCheckMonorepoNoRootGoMod: a Go module in a subdirectory plus a Python
+// test at the root, with no root go.mod — both are extracted, and a stray
+// Go test with no go.mod is skipped, not fatal.
+func TestCheckMonorepoNoRootGoMod(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	root := t.TempDir()
+	writeFile(t, root, "services/api/go.mod", "module example.com/api\n\ngo 1.22\n")
+	writeFile(t, root, "services/api/calc_test.go", "package api\n\nfunc TestGoSide(t *testing.T) {\n\t_ = 1\n}\n")
+	writeFile(t, root, "scripts/stray_test.go", "package scripts\n\nfunc TestStray(t *testing.T) {\n\t_ = 1\n}\n")
+	writeFile(t, root, "test_root.py", "def test_py_side():\n    assert 1 == 1\n")
+
+	var stdout, stderr bytes.Buffer
+	report, err := Run(context.Background(), nil, Options{Path: root, DryRun: true, Stdout: &stdout, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"test_name":"TestGoSide"`, `"test_name":"test_py_side"`} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("stdout missing %s:\n%s", want, stdout.String())
+		}
+	}
+	if len(report.Skipped) != 1 || report.Skipped[0].File != "scripts/stray_test.go" || !strings.Contains(report.Skipped[0].Reason, "no go.mod") {
+		t.Errorf("skipped = %+v, want scripts/stray_test.go (no go.mod)", report.Skipped)
+	}
+}

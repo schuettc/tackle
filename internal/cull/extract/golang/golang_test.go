@@ -285,3 +285,74 @@ func TestSubtestSetupCountsAgainstBudget(t *testing.T) {
 		t.Errorf("want Add excluded once the setup bytes exhaust the budget, got %+v", tc.Callees)
 	}
 }
+
+func writeTree(t *testing.T, root string, files map[string]string) {
+	t.Helper()
+	for rel, content := range files {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestNestedModule: a Go module in a subdirectory (no root go.mod) is
+// resolved from its own go.mod; ids and callee files stay root-relative and
+// in-module imports resolve against the module's directory.
+func TestNestedModule(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"services/api/go.mod":         "module example.com/api\n\ngo 1.22\n",
+		"services/api/calc.go":        "package api\n\nfunc Add(a, b int) int { return a + b }\n",
+		"services/api/util/double.go": "package util\n\nfunc Double(x int) int { return 2 * x }\n",
+		"services/api/calc_test.go": "package api\n\nimport (\n\t\"testing\"\n\n\t\"example.com/api/util\"\n)\n\n" +
+			"func TestAdd(t *testing.T) {\n\tif Add(1, util.Double(1)) != 3 {\n\t\tt.Fail()\n\t}\n}\n",
+	})
+	res, err := New().Extract(root, []string{"services/api/calc_test.go"}, 24000)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	if len(res.Skipped) != 0 {
+		t.Fatalf("Skipped = %+v", res.Skipped)
+	}
+	tc := caseByID(t, res, "go:services/api/calc_test.go:TestAdd")
+	var got []string
+	for _, c := range tc.Callees {
+		got = append(got, c.Symbol+"@"+c.File)
+	}
+	want := "Add@services/api/calc.go util.Double@services/api/util/double.go"
+	if strings.Join(got, " ") != want {
+		t.Errorf("callees = %v, want %s", got, want)
+	}
+}
+
+// TestNoGoModSkipped: a Go test file with no go.mod at or above it (within
+// root) is skipped with "no go.mod"; other files still extract.
+func TestNoGoModSkipped(t *testing.T) {
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{
+		"mod/go.mod":           "module example.com/mod\n\ngo 1.22\n",
+		"mod/a_test.go":        "package mod\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) {}\n",
+		"loose/b_test.go":      "package loose\n\nimport \"testing\"\n\nfunc TestB(t *testing.T) {}\n",
+		"other/deep/c_test.go": "package deep\n\nimport \"testing\"\n\nfunc TestC(t *testing.T) {}\n",
+	})
+	res, err := New().Extract(root, []string{"loose/b_test.go", "mod/a_test.go", "other/deep/c_test.go"}, 24000)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+	caseByID(t, res, "go:mod/a_test.go:TestA")
+	if len(res.Cases) != 1 {
+		t.Errorf("cases = %v, want only TestA", ids(res.Cases))
+	}
+	if len(res.Skipped) != 2 {
+		t.Fatalf("Skipped = %+v, want loose/b_test.go and other/deep/c_test.go", res.Skipped)
+	}
+	for _, s := range res.Skipped {
+		if !strings.Contains(s.Reason, "no go.mod") {
+			t.Errorf("skip %s reason = %q, want it to mention no go.mod", s.File, s.Reason)
+		}
+	}
+}
