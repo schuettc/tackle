@@ -5,6 +5,8 @@ package cases
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
+	"strings"
 )
 
 // Span is a byte range [Start, End) in the test's file.
@@ -41,4 +43,21 @@ type TestCase struct {
 func HashBody(body string) string {
 	sum := sha256.Sum256([]byte(body))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// Group is a set of near-duplicate tests from one file, judged together.
+type Group struct {
+	ID        string     `json:"id"`
+	Lang      string     `json:"lang"`
+	Framework string     `json:"framework"`
+	File      string     `json:"file"`
+	Tests     []TestCase `json:"tests"`
+}
+
+// GroupID is a stable id for a set of member test ids, independent of order.
+func GroupID(memberIDs []string) string {
+	ids := append([]string(nil), memberIDs...)
+	sort.Strings(ids)
+	sum := sha256.Sum256([]byte(strings.Join(ids, "\n")))
+	return "group:" + hex.EncodeToString(sum[:])[:16]
 }

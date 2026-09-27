@@ -1,6 +1,7 @@
 // Package rubric loads cull's versioned rubric files: the Jev questions a test
-// is judged on and the policy thresholds that turn answers into a verdict.
-// Rubrics are data so they can be revised and re-evaluated without a rebuild.
+// (kind "test") or a group of near-duplicate tests (kind "group") is judged on,
+// and the thresholds that turn Jev's answers into a verdict. Rubrics are data so
+// they can be revised and re-evaluated without a rebuild.
 package rubric
 
 import (
@@ -16,8 +17,20 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Default is the rubric version check and eval use when none is named.
-const Default = "v1"
+// Rubric kinds and the embedded defaults for each.
+const (
+	KindTest     = "test"
+	KindGroup    = "group"
+	DefaultTest  = "test-v2"
+	DefaultGroup = "group-v2"
+)
+
+// verdictOptions are the verdict choice's options per kind; the first is the
+// option whose probability decides whether cull acts (ActOption).
+var verdictOptions = map[string][]string{
+	KindTest:  {"cut", "keep", "review"},
+	KindGroup: {"consolidate", "keep_separate", "review"},
+}
 
 //go:embed rubrics/*.toml
 var embedded embed.FS
@@ -34,26 +47,29 @@ type Question struct {
 	No           string            `toml:"no"`
 }
 
-// Policy holds the thresholds the verdict policy applies to Jev's answers.
+// Policy holds the thresholds applied to Jev's probability for the act option.
 type Policy struct {
-	MinVerdictConfidence  float64  `toml:"min_verdict_confidence"`
-	KeepRegressionValue   float64  `toml:"keep_regression_value"`
-	CutMaxRegressionValue float64  `toml:"cut_max_regression_value"`
-	HazardThreshold       float64  `toml:"hazard_threshold"`
-	Hazards               []string `toml:"hazards"`
+	Act            float64 `toml:"act"`             // act (cut / consolidate) at or above
+	Review         float64 `toml:"review"`          // review at or above, below Act
+	ExactDuplicate float64 `toml:"exact_duplicate"` // group only: flag a redundant member at or above
 }
 
 // Rubric is one versioned rubric file.
 type Rubric struct {
+	Kind      string     `toml:"kind"`
 	Version   string     `toml:"version"`
 	Changelog string     `toml:"changelog"`
 	Questions []Question `toml:"question"`
 	Policy    Policy     `toml:"policy"`
 }
 
-var versionName = regexp.MustCompile(`^v[0-9]+$`)
+var versionName = regexp.MustCompile(`^(test|group)-v[0-9]+$`)
 
-// Load returns the embedded rubric named "v<N>", or parses the file at path.
+// ActOption is the verdict option whose probability decides whether cull acts:
+// "cut" for tests, "consolidate" for groups.
+func (r Rubric) ActOption() string { return verdictOptions[r.Kind][0] }
+
+// Load returns the embedded rubric named "<kind>-v<N>", or parses the file at path.
 func Load(nameOrPath string) (Rubric, error) {
 	var data []byte
 	var err error
@@ -86,14 +102,17 @@ func Parse(data []byte) (Rubric, error) {
 		}
 		return Rubric{}, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
-	// A missing threshold would decode as 0 and quietly keep every test.
+	// A missing threshold would decode as 0 and quietly act on everything.
 	if !md.IsDefined("policy") {
 		return Rubric{}, fmt.Errorf("a [policy] section is required")
 	}
-	for _, k := range []string{"min_verdict_confidence", "keep_regression_value", "cut_max_regression_value", "hazard_threshold", "hazards"} {
+	for _, k := range []string{"act", "review"} {
 		if !md.IsDefined("policy", k) {
 			return Rubric{}, fmt.Errorf("policy.%s is required", k)
 		}
+	}
+	if r.Kind == KindGroup && !md.IsDefined("policy", "exact_duplicate") {
+		return Rubric{}, fmt.Errorf("policy.exact_duplicate is required for kind group")
 	}
 	return r, r.validate()
 }
@@ -108,6 +127,10 @@ func (r Rubric) question(key string) (Question, bool) {
 }
 
 func (r Rubric) validate() error {
+	opts, ok := verdictOptions[r.Kind]
+	if !ok {
+		return fmt.Errorf("kind must be %q or %q, got %q", KindTest, KindGroup, r.Kind)
+	}
 	if r.Version == "" {
 		return fmt.Errorf("version is required")
 	}
@@ -142,39 +165,30 @@ func (r Rubric) validate() error {
 	if !ok || v.Type != "choice" {
 		return fmt.Errorf("a choice question %q is required", "verdict")
 	}
-	if len(v.Options) != 3 || v.Options["keep"] == "" || v.Options["cut"] == "" || v.Options["review"] == "" {
-		return fmt.Errorf("verdict options must be exactly keep, cut, review")
+	if len(v.Options) != len(opts) {
+		return fmt.Errorf("verdict options must be exactly %s", strings.Join(opts, ", "))
 	}
-	rv, ok := r.question("regression_value")
-	if !ok || rv.Type != "score" {
-		return fmt.Errorf("a score question %q is required", "regression_value")
+	for _, o := range opts {
+		if v.Options[o] == "" {
+			return fmt.Errorf("verdict options must be exactly %s", strings.Join(opts, ", "))
+		}
 	}
 
 	p := r.Policy
-	if len(p.Hazards) == 0 {
-		return fmt.Errorf("policy.hazards must name at least one noul question")
+	if p.Act <= 0 || p.Act > 1 {
+		return fmt.Errorf("policy.act %v must be in (0,1]", p.Act)
 	}
-	for _, h := range p.Hazards {
-		q, ok := r.question(h)
-		if !ok || q.Type != "noul" {
-			return fmt.Errorf("hazard %q must name a noul question", h)
+	if p.Review < 0 || p.Review >= p.Act {
+		return fmt.Errorf("policy.review %v must be in [0, act)", p.Review)
+	}
+	switch r.Kind {
+	case KindTest:
+		if p.ExactDuplicate != 0 {
+			return fmt.Errorf("policy.exact_duplicate applies only to kind group")
 		}
-	}
-	for name, val := range map[string]float64{
-		"min_verdict_confidence": p.MinVerdictConfidence,
-		"hazard_threshold":       p.HazardThreshold,
-	} {
-		if val < 0 || val > 1 {
-			return fmt.Errorf("%s %v is outside [0,1]", name, val)
-		}
-	}
-	top := float64(len(rv.Levels) - 1)
-	for name, val := range map[string]float64{
-		"keep_regression_value":    p.KeepRegressionValue,
-		"cut_max_regression_value": p.CutMaxRegressionValue,
-	} {
-		if val < 0 || val > top {
-			return fmt.Errorf("%s %v is outside [0,%v]", name, val, top)
+	case KindGroup:
+		if p.ExactDuplicate <= 0 || p.ExactDuplicate > 1 {
+			return fmt.Errorf("policy.exact_duplicate %v must be in (0,1]", p.ExactDuplicate)
 		}
 	}
 	return nil

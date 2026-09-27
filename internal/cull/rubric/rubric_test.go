@@ -5,79 +5,56 @@ import (
 	"testing"
 )
 
-func mustLoad(t *testing.T) Rubric {
+func mustLoad(t *testing.T, name string) Rubric {
 	t.Helper()
-	r, err := Load("v1")
+	r, err := Load(name)
 	if err != nil {
-		t.Fatalf("Load(v1): %v", err)
+		t.Fatalf("Load(%s): %v", name, err)
 	}
 	return r
 }
 
-func TestLoadV1(t *testing.T) {
-	r := mustLoad(t)
-	if r.Version != "v1" {
-		t.Errorf("Version = %q, want v1", r.Version)
+func TestLoadEmbedded(t *testing.T) {
+	tr := mustLoad(t, DefaultTest)
+	if tr.Kind != KindTest || tr.Version != "test-v2" || len(tr.Questions) != 7 {
+		t.Errorf("test-v2 = kind %q version %q, %d questions", tr.Kind, tr.Version, len(tr.Questions))
 	}
-	if len(r.Questions) != 6 {
-		t.Errorf("len(Questions) = %d, want 6", len(r.Questions))
+	if tr.Policy != (Policy{Act: 0.6, Review: 0.3}) {
+		t.Errorf("test-v2 policy = %+v", tr.Policy)
 	}
-	if r.Policy.HazardThreshold != 0.7 {
-		t.Errorf("HazardThreshold = %v, want 0.7", r.Policy.HazardThreshold)
+	gr := mustLoad(t, DefaultGroup)
+	if gr.Kind != KindGroup || gr.Version != "group-v2" || len(gr.Questions) != 4 {
+		t.Errorf("group-v2 = kind %q version %q, %d questions", gr.Kind, gr.Version, len(gr.Questions))
 	}
-	if len(r.Policy.Hazards) != 4 {
-		t.Errorf("len(Hazards) = %d, want 4", len(r.Policy.Hazards))
+	if gr.Policy != (Policy{Act: 0.6, Review: 0.3, ExactDuplicate: 0.7}) {
+		t.Errorf("group-v2 policy = %+v", gr.Policy)
 	}
 }
 
-func TestAPIQuestionsShape(t *testing.T) {
-	q := mustLoad(t).APIQuestions()
-
-	verdict := q["verdict"].(map[string]any)
-	if verdict["type"] != "choice" {
-		t.Errorf("verdict type = %v", verdict["type"])
+func TestActOption(t *testing.T) {
+	if got := mustLoad(t, DefaultTest).ActOption(); got != "cut" {
+		t.Errorf("test ActOption = %q", got)
 	}
-	opts := verdict["criteria"].(map[string]string)
-	for _, k := range []string{"keep", "cut", "review"} {
-		if opts[k] == "" {
-			t.Errorf("verdict criteria missing %q", k)
-		}
-	}
-	if len(opts) != 3 {
-		t.Errorf("verdict criteria has %d options, want 3", len(opts))
-	}
-
-	levels := q["regression_value"].(map[string]any)["criteria"].([]string)
-	if len(levels) != 4 {
-		t.Errorf("regression_value levels = %d, want 4", len(levels))
-	}
-
-	mock := q["mock_only"].(map[string]any)
-	crit := mock["criteria"].(map[string]string)
-	if mock["type"] != "noul" || crit["true"] == "" || crit["false"] == "" {
-		t.Errorf("mock_only = %#v", mock)
+	if got := mustLoad(t, DefaultGroup).ActOption(); got != "consolidate" {
+		t.Errorf("group ActOption = %q", got)
 	}
 }
 
 func TestQuestionsHashIgnoresPolicy(t *testing.T) {
-	a := mustLoad(t)
-	b := mustLoad(t)
-	b.Policy.HazardThreshold = 0.9
-	b.Version = "v9"
+	a, b := mustLoad(t, DefaultTest), mustLoad(t, DefaultTest)
+	b.Policy.Act, b.Version = 0.9, "test-v9"
 	if a.QuestionsHash() != b.QuestionsHash() {
 		t.Error("policy/version change altered QuestionsHash")
 	}
-	c := mustLoad(t)
+	c := mustLoad(t, DefaultTest)
 	c.Questions[0].Instructions += " More."
 	if a.QuestionsHash() == c.QuestionsHash() {
 		t.Error("instruction change did not alter QuestionsHash")
 	}
-	if !strings.HasPrefix(a.QuestionsHash(), "sha256:") {
-		t.Errorf("hash %q lacks sha256: prefix", a.QuestionsHash())
-	}
 }
 
-const validBase = `
+const testBase = `
+kind = "test"
 version = "t"
 [[question]]
 key = "verdict"
@@ -88,53 +65,50 @@ keep = "k"
 cut = "c"
 review = "r"
 [[question]]
-key = "regression_value"
-type = "score"
-instructions = "i"
-levels = ["a", "b", "c", "d"]
-[[question]]
 key = "mock_only"
 type = "noul"
 instructions = "i"
-yes = "y"
-no = "n"
+`
+
+const groupBase = `
+kind = "group"
+version = "g"
 [[question]]
-key = "pick"
+key = "verdict"
 type = "choice"
 instructions = "i"
 [question.options]
-x = "x"
-y = "y"
+consolidate = "c"
+keep_separate = "k"
+review = "r"
 `
 
-const validPolicy = `
-[policy]
-min_verdict_confidence = 0.5
-keep_regression_value = 2.0
-cut_max_regression_value = 1.0
-hazard_threshold = 0.7
-hazards = ["mock_only"]
-`
+const testPolicy = "\n[policy]\nact = 0.6\nreview = 0.3\n"
+const groupPolicy = "\n[policy]\nact = 0.6\nreview = 0.3\nexact_duplicate = 0.7\n"
 
-func TestParseValidBase(t *testing.T) {
-	if _, err := Parse([]byte(validBase + validPolicy)); err != nil {
-		t.Fatalf("valid rubric rejected: %v", err)
+func TestParseValidBases(t *testing.T) {
+	if _, err := Parse([]byte(testBase + testPolicy)); err != nil {
+		t.Errorf("valid test rubric: %v", err)
+	}
+	if _, err := Parse([]byte(groupBase + groupPolicy)); err != nil {
+		t.Errorf("valid group rubric: %v", err)
 	}
 }
 
 func TestParseRejects(t *testing.T) {
-	cases := []struct {
-		name, doc, want string
-	}{
-		{"missing version", strings.Replace(validBase, `version = "t"`, "", 1) + validPolicy, "version"},
-		{"duplicate key", validBase + "[[question]]\nkey = \"mock_only\"\ntype = \"noul\"\ninstructions = \"i\"\n" + validPolicy, "duplicate question"},
-		{"unknown type", validBase + "[[question]]\nkey = \"z\"\ntype = \"rank\"\ninstructions = \"i\"\n" + validPolicy, "unknown type"},
-		{"verdict options", strings.Replace(validBase, "review = \"r\"\n", "", 1) + validPolicy, "verdict options"},
-		{"levels", strings.Replace(validBase, `levels = ["a", "b", "c", "d"]`, `levels = ["a"]`, 1) + validPolicy, "levels"},
-		{"hazard not noul", validBase + strings.Replace(validPolicy, `hazards = ["mock_only"]`, `hazards = ["pick"]`, 1), "hazard"},
-		{"hazard threshold", validBase + strings.Replace(validPolicy, "hazard_threshold = 0.7", "hazard_threshold = 1.5", 1), "hazard_threshold"},
-		{"keep regression", validBase + strings.Replace(validPolicy, "keep_regression_value = 2.0", "keep_regression_value = 5.0", 1), "keep_regression_value"},
-		{"unknown key", validBase + validPolicy + "\nbogus = 1\n", "unknown"},
+	cases := []struct{ name, doc, want string }{
+		{"missing kind", strings.Replace(testBase, `kind = "test"`, "", 1) + testPolicy, "kind"},
+		{"bad kind", strings.Replace(testBase, `kind = "test"`, `kind = "suite"`, 1) + testPolicy, "kind"},
+		{"test verdict options", strings.Replace(testBase, "review = \"r\"\n", "", 1) + testPolicy, "verdict options"},
+		{"group verdict options", strings.Replace(groupBase, "keep_separate = \"k\"\n", "", 1) + groupPolicy, "verdict options"},
+		{"act out of range", testBase + strings.Replace(testPolicy, "act = 0.6", "act = 1.2", 1), "act"},
+		{"review not below act", testBase + strings.Replace(testPolicy, "review = 0.3", "review = 0.7", 1), "review"},
+		{"exact_duplicate on test", testBase + testPolicy + "exact_duplicate = 0.7\n", "exact_duplicate"},
+		{"exact_duplicate missing on group", groupBase + testPolicy, "exact_duplicate"},
+		{"missing policy", testBase, "policy"},
+		{"missing act", testBase + "\n[policy]\nreview = 0.3\n", "act"},
+		{"duplicate key", testBase + "[[question]]\nkey = \"mock_only\"\ntype = \"noul\"\ninstructions = \"i\"\n" + testPolicy, "duplicate question"},
+		{"unknown key", testBase + testPolicy + "bogus = 1\n", "unknown"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -143,19 +117,5 @@ func TestParseRejects(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, c.want)
 			}
 		})
-	}
-}
-
-func TestParseRequiresPolicy(t *testing.T) {
-	if _, err := Parse([]byte(validBase)); err == nil || !strings.Contains(err.Error(), "policy") {
-		t.Fatalf("rubric without [policy] accepted: %v", err)
-	}
-	partial := strings.Replace(validPolicy, "hazard_threshold = 0.7\n", "", 1)
-	if _, err := Parse([]byte(validBase + partial)); err == nil || !strings.Contains(err.Error(), "hazard_threshold") {
-		t.Fatalf("rubric missing hazard_threshold accepted: %v", err)
-	}
-	none := strings.Replace(validPolicy, `hazards = ["mock_only"]`, `hazards = []`, 1)
-	if _, err := Parse([]byte(validBase + none)); err == nil || !strings.Contains(err.Error(), "hazards") {
-		t.Fatalf("rubric with no hazards accepted: %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,8 +53,8 @@ func (f *fake) Evaluate(ctx context.Context, model string, state any, questions 
 	return jev.Response{Model: "jev-test/" + name, Answers: ans}, nil
 }
 
-func states(n int) []State {
-	out := make([]State, n)
+func states(n int) []any {
+	out := make([]any, n)
 	for i := range out {
 		out[i] = StateFor(cases.TestCase{Name: fmt.Sprintf("T%02d", i), Body: fmt.Sprintf("body %d", i)})
 	}
@@ -62,7 +63,7 @@ func states(n int) []State {
 
 func opts(t *testing.T, cache *Cache) Options {
 	t.Helper()
-	r, err := rubric.Load("v1")
+	r, err := rubric.Load(rubric.DefaultTest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +129,7 @@ func TestThresholdOnlyChangeUsesCache(t *testing.T) {
 	o := opts(t, c)
 	JudgeAll(context.Background(), f, states(5), o)
 	f.calls.Store(0)
-	o.Rubric.Policy.HazardThreshold = 0.9
+	o.Rubric.Policy.Act = 0.9
 	o.Rubric.Version = "v2"
 	JudgeAll(context.Background(), f, states(5), o)
 	if f.calls.Load() != 0 {
@@ -181,7 +182,7 @@ func TestPerStateErrorContinues(t *testing.T) {
 func TestUnauthorizedAborts(t *testing.T) {
 	f := &fake{fail: map[string]error{}}
 	for _, s := range states(10) {
-		f.fail[s.TestName] = jev.ErrUnauthorized
+		f.fail[s.(State).TestName] = jev.ErrUnauthorized
 	}
 	o := opts(t, nil)
 	o.Concurrency = 1
@@ -212,7 +213,7 @@ func TestCancelKeepsCompletedCache(t *testing.T) {
 	}
 	for _, s := range st[:5] {
 		if _, ok := c.Get(CacheKey(StateHash(s), o.Model, o.Rubric.QuestionsHash())); !ok {
-			t.Errorf("%s not cached", s.TestName)
+			t.Errorf("%s not cached", s.(State).TestName)
 		}
 	}
 	files, _ := filepath.Glob(filepath.Join(c.Dir, "*"))
@@ -221,5 +222,33 @@ func TestCancelKeepsCompletedCache(t *testing.T) {
 		if !json.Valid(b) {
 			t.Errorf("cache file %s is not valid JSON", p)
 		}
+	}
+}
+
+func TestGroupStateForCap(t *testing.T) {
+	body := strings.Repeat("x", 100)
+	g := cases.Group{Lang: "python", Framework: "pytest", File: "tests/test_a.py", Tests: []cases.TestCase{
+		{ID: "a", Name: "test_a", Body: body}, {ID: "b", Name: "test_b", Body: body}, {ID: "c", Name: "test_c", Body: body},
+	}}
+	s := GroupStateFor(g, 250)
+	if len(s.Tests) != 2 || !s.Truncated || s.Note != GroupNote || s.File != "tests/test_a.py" {
+		t.Fatalf("cap 250: %d tests, truncated %v, note %q", len(s.Tests), s.Truncated, s.Note)
+	}
+	s = GroupStateFor(g, 1000)
+	if len(s.Tests) != 3 || s.Truncated || s.Tests[2].Name != "test_c" || s.Tests[2].Source != body {
+		t.Fatalf("cap 1000: %+v", s)
+	}
+}
+
+func TestGroupID(t *testing.T) {
+	a := cases.GroupID([]string{"x", "y", "z"})
+	if a != cases.GroupID([]string{"z", "x", "y"}) {
+		t.Error("GroupID depends on order")
+	}
+	if !strings.HasPrefix(a, "group:") {
+		t.Errorf("GroupID %q lacks group: prefix", a)
+	}
+	if a == cases.GroupID([]string{"x", "y"}) {
+		t.Error("different member sets share an id")
 	}
 }

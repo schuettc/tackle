@@ -35,7 +35,7 @@ type Judged struct {
 // JudgeAll judges states in parallel and returns results in input order. A
 // failure on one state is recorded on that result and the run continues. A
 // rejected key or a cancelled context stops the run and is returned.
-func JudgeAll(ctx context.Context, ev Evaluator, states []State, opt Options) ([]Judged, error) {
+func JudgeAll(ctx context.Context, ev Evaluator, states []any, opt Options) ([]Judged, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	n := opt.Concurrency
@@ -67,7 +67,7 @@ func JudgeAll(ctx context.Context, ev Evaluator, states []State, opt Options) ([
 			continue
 		}
 		wg.Add(1)
-		go func(i int, s State, key string) {
+		go func(i int, s any, key string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			r, err := ev.Evaluate(ctx, opt.Model, s, questions)

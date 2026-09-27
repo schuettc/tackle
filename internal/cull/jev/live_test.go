@@ -16,7 +16,7 @@ func TestLiveSmoke(t *testing.T) {
 	if os.Getenv("CULL_LIVE") != "1" || key == "" {
 		t.Skip("set CULL_LIVE=1 and TYPESAFE_API_KEY to run")
 	}
-	r, err := rubric.Load(rubric.Default)
+	r, err := rubric.Load(rubric.DefaultTest)
 	if err != nil {
 		t.Fatal(err)
 	}
