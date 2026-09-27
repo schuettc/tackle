@@ -36,9 +36,8 @@ func TestSheetRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []SheetLabel{{ID: "go:b_test.go:TestB", Label: policy.Cut, Note: "mock only"}}
-	if len(got) != 1 || got[0] != want[0] {
-		t.Fatalf("got %+v, want %+v", got, want)
+	if len(got) != 1 || got[0].ID != "go:b_test.go:TestB" || got[0].Label != policy.Cut || got[0].Note != "mock only" || got[0].StateHash == "" {
+		t.Fatalf("got %+v", got)
 	}
 }
 
@@ -54,5 +53,60 @@ func TestReadSheetBadLabel(t *testing.T) {
 	_, err := ReadSheet(strings.NewReader(sheet))
 	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("line %d", line)) || !strings.Contains(err.Error(), "kep") {
 		t.Fatalf("err = %v, want line %d and kep", err, line)
+	}
+}
+
+// fill labels the named entry in a sheet.
+func fill(sheet, id, label string) string {
+	i := strings.Index(sheet, "## "+id)
+	return sheet[:i] + strings.Replace(sheet[i:], "label: \n", "label: "+label+"\n", 1)
+}
+
+func TestApplySheetLabels(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "c.jsonl"))
+	s.Import([]cases.TestCase{tc("a", "1"), tc("b", "2")})
+	var buf bytes.Buffer
+	WriteSheet(&buf, s.Entries())
+	labels, err := ReadSheet(strings.NewReader(fill(buf.String(), "b", "cut")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ApplySheet(labels, "court", now); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range s.Entries() {
+		if (e.ID == "b") != (e.Label == policy.Cut) {
+			t.Errorf("%s label = %q", e.ID, e.Label)
+		}
+	}
+}
+
+func TestApplySheetRejectsStaleEntry(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "c.jsonl"))
+	s.Import([]cases.TestCase{tc("a", "1"), tc("b", "2")})
+	var buf bytes.Buffer
+	WriteSheet(&buf, s.Entries())
+	s.Import([]cases.TestCase{tc("b", "2 changed")}) // b's code changed after the sheet was written
+	labels, err := ReadSheet(strings.NewReader(fill(fill(buf.String(), "a", "keep"), "b", "cut")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = s.ApplySheet(labels, "court", now)
+	if err == nil || !strings.Contains(err.Error(), `"b"`) {
+		t.Fatalf("stale sheet accepted: %v", err)
+	}
+	for _, e := range s.Entries() {
+		if e.Label != "" {
+			t.Errorf("%s labeled %q from a rejected sheet", e.ID, e.Label)
+		}
+	}
+}
+
+func TestApplySheetRequiresStateHash(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "c.jsonl"))
+	s.Import([]cases.TestCase{tc("a", "1")})
+	labels, _ := ReadSheet(strings.NewReader("## a\nlabel: keep\n"))
+	if err := s.ApplySheet(labels, "court", now); err == nil || !strings.Contains(err.Error(), "cull corpus sheet") {
+		t.Fatalf("sheet without state hash accepted: %v", err)
 	}
 }

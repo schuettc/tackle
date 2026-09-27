@@ -145,3 +145,17 @@ func TestParseRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRequiresPolicy(t *testing.T) {
+	if _, err := Parse([]byte(validBase)); err == nil || !strings.Contains(err.Error(), "policy") {
+		t.Fatalf("rubric without [policy] accepted: %v", err)
+	}
+	partial := strings.Replace(validPolicy, "hazard_threshold = 0.7\n", "", 1)
+	if _, err := Parse([]byte(validBase + partial)); err == nil || !strings.Contains(err.Error(), "hazard_threshold") {
+		t.Fatalf("rubric missing hazard_threshold accepted: %v", err)
+	}
+	none := strings.Replace(validPolicy, `hazards = ["mock_only"]`, `hazards = []`, 1)
+	if _, err := Parse([]byte(validBase + none)); err == nil || !strings.Contains(err.Error(), "hazards") {
+		t.Fatalf("rubric with no hazards accepted: %v", err)
+	}
+}

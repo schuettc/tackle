@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/schuettc/tackle/internal/cull/policy"
 )
 
+const statePrefix = "<!-- state: "
+
 // SheetLabel is one filled-in label from a labeling sheet.
 type SheetLabel struct {
-	ID    string
-	Label policy.Verdict
-	Note  string
+	ID        string
+	StateHash string // the state the person saw when labeling
+	Label     policy.Verdict
+	Note      string
 }
 
 // fence returns a backtick fence longer than any backtick run in s.
@@ -37,7 +41,7 @@ func WriteSheet(w io.Writer, entries []Entry) error {
 	var b strings.Builder
 	for _, e := range entries {
 		s := e.State
-		fmt.Fprintf(&b, "## %s\nlabel: %s\nnote: %s\n\n", e.ID, e.Label, e.Note)
+		fmt.Fprintf(&b, "## %s\n%s%s -->\nlabel: %s\nnote: %s\n\n", e.ID, statePrefix, e.StateHash, e.Label, e.Note)
 		f := fence(s.TestSource)
 		fmt.Fprintf(&b, "%s%s\n%s\n%s\n", f, s.Language, s.TestSource, f)
 		var more strings.Builder
@@ -90,6 +94,8 @@ func ReadSheet(r io.Reader) ([]SheetLabel, error) {
 		case strings.HasPrefix(line, "## "):
 			flush()
 			cur = &SheetLabel{ID: strings.TrimSpace(line[3:])}
+		case cur != nil && strings.HasPrefix(line, statePrefix):
+			cur.StateHash = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, statePrefix), "-->"))
 		case cur != nil && strings.HasPrefix(line, "label:"):
 			v := strings.TrimSpace(strings.TrimPrefix(line, "label:"))
 			if v == "" {
@@ -106,4 +112,31 @@ func ReadSheet(r io.Reader) ([]SheetLabel, error) {
 	}
 	flush()
 	return out, sc.Err()
+}
+
+// ApplySheet labels every entry in labels, or none. Each label must carry the
+// state hash its sheet was written from, and that must still be the entry's
+// state: a judgment of old code must not land on new code.
+func (s *Store) ApplySheet(labels []SheetLabel, by string, now time.Time) error {
+	var stale []string
+	for _, l := range labels {
+		e, ok := s.entries[l.ID]
+		switch {
+		case !ok:
+			return fmt.Errorf("no corpus entry %q", l.ID)
+		case l.StateHash == "":
+			return fmt.Errorf("sheet entry %q has no state hash; regenerate the sheet with cull corpus sheet", l.ID)
+		case l.StateHash != e.StateHash:
+			stale = append(stale, fmt.Sprintf("%q", l.ID))
+		}
+	}
+	if len(stale) > 0 {
+		return fmt.Errorf("tests changed since the sheet was written: %s; regenerate the sheet with cull corpus sheet", strings.Join(stale, ", "))
+	}
+	for _, l := range labels {
+		if err := s.Label(l.ID, l.Label, by, l.Note, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }

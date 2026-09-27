@@ -86,6 +86,15 @@ func Parse(data []byte) (Rubric, error) {
 		}
 		return Rubric{}, fmt.Errorf("unknown keys: %s", strings.Join(keys, ", "))
 	}
+	// A missing threshold would decode as 0 and quietly keep every test.
+	if !md.IsDefined("policy") {
+		return Rubric{}, fmt.Errorf("a [policy] section is required")
+	}
+	for _, k := range []string{"min_verdict_confidence", "keep_regression_value", "cut_max_regression_value", "hazard_threshold", "hazards"} {
+		if !md.IsDefined("policy", k) {
+			return Rubric{}, fmt.Errorf("policy.%s is required", k)
+		}
+	}
 	return r, r.validate()
 }
 
@@ -142,6 +151,9 @@ func (r Rubric) validate() error {
 	}
 
 	p := r.Policy
+	if len(p.Hazards) == 0 {
+		return fmt.Errorf("policy.hazards must name at least one noul question")
+	}
 	for _, h := range p.Hazards {
 		q, ok := r.question(h)
 		if !ok || q.Type != "noul" {

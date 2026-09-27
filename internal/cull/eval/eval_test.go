@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -83,10 +84,10 @@ func TestCompare(t *testing.T) {
 	}
 }
 
-type fakeEv struct{ calls int }
+type fakeEv struct{ calls atomic.Int32 }
 
 func (f *fakeEv) Evaluate(_ context.Context, _ string, _ any, questions map[string]any) (jev.Response, error) {
-	f.calls++
+	f.calls.Add(1)
 	lo, conf := 0.1, 0.9
 	ans := map[string]jev.Answer{}
 	for k, q := range questions {
@@ -113,8 +114,8 @@ func TestRunSkipsUnlabeled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 || f.calls != 2 {
-		t.Fatalf("rows=%d calls=%d, want 2, 2", len(rows), f.calls)
+	if len(rows) != 2 || f.calls.Load() != 2 {
+		t.Fatalf("rows=%d calls=%d, want 2, 2", len(rows), f.calls.Load())
 	}
 	if rows[0].Pred != K || rows[0].Rule != "default_keep" {
 		t.Errorf("row 0 = %+v", rows[0])

@@ -194,38 +194,40 @@ func runLabel(args []string, out, errw io.Writer) error {
 		return err
 	}
 	by, now := str(fs, "by"), time.Now()
-	var labels []corpus.SheetLabel
 	if sheet := str(fs, "sheet"); sheet != "" {
 		f, err := os.Open(sheet)
 		if err != nil {
 			return err
 		}
-		labels, err = corpus.ReadSheet(f)
+		labels, err := corpus.ReadSheet(f)
 		f.Close()
 		if err != nil {
 			return fmt.Errorf("%s: %w", sheet, err)
 		}
-	} else {
-		if len(pos) != 2 {
-			return tools.UsageError{Msg: "label takes <id> keep|cut|review, or --sheet <file>"}
-		}
-		v, err := policy.ParseVerdict(pos[1])
-		if err != nil {
-			return tools.UsageError{Msg: err.Error()}
-		}
-		labels = []corpus.SheetLabel{{ID: pos[0], Label: v, Note: str(fs, "note")}}
-	}
-	// Labels apply in memory; any failure returns before Save, so a bad
-	// sheet changes nothing.
-	for _, l := range labels {
-		if err := s.Label(l.ID, l.Label, by, l.Note, now); err != nil {
+		// ApplySheet is all or nothing and nothing is saved on failure.
+		if err := s.ApplySheet(labels, by, now); err != nil {
 			return err
 		}
+		if err := s.Save(); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "labeled %d\n", len(labels))
+		return nil
+	}
+	if len(pos) != 2 {
+		return tools.UsageError{Msg: "label takes <id> keep|cut|review, or --sheet <file>"}
+	}
+	v, err := policy.ParseVerdict(pos[1])
+	if err != nil {
+		return tools.UsageError{Msg: err.Error()}
+	}
+	if err := s.Label(pos[0], v, by, str(fs, "note"), now); err != nil {
+		return err
 	}
 	if err := s.Save(); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "labeled %d\n", len(labels))
+	fmt.Fprintln(out, "labeled 1")
 	return nil
 }
 
