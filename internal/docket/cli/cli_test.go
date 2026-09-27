@@ -174,7 +174,27 @@ func TestEndToEnd(t *testing.T) {
 	if out := e.ok("doctor"); !strings.Contains(out, "hooks") {
 		t.Errorf("doctor:\n%s", out)
 	}
+	// A clone with a local core.hooksPath bypasses the global shims until adopted.
+	husky := filepath.Join(e.root, "husky")
+	os.MkdirAll(husky, 0o755)
+	testgit.Git(t, husky, "init", "-q", "-b", "main")
+	testgit.Commit(t, husky, "a", "1")
+	testgit.Git(t, husky, "config", "core.hooksPath", ".githooks")
+	e.ok("sync", "--no-github")
+	if out := e.ok("hooks", "adopt", "--all"); !strings.Contains(out, "adopted 1") {
+		t.Errorf("adopt --all:\n%s", out)
+	}
+	var hs2 struct {
+		Adopted []string `json:"adopted"`
+	}
+	json.Unmarshal([]byte(e.ok("hooks", "status", "--json")), &hs2)
+	if len(hs2.Adopted) != 1 {
+		t.Errorf("adopted entries = %v, want one", hs2.Adopted)
+	}
 	e.ok("hooks", "uninstall")
+	if got := testgit.Git(t, husky, "config", "--local", "core.hooksPath"); got != ".githooks" {
+		t.Errorf("husky core.hooksPath after uninstall = %q, want .githooks", got)
+	}
 	if code, out, _ := e.run("", "commands", "--json"); code != 0 || !strings.Contains(out, `"record"`) || !strings.Contains(out, `"hook"`) {
 		t.Errorf("commands: %d %s", code, out)
 	}

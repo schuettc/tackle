@@ -82,6 +82,132 @@ func TestShimChainsBlockingRepoHook(t *testing.T) {
 	}
 }
 
+// adoptRepo sets a local core.hooksPath of .husky/_ (relative) with a
+// pre-commit and a post-commit, and returns the hooks dir path.
+func huskyRepo(t *testing.T, repo, precommit string) string {
+	t.Helper()
+	hooksDir := filepath.Join(repo, ".husky", "_")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\n"+precommit+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Git(t, repo, "config", "--local", "core.hooksPath", ".husky/_")
+	return hooksDir
+}
+
+func TestAdoptChainsLocalHooksPath(t *testing.T) {
+	r := setup(t)
+	marker := filepath.Join(t.TempDir(), "post-commit-ran")
+	hooksDir := huskyRepo(t, r.repo, "exit 1")
+	os.WriteFile(filepath.Join(hooksDir, "post-commit"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755)
+	r.install(t)
+	res, err := Adopt(ctx, r.opts, r.repo)
+	if err != nil || res.Already {
+		t.Fatalf("Adopt = %+v %v", res, err)
+	}
+	os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
+	testgit.Git(t, r.repo, "add", "f")
+	if gitErr(r.repo, "commit", "-q", "-m", "blocked") == nil {
+		t.Fatal("adopted repo's pre-commit (exit 1) did not block the commit")
+	}
+	os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	testgit.Git(t, r.repo, "commit", "-q", "-m", "ok")
+	if _, err := os.Stat(marker); err != nil {
+		t.Error("repo post-commit did not run after adopt")
+	}
+	if !strings.Contains(r.stubLog(t), "ARGS hook post-commit") {
+		t.Errorf("post-commit not recorded:\n%s", r.stubLog(t))
+	}
+	if got := testgit.Git(t, r.repo, "config", "--local", "core.hooksPath"); got != r.opts.Dir {
+		t.Errorf("local core.hooksPath = %q, want %q", got, r.opts.Dir)
+	}
+	if got := testgit.Git(t, r.repo, "config", "--local", "docket.prevHooksPath"); got != ".husky/_" {
+		t.Errorf("docket.prevHooksPath = %q, want .husky/_", got)
+	}
+}
+
+func TestAdoptIdempotentAndRelease(t *testing.T) {
+	r := setup(t)
+	huskyRepo(t, r.repo, "exit 0")
+	r.install(t)
+	if _, err := Adopt(ctx, r.opts, r.repo); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Adopt(ctx, r.opts, r.repo)
+	if err != nil || !res.Already {
+		t.Fatalf("second Adopt = %+v %v, want Already", res, err)
+	}
+	st, _ := GetStatus(ctx, r.opts)
+	if len(st.Adopted) != 1 {
+		t.Fatalf("Adopted = %v, want one entry", st.Adopted)
+	}
+	if err := Release(ctx, r.opts, r.repo); err != nil {
+		t.Fatal(err)
+	}
+	if got := testgit.Git(t, r.repo, "config", "--local", "core.hooksPath"); got != ".husky/_" {
+		t.Errorf("core.hooksPath after release = %q, want .husky/_", got)
+	}
+	if gitErr(r.repo, "config", "--local", "docket.prevHooksPath") == nil {
+		t.Error("docket.prevHooksPath still set after release")
+	}
+	st, _ = GetStatus(ctx, r.opts)
+	if len(st.Adopted) != 0 {
+		t.Errorf("Adopted after release = %v, want empty", st.Adopted)
+	}
+}
+
+func TestAdoptRefusals(t *testing.T) {
+	r := setup(t)
+	huskyRepo(t, r.repo, "exit 0")
+	if _, err := Adopt(ctx, r.opts, r.repo); err == nil || !strings.Contains(err.Error(), "install the global hooks first") {
+		t.Fatalf("Adopt without install = %v", err)
+	}
+	r2 := setup(t)
+	r2.install(t)
+	if _, err := Adopt(ctx, r2.opts, r2.repo); err == nil || !strings.Contains(err.Error(), "no local core.hooksPath") {
+		t.Fatalf("Adopt with no local hooksPath = %v", err)
+	}
+}
+
+func TestUninstallReleasesAdopted(t *testing.T) {
+	r := setup(t)
+	huskyRepo(t, r.repo, "exit 0")
+	r.install(t)
+	if _, err := Adopt(ctx, r.opts, r.repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := Uninstall(ctx, r.opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := testgit.Git(t, r.repo, "config", "--local", "core.hooksPath"); got != ".husky/_" {
+		t.Errorf("core.hooksPath after uninstall = %q, want .husky/_", got)
+	}
+	if gitErr(r.repo, "config", "--global", "core.hooksPath") == nil {
+		t.Error("global core.hooksPath still set after uninstall")
+	}
+}
+
+func TestReleaseLeavesRepointedRepo(t *testing.T) {
+	r := setup(t)
+	huskyRepo(t, r.repo, "exit 0")
+	r.install(t)
+	if _, err := Adopt(ctx, r.opts, r.repo); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Git(t, r.repo, "config", "--local", "core.hooksPath", "other/")
+	if err := Release(ctx, r.opts, r.repo); err != nil {
+		t.Fatal(err)
+	}
+	if got := testgit.Git(t, r.repo, "config", "--local", "core.hooksPath"); got != "other/" {
+		t.Errorf("core.hooksPath after release of repointed repo = %q, want other/", got)
+	}
+	if gitErr(r.repo, "config", "--local", "docket.prevHooksPath") == nil {
+		t.Error("docket.prevHooksPath still set after release")
+	}
+}
+
 func TestShimPrePushStdinReachesBoth(t *testing.T) {
 	r := setup(t)
 	remote := testgit.NewBare(t)

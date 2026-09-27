@@ -175,6 +175,9 @@ func machines(snaps []observe.Snapshot) []byte {
 			if c.LocalHooksPath != "" {
 				st = append(st, "not journaled (local core.hooksPath "+c.LocalHooksPath+")")
 			}
+			if c.Adopted {
+				st = append(st, "journaled via adopt")
+			}
 			repo := c.Repo
 			if repo == "" {
 				repo = "no GitHub remote"

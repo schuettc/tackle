@@ -93,6 +93,7 @@ type Clone struct {
 	Dirty          bool              `json:"dirty,omitempty"`
 	Stashes        int               `json:"stashes,omitempty"`
 	LocalHooksPath string            `json:"local_hooks_path,omitempty"` // set: global hooks don't run here
+	Adopted        bool              `json:"adopted,omitempty"`          // docket's shims are chained in via docket.prevHooksPath
 	Branches       []Branch          `json:"branches,omitempty"`
 	Worktrees      []Worktree        `json:"worktrees,omitempty"`
 }
