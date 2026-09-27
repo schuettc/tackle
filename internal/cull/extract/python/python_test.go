@@ -138,6 +138,29 @@ func TestPlainFunctionParity(t *testing.T) {
 	}
 }
 
+func TestExtractHonorsMaxContext(t *testing.T) {
+	requirePython3(t)
+	// test_add's single callee ("add") source is 51 bytes; a budget of
+	// 10 must truncate it away and mark the case Truncated, unlike the
+	// default-24000 case in TestPlainFunctionParity where it fits whole.
+	res := extractAll(t, testdataDir, 10)
+	tc := caseByID(t, res, "py:tests/test_calc.py:test_add")
+	if !tc.Truncated {
+		t.Errorf("Truncated = false, want true when maxContext=10 (add()'s source is 51 bytes)")
+	}
+	if len(tc.Context)+calleeBytes(tc.Callees) > 10 {
+		t.Errorf("context+callee bytes = %d, want <= maxContext (10)", len(tc.Context)+calleeBytes(tc.Callees))
+	}
+}
+
+func calleeBytes(cs []cases.Callee) int {
+	n := 0
+	for _, c := range cs {
+		n += len(c.Source)
+	}
+	return n
+}
+
 func TestClassMethodsHaveParent(t *testing.T) {
 	requirePython3(t)
 	res := extractAll(t, testdataDir, 24000)

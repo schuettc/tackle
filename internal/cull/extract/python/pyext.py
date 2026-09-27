@@ -23,7 +23,7 @@ import json
 import os
 import sys
 
-MAX_CTX = 24000
+MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 24000)
 
 root = sys.argv[1]
 relpaths = sys.argv[2:]

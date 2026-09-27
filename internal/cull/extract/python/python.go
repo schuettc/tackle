@@ -110,6 +110,7 @@ func (pythonExtractor) Extract(root string, relpaths []string, maxContext int) (
 	}
 
 	cmd := exec.Command(pyPath, args...)
+	cmd.Env = append(os.Environ(), fmt.Sprintf("CULL_MAX_CONTEXT_BYTES=%d", maxContext))
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
