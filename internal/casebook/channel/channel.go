@@ -68,9 +68,9 @@ type Channel struct {
 	Retry    time.Duration
 	Presence time.Duration
 	Poll     time.Duration
-	// runCtx is set by Run before Server.Run begins; the Call closure uses it
-	// so tool calls are cancelled when the MCP connection closes. Nil before
-	// Run has started (not expected in practice) → fall back to Background.
+	// runCtx is Run's context, set before Server.Run begins; the Call closure
+	// uses it so tool calls end with the channel. Nil before Run has started
+	// (not expected in practice): fall back to Background.
 	runCtx context.Context
 }
 
@@ -94,24 +94,14 @@ func New(id Identity, c *Client, version string) *Channel {
 func (ch *Channel) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	// Relay r through a pipe. When the reader closes (the MCP connection is
-	// torn down), the goroutine calls cancel() so any in-flight tool call is
-	// also cancelled — even when Server.Run is blocked synchronously in
-	// dispatch and cannot yet see the EOF on its scanner.
-	pr, pw := io.Pipe()
-	go func() {
-		_, _ = io.Copy(pw, r)
-		pw.Close()
-		cancel()
-	}()
-	// Set ch.runCtx before Server.Run begins reading. The Call closure reads
-	// ch.runCtx only after an MCP request arrives, which requires a prior
-	// write on the pipe — establishing happens-before. No race.
+	// Tool calls run under ctx, so they end with the channel: channelMain
+	// cancels it on SIGINT/SIGTERM, which is how a harness stops the channel.
+	// Set before Server.Run starts reading, so the Call closure never races it.
 	ch.runCtx = ctx
 	if ch.ID.Session != "" {
 		go ch.loop(ctx)
 	}
-	return ch.Server.Run(pr, w)
+	return ch.Server.Run(r, w)
 }
 
 func (ch *Channel) presence(ctx context.Context, c *Client) error {
