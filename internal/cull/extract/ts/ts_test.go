@@ -194,6 +194,31 @@ func TestSpansExactWithEmoji(t *testing.T) {
 	}
 }
 
+func TestPlainTestParity(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, testdataDir, 24000)
+	tc := caseByID(t, res, "ts:test/comment.test.ts:uses add with a leading comment")
+
+	wantBody := "// a comment right before the test\ntest(\"uses add with a leading comment\", () => {\n  expect(add(1, 1)).toBe(2);\n})"
+	if tc.Body != wantBody {
+		t.Errorf("Body = %q, want %q", tc.Body, wantBody)
+	}
+	if tc.Context != "" {
+		t.Errorf("Context = %q, want empty", tc.Context)
+	}
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "add" {
+		t.Fatalf("Callees = %+v, want exactly [add]", tc.Callees)
+	}
+
+	b, err := os.ReadFile(filepath.Join(testdataDir, "test/comment.test.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(b[tc.Span.Start:tc.Span.End]); got != tc.Body {
+		t.Errorf("span bytes != Body\nspan: %q\nbody: %q", got, tc.Body)
+	}
+}
+
 func TestBrokenFileSkipped(t *testing.T) {
 	requireTS(t)
 	res := extractAll(t, testdataDir, 24000)

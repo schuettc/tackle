@@ -180,8 +180,15 @@ for (const rel of relpaths) {
   }
 
   function emit(node, qual, parentId) {
-    const start = byteAt[node.getStart(sf)];
-    const end = byteAt[node.getEnd()];
+    // Phase 0's body is node.getFullText(sf).trim(), which keeps leading
+    // comments attached to the node; match that exactly while keeping the
+    // span byte-exact by locating the trimmed text within the full text.
+    const fullText = node.getFullText(sf);
+    const trimmed = fullText.trim();
+    const start16 = node.getFullStart() + fullText.indexOf(trimmed);
+    const end16 = start16 + trimmed.length;
+    const start = byteAt[start16];
+    const end = byteAt[end16];
     const body = rawBytes.slice(start, end).toString("utf8");
     const used = identifiers(node);
     const ctx = [];
