@@ -146,6 +146,56 @@ func TestDiffModifiedAndNew(t *testing.T) {
 	}
 }
 
+func TestDiffUnicodeFilenames(t *testing.T) {
+	dir, cfg := newGitRepo(t)
+
+	writeFile(t, dir, "pkg/café_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\tx := 1\n\t_ = x\n}\n")
+	runGit(t, dir, cfg, "add", ".")
+	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+
+	// Modify a line in the committed test file (line 4).
+	writeFile(t, dir, "pkg/café_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\tx := 2\n\t_ = x\n}\n")
+
+	// An untracked test file with a non-ASCII name.
+	writeFile(t, dir, "pkg/niño_test.go", "package pkg\n\nfunc TestC(t *testing.T) {}\n")
+
+	changes, err := Diff(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := changes["pkg/café_test.go"]; !ok {
+		t.Errorf("changes missing pkg/café_test.go: %v", changes)
+	}
+	untrackedRanges, ok := changes["pkg/niño_test.go"]
+	if !ok {
+		t.Fatalf("changes missing pkg/niño_test.go: %v", changes)
+	}
+	if untrackedRanges != nil {
+		t.Errorf("changes[pkg/niño_test.go] = %v, want nil (whole file new)", untrackedRanges)
+	}
+}
+
+func TestDiffIgnoresNonTestFiles(t *testing.T) {
+	dir, cfg := newGitRepo(t)
+
+	writeFile(t, dir, "pkg/calc.go", "package pkg\n\nfunc Add(a, b int) int { return a + b }\n")
+	runGit(t, dir, cfg, "add", ".")
+	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+
+	writeFile(t, dir, "pkg/calc.go", "package pkg\n\nfunc Add(a, b int) int { return a + b + 0 }\n")
+
+	changes, err := Diff(dir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := changes["pkg/calc.go"]; ok {
+		t.Errorf("changes contains non-test file pkg/calc.go: %v", changes)
+	}
+}
+
 func TestDiffDeletionOnly(t *testing.T) {
 	dir, cfg := newGitRepo(t)
 

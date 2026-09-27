@@ -145,7 +145,7 @@ var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 // repository, is reported as an error naming base and including git's
 // message.
 func Diff(root, base string) (Changes, error) {
-	cmd := exec.Command("git", "diff", "--no-color", "-U0", base, "--")
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "diff", "--no-color", "-U0", base, "--")
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -164,7 +164,11 @@ func Diff(root, base string) (Changes, error) {
 				current = ""
 				continue
 			}
+			p = unquotePath(p)
 			current = strings.TrimPrefix(p, "b/")
+			if extract.ForFile(current) == nil {
+				current = ""
+			}
 		case strings.HasPrefix(line, "@@ "):
 			if current == "" {
 				continue
@@ -206,7 +210,7 @@ func Diff(root, base string) (Changes, error) {
 // untrackedFiles lists untracked, non-ignored files in root, as
 // '/'-separated relpaths.
 func untrackedFiles(root string) ([]string, error) {
-	cmd := exec.Command("git", "ls-files", "--others", "--exclude-standard")
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "ls-files", "-z", "--others", "--exclude-standard")
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -215,12 +219,25 @@ func untrackedFiles(root string) ([]string, error) {
 		return nil, fmt.Errorf("git ls-files: %v: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	var out []string
-	for _, line := range strings.Split(stdout.String(), "\n") {
-		line = strings.TrimSpace(line)
+	for _, line := range strings.Split(stdout.String(), "\x00") {
 		if line == "" {
 			continue
 		}
 		out = append(out, filepath.ToSlash(line))
 	}
 	return out, nil
+}
+
+// unquotePath undoes git's C-style quoting of a path (used as a fallback
+// for filenames containing characters, like a literal quote or newline,
+// that git quotes even with core.quotePath=false).
+func unquotePath(p string) string {
+	if len(p) < 2 || p[0] != '"' || p[len(p)-1] != '"' {
+		return p
+	}
+	unquoted, err := strconv.Unquote(p)
+	if err != nil {
+		return p
+	}
+	return unquoted
 }
