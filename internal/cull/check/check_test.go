@@ -147,6 +147,12 @@ func TestConfigDefaultsAndUnknownKey(t *testing.T) {
 		t.Fatalf("cfg = %+v, found = %v, err = %v", cfg, found, err)
 	}
 
+	writeFile(t, root, ".cull.toml", "egress = true\ntest_command = \"go test ./...\"\n")
+	cfg, found, err = LoadConfig(root)
+	if err != nil || !found || cfg.TestCommand != "go test ./..." {
+		t.Fatalf("cfg = %+v, found = %v, err = %v", cfg, found, err)
+	}
+
 	writeFile(t, root, ".cull.toml", "egress = true\nbogus_key = 1\n")
 	if _, _, err := LoadConfig(root); err == nil {
 		t.Fatal("unknown key accepted")
@@ -171,16 +177,19 @@ func TestCheckDryRunNoConfigNoKey(t *testing.T) {
 	root := t.TempDir()
 	goModule(t, root)
 	writeFile(t, root, "a_test.go", "package a\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
-	var stderr bytes.Buffer
-	report, err := Run(context.Background(), nil, Options{Path: root, DryRun: true, Stderr: &stderr})
+	var stdout, stderr bytes.Buffer
+	report, err := Run(context.Background(), nil, Options{Path: root, DryRun: true, Stdout: &stdout, Stderr: &stderr})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Mode != "suite" || report.Root == "" {
 		t.Fatalf("report = %+v", report)
 	}
-	if !strings.Contains(stderr.String(), `"test_name":"TestA"`) {
-		t.Errorf("stderr = %q, want a printed state for TestA", stderr.String())
+	if !strings.Contains(stdout.String(), `"test_name":"TestA"`) {
+		t.Errorf("stdout = %q, want a printed state for TestA", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Errorf("stderr = %q, want nothing", stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(root, ".cull", "last.json")); !os.IsNotExist(err) {
 		t.Errorf("last.json written during --dry-run: %v", err)

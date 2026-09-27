@@ -33,35 +33,52 @@ type Options struct {
 	Diff    string // base ref; "" means suite mode
 	DryRun  bool
 	Refresh bool
-	Stderr  io.Writer // dry-run states go here; defaults to io.Discard
+	Stdout  io.Writer // dry-run states go here (as `cull judge --dry-run`); defaults to io.Discard
+	Stderr  io.Writer // diagnostics; defaults to io.Discard
+}
+
+// ResolveConfig finds the project root for path and loads its .cull.toml,
+// gating on egress unless dryRun. cli/check.go calls this before deciding
+// whether the API key is needed, so a missing or misconfigured .cull.toml
+// is reported before a missing key ever is. Run calls it too, so both code
+// paths gate identically.
+func ResolveConfig(path string, dryRun bool) (root string, cfg Config, err error) {
+	p := path
+	if p == "" {
+		p = "."
+	}
+	root, err = discover.Root(p)
+	if err != nil {
+		return "", Config{}, err
+	}
+	cfg, found, err := LoadConfig(root)
+	if err != nil {
+		return "", Config{}, err
+	}
+	if !dryRun && (!found || !cfg.Egress) {
+		return "", Config{}, fmt.Errorf(
+			"check sends test source to %s; set egress = true in .cull.toml to allow it (or --dry-run to see what would be sent)",
+			Endpoint)
+	}
+	return root, cfg, nil
 }
 
 // Run discovers, extracts, groups, judges and reports. It always uses the
 // same code path as `cull judge` (JudgeAndDecide) so calibration measures
 // what check ships. It writes <root>/.cull/last.json unless DryRun is set.
 func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
-	stderr := opt.Stderr
-	if stderr == nil {
-		stderr = io.Discard
+	stdout := opt.Stdout
+	if stdout == nil {
+		stdout = io.Discard
 	}
 
 	p := opt.Path
 	if p == "" {
 		p = "."
 	}
-	root, err := discover.Root(p)
+	root, cfg, err := ResolveConfig(p, opt.DryRun)
 	if err != nil {
 		return Report{}, err
-	}
-
-	cfg, found, err := LoadConfig(root)
-	if err != nil {
-		return Report{}, err
-	}
-	if !opt.DryRun && (!found || !cfg.Egress) {
-		return Report{}, fmt.Errorf(
-			"check sends test source to %s; set egress = true in .cull.toml to allow it (or --dry-run to see what would be sent)",
-			Endpoint)
 	}
 
 	sub, err := subPath(root, p)
@@ -122,7 +139,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	}
 
 	if opt.DryRun {
-		printDryRunStates(stderr, keptCases, groups, cfg.MaxContextBytes)
+		printDryRunStates(stdout, keptCases, groups, cfg.MaxContextBytes)
 		return Report{
 			Root: root, Mode: mode, Base: opt.Diff,
 			Skipped: skipped, Summary: summarize(nil, nil, skipped),

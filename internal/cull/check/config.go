@@ -23,6 +23,7 @@ type Config struct {
 	Exclude         []string `toml:"exclude"`
 	TestRubric      string   `toml:"test_rubric"`
 	GroupRubric     string   `toml:"group_rubric"`
+	TestCommand     string   `toml:"test_command"` // unused until apply
 }
 
 // defaultConfig is Config before .cull.toml is applied.

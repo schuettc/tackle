@@ -45,6 +45,10 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		dryRun := boolFlag(fs, "dry-run")
 		jsonMode := boolFlag(fs, "json")
 
+		if _, _, err := check.ResolveConfig(path, dryRun); err != nil {
+			return tools.Exitf(2, "%v", err)
+		}
+
 		var ev judge.Evaluator
 		if !dryRun {
 			key := os.Getenv("TYPESAFE_API_KEY")
@@ -58,7 +62,7 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		defer stop()
 
 		report, err := check.Run(ctx, ev, check.Options{
-			Path: path, Diff: str(fs, "diff"), DryRun: dryRun, Refresh: boolFlag(fs, "refresh"), Stderr: errw,
+			Path: path, Diff: str(fs, "diff"), DryRun: dryRun, Refresh: boolFlag(fs, "refresh"), Stdout: out, Stderr: errw,
 		})
 		if errors.Is(err, jev.ErrUnauthorized) {
 			return tools.Exitf(2, "%v", err).WithHint("creel exec TYPESAFE_API_KEY -- cull check ...")
@@ -81,6 +85,9 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			check.WriteTable(out, report)
 		}
 
+		if n := report.Summary["errors"]; n > 0 {
+			return tools.Exitf(2, "%d item(s) could not be judged (incomplete run)", n)
+		}
 		if report.HasActions() {
 			return tools.Exitf(1, "%d to cut, %d to consolidate",
 				report.Summary["cut"], report.Summary["consolidate"])

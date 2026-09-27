@@ -21,6 +21,7 @@ type checkFake struct {
 	n      atomic.Int32
 	boost  map[string]string
 	status int
+	failOn map[string]int // marker substring in the request body -> status
 }
 
 func (f *checkFake) start(t *testing.T) {
@@ -34,6 +35,13 @@ func (f *checkFake) start(t *testing.T) {
 			return
 		}
 		body := string(b)
+		for marker, status := range f.failOn {
+			if strings.Contains(body, marker) {
+				w.WriteHeader(status)
+				io.WriteString(w, `{"detail":"nope"}`)
+				return
+			}
+		}
 		act := ""
 		for marker, opt := range f.boost {
 			if strings.Contains(body, marker) {
@@ -186,15 +194,38 @@ func TestCheckDryRunPrintsStates(t *testing.T) {
 	ckGoModule(t, root)
 	ckWriteFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
 
-	code, _, errw := run(t, "", "check", root, "--dry-run")
+	code, out, errw := run(t, "", "check", root, "--dry-run")
 	if code != 0 {
 		t.Fatalf("code %d, errw %q", code, errw)
 	}
-	if !strings.Contains(errw, `"test_name":"TestA"`) {
-		t.Errorf("errw = %q, want a printed state for TestA", errw)
+	if !strings.Contains(out, `"test_name":"TestA"`) {
+		t.Errorf("out = %q, want a printed state for TestA", out)
+	}
+	if errw != "" {
+		t.Errorf("errw = %q, want nothing", errw)
 	}
 	if f.n.Load() != 0 {
 		t.Errorf("server saw %d requests during --dry-run", f.n.Load())
+	}
+}
+
+func TestCheckNoConfigNoKeyGivesEgressMessage(t *testing.T) {
+	checkEnv(t, "")
+	f := &checkFake{}
+	f.start(t)
+	root := t.TempDir()
+	ckGoModule(t, root)
+	ckWriteFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
+
+	code, _, errw := run(t, "", "check", root)
+	if code != 2 || !strings.Contains(errw, "api.typesafe.ai") || !strings.Contains(errw, "egress = true in .cull.toml") {
+		t.Fatalf("code %d, errw %q", code, errw)
+	}
+	if strings.Contains(errw, "TYPESAFE_API_KEY") {
+		t.Errorf("errw = %q, should not mention the key before the egress gate", errw)
+	}
+	if f.n.Load() != 0 {
+		t.Errorf("server saw %d requests", f.n.Load())
 	}
 }
 
@@ -252,6 +283,21 @@ func TestCheckExitCodes(t *testing.T) {
 			t.Fatalf("code %d, out %q, errw %q", code, out, errw)
 		}
 	})
+}
+
+func TestCheckIncompleteRunExitsTwo(t *testing.T) {
+	checkEnv(t, "k")
+	(&checkFake{failOn: map[string]int{"TestA": 422}}).start(t)
+	root := t.TempDir()
+	ckGoModule(t, root)
+	ckEgress(t, root)
+	ckWriteFile(t, root, "pkg/calc_test.go",
+		"package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n")
+
+	code, _, errw := run(t, "", "check", root)
+	if code != 2 || !strings.Contains(errw, "could not be judged") || !strings.Contains(errw, "incomplete run") {
+		t.Fatalf("code %d, errw %q", code, errw)
+	}
 }
 
 func TestCheckJSONOutput(t *testing.T) {
