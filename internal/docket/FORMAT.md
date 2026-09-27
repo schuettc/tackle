@@ -70,7 +70,7 @@ Never stored: command lines, commit or tag messages, titles, bodies, field value
 
 This machine's clones under its configured roots. Each clone has:
 - path, identifying GitHub repo, remotes (non-GitHub URLs redacted)
-- bare, dirty, stash count, local `core.hooksPath`
+- bare, dirty, stash count, local `core.hooksPath`, adopted (docket's shims chained in)
 - branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip
 - linked worktrees: path, branch, head, detached, dirty
 

@@ -69,6 +69,11 @@ func (a *App) Doctor(ctx context.Context, h hooks.Options, exe string) []Check {
 	default:
 		add("hooks", "ok", "global core.hooksPath → %s", h.Dir)
 	}
+	for _, repo := range hs.Adopted {
+		if fi, err := os.Stat(repo); err != nil || !fi.IsDir() {
+			add("adopted repo missing", "warn", "adopted repo missing: %s (docket hooks release %s)", repo, repo)
+		}
+	}
 
 	if files, _ := filepath.Glob(filepath.Join(config.SpoolDir(), "*.jsonl")); len(files) > 0 {
 		add("spool", "ok", "%d spool file(s) waiting for sync", len(files))
@@ -104,16 +109,23 @@ func (a *App) Doctor(ctx context.Context, h hooks.Options, exe string) []Check {
 				continue
 			}
 			var local, nogh []string
+			adoptedCount := 0
 			for _, c := range s.Clones {
 				if c.LocalHooksPath != "" {
 					local = append(local, c.Path)
+				}
+				if c.Adopted {
+					adoptedCount++
 				}
 				if c.Repo == "" {
 					nogh = append(nogh, c.Path)
 				}
 			}
 			if len(local) > 0 {
-				add("not journaled", "warn", "local core.hooksPath bypasses the global hooks in: %s", strings.Join(local, ", "))
+				add("not journaled", "warn", "local core.hooksPath bypasses the global hooks in: %s (run: docket hooks adopt --all)", strings.Join(local, ", "))
+			}
+			if adoptedCount > 0 {
+				add("adopted", "ok", "%d repo(s) adopted", adoptedCount)
 			}
 			if len(nogh) > 0 {
 				add("no GitHub remote", "ok", "%d clone(s) tracked only locally", len(nogh))

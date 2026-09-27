@@ -312,19 +312,20 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "hooks", Group: "setup", Synopsis: "hooks install|uninstall|status [--json]",
+			Name: "hooks", Group: "setup", Synopsis: "hooks install|uninstall|status|adopt [<repo>|--all]|release [<repo>|--all] [--json]",
 			Summary:  "manage the global git hook shims that journal git activity",
-			NewFlags: jsonFlags("hooks"),
+			NewFlags: hooksFlags,
 			Run: func(args []string, out, errw io.Writer) error {
-				fs := jsonFlags("hooks")()
+				fs := hooksFlags()
 				pos, err := parse(fs, args, out)
 				if err != nil {
 					return err
 				}
-				if len(pos) != 1 {
-					return tools.UsageError{Msg: "hooks needs install, uninstall or status"}
+				if len(pos) == 0 {
+					return tools.UsageError{Msg: "hooks needs install, uninstall, status, adopt or release"}
 				}
 				o := hookOpts()
+				all := boolFlag(fs, "all")
 				switch pos[0] {
 				case "install":
 					if err := hooks.Install(ctx, o); err != nil {
@@ -344,12 +345,54 @@ func commands(stdin io.Reader) []tools.Command {
 					}
 					if boolFlag(fs, "json") {
 						return tools.PrintJSON(out, map[string]any{"installed": st.Installed, "global_hooks_path": st.GlobalHooksPath,
-							"prev": st.Prev, "binary": st.Binary, "binary_ok": st.BinaryOK, "missing": nonNil(st.Missing)})
+							"prev": st.Prev, "binary": st.Binary, "binary_ok": st.BinaryOK, "missing": nonNil(st.Missing), "adopted": nonNil(st.Adopted)})
 					}
-					fmt.Fprintf(out, "installed: %v\nglobal core.hooksPath: %s\nchains to: %s\nbinary: %s (ok: %v)\n", st.Installed,
-						orText(st.GlobalHooksPath, "(unset)"), orText(st.Prev, "each repo's own hooks"), st.Binary, st.BinaryOK)
+					fmt.Fprintf(out, "installed: %v\nglobal core.hooksPath: %s\nchains to: %s\nbinary: %s (ok: %v)\nadopted: %s\n", st.Installed,
+						orText(st.GlobalHooksPath, "(unset)"), orText(st.Prev, "each repo's own hooks"), st.Binary, st.BinaryOK, orText(strings.Join(st.Adopted, ", "), "none"))
+				case "adopt":
+					if all {
+						return hooksAdoptAll(o, out)
+					}
+					repo := "."
+					if len(pos) > 1 {
+						repo = pos[1]
+					}
+					res, err := hooks.Adopt(ctx, o, repo)
+					if err != nil {
+						return err
+					}
+					if res.Already {
+						fmt.Fprintf(out, "%s already adopted\n", res.Repo)
+					} else {
+						fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
+					}
+				case "release":
+					if all {
+						st, err := hooks.GetStatus(ctx, o)
+						if err != nil {
+							return err
+						}
+						var errs []error
+						for _, repo := range st.Adopted {
+							if err := hooks.Release(ctx, o, repo); err != nil {
+								errs = append(errs, err)
+								fmt.Fprintf(out, "failed %s: %v\n", repo, err)
+							} else {
+								fmt.Fprintf(out, "released %s\n", repo)
+							}
+						}
+						return errors.Join(errs...)
+					}
+					repo := "."
+					if len(pos) > 1 {
+						repo = pos[1]
+					}
+					if err := hooks.Release(ctx, o, repo); err != nil {
+						return err
+					}
+					fmt.Fprintf(out, "released %s\n", repo)
 				default:
-					return tools.UsageError{Msg: "hooks needs install, uninstall or status"}
+					return tools.UsageError{Msg: "hooks needs install, uninstall, status, adopt or release"}
 				}
 				return nil
 			},
@@ -448,6 +491,57 @@ func filterFlags(name string) func() *flag.FlagSet {
 
 func jsonFlags(name string) func() *flag.FlagSet {
 	return flags(name, "", "", func(fs *flag.FlagSet) { fs.Bool("json", false, "print JSON") })
+}
+
+func hooksFlags() *flag.FlagSet {
+	return flags("hooks", "docket hooks install|uninstall|status|adopt [<repo>|--all]|release [<repo>|--all] [--json]", "", func(fs *flag.FlagSet) {
+		fs.Bool("json", false, "print JSON")
+		fs.Bool("all", false, "adopt/release every applicable repo")
+	})()
+}
+
+// hooksAdoptAll adopts every clone in this machine's snapshot that has a local
+// core.hooksPath, is not bare, and whose directory exists.
+func hooksAdoptAll(o hooks.Options, out io.Writer) error {
+	ctx := context.Background()
+	a, err := open()
+	if err != nil {
+		return err
+	}
+	snap, ok, err := a.MachineSnapshot()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return tools.Exitf(1, "no snapshot for this machine yet: run docket sync first")
+	}
+	var adopted, already, failed int
+	for _, c := range snap.Clones {
+		if c.Bare || c.LocalHooksPath == "" {
+			continue
+		}
+		if fi, err := os.Stat(c.Path); err != nil || !fi.IsDir() {
+			continue
+		}
+		res, err := hooks.Adopt(ctx, o, c.Path)
+		if err != nil {
+			failed++
+			fmt.Fprintf(out, "failed %s: %v\n", c.Path, err)
+			continue
+		}
+		if res.Already {
+			already++
+			fmt.Fprintf(out, "%s already adopted\n", res.Repo)
+		} else {
+			adopted++
+			fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
+		}
+	}
+	fmt.Fprintf(out, "adopted %d, already %d, failed %d\n", adopted, already, failed)
+	if failed > 0 {
+		return tools.Exitf(1, "%d repo(s) failed to adopt", failed)
+	}
+	return nil
 }
 
 func decideFlags() *flag.FlagSet {

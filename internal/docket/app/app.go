@@ -154,6 +154,22 @@ func (a *App) snapshots() ([]observe.Snapshot, error) {
 	return out, nil
 }
 
+// MachineSnapshot returns this machine's snapshot from the docket repo, if any.
+func (a *App) MachineSnapshot() (observe.Snapshot, bool, error) {
+	b, err := a.Repo.ReadFile("machines/" + a.Cfg.Machine + ".json")
+	if errors.Is(err, fs.ErrNotExist) {
+		return observe.Snapshot{}, false, nil
+	}
+	if err != nil {
+		return observe.Snapshot{}, false, err
+	}
+	var s observe.Snapshot
+	if err := json.Unmarshal(b, &s); err != nil {
+		return observe.Snapshot{}, false, err
+	}
+	return s, true, nil
+}
+
 func loadSeen() map[string]time.Time {
 	seen := map[string]time.Time{}
 	if b, err := os.ReadFile(config.SeenPath()); err == nil {

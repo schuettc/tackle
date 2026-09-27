@@ -28,6 +28,7 @@ type State struct {
 	Prev        string    `json:"prev"`
 	Binary      string    `json:"binary"`
 	InstalledAt time.Time `json:"installed_at"`
+	Adopted     []string  `json:"adopted,omitempty"` // absolute repo top-level paths, sorted and deduplicated
 }
 
 // Status describes the installation.
@@ -38,6 +39,7 @@ type Status struct {
 	Binary          string   // binary the shims call
 	BinaryOK        bool     // it exists and is executable
 	Missing         []string // hook names without a shim
+	Adopted         []string // adopted repos (absolute top-level paths)
 }
 
 func globalHooksPath(ctx context.Context) string {
@@ -84,7 +86,11 @@ func Install(ctx context.Context, o Options) error {
 			_ = os.Remove(filepath.Join(o.Dir, e.Name()))
 		}
 	}
-	b, _ := json.MarshalIndent(State{Prev: prev, Binary: o.Binary, InstalledAt: time.Now().UTC()}, "", "  ")
+	var adopted []string
+	if st, err := readState(o.StatePath); err == nil {
+		adopted = st.Adopted
+	}
+	b, _ := json.MarshalIndent(State{Prev: prev, Binary: o.Binary, InstalledAt: time.Now().UTC(), Adopted: adopted}, "", "  ")
 	if err := tools.WriteFileAtomic(o.StatePath, append(b, '\n'), 0o600); err != nil {
 		return err
 	}
@@ -98,6 +104,12 @@ func Uninstall(ctx context.Context, o Options) error {
 	st, err := readState(o.StatePath)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
+	}
+	var relErrs []error
+	for _, repo := range st.Adopted {
+		if rerr := Release(ctx, o, repo); rerr != nil {
+			relErrs = append(relErrs, rerr)
+		}
 	}
 	if filepath.Clean(globalHooksPath(ctx)) == filepath.Clean(o.Dir) {
 		if st.Prev != "" {
@@ -115,7 +127,7 @@ func Uninstall(ctx context.Context, o Options) error {
 	if err := os.Remove(o.StatePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return nil
+	return errors.Join(relErrs...)
 }
 
 // GetStatus inspects the installation.
@@ -123,7 +135,7 @@ func GetStatus(ctx context.Context, o Options) (Status, error) {
 	s := Status{GlobalHooksPath: globalHooksPath(ctx)}
 	s.Installed = s.GlobalHooksPath != "" && filepath.Clean(s.GlobalHooksPath) == filepath.Clean(o.Dir)
 	if st, err := readState(o.StatePath); err == nil {
-		s.Prev, s.Binary = st.Prev, st.Binary
+		s.Prev, s.Binary, s.Adopted = st.Prev, st.Binary, st.Adopted
 	}
 	if fi, err := os.Stat(s.Binary); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 		s.BinaryOK = true

@@ -139,6 +139,10 @@ func inspect(ctx context.Context, dir string) (Clone, error) {
 		}
 	}
 	c.LocalHooksPath, _ = gitx.Run(ctx, dir, "config", "--local", "--get", "core.hooksPath")
+	if prev, _ := gitx.Run(ctx, dir, "config", "--local", "--get", "docket.prevHooksPath"); prev != "" {
+		c.Adopted = true
+		c.LocalHooksPath = ""
+	}
 	branches, err := gitx.Run(ctx, dir, "for-each-ref", "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(objectname)", "refs/heads")
 	if err != nil {
 		return c, err

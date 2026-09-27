@@ -108,6 +108,25 @@ func TestScan(t *testing.T) {
 	}
 }
 
+func TestScanAdoptedClone(t *testing.T) {
+	testgit.Env(t)
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	a := filepath.Join(root, "a")
+	os.MkdirAll(a, 0o755)
+	testgit.Git(t, a, "init", "-q", "-b", "main")
+	testgit.Commit(t, a, "one", "x")
+	testgit.Git(t, a, "config", "--local", "core.hooksPath", "/some/shim/dir")
+	testgit.Git(t, a, "config", "--local", "docket.prevHooksPath", ".husky/_")
+	snap, errs := Scan(ctx, []string{root}, "mbp")
+	if len(errs) != 0 || len(snap.Clones) != 1 {
+		t.Fatalf("clones %+v errs %v", snap.Clones, errs)
+	}
+	c := snap.Clones[0]
+	if !c.Adopted || c.LocalHooksPath != "" {
+		t.Errorf("adopted clone %+v, want Adopted and empty LocalHooksPath", c)
+	}
+}
+
 func TestScanBareWithWorktrees(t *testing.T) {
 	testgit.Env(t)
 	root, _ := filepath.EvalSymlinks(t.TempDir())
