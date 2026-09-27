@@ -19,7 +19,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 			{Key: "judge", Heading: "Judge"},
 		},
 	})
-	for _, c := range commands() {
+	for _, c := range commands(stdin) {
 		a.Register(c)
 	}
 	return a.Dispatch(args, out, errw)
