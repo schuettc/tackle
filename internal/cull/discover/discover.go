@@ -143,9 +143,11 @@ var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 // returns the changed line ranges per file, plus untracked test files as
 // whole-file additions. A base that doesn't exist, or root not being a git
 // repository, is reported as an error naming base and including git's
-// message.
+// message. Prefixes, external diff and relative mode are pinned on the
+// command line so user git config (diff.mnemonicPrefix, diff.noprefix,
+// diff.external, diff.relative) can't change the paths parsed here.
 func Diff(root, base string) (Changes, error) {
-	cmd := exec.Command("git", "-c", "core.quotePath=false", "diff", "--no-color", "-U0", base, "--")
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", "-U0", base, "--")
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -317,3 +317,42 @@ func TestRoot(t *testing.T) {
 		t.Errorf("Root(notRepo) = %q, want %q (the absolute path itself)", got2, notRepo)
 	}
 }
+
+// TestDiffIgnoresUserDiffConfig: the user's git diff settings must not
+// change the paths Diff parses. mnemonicPrefix turns b/ into w/, noprefix
+// drops prefixes (so a top-level b/ directory would be trimmed), and an
+// external diff replaces the output format entirely.
+func TestDiffIgnoresUserDiffConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  [][2]string
+	}{
+		{"mnemonicPrefix", [][2]string{{"diff.mnemonicPrefix", "true"}}},
+		{"noprefix", [][2]string{{"diff.noprefix", "true"}}},
+		{"both", [][2]string{{"diff.mnemonicPrefix", "true"}, {"diff.noprefix", "true"}}},
+		{"external", [][2]string{{"diff.external", "true"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, cfg := newGitRepo(t)
+			for _, kv := range tc.cfg {
+				runGit(t, dir, cfg, "config", kv[0], kv[1])
+			}
+			writeFile(t, dir, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\tx := 1\n\t_ = x\n}\n")
+			writeFile(t, dir, "b/calc_test.go", "package b\n\nfunc TestB(t *testing.T) {\n\tx := 1\n\t_ = x\n}\n")
+			runGit(t, dir, cfg, "add", ".")
+			runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+			base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+			writeFile(t, dir, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\tx := 2\n\t_ = x\n}\n")
+			writeFile(t, dir, "b/calc_test.go", "package b\n\nfunc TestB(t *testing.T) {\n\tx := 2\n\t_ = x\n}\n")
+
+			changes, err := Diff(dir, base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := Changes{"pkg/calc_test.go": {{4, 4}}, "b/calc_test.go": {{4, 4}}}
+			if !reflect.DeepEqual(changes, want) {
+				t.Fatalf("Diff() = %v, want %v", changes, want)
+			}
+		})
+	}
+}
