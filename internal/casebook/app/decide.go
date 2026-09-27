@@ -26,10 +26,12 @@ func (a *App) Actor() string {
 
 // DecideOptions are the optional parts of a decision.
 type DecideOptions struct {
-	Until  string
-	Note   string
-	By     string // overrides Actor()
-	NoPush bool
+	Until      string
+	Note       string
+	By         string // overrides Actor()
+	ProposedBy string // who proposed it, when accepting a proposal
+	Rule       string // the rule that proposed it, if any
+	NoPush     bool
 }
 
 func (a *App) decision(k item.Key, disposition string, o DecideOptions) (item.Decision, error) {
@@ -37,7 +39,8 @@ func (a *App) decision(k item.Key, disposition string, o DecideOptions) (item.De
 	if by == "" {
 		by = a.Actor()
 	}
-	d := item.Decision{Disposition: item.Disposition(disposition), Until: o.Until, Note: o.Note, DecidedBy: by, DecidedAt: a.Now().UTC()}
+	d := item.Decision{Disposition: item.Disposition(disposition), Until: o.Until, Note: o.Note, DecidedBy: by, DecidedAt: a.Now().UTC(),
+		ProposedBy: o.ProposedBy, Rule: o.Rule}
 	return d, d.Validate(k.Kind)
 }
 
@@ -85,6 +88,10 @@ func (a *App) DecideBatch(ctx context.Context, entries []TriageEntry, o DecideOp
 	}
 	return n, errs, pushed
 }
+
+// Push sends local commits (decisions made with NoPush) to the casebook remote.
+// pushed is false, with no error, when the remote is unreachable.
+func (a *App) Push(ctx context.Context) (bool, error) { return a.push(ctx) }
 
 func (a *App) push(ctx context.Context) (bool, error) {
 	res, err := a.Repo.Sync(ctx)

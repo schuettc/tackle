@@ -40,6 +40,11 @@ func Open(gh observe.Runner) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w (run `casebook init %s` to re-clone it)", err, cfg.CasebookRemote)
 	}
+	// An older repo is upgraded in place (one local commit, pushed by the next
+	// sync or decision). Every binary that can write it is this version or newer.
+	if _, err := repo.Upgrade(context.Background()); err != nil {
+		return nil, fmt.Errorf("upgrading casebook repo format: %w", err)
+	}
 	return &App{Cfg: cfg, Repo: repo, Gh: gh, Now: time.Now}, nil
 }
 

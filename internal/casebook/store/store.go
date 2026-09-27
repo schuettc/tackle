@@ -22,13 +22,16 @@ import (
 
 // FormatVersion is the casebook repo format this binary reads and writes
 // (casebook.toml format_version). Documented in internal/casebook/FORMAT.md.
-const FormatVersion = 1
+const FormatVersion = 2
 
 const readme = "# casebook\n\nThis repository is written by `casebook sync`. Views appear here after the first sync.\n"
 
 // Repo is an open casebook data repository.
 type Repo struct {
 	Dir string
+	// Version is the format_version read from casebook.toml when opened; Upgrade
+	// raises it to FormatVersion.
+	Version int
 }
 
 type meta struct {
@@ -54,7 +57,7 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 	if _, err := gitx.Run(ctx, dir, "symbolic-ref", "HEAD", "refs/heads/main"); err != nil {
 		return nil, err
 	}
-	r := &Repo{Dir: dir}
+	r := &Repo{Dir: dir, Version: FormatVersion}
 	pol, err := item.EncodePolicy(item.DefaultPolicy())
 	if err != nil {
 		return nil, err
@@ -90,7 +93,26 @@ func Open(dir string) (*Repo, error) {
 	if m.FormatVersion < 1 || m.FormatVersion > FormatVersion {
 		return nil, fmt.Errorf("casebook.toml: format_version %d is not supported (max %d); update casebook", m.FormatVersion, FormatVersion)
 	}
-	return &Repo{Dir: dir}, nil
+	return &Repo{Dir: dir, Version: m.FormatVersion}, nil
+}
+
+// Upgrade raises an older repo to FormatVersion with one commit ("upgrade
+// casebook repo to format N"). Format 2 only adds optional decision fields, so
+// no item file changes; older binaries refuse the repo afterwards. It does
+// not push. A repo already at FormatVersion is left alone.
+func (r *Repo) Upgrade(ctx context.Context) (bool, error) {
+	if r.Version >= FormatVersion {
+		return false, nil
+	}
+	b := fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion)
+	if _, err := r.WriteFile("casebook.toml", b); err != nil {
+		return false, err
+	}
+	if _, err := r.Commit(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion)); err != nil {
+		return false, err
+	}
+	r.Version = FormatVersion
+	return true, nil
 }
 
 func (r *Repo) abs(rel string) string { return filepath.Join(r.Dir, filepath.FromSlash(rel)) }

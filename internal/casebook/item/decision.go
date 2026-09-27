@@ -38,22 +38,27 @@ func Allowed(k Kind) []Disposition { return slices.Clone(allowed[k]) }
 // Decision is the only thing humans and agents write: one per item, in the
 // item's decision file.
 type Decision struct {
-	Disposition Disposition `toml:"disposition"`
-	Note        string      `toml:"note,omitempty"`
-	Until       string      `toml:"until,omitempty"`
-	DecidedBy   string      `toml:"decided_by"`
-	DecidedAt   time.Time   `toml:"decided_at"`
-	Conflict    *Conflict   `toml:"conflict,omitempty"`
+	Disposition Disposition `toml:"disposition" json:"disposition"`
+	Note        string      `toml:"note,omitempty" json:"note,omitempty"`
+	Until       string      `toml:"until,omitempty" json:"until,omitempty"`
+	DecidedBy   string      `toml:"decided_by" json:"decided_by"`
+	DecidedAt   time.Time   `toml:"decided_at" json:"decided_at"`
+	// ProposedBy names who proposed this decision when it was accepted from a
+	// proposal: "pi:<session>", "claude:<session>" or "rule:<id>". Format 2.
+	ProposedBy string `toml:"proposed_by,omitempty" json:"proposed_by,omitempty"`
+	// Rule is the standing rule that proposed it, when one did. Format 2.
+	Rule     string    `toml:"rule,omitempty" json:"rule,omitempty"`
+	Conflict *Conflict `toml:"conflict,omitempty" json:"conflict,omitempty"`
 }
 
 // Conflict records the losing side of a decision race (the later decided_at
 // wins). A decision with a conflict has status conflict until decided again.
 type Conflict struct {
-	Disposition Disposition `toml:"disposition"`
-	Note        string      `toml:"note,omitempty"`
-	Until       string      `toml:"until,omitempty"`
-	DecidedBy   string      `toml:"decided_by"`
-	DecidedAt   time.Time   `toml:"decided_at"`
+	Disposition Disposition `toml:"disposition" json:"disposition"`
+	Note        string      `toml:"note,omitempty" json:"note,omitempty"`
+	Until       string      `toml:"until,omitempty" json:"until,omitempty"`
+	DecidedBy   string      `toml:"decided_by" json:"decided_by"`
+	DecidedAt   time.Time   `toml:"decided_at" json:"decided_at"`
 }
 
 // Validate checks d for an item of kind k.

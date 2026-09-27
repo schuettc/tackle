@@ -1,6 +1,7 @@
 package item
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -72,5 +73,34 @@ func TestValidate(t *testing.T) {
 	}
 	if err := (Decision{Disposition: Keep, DecidedBy: "c"}).Validate(KindRepo); err == nil {
 		t.Error("missing decided_at accepted")
+	}
+}
+
+func TestDecisionFormat2FieldsRoundTrip(t *testing.T) {
+	at := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	d := Decision{Disposition: Close, DecidedBy: "court", DecidedAt: at, ProposedBy: "pi:s-1", Rule: "stale-bots"}
+	b, err := EncodeDecision(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `proposed_by = "pi:s-1"`) || !strings.Contains(string(b), `rule = "stale-bots"`) {
+		t.Fatalf("encoded:\n%s", b)
+	}
+	got, err := DecodeDecision(b)
+	if err != nil || got.ProposedBy != "pi:s-1" || got.Rule != "stale-bots" {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	plain, _ := EncodeDecision(Decision{Disposition: Keep, DecidedBy: "court", DecidedAt: at})
+	if strings.Contains(string(plain), "proposed_by") || strings.Contains(string(plain), "rule") {
+		t.Errorf("empty format-2 fields encoded:\n%s", plain)
+	}
+}
+
+func TestDecisionJSONIsSnakeCase(t *testing.T) {
+	b, _ := json.Marshal(Decision{Disposition: Keep, DecidedBy: "court", ProposedBy: "rule:x"})
+	for _, want := range []string{`"disposition":"keep"`, `"decided_by":"court"`, `"proposed_by":"rule:x"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("json %s lacks %s", b, want)
+		}
 	}
 }
