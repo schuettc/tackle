@@ -18,10 +18,10 @@ const (
 
 // Observed is what the docket last saw of an item.
 type Observed struct {
-	Known    bool   // there is an observation at all
-	Exists   bool   // repo/branch/worktree present; pr/issue found
-	Archived bool   // repo
-	State    string // pr/issue: OPEN, CLOSED or MERGED
+	Known    bool   `json:"known"`              // there is an observation at all
+	Exists   bool   `json:"exists"`             // repo/branch/worktree present; pr/issue found
+	Archived bool   `json:"archived,omitempty"` // repo
+	State    string `json:"state,omitempty"`    // pr/issue: OPEN, CLOSED or MERGED
 }
 
 // Satisfied reports whether obs already reflects disposition d. Dispositions
