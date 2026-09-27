@@ -41,6 +41,9 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 	if len(args) > 0 && args[0] == "hook" {
 		return hooks.Main(args[1:], stdin)
 	}
+	if len(args) > 0 && args[0] == "channel" {
+		return channelMain(stdin, out, errw)
+	}
 	a := tools.New(tools.Config{
 		Name:    "casebook",
 		Domain:  "tackle.tools",
@@ -52,7 +55,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 			{Key: "plumbing", Heading: "Plumbing (called by hooks and harnesses)"},
 		},
 	})
-	for _, c := range commands(stdin) {
+	for _, c := range append(commands(stdin), workbenchCommands(stdin)...) {
 		a.Register(c)
 	}
 	return a.Dispatch(args, out, errw)
