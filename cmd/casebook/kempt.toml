@@ -1,0 +1,51 @@
+# kempt manifest for casebook — kept separate from any dotfiles manifest.
+#
+#   kempt apply   -manifest cmd/casebook/kempt.toml -packages casebook
+#   kempt upgrade -manifest cmd/casebook/kempt.toml -packages casebook
+#
+# -packages casebook is required: without it kempt applies the selection saved by
+# your dotfiles `kempt init`, which does not contain "casebook".
+# After the first apply: `casebook init` (defaults to, and if needed creates, a private `<you>/casebook-data`)
+# and `casebook hooks install` (see internal/casebook/FORMAT.md). Needs kempt >= 0.5.3.
+
+[kempt]
+spec = 1
+
+[packages.casebook]
+description = "casebook: the fate of every repo, PR, issue, branch and worktree; journals git/gh activity"
+only = { os = "darwin" }
+
+  # The binary, from the family download contract (verified against .sha256).
+  [[packages.casebook.download]]
+  site = "tackle.tools"
+  tool = "casebook"
+  bin = "casebook"
+
+  # Claude Code: journal Bash tool calls; brief the session on its repo.
+  [[packages.casebook.json-merge]]
+  file = "~/.claude/settings.json"
+  merge = { hooks = { PostToolUse = [ { matcher = "Bash", hooks = [ { type = "command", command = "~/.local/bin/casebook record --harness claude" } ] } ] } }
+
+  [[packages.casebook.json-merge]]
+  file = "~/.claude/settings.json"
+  merge = { hooks = { SessionStart = [ { matcher = "startup|resume", hooks = [ { type = "command", command = "~/.local/bin/casebook brief" } ] } ] } }
+
+  # pi: journal bash tool calls with the pi session id, brief the first turn,
+  # background `casebook sync --no-github` at session start/end.
+  [[packages.casebook.install]]
+  pi = ["npm:pi-casebook"]
+
+  # Full sync (including the GitHub refresh) every 30 minutes.
+  [[packages.casebook.service]]
+  label = "tools.tackle.casebook.sync"
+  program = ["/bin/zsh", "-lc", "exec \"$HOME/.local/bin/casebook\" sync"]
+  keep-alive = false
+  run-at-load = true
+  start-interval = 1800
+  process-type = "Background"
+  session-type = "Aqua"
+  stdout = "~/.local/state/casebook/sync.log"
+  stderr = "~/.local/state/casebook/sync.log"
+
+  [[packages.casebook.verify]]
+  command-exists = "casebook"
