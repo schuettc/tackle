@@ -16,8 +16,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 		Domain:  "tackle.tools",
 		Version: tools.Version{Number: version.Number(), Commit: version.Commit(), Date: version.Date()},
 		Groups: []tools.Group{
-			{Key: "corpus", Heading: "Corpus"},
-			{Key: "eval", Heading: "Evaluate"},
+			{Key: "judge", Heading: "Judge"},
 		},
 	})
 	for _, c := range commands() {
