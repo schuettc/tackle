@@ -398,3 +398,64 @@ func TestCheckPathThroughSymlink(t *testing.T) {
 		t.Fatalf("tests = %+v, want TestA found through a symlinked path", report.Tests)
 	}
 }
+
+// TestCheckDiffAppliesSuiteFilter: --diff must never judge a file suite mode
+// wouldn't: files under skip dirs (testdata/, vendor/), files matching
+// exclude, and files outside the [path] argument — tracked or untracked.
+func TestCheckDiffAppliesSuiteFilter(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	dir, cfg := newGitRepo(t)
+	writeFile(t, dir, ".cull.toml", "exclude = [\"svc/gen/**\"]\n")
+	py := func(name string) string { return "def " + name + "():\n    assert 1 == 1\n" }
+	writeFile(t, dir, "svc/tests/test_in.py", py("test_in_old"))
+	writeFile(t, dir, "svc/testdata/test_fixture.py", py("test_fixture_old"))
+	writeFile(t, dir, "other/test_out.py", py("test_out_old"))
+	runGit(t, dir, cfg, "add", ".")
+	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+
+	// Tracked changes.
+	writeFile(t, dir, "svc/tests/test_in.py", py("test_in"))
+	writeFile(t, dir, "svc/testdata/test_fixture.py", py("test_fixture"))
+	writeFile(t, dir, "other/test_out.py", py("test_out"))
+	// Untracked files.
+	writeFile(t, dir, "svc/tests/test_new.py", py("test_new"))
+	writeFile(t, dir, "svc/gen/test_generated.py", py("test_generated"))
+	writeFile(t, dir, "svc/vendor/test_vendored.py", py("test_vendored"))
+
+	var stdout bytes.Buffer
+	report, err := Run(context.Background(), nil, Options{Path: filepath.Join(dir, "svc"), Diff: base, DryRun: true, Stdout: &stdout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"test_in", "test_new"} {
+		if !strings.Contains(out, `"test_name":"`+want+`"`) {
+			t.Errorf("dry-run output missing %s:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"test_fixture", "test_out", "test_generated", "test_vendored"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("dry-run output includes %s, which suite mode would never send:\n%s", bad, out)
+		}
+	}
+	if len(report.Skipped) != 0 {
+		t.Errorf("skipped = %+v", report.Skipped)
+	}
+}
+
+func TestSubPathDotDotPrefixedDir(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "..foo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := subPath(root, filepath.Join(root, "..foo"))
+	if err != nil || got != "..foo" {
+		t.Fatalf("subPath(..foo) = %q, %v; want \"..foo\"", got, err)
+	}
+	if got, _ := subPath(root, filepath.Dir(root)); got != "" {
+		t.Errorf("subPath(parent) = %q, want \"\"", got)
+	}
+}

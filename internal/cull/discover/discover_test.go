@@ -113,7 +113,7 @@ func TestDiffModifiedAndNew(t *testing.T) {
 	// An untracked test file.
 	writeFile(t, dir, "pkg/untracked_test.go", "package pkg\n\nfunc TestC(t *testing.T) {}\n")
 
-	changes, err := Diff(dir, base)
+	changes, err := Diff(dir, base, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestDiffUnicodeFilenames(t *testing.T) {
 	// An untracked test file with a non-ASCII name.
 	writeFile(t, dir, "pkg/niño_test.go", "package pkg\n\nfunc TestC(t *testing.T) {}\n")
 
-	changes, err := Diff(dir, base)
+	changes, err := Diff(dir, base, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestDiffIgnoresNonTestFiles(t *testing.T) {
 
 	writeFile(t, dir, "pkg/calc.go", "package pkg\n\nfunc Add(a, b int) int { return a + b + 0 }\n")
 
-	changes, err := Diff(dir, base)
+	changes, err := Diff(dir, base, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +207,7 @@ func TestDiffDeletionOnly(t *testing.T) {
 	// Delete lines 4-5 (the body of TestA) without adding anything.
 	writeFile(t, dir, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n}\n\nfunc TestB(t *testing.T) {}\n")
 
-	changes, err := Diff(dir, base)
+	changes, err := Diff(dir, base, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestDiffBadBase(t *testing.T) {
 	runGit(t, dir, cfg, "add", ".")
 	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
 
-	_, err := Diff(dir, "not-a-real-base-ref")
+	_, err := Diff(dir, "not-a-real-base-ref", "", nil)
 	if err == nil {
 		t.Fatal("Diff() with a bad base = nil error, want error")
 	}
@@ -265,7 +265,7 @@ func TestDiffBadBase(t *testing.T) {
 
 func TestDiffNotARepo(t *testing.T) {
 	dir := t.TempDir()
-	_, err := Diff(dir, "HEAD")
+	_, err := Diff(dir, "HEAD", "", nil)
 	if err == nil {
 		t.Fatal("Diff() outside a git repo = nil error, want error")
 	}
@@ -345,7 +345,7 @@ func TestDiffIgnoresUserDiffConfig(t *testing.T) {
 			writeFile(t, dir, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\tx := 2\n\t_ = x\n}\n")
 			writeFile(t, dir, "b/calc_test.go", "package b\n\nfunc TestB(t *testing.T) {\n\tx := 2\n\t_ = x\n}\n")
 
-			changes, err := Diff(dir, base)
+			changes, err := Diff(dir, base, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -354,5 +354,29 @@ func TestDiffIgnoresUserDiffConfig(t *testing.T) {
 				t.Fatalf("Diff() = %v, want %v", changes, want)
 			}
 		})
+	}
+}
+
+func TestKeep(t *testing.T) {
+	for _, tc := range []struct {
+		sub  string
+		rel  string
+		want bool
+	}{
+		{"", "pkg/calc_test.go", true},
+		{"", "pkg/calc.go", false},
+		{"", "pkg/testdata/test_x.py", false},
+		{"", ".worktrees/wt/a_test.go", false},
+		{"", "node_modules/p/a.test.ts", false},
+		{"", "gen/test_x.py", false}, // excluded
+		{"svc", "svc/test_x.py", true},
+		{"svc", "svcx/test_x.py", false},
+		{"svc", "other/test_x.py", false},
+		{"svc/testdata", "svc/testdata/test_x.py", true}, // asked for explicitly, as Suite does
+		{"..foo", "..foo/test_x.py", true},
+	} {
+		if got := Keep(tc.sub, []string{"gen/**"}, tc.rel); got != tc.want {
+			t.Errorf("Keep(%q, %q) = %v, want %v", tc.sub, tc.rel, got, tc.want)
+		}
 	}
 }

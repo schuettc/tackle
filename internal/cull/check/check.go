@@ -91,7 +91,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	var changes discover.Changes
 	if opt.Diff != "" {
 		mode = "diff"
-		changes, err = discover.Diff(root, opt.Diff)
+		changes, err = discover.Diff(root, opt.Diff, sub, cfg.Exclude)
 		if err != nil {
 			return Report{}, err
 		}
@@ -257,7 +257,7 @@ func subPath(root, p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if rel == "." || strings.HasPrefix(rel, "..") {
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", nil
 	}
 	return rel, nil

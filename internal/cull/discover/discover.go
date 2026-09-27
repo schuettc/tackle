@@ -67,12 +67,7 @@ func Suite(root, sub string, exclude []string) ([]string, error) {
 			return rerr
 		}
 		rel = filepath.ToSlash(rel)
-		for _, pat := range exclude {
-			if globMatch(pat, rel) {
-				return nil
-			}
-		}
-		if extract.ForFile(rel) != nil {
+		if Keep(sub, exclude, rel) {
 			out = append(out, rel)
 		}
 		return nil
@@ -82,6 +77,34 @@ func Suite(root, sub string, exclude []string) ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// Keep is the one path filter Suite and Diff share, so --diff never
+// selects a file suite mode wouldn't: rel (project-root-relative,
+// '/'-separated) must be under sub (root-relative; "" is the whole
+// project), have no skipDirs directory below sub, match no exclude glob,
+// and be a test file some registered extractor handles.
+func Keep(sub string, exclude []string, rel string) bool {
+	sub = strings.Trim(filepath.ToSlash(sub), "/")
+	below := rel
+	if sub != "" {
+		if !strings.HasPrefix(rel, sub+"/") {
+			return false
+		}
+		below = strings.TrimPrefix(rel, sub+"/")
+	}
+	parts := strings.Split(below, "/")
+	for _, part := range parts[:len(parts)-1] {
+		if skipDirs[part] {
+			return false
+		}
+	}
+	for _, pat := range exclude {
+		if globMatch(pat, rel) {
+			return false
+		}
+	}
+	return extract.ForFile(rel) != nil
 }
 
 // globMatch reports whether name matches a doublestar-style glob pattern:
@@ -143,10 +166,11 @@ var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@`)
 // returns the changed line ranges per file, plus untracked test files as
 // whole-file additions. A base that doesn't exist, or root not being a git
 // repository, is reported as an error naming base and including git's
-// message. Prefixes, external diff and relative mode are pinned on the
+// message. Only files passing Keep(sub, exclude, ·) are returned.
+// Prefixes, external diff and relative mode are pinned on the
 // command line so user git config (diff.mnemonicPrefix, diff.noprefix,
 // diff.external, diff.relative) can't change the paths parsed here.
-func Diff(root, base string) (Changes, error) {
+func Diff(root, base, sub string, exclude []string) (Changes, error) {
 	cmd := exec.Command("git", "-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-relative", "--src-prefix=a/", "--dst-prefix=b/", "-U0", base, "--")
 	cmd.Dir = root
 	var stdout, stderr bytes.Buffer
@@ -168,7 +192,7 @@ func Diff(root, base string) (Changes, error) {
 			}
 			p = unquotePath(p)
 			current = strings.TrimPrefix(p, "b/")
-			if extract.ForFile(current) == nil {
+			if !Keep(sub, exclude, current) {
 				current = ""
 			}
 		case strings.HasPrefix(line, "@@ "):
@@ -201,7 +225,7 @@ func Diff(root, base string) (Changes, error) {
 		return nil, err
 	}
 	for _, rel := range untracked {
-		if extract.ForFile(rel) != nil {
+		if Keep(sub, exclude, rel) {
 			changes[rel] = nil
 		}
 	}
