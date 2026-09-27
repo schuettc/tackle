@@ -93,26 +93,42 @@ func mkCase(id, file, body string) cases.TestCase {
 }
 
 func TestGroupsNoChaining(t *testing.T) {
-	// a and b are similar; b and c are similar; a and c are not. No
-	// chaining means a,b,c should NOT all end up in one group: c only
-	// joins a cluster if it's similar to EVERY member.
-	body := func(tail string) string {
-		return "def test():\n    x = 1\n    y = 2\n    z = 3\n    w = 4\n    v = 5\n    u = 6\n    assert x == " + tail + "\n"
+	// A real chaining case: a~b and b~c clear the 0.85 threshold, a~c does
+	// not. A chaining (single-link) grouping would put all three together;
+	// §5.1 requires every member to be similar to every other, so a and c
+	// must never share a group, whatever the input order.
+	body := func(head, tail string) string {
+		return "def test():\n    " + head + " = make_widget()\n    result = compute(widget)\n    check_value(result)\n    " + tail + " = finish(result)\n"
 	}
-	a := mkCase("a", "f.py", body("1"))
-	b := mkCase("b", "f.py", body("2"))
-	c := mkCase("c", "f.py", "def test():\n    q = 99\n    r = 'totally different'\n    s = [1,2,3,4,5,6,7]\n    return q\n")
+	a := mkCase("a", "f.py", body("alphaalpha", "omega"))
+	b := mkCase("b", "f.py", body("widget", "omega"))
+	c := mkCase("c", "f.py", body("widget", "zetazetazeta"))
+	ratio := func(x, y cases.TestCase) float64 { return Ratio(Norm("python", x.Body), Norm("python", y.Body)) }
+	if r := ratio(a, b); r < 0.85 {
+		t.Fatalf("fixture: Ratio(a,b) = %v, want >= 0.85", r)
+	}
+	if r := ratio(b, c); r < 0.85 {
+		t.Fatalf("fixture: Ratio(b,c) = %v, want >= 0.85", r)
+	}
+	if r := ratio(a, c); r >= 0.85 {
+		t.Fatalf("fixture: Ratio(a,c) = %v, want < 0.85", r)
+	}
 
-	groups := Groups([]cases.TestCase{a, b, c})
-	if len(groups) != 1 {
-		t.Fatalf("expected 1 group, got %d: %+v", len(groups), groups)
-	}
-	if len(groups[0].Tests) != 2 {
-		t.Fatalf("expected group of 2 (no chaining to c), got %d", len(groups[0].Tests))
-	}
-	ids := []string{groups[0].Tests[0].ID, groups[0].Tests[1].ID}
-	if ids[0] != "a" || ids[1] != "b" {
-		t.Errorf("expected members [a b] sorted by id, got %v", ids)
+	orders := [][]cases.TestCase{{a, b, c}, {c, b, a}, {b, a, c}, {b, c, a}, {a, c, b}, {c, a, b}}
+	for _, order := range orders {
+		groups := Groups(order)
+		if len(groups) != 1 || len(groups[0].Tests) != 2 {
+			t.Fatalf("order %s%s%s: groups = %+v, want one pair", order[0].ID, order[1].ID, order[2].ID, groups)
+		}
+		for _, g := range groups {
+			in := map[string]bool{}
+			for _, m := range g.Tests {
+				in[m.ID] = true
+			}
+			if in["a"] && in["c"] {
+				t.Errorf("order %s%s%s: a and c grouped together (chaining): %+v", order[0].ID, order[1].ID, order[2].ID, g)
+			}
+		}
 	}
 }
 
