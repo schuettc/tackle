@@ -44,11 +44,16 @@ type Item struct {
 	Labels     []string          `json:"labels,omitempty"`
 	Body       string            `json:"body,omitempty"`
 	Landed     string            `json:"landed,omitempty"`      // combined across machines: "all-machines", "some-machines", "none", "unknown"
-	LandedHow  string            `json:"landed_how,omitempty"`  // reasons seen, e.g. "in main", "merged #7"
+	LandedHow  string            `json:"landed_how,omitempty"`  // machine-readable how type: "default-branch", "merged-pr", or ";" joined when both
 	LandedTips map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
-	fresh   bool // observed from a fresh owner listing
-	signals item.Signals
+	fresh         bool // observed from a fresh owner listing
+	signals       item.Signals
+	goneUpstream  bool   // branch: remote upstream was deleted
+	worktreeState string // branch: "dirty", "clean", or "" (none)
+	dirty         bool   // worktree: has uncommitted changes
+	openPRs       int    // repo: number of open PRs
+	openIssues    int    // repo: number of open issues
 }
 
 // Result is a build.
@@ -84,18 +89,20 @@ type machineLanded struct {
 	Landed      string // "in main", "merged #N", or "" (not landed)
 	LandedState string // "yes" | "no" | "unknown" | "" (empty = snapshot written before LandedState existed)
 	Tip         string // tip SHA; non-empty only when LandedState == "yes"
+	HowType     string // "default-branch" or "merged-pr" (machine-readable; from Branch.LandedHow)
 }
 
 type builder struct {
-	in           Input
-	user         string
-	items        map[string]*Item
-	f            facts
-	local        map[string]bool            // branch keys present in some snapshot
-	fresh        map[string]bool            // lower-case owners with a fresh, complete listing
-	stale        map[string]bool            // lower-case owners whose listing is stale
-	snaps        map[string]bool            // machines with a snapshot
-	branchLanded map[string][]machineLanded // branch item ID → per-machine verdicts
+	in             Input
+	user           string
+	items          map[string]*Item
+	f              facts
+	local          map[string]bool            // branch keys present in some snapshot
+	fresh          map[string]bool            // lower-case owners with a fresh, complete listing
+	stale          map[string]bool            // lower-case owners whose listing is stale
+	snaps          map[string]bool            // machines with a snapshot
+	branchLanded   map[string][]machineLanded // branch item ID → per-machine verdicts
+	branchWorktree map[string]string          // branch item ID → "dirty" or "clean"
 }
 
 func (b *builder) get(k item.Key) *Item {
@@ -123,11 +130,12 @@ func Build(in Input) Result {
 			prs:   map[string]observe.PRObs{},
 			refs:  in.GitHub.Refs,
 		},
-		local:        map[string]bool{},
-		fresh:        map[string]bool{},
-		stale:        map[string]bool{},
-		snaps:        map[string]bool{},
-		branchLanded: map[string][]machineLanded{},
+		local:          map[string]bool{},
+		fresh:          map[string]bool{},
+		stale:          map[string]bool{},
+		snaps:          map[string]bool{},
+		branchLanded:   map[string][]machineLanded{},
+		branchWorktree: map[string]string{},
 	}
 	b.f.items = b.items
 	var res Result
@@ -184,6 +192,7 @@ func (b *builder) owners(res *Result) {
 			if r.Archived {
 				it.Evidence = append(it.Evidence, "archived")
 			}
+			it.openPRs, it.openIssues = len(r.PRs), len(r.Issues)
 			if n := len(r.PRs); n > 0 {
 				it.Evidence = append(it.Evidence, fmt.Sprintf("%d open PRs", n))
 			}
@@ -253,6 +262,7 @@ func (b *builder) snapshots() {
 				it.fresh, it.Repo, it.Title = true, c.Repo, w.Branch
 				it.Locations = append(it.Locations, where)
 				if w.Dirty {
+					it.dirty = true
 					it.Evidence = append(it.Evidence, "uncommitted changes")
 				}
 				if br, ok := branches[w.Branch]; ok {
@@ -261,6 +271,15 @@ func (b *builder) snapshots() {
 					}
 					if !br.TipAt.IsZero() {
 						it.UpdatedAt = br.TipAt
+					}
+				}
+				// Track worktree state for the branch item.
+				if c.Repo != "" && w.Branch != "" {
+					bk := item.BranchKey(c.Repo, w.Branch).String()
+					if w.Dirty {
+						b.branchWorktree[bk] = "dirty" // dirty overrides clean
+					} else if b.branchWorktree[bk] == "" {
+						b.branchWorktree[bk] = "clean"
 					}
 				}
 			}
@@ -297,11 +316,13 @@ func (b *builder) snapshots() {
 					Landed:      br.Landed,
 					LandedState: ls,
 					Tip:         br.LandedTip, // non-empty only when LandedState=="yes"
+					HowType:     br.LandedHow, // "default-branch" or "merged-pr"
 				})
 				if br.Gone {
 					// Upstream deleted on the remote: usually a squash-merged PR
 					// branch. Its local-only commits are not work at risk.
 					it.Evidence = append(it.Evidence, "upstream branch deleted (likely merged) on "+where)
+					it.goneUpstream = true
 					continue
 				}
 				if br.Unpushed > 0 {
@@ -338,9 +359,11 @@ func (b *builder) finishLanded(it *Item) {
 		notLandedCount int
 		unknownCount   int
 		reasons        []string
+		howTypes       []string
 		tips           = map[string]string{}
 	)
 	seen := map[string]bool{}
+	seenHow := map[string]bool{}
 	for _, ml := range verdicts {
 		switch ml.LandedState {
 		case "yes":
@@ -352,6 +375,10 @@ func (b *builder) finishLanded(it *Item) {
 				seen[ml.Landed] = true
 				reasons = append(reasons, ml.Landed)
 			}
+			if ml.HowType != "" && !seenHow[ml.HowType] {
+				seenHow[ml.HowType] = true
+				howTypes = append(howTypes, ml.HowType)
+			}
 		case "no":
 			notLandedCount++
 		default: // "unknown" or "" (snapshot from before LandedState was added)
@@ -361,7 +388,14 @@ func (b *builder) finishLanded(it *Item) {
 	if len(tips) > 0 {
 		it.LandedTips = tips
 	}
-	if len(reasons) > 0 {
+	// LandedHow stores the machine-readable how type for rule matching
+	// ("default-branch", "merged-pr", or both joined with ";").
+	// Human-readable reasons ("in main", "merged #N") are kept in LandedTips evidence.
+	if len(howTypes) > 0 {
+		it.LandedHow = strings.Join(howTypes, ";")
+	} else if len(reasons) > 0 {
+		// Fallback for old snapshots that set Landed/LandedState but not LandedHow:
+		// preserve the human-readable reason so it's not silently dropped.
 		it.LandedHow = strings.Join(reasons, "; ")
 	}
 	switch {
@@ -415,6 +449,12 @@ func (b *builder) finish(it *Item) {
 		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)
 	}
 	sort.Strings(it.Locations)
+	// Set worktreeState on branch items from the worktree tracking map.
+	if it.Kind == item.KindBranch {
+		if state, ok := b.branchWorktree[it.ID]; ok {
+			it.worktreeState = state
+		}
+	}
 	b.finishLanded(it)
 }
 
