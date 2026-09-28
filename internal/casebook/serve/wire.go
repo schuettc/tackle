@@ -3,6 +3,7 @@ package serve
 import (
 	"time"
 
+	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/journal"
 	"github.com/schuettc/tackle/internal/casebook/propose"
@@ -176,4 +177,16 @@ type MatchRow struct {
 // VocabularyView is the response body of GET /api/rules/vocabulary.
 type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`
+}
+
+// JobStepResult is the response body of POST /api/agent/job-step.
+type JobStepResult struct {
+	JobID  int64  `json:"job_id"`
+	StepID int64  `json:"step_id"`
+	State  string `json:"state"`
+}
+
+// JobAskResult is the response body of POST /api/agent/job-ask.
+type JobAskResult struct {
+	NeedsYou apply.NeedsYou `json:"needs_you"`
 }

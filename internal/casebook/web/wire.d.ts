@@ -156,6 +156,16 @@ export interface VocabularyView {
   fields: Field[] | null;
 }
 
+export interface JobStepResult {
+  job_id: number;
+  step_id: number;
+  state: string;
+}
+
+export interface JobAskResult {
+  needs_you: NeedsYou;
+}
+
 export interface ItemView {
   key: string;
   kind: string;
@@ -305,6 +315,19 @@ export interface Field {
   type: number;
   ops: string[] | null;
   values: string[] | null;
+}
+
+export interface NeedsYou {
+  id: number;
+  job_id: number;
+  step_id: number;
+  kind: string;
+  question: string;
+  text: string;
+  state: string;
+  answer: string;
+  created_at: string;
+  answered_at?: string;
 }
 
 export interface Decision {

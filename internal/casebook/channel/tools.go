@@ -39,6 +39,10 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"state":{"type":"string","enum":["received","working","answered","declined","failed"]},"text":{"type":"string"}},"required":["ids","state"]}`)},
 		{Name: "casebook_rule_draft", Description: "Create or update a draft rule (Court activates it; you never can). Provide a rule object with id, name, match conditions and a propose block. status must be \"draft\" or omitted; setting it to \"active\" is refused.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"rule id: lower-case letters, digits and hyphens"},"name":{"type":"string"},"match":{"type":"array","items":{"type":"object","properties":{"Field":{"type":"string"},"Op":{"type":"string"},"Value":{"type":"string"}}}},"propose":{"type":"object","properties":{"Disposition":{"type":"string"},"Until":{"type":"string"},"Note":{"type":"string"}}},"note":{"type":"string","description":"a short note about what this rule is for"}},"required":["id","name","match","propose"]}`)},
+		{Name: "casebook_job_step", Description: "Report an apply job step's progress. state: started (beginning work on the step), reported (command dispatched — casebook verifies the outcome), paused (precondition failed; provide detail), failed (command error; provide detail). Only the session the job was approved for may call this.",
+			InputSchema: schema(`{"type":"object","properties":{"job":{"type":"integer","description":"job id"},"step":{"type":"integer","description":"step id"},"state":{"type":"string","enum":["started","reported","paused","failed"]},"detail":{"type":"string","description":"reason for paused or failed"}},"required":["job","step","state"]}`)},
+		{Name: "casebook_job_ask", Description: "Draft public text for an apply step that posts a comment (Posts=true), or ask Court a question mid-job. Opens a needs-you card that Court reviews on the page. Nothing is posted until Court approves. Only the session the job was approved for may call this.",
+			InputSchema: schema(`{"type":"object","properties":{"job":{"type":"integer","description":"job id"},"step":{"type":"integer","description":"step id"},"question":{"type":"string","description":"what you are asking Court to review or approve"},"text":{"type":"string","description":"draft text to post (for posts=true steps) or a question body"}},"required":["job","step","question"]}`)},
 	}
 }
 
@@ -66,6 +70,10 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		Total       int      `json:"total"`
 		IDs         []int64  `json:"ids"`
 		State       string   `json:"state"`
+		Job         int64    `json:"job"`
+		Step        int64    `json:"step"`
+		Detail      string   `json:"detail"`
+		Question    string   `json:"question"`
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -208,6 +216,44 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			}
 			if rule, ok := out["rule"].(map[string]any); ok {
 				return fmt.Sprintf("draft rule %q written (created_by %q)", rule["id"], rule["created_by"]), nil
+			}
+			return pretty(out), nil
+		})
+	case "casebook_job_step":
+		if err := needSession(); err != nil {
+			return "", err
+		}
+		return ch.callSessionBound(ctx, func() (string, error) {
+			body := map[string]any{
+				"session": ch.ID.Session,
+				"job":     a.Job,
+				"step":    a.Step,
+				"state":   a.State,
+				"detail":  a.Detail,
+			}
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/job-step", body, &out)
+			if err != nil {
+				return "", err
+			}
+			return pretty(out), nil
+		})
+	case "casebook_job_ask":
+		if err := needSession(); err != nil {
+			return "", err
+		}
+		return ch.callSessionBound(ctx, func() (string, error) {
+			body := map[string]any{
+				"session":  ch.ID.Session,
+				"job":      a.Job,
+				"step":     a.Step,
+				"question": a.Question,
+				"text":     a.Text,
+			}
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/job-ask", body, &out)
+			if err != nil {
+				return "", err
 			}
 			return pretty(out), nil
 		})

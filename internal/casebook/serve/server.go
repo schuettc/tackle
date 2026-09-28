@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/app"
+	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/bus"
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/db"
@@ -40,6 +41,7 @@ type Server struct {
 	DB    *db.DB
 	Queue *deliver.Queue
 	Props *propose.Store
+	Apply *apply.Store
 	Bus   *bus.Bus
 	Index *Index
 	Now   func() time.Time
@@ -133,7 +135,7 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 // New wires a server over an opened app and database. It marks deliveries a
 // previous serve left in flight as interrupted and builds the index.
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
-	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Bus: bus.New(d), Index: &Index{},
+	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
 		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}}
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
@@ -322,6 +324,8 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
 	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
+	m.HandleFunc("POST /api/agent/job-step", s.agentJobStep)
+	m.HandleFunc("POST /api/agent/job-ask", s.agentJobAsk)
 	// rules
 	m.HandleFunc("GET /api/rules", s.getRules)
 	m.HandleFunc("GET /api/rule", s.getRule)

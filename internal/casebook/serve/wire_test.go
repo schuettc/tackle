@@ -64,6 +64,8 @@ var wireRoots = []any{
 	RepoGroup{},
 	MatchRow{},
 	VocabularyView{},
+	JobStepResult{},
+	JobAskResult{},
 }
 
 const wirePath = "../web/wire.d.ts"

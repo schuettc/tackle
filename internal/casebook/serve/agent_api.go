@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/item"
 )
@@ -364,4 +366,248 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	s.Bus.Publish(ctx, "settled", ev)
 	s.wake(in.Session)
 	reply(w, result, nil)
+}
+
+// jobForSession validates that the job exists and is owned by the given
+// session, returning 404 for unknown jobs and 403 when the session doesn't
+// match. Only the session the job was approved for may call job-step or
+// job-ask (spec §6.5).
+func (s *Server) jobForSession(ctx context.Context, jobID int64, sessionID string) (apply.Job, error) {
+	job, err := s.Apply.Get(ctx, jobID)
+	if err != nil {
+		return apply.Job{}, httpError{code: http.StatusNotFound, msg: err.Error()}
+	}
+	if job.Session != sessionID {
+		return apply.Job{}, httpError{code: http.StatusForbidden,
+			msg: "session " + sessionID + " is not approved for job " + strconv.FormatInt(jobID, 10)}
+	}
+	return job, nil
+}
+
+// agentJobStep is POST /api/agent/job-step: the agent reports a step's
+// progress (started, reported, paused, or failed). Only the session the job
+// was approved for may call this endpoint.
+//
+//   - started:  pending → running
+//   - reported: running → reported, then verified by a fresh gh observation
+//   - paused:   running → paused; opens a needs-you card of kind "paused"
+//   - failed:   running → failed;  opens a needs-you card of kind "failed"
+func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Session string `json:"session"`
+		Job     int64  `json:"job"`
+		Step    int64  `json:"step"`
+		State   string `json:"state"`
+		Detail  string `json:"detail"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	ctx := r.Context()
+
+	switch in.State {
+	case "started", "reported", "paused", "failed":
+	default:
+		reply(w, nil, bad("state must be started, reported, paused, or failed"))
+		return
+	}
+
+	if _, err := s.session(ctx, in.Session); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	job, err := s.jobForSession(ctx, in.Job, in.Session)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+
+	// Find the step in the job.
+	var step apply.JobStep
+	var found bool
+	for _, st := range job.Steps {
+		if st.ID == in.Step {
+			step = st
+			found = true
+			break
+		}
+	}
+	if !found {
+		reply(w, nil, httpError{code: http.StatusNotFound,
+			msg: fmt.Sprintf("step %d not found in job %d", in.Step, in.Job)})
+		return
+	}
+
+	switch in.State {
+	case "started":
+		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepRunning, ""); err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepRunning})
+
+	case "reported":
+		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepReported, ""); err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepReported})
+		// Verify the outcome with a fresh gh read.
+		obs := apply.ObserveGh(ctx, step, s.App.Gh)
+		verState := apply.Verify(step, obs)
+		if verState != apply.StepReported { // StepReported means inconclusive: leave as-is
+			detail := ""
+			if verState == apply.StepFailed {
+				detail = apply.DetailDrift
+			}
+			if err := s.Apply.SetStepState(ctx, step.ID, verState, detail); err == nil {
+				s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
+			}
+		}
+
+	case "paused":
+		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepPaused, in.Detail); err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		ny, err := s.Apply.OpenNeedsYou(ctx, in.Job, step.ID, "paused", in.Detail, "")
+		if err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepPaused})
+		s.Bus.Publish(ctx, "needs_you", ny)
+
+	case "failed":
+		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepFailed, in.Detail); err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		ny, err := s.Apply.OpenNeedsYou(ctx, in.Job, step.ID, "failed", in.Detail, "")
+		if err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
+		s.Bus.Publish(ctx, "needs_you", ny)
+	}
+
+	reply(w, JobStepResult{JobID: in.Job, StepID: step.ID, State: in.State}, nil)
+}
+
+// agentJobAsk is POST /api/agent/job-ask: the agent drafts public text or
+// asks a question, opening a needs-you card so Court can review and answer it.
+// Nothing is posted until Court approves (spec §5.4, Court 2026-09-27).
+func (s *Server) agentJobAsk(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Session  string `json:"session"`
+		Job      int64  `json:"job"`
+		Step     int64  `json:"step"`
+		Question string `json:"question"`
+		Text     string `json:"text"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	ctx := r.Context()
+
+	if _, err := s.session(ctx, in.Session); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if _, err := s.jobForSession(ctx, in.Job, in.Session); err != nil {
+		reply(w, nil, err)
+		return
+	}
+
+	ny, err := s.Apply.OpenNeedsYou(ctx, in.Job, in.Step, "text", in.Question, in.Text)
+	if err != nil {
+		reply(w, nil, bad("%v", err))
+		return
+	}
+	s.Bus.Publish(ctx, "needs_you", ny)
+	reply(w, JobAskResult{NeedsYou: ny}, nil)
+}
+
+// dispatchAgentJob enqueues the job as a delivery to session through
+// deliver.Queue (spec §6.5). The message body describes the job's agent-lane
+// steps, the preconditions the agent must re-check, and the confirmation
+// protocol for steps that post public text. Attached.Job carries the job id
+// so the agent can reference it in job-step and job-ask calls.
+func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session string) error {
+	// Create a dedicated thread for this job.
+	thread, err := s.Queue.NewThread(ctx, session, "job:"+strconv.FormatInt(job.ID, 10))
+	if err != nil {
+		return fmt.Errorf("dispatchAgentJob: create thread: %w", err)
+	}
+
+	body := buildJobBody(job)
+	att := deliver.Attached{Job: strconv.FormatInt(job.ID, 10)}
+	if _, err := s.Queue.Post(ctx, thread.ID, body, att, false); err != nil {
+		return fmt.Errorf("dispatchAgentJob: post: %w", err)
+	}
+	s.wake(session)
+	return nil
+}
+
+// buildJobBody formats the delivery message body for an agent-lane job.
+// It lists every agent-lane step with its command and precondition, calls out
+// steps that post public text (requiring casebook_job_ask before posting), and
+// describes the protocol for working the job with casebook_job_step.
+func buildJobBody(job apply.Job) string {
+	var b strings.Builder
+
+	// Count agent-lane steps.
+	var agentSteps []apply.JobStep
+	for _, st := range job.Steps {
+		if st.Lane == apply.LaneAgent {
+			agentSteps = append(agentSteps, st)
+		}
+	}
+
+	fmt.Fprintf(&b, "casebook apply job %d — %d agent-lane step(s) to execute.\n",
+		job.ID, len(agentSteps))
+	b.WriteString("Work through each step in order. Check preconditions live before running.\n")
+
+	// List agent-lane steps.
+	if len(agentSteps) > 0 {
+		b.WriteString("\nSTEPS:\n")
+	}
+	for _, st := range agentSteps {
+		fmt.Fprintf(&b, "[s-%d] %s · %s\n", st.ID, st.Key, st.Action)
+		fmt.Fprintf(&b, "  command: %s\n", st.Command)
+		if st.Precondition != "" {
+			fmt.Fprintf(&b, "  precondition: %s\n", describePrecondition(st.Precondition, st.Key))
+		}
+		if st.Posts {
+			b.WriteString("  ⚠ posts public text: draft text first with casebook_job_ask; wait for Court's approval before running\n")
+		}
+	}
+
+	// Protocol.
+	b.WriteString("\nPROTOCOL for each step:\n")
+	fmt.Fprintf(&b, "  1. casebook_job_step(job=%d, step=<step_id>, state=\"started\")\n", job.ID)
+	b.WriteString("  2. [if posts=true] casebook_job_ask(job=<id>, step=<step_id>, text=\"<your draft>\")\n")
+	b.WriteString("     Wait for Court's answer (a message in this thread with the approved text).\n")
+	b.WriteString("     Run the command with exactly that text.\n")
+	fmt.Fprintf(&b, "  3. casebook_job_step(job=%d, step=<step_id>, state=\"reported\") on success\n", job.ID)
+	fmt.Fprintf(&b, "  4. casebook_job_step(job=%d, step=<step_id>, state=\"paused\", detail=\"reason\") if precondition fails\n", job.ID)
+	fmt.Fprintf(&b, "  5. casebook_job_step(job=%d, step=<step_id>, state=\"failed\", detail=\"reason\") on error\n", job.ID)
+	b.WriteString("casebook verifies each reported step's outcome by a fresh observation.\n")
+
+	return b.String()
+}
+
+// describePrecondition translates a machine precondition name into a human
+// description the agent can act on, including the live check to perform.
+func describePrecondition(precondition, key string) string {
+	switch precondition {
+	case "pr-no-new-activity":
+		return precondition + " (run: gh pr view <num> -R <repo> --json updatedAt; confirm updatedAt ≤ decision time)"
+	case "repo-no-open-human-prs":
+		return precondition + " (run: gh pr list -R <repo> --state open --json author; confirm no human authors)"
+	}
+	return precondition
 }

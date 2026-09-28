@@ -51,6 +51,18 @@ func (FakeGh) Gh(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`[{"author":{"login":"bob","is_bot":false}}]`), nil
 	case strings.Contains(j, "pr view") && strings.Contains(j, "updatedAt"):
 		return []byte(`{"updatedAt":"2026-08-01T00:00:00Z"}`), nil
+	case strings.Contains(j, "pr view") && strings.Contains(j, "--json state"):
+		// Agent-lane step verification: report PR as CLOSED.
+		return []byte(`{"state":"CLOSED"}`), nil
+	case strings.Contains(j, "issue view") && strings.Contains(j, "--json state"):
+		// Agent-lane step verification: report issue as CLOSED.
+		return []byte(`{"state":"CLOSED"}`), nil
+	case strings.Contains(j, "repo view") && strings.Contains(j, "--json isArchived"):
+		// Agent-lane step verification: repo is archived.
+		return []byte(`{"isArchived":true}`), nil
+	case strings.HasPrefix(j, "repo view "):
+		// Agent-lane step verification: repo exists.
+		return []byte(`{}`), nil
 	}
 	return nil, fmt.Errorf("apptest.FakeGh: unexpected %s", j)
 }
