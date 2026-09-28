@@ -1,7 +1,6 @@
 package serve
 
 import (
-	"context"
 	"sort"
 	"strings"
 	"sync"
@@ -168,30 +167,9 @@ func (x *Index) Result() engine.Result {
 	return x.res
 }
 
-// appendNotices appends additional notices (e.g. rule-load errors) to the
-// index so the page can display them alongside engine notices.
-func (x *Index) appendNotices(notices []string) {
-	if len(notices) == 0 {
-		return
-	}
-	x.mu.Lock()
-	x.res.Notices = append(x.res.Notices, notices...)
-	x.mu.Unlock()
-}
-
 // BuiltAt is when the index was last built.
 func (x *Index) BuiltAt() time.Time {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.builtAt
-}
-
-// rebuild recomputes the index; build is app.Build.
-func (x *Index) rebuild(ctx context.Context, build func(context.Context) (engine.Result, error), head string, now time.Time) error {
-	r, err := build(ctx)
-	if err != nil {
-		return err
-	}
-	x.set(r, head, now)
-	return nil
 }
