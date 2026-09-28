@@ -321,6 +321,18 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/agent/status", s.agentStatus)
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
+	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
+	// rules
+	m.HandleFunc("GET /api/rules", s.getRules)
+	m.HandleFunc("GET /api/rule", s.getRule)
+	m.HandleFunc("POST /api/rules/draft", s.postRulesDraft)
+	m.HandleFunc("POST /api/rules/preview", s.postRulesPreview)
+	m.HandleFunc("POST /api/rules/exclude", s.postRulesExclude)
+	m.HandleFunc("POST /api/rules/include", s.postRulesInclude)
+	m.HandleFunc("POST /api/rules/propose-once", s.postRulesProposeOnce)
+	m.HandleFunc("POST /api/rules/activate", s.postRulesActivate)
+	m.HandleFunc("POST /api/rules/deactivate", s.postRulesDeactivate)
+	m.HandleFunc("GET /api/rules/vocabulary", s.getRulesVocabulary)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.activity.Store(time.Now().UnixMilli())
 		m.ServeHTTP(w, r)

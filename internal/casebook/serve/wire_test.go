@@ -52,6 +52,14 @@ var wireRoots = []any{
 	StatusView{},
 	OpenResult{},
 	SettledResult{},
+	RulesView{},
+	RuleRow{},
+	RuleDetailView{},
+	MatchPreview{},
+	ReasonCount{},
+	RepoGroup{},
+	MatchRow{},
+	VocabularyView{},
 }
 
 const wirePath = "../web/wire.d.ts"

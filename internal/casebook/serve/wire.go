@@ -6,6 +6,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/journal"
 	"github.com/schuettc/tackle/internal/casebook/propose"
+	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
@@ -119,4 +120,60 @@ type SettledResult struct {
 	Session  string `json:"session"`
 	WorkedMs int64  `json:"worked_ms"`
 	Delivery *int64 `json:"delivery,omitempty"`
+}
+
+// RulesView is the response body of GET /api/rules.
+type RulesView struct {
+	Rules []RuleRow `json:"rules"`
+}
+
+// RuleRow is one row in the rules list: the rule and its track record.
+type RuleRow struct {
+	Rule   rules.Rule        `json:"rule"`
+	Record rules.TrackRecord `json:"record"`
+}
+
+// RuleDetailView is the response body of GET /api/rule, POST /api/rules/draft,
+// POST /api/rules/activate, POST /api/rules/deactivate, POST /api/rules/exclude,
+// POST /api/rules/include, and POST /api/agent/rule-draft.
+type RuleDetailView struct {
+	Rule    rules.Rule        `json:"rule"`
+	Record  rules.TrackRecord `json:"record"`
+	Matches MatchPreview      `json:"matches"`
+}
+
+// MatchPreview is the paginated, grouped match list returned by
+// POST /api/rules/preview and embedded in RuleDetailView.
+type MatchPreview struct {
+	Total    int           `json:"total"`
+	ByReason []ReasonCount `json:"by_reason"`
+	Groups   []RepoGroup   `json:"groups"`
+	Page     []MatchRow    `json:"page"`
+}
+
+// ReasonCount is one reason bucket inside a MatchPreview.
+type ReasonCount struct {
+	Reason string `json:"reason"`
+	Count  int    `json:"count"`
+}
+
+// RepoGroup is one repo bucket inside a MatchPreview.
+type RepoGroup struct {
+	Repo    string        `json:"repo"`
+	Count   int           `json:"count"`
+	Reasons []ReasonCount `json:"reasons"`
+}
+
+// MatchRow is one row in a MatchPreview page.
+type MatchRow struct {
+	Key    string `json:"key"`
+	Reason string `json:"reason"`
+	Repo   string `json:"repo"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// VocabularyView is the response body of GET /api/rules/vocabulary.
+type VocabularyView struct {
+	Fields []rules.Field `json:"fields"`
 }

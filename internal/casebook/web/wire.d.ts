@@ -111,6 +111,51 @@ export interface SettledResult {
   delivery?: number;
 }
 
+export interface RulesView {
+  rules: RuleRow[] | null;
+}
+
+export interface RuleRow {
+  rule: Rule;
+  record: TrackRecord;
+}
+
+export interface RuleDetailView {
+  rule: Rule;
+  record: TrackRecord;
+  matches: MatchPreview;
+}
+
+export interface MatchPreview {
+  total: number;
+  by_reason: ReasonCount[] | null;
+  groups: RepoGroup[] | null;
+  page: MatchRow[] | null;
+}
+
+export interface ReasonCount {
+  reason: string;
+  count: number;
+}
+
+export interface RepoGroup {
+  repo: string;
+  count: number;
+  reasons: ReasonCount[] | null;
+}
+
+export interface MatchRow {
+  key: string;
+  reason: string;
+  repo: string;
+  title: string;
+  status: string;
+}
+
+export interface VocabularyView {
+  fields: Field[] | null;
+}
+
 export interface ItemView {
   key: string;
   kind: string;
@@ -237,6 +282,31 @@ export interface SkippedMessage {
   reason: string;
 }
 
+export interface Rule {
+  ID: string;
+  Name: string;
+  Status: string;
+  CreatedBy: string;
+  CreatedAt: string;
+  EditedAt: string;
+  Match: Condition[] | null;
+  Propose: Action;
+  Exclude: Exclusion[] | null;
+}
+
+export interface TrackRecord {
+  Accepted: number;
+  Rejected: number;
+  Pending: number;
+}
+
+export interface Field {
+  Name: string;
+  Type: number;
+  Ops: string[] | null;
+  Values: string[] | null;
+}
+
 export interface Decision {
   disposition: string;
   note?: string;
@@ -275,6 +345,25 @@ export interface Attached {
   open?: string;
   rule?: string;
   job?: string;
+}
+
+export interface Condition {
+  Field: string;
+  Op: string;
+  Value: string;
+}
+
+export interface Action {
+  Disposition: string;
+  Until: string;
+  Note: string;
+}
+
+export interface Exclusion {
+  Key: string;
+  Reason: string;
+  By: string;
+  At: string;
 }
 
 export interface Conflict {
