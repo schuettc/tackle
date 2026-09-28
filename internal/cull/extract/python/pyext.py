@@ -86,8 +86,12 @@ def _collect_comment_lines(src):
     return lines
 
 
-def tidy_source(data):
-    """Rewrite an unused-import-free version of a Python source file.
+def tidy_source(data, before=b""):
+    """Drop the imports an edit orphaned from a Python source file.
+    Only an alias whose bound name was used in `before` (the pre-edit
+    file) and is unused in `data` is dropped: an import that was already
+    unused (an autouse fixture, a usefixtures("x") string, a plugin) is
+    never touched.
     Returns (new_source, removed) where removed is a list of
     "module.name" (or bare "name" for plain `import name`) strings for
     every alias dropped. Every byte outside the changed import statements
@@ -119,6 +123,13 @@ def tidy_source(data):
         return src, []
 
     used = _collect_used_names(tree)
+    try:
+        used_before = _collect_used_names(ast.parse(before.decode("utf-8")))
+    except Exception:
+        used_before = set()
+
+    def dropped(name):
+        return name not in used and name in used_before
     comment_lines = _collect_comment_lines(src)
     lines = src.splitlines(keepends=True)
 
@@ -147,7 +158,7 @@ def tidy_source(data):
                 continue
             if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
                 continue
-            keep = [a for a in n.names if (a.asname or a.name) in used]
+            keep = [a for a in n.names if not dropped(a.asname or a.name)]
             if len(keep) == len(n.names):
                 continue
             dots = "." * n.level
@@ -163,7 +174,7 @@ def tidy_source(data):
         elif isinstance(n, ast.Import):
             if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
                 continue
-            keep = [a for a in n.names if _import_bound_name(a) in used]
+            keep = [a for a in n.names if not dropped(_import_bound_name(a))]
             if len(keep) == len(n.names):
                 continue
             for a in n.names:
@@ -223,7 +234,11 @@ def tidy_source(data):
 
 if len(sys.argv) > 1 and sys.argv[1] == "--tidy":
     data = sys.stdin.buffer.read()
-    new_source, removed = tidy_source(data)
+    before = b""
+    if len(sys.argv) > 3 and sys.argv[2] == "--before":
+        with open(sys.argv[3], "rb") as f:
+            before = f.read()
+    new_source, removed = tidy_source(data, before)
     print(json.dumps({"source": new_source, "removed": removed}))
     sys.exit(0)
 

@@ -166,13 +166,16 @@ type tidyResult struct {
 }
 
 // Tidy removes now-unused imports from a Python test file's source: it
-// runs the embedded helper as `python3 pyext.py --tidy <relpath>`,
+// runs the embedded helper as `python3 pyext.py --tidy --before <file>`,
 // feeding src on stdin, and decodes its {"source":...,"removed":[...]}
 // JSON reply. root is accepted for parity with the ts package (which
 // needs it to locate the typescript package) but isn't otherwise used:
 // tidy mode needs no cross-file resolution. If python3 is not on PATH,
 // src is returned unchanged with no error and no removals.
-func Tidy(root, relpath string, src []byte) ([]byte, []string, error) {
+//
+// before is the pre-edit file: only imports whose names it used and src
+// no longer uses are removed.
+func Tidy(root, relpath string, before, src []byte) ([]byte, []string, error) {
 	_ = root
 	pyPath, err := exec.LookPath("python3")
 	if err != nil {
@@ -192,7 +195,11 @@ func Tidy(root, relpath string, src []byte) ([]byte, []string, error) {
 		return nil, nil, fmt.Errorf("extract/python: write helper: %w", err)
 	}
 
-	cmd := exec.Command(pyPath, helperPath, "--tidy", filepath.ToSlash(relpath))
+	beforePath := filepath.Join(tmpDir, "before")
+	if err := os.WriteFile(beforePath, before, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: write before: %w", err)
+	}
+	cmd := exec.Command(pyPath, helperPath, "--tidy", "--before", beforePath)
 	cmd.Env = helperEnvFunc(defaultMaxContext)
 	cmd.Stdin = bytes.NewReader(src)
 	var stdout, stderr bytes.Buffer

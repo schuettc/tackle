@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -815,4 +816,61 @@ func TestApplyWontEmptyAFile(t *testing.T) {
 	if got := readFile(t, root, "only_test.go"); got != only {
 		t.Errorf("only_test.go changed by --ids:\n%s", got)
 	}
+}
+
+// requireTSApply skips unless node and a typescript package ($CULL_TS)
+// are available, like the extractor tests.
+func requireTSApply(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not on PATH")
+	}
+	if os.Getenv("CULL_TS") == "" {
+		t.Skip("CULL_TS not set")
+	}
+}
+
+// TestApplyTidyOnlyWhatTheCutOrphaned (I-4): imports already unused
+// before the edit (autouse fixtures, usefixtures strings, React for JSX)
+// are never removed; only the import the removed test used goes.
+func TestApplyTidyOnlyWhatTheCutOrphaned(t *testing.T) {
+	t.Run("python", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		src := "import os\nimport pytest\nfrom fixtures import auto_cleanup, db\n\n\n@pytest.mark.usefixtures(\"db\")\ndef test_keep():\n    assert pytest\n\n\ndef test_env():\n    assert os.sep\n"
+		root := t.TempDir()
+		fixtureFile(t, root, "test_calc.py", src, 0o644)
+		writeReport(t, root, []string{"test_calc.py"}, "test_env")
+		out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"})
+		if code := exitCode(err); code != 0 {
+			t.Fatalf("exit %d: %v", code, err)
+		}
+		want := "import pytest\nfrom fixtures import auto_cleanup, db\n\n\n@pytest.mark.usefixtures(\"db\")\ndef test_keep():\n    assert pytest\n"
+		// Trailing blank lines are I-1's business (exact bytes in TestApplyPythonExact).
+		if got := readFile(t, root, "test_calc.py"); strings.TrimRight(got, "\n") != strings.TrimRight(want, "\n") {
+			t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
+		}
+		if fmt.Sprint(out.ImportsRemoved["test_calc.py"]) != "[os]" {
+			t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
+		}
+	})
+	t.Run("typescript", func(t *testing.T) {
+		requireTSApply(t)
+		src := "import React from \"react\";\nimport { parse } from \"./parse\";\n\ntest(\"keeps\", () => {\n  expect(<div />).toBeTruthy();\n});\n\ntest(\"parses\", () => {\n  expect(parse(\"x\")).toBe(1);\n});\n"
+		root := t.TempDir()
+		fixtureFile(t, root, "web/calc.test.tsx", src, 0o644)
+		writeReport(t, root, []string{"web/calc.test.tsx"}, "parses")
+		out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"})
+		if code := exitCode(err); code != 0 {
+			t.Fatalf("exit %d: %v", code, err)
+		}
+		got := readFile(t, root, "web/calc.test.tsx")
+		if !strings.HasPrefix(got, "import React from \"react\";\n\ntest(") {
+			t.Errorf("calc.test.tsx =\n%q", got)
+		}
+		if fmt.Sprint(out.ImportsRemoved["web/calc.test.tsx"]) != `["./parse".parse]` {
+			t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
+		}
+	})
 }

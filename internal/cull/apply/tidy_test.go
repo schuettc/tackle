@@ -21,7 +21,7 @@ func run() {
 	fmt.Println("hi")
 }
 `
-	out, removed, err := Tidy(t.TempDir(), "a.go", "go", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "a.go", "go", nil, []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestTidyDispatchesPython(t *testing.T) {
 		t.Skip("python3 not found in PATH, skipping")
 	}
 	src := "import os\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", "python", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", "python", []byte(src+"\n\ndef test_gone():\n    assert os\n"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestTidyDispatchesPython(t *testing.T) {
 
 func TestTidyUnknownLangUnchanged(t *testing.T) {
 	src := []byte("some source\n")
-	out, removed, err := Tidy(t.TempDir(), "f.rb", "ruby", src)
+	out, removed, err := Tidy(t.TempDir(), "f.rb", "ruby", src, src)
 	if err != nil {
 		t.Fatal(err)
 	}

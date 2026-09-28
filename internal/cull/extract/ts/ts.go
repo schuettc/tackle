@@ -210,7 +210,7 @@ type tidyResult struct {
 // no typescript package can be found ($CULL_TS or node_modules/typescript
 // walking up from root), src is returned unchanged with no error and no
 // removals.
-func Tidy(root, relpath string, src []byte) ([]byte, []string, error) {
+func Tidy(root, relpath string, before, src []byte) ([]byte, []string, error) {
 	nodePath, err := exec.LookPath("node")
 	if err != nil {
 		return src, nil, nil
@@ -234,7 +234,11 @@ func Tidy(root, relpath string, src []byte) ([]byte, []string, error) {
 		return nil, nil, fmt.Errorf("extract/ts: write helper: %w", err)
 	}
 
-	cmd := exec.Command(nodePath, helperPath, "--tidy", tsDir, filepath.ToSlash(relpath))
+	beforePath := filepath.Join(tmpDir, "before")
+	if err := os.WriteFile(beforePath, before, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: write before: %w", err)
+	}
+	cmd := exec.Command(nodePath, helperPath, "--tidy", tsDir, filepath.ToSlash(relpath), beforePath)
 	cmd.Env = extract.HelperEnv(defaultMaxContext)
 	cmd.Stdin = bytes.NewReader(src)
 	var stdout, stderr bytes.Buffer

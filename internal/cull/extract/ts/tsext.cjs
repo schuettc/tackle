@@ -333,7 +333,7 @@ function collectCommentLines(sf, text) {
 // net, the rewritten source is re-parsed before being returned; if that
 // introduces new parse errors, the original source is returned unchanged
 // with an empty removed list.
-function tidySource(src, relpath) {
+function tidySource(src, relpath, before) {
   let sf;
   try {
     sf = ts.createSourceFile(relpath || "input.ts", src, ts.ScriptTarget.Latest, true, scriptKindFor(relpath || ""));
@@ -345,6 +345,17 @@ function tidySource(src, relpath) {
   }
 
   const used = collectUsedIdentifiers(sf);
+  // Only what the edit orphaned: a name used before (the pre-edit file)
+  // and unused now. An import already unused before (React for classic
+  // JSX, a plugin, a type-only side effect) is never touched.
+  let usedBefore = new Set();
+  try {
+    const bsf = ts.createSourceFile(relpath || "input.ts", before || "", ts.ScriptTarget.Latest, true, scriptKindFor(relpath || ""));
+    if (!(bsf.parseDiagnostics && bsf.parseDiagnostics.length > 0)) usedBefore = collectUsedIdentifiers(bsf);
+  } catch (e) {
+    usedBefore = new Set();
+  }
+  const dropped = (name) => !used.has(name) && usedBefore.has(name);
   const commentLines = collectCommentLines(sf, src);
   const lines = splitLinesKeepEnds(src);
   const actions = new Map(); // startLine (0-indexed) -> {endLine, kind, text}
@@ -386,14 +397,14 @@ function tidySource(src, relpath) {
     const hadDefault = !!clause.name;
     let keepDefault = null;
     if (hadDefault) {
-      if (used.has(clause.name.text)) keepDefault = clause.name.text;
+      if (!dropped(clause.name.text)) keepDefault = clause.name.text;
       else removed.push(`${moduleText}.default`);
     }
 
     const hadNamespace = !!(clause.namedBindings && ts.isNamespaceImport(clause.namedBindings));
     let keepNamespace = null;
     if (hadNamespace) {
-      if (used.has(clause.namedBindings.name.text)) keepNamespace = clause.namedBindings.name.text;
+      if (!dropped(clause.namedBindings.name.text)) keepNamespace = clause.namedBindings.name.text;
       else removed.push(`${moduleText}.*`);
     }
 
@@ -402,7 +413,7 @@ function tidySource(src, relpath) {
     if (hadNamed) {
       keepNamed = [];
       for (const el of clause.namedBindings.elements) {
-        if (used.has(el.name.text)) {
+        if (!dropped(el.name.text)) {
           keepNamed.push(el);
         } else {
           const orig = (el.propertyName ?? el.name).text;
@@ -490,7 +501,7 @@ function tidySource(src, relpath) {
 }
 
 function tidyMain(args) {
-  const [tsDir, relpath] = args;
+  const [tsDir, relpath, beforePath] = args;
   ts = require(tsDir);
 
   const chunks = [];
@@ -503,7 +514,8 @@ function tidyMain(args) {
       console.log(JSON.stringify({ source: null, removed: [] }));
       return;
     }
-    const { source, removed } = tidySource(src, relpath);
+    const before = beforePath ? fs.readFileSync(beforePath, "utf8") : "";
+    const { source, removed } = tidySource(src, relpath, before);
     console.log(JSON.stringify({ source, removed }));
   });
 }

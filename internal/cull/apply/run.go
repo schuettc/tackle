@@ -381,7 +381,7 @@ func loadAndEdit(root, wantSum string, e *fileEdit) error {
 		bodies = append(bodies, string(data[sp.Start:sp.End]))
 	}
 	removed := RemoveSpans(data, e.spans)
-	tidied, imports, err := Tidy(root, e.rel, e.lang, removed)
+	tidied, imports, err := Tidy(root, e.rel, e.lang, data, removed)
 	if err != nil {
 		return fmt.Errorf("tidying %s: %v", e.rel, err)
 	}

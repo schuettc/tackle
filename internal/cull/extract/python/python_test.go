@@ -261,7 +261,7 @@ func TestBrokenFileSkipped(t *testing.T) {
 func TestPyTidyDropsUnusedKeepsFixtureImport(t *testing.T) {
 	requirePython3(t)
 	src := "import os\nfrom mymod import my_fixture\n\n\ndef test_x(my_fixture):\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,7 +277,7 @@ func TestPyTidyDropsUnusedKeepsFixtureImport(t *testing.T) {
 func TestPyTidyRewritesPartialFromImport(t *testing.T) {
 	requirePython3(t)
 	src := "from itertools import chain, count\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "count"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestPyTidyRewritesPartialFromImport(t *testing.T) {
 func TestPyTidyKeepsStarAndFuture(t *testing.T) {
 	requirePython3(t)
 	src := "from __future__ import annotations\nfrom os import *\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "annotations"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestPyTidyKeepsStarAndFuture(t *testing.T) {
 func TestPyTidySkipsNestedTypeCheckingImport(t *testing.T) {
 	requirePython3(t)
 	src := "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from mymod import Foo\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "Foo", "TYPE_CHECKING"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestPyTidySkipsNestedTypeCheckingImport(t *testing.T) {
 func TestPyTidySkipsNestedTryImport(t *testing.T) {
 	requirePython3(t)
 	src := "try:\n    import simplejson\nexcept ImportError:\n    pass\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "simplejson"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestPyTidySkipsImportWithTrailingComment(t *testing.T) {
 	requirePython3(t)
 	// Fully unused, with a trailing comment.
 	src := "import os  # note\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestPyTidySkipsImportWithTrailingComment(t *testing.T) {
 
 	// Partially unused, with a trailing comment.
 	src2 := "from itertools import chain, count  # note\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
-	out2, removed2, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src2))
+	out2, removed2, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src2, "count"), []byte(src2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,7 +371,7 @@ func TestPyTidySkipsImportWithTrailingComment(t *testing.T) {
 func TestPyTidySkipsMultilineImportWithInteriorComment(t *testing.T) {
 	requirePython3(t)
 	src := "from itertools import (\n    chain,\n    # keep this one documented\n    count,\n)\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "count"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestPyTidyRevertsOnPostCheckFailure(t *testing.T) {
 	requirePython3(t)
 	t.Setenv("CULL_TIDY_TEST_FORCE_BROKEN", "1")
 	src := "import os\n\n\ndef test_x():\n    assert True\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +412,7 @@ func TestTidyEnvHasNoKey(t *testing.T) {
 	defer func() { helperEnvFunc = orig }()
 
 	src := "import os\n\n\ndef test_x():\n    assert True\n"
-	if _, _, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src)); err != nil {
+	if _, _, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src)); err != nil {
 		t.Fatal(err)
 	}
 	if got == nil {
@@ -453,7 +453,7 @@ func TestNoPython3Skips(t *testing.T) {
 func TestPyTidySkipsImportSharingALine(t *testing.T) {
 	requirePython3(t)
 	src := "import os; import sys\n\n\ndef test_x():\n    assert sys.argv\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -467,11 +467,18 @@ func TestPyTidySkipsImportSharingALine(t *testing.T) {
 func TestPyTidyRefusesNonUTF8(t *testing.T) {
 	requirePython3(t)
 	src := "# -*- coding: latin-1 -*-\nimport os\n\n\ndef test_x():\n    assert '\xe9'\n"
-	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, "os"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(out) != src || len(removed) != 0 {
 		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
 	}
+}
+
+// cutUsing is the pre-edit file for a tidy test: src plus a (since
+// removed) test that used names. Tidy only drops imports the cut
+// orphaned, so this is what makes names removable (I-4).
+func cutUsing(src string, names ...string) []byte {
+	return []byte(src + "\n\ndef test_gone():\n    assert " + strings.Join(append(names, "True"), " and ") + "\n")
 }

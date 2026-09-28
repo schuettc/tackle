@@ -250,7 +250,7 @@ func TestBrokenFileSkipped(t *testing.T) {
 func TestTsTidyDropsUnusedSpecifier(t *testing.T) {
 	requireTS(t)
 	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "sub"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestTsTidyDropsUnusedSpecifier(t *testing.T) {
 func TestTsTidyKeepsTypeOnlyUse(t *testing.T) {
 	requireTS(t)
 	src := "import { Calc } from \"./calc\";\n\nfunction make(): Calc {\n  return {} as Calc;\n}\n\ntest(\"x\", () => {\n  make();\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "Calc"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestTsTidyKeepsTypeOnlyUse(t *testing.T) {
 func TestTsTidyKeepsSideEffectImport(t *testing.T) {
 	requireTS(t)
 	src := "import \"./setup\";\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +297,7 @@ func TestTsTidySkipsImportWithTrailingComment(t *testing.T) {
 	requireTS(t)
 	// Fully unused, with a trailing comment.
 	src := "import \"./setup\"; // side effects only\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +310,7 @@ func TestTsTidySkipsImportWithTrailingComment(t *testing.T) {
 
 	// Partially unused, with a trailing comment.
 	src2 := "import { add, sub } from \"./calc\"; // math ops\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
-	out2, removed2, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src2))
+	out2, removed2, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src2, "sub"), []byte(src2))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,7 +326,7 @@ func TestTsTidyRevertsOnPostCheckFailure(t *testing.T) {
 	requireTS(t)
 	t.Setenv("CULL_TIDY_TEST_FORCE_BROKEN", "1")
 	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "sub"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +365,7 @@ func TestNoTypescriptSkips(t *testing.T) {
 func TestTsTidySkipsImportSharingALine(t *testing.T) {
 	requireTS(t)
 	src := "import { a } from \"./a\"; import { b } from \"./b\";\n\ntest(\"x\", () => {\n  b();\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "a"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,11 +379,18 @@ func TestTsTidySkipsImportSharingALine(t *testing.T) {
 func TestTsTidyRefusesNonUTF8(t *testing.T) {
 	requireTS(t)
 	src := "import { a } from \"./a\";\n\ntest(\"x\", () => {\n  expect(\"\xe9\").toBe(\"\xe9\");\n});\n"
-	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "a"), []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(out) != src || len(removed) != 0 {
 		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
 	}
+}
+
+// cutUsing is the pre-edit file for a tidy test: src plus a (since
+// removed) test that used names. Tidy only drops imports the cut
+// orphaned, so this is what makes names removable (I-4).
+func cutUsing(src string, names ...string) []byte {
+	return []byte(src + "\ntest(\"gone\", () => {\n  use(" + strings.Join(names, ", ") + ");\n});\n")
 }
