@@ -293,6 +293,51 @@ func TestTsTidyKeepsSideEffectImport(t *testing.T) {
 	}
 }
 
+func TestTsTidySkipsImportWithTrailingComment(t *testing.T) {
+	requireTS(t)
+	// Fully unused, with a trailing comment.
+	src := "import \"./setup\"; // side effects only\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+
+	// Partially unused, with a trailing comment.
+	src2 := "import { add, sub } from \"./calc\"; // math ops\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out2, removed2, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out2) != src2 {
+		t.Errorf("out = %q, want unchanged %q", out2, src2)
+	}
+	if len(removed2) != 0 {
+		t.Errorf("removed = %v, want none", removed2)
+	}
+}
+
+func TestTsTidyRevertsOnPostCheckFailure(t *testing.T) {
+	requireTS(t)
+	t.Setenv("CULL_TIDY_TEST_FORCE_BROKEN", "1")
+	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged original %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none (post-check failure must not report removals)", removed)
+	}
+}
+
 func TestNoTypescriptSkips(t *testing.T) {
 	t.Setenv("CULL_TS", "")
 	root := t.TempDir()

@@ -305,6 +305,100 @@ func TestPyTidyKeepsStarAndFuture(t *testing.T) {
 	}
 }
 
+func TestPyTidySkipsNestedTypeCheckingImport(t *testing.T) {
+	requirePython3(t)
+	src := "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from mymod import Foo\n\n\ndef test_x():\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "Foo" and "TYPE_CHECKING" only appear as import targets/conditions, so
+	// a naive walk would consider both nested imports here unused; tidy must
+	// leave the nested `from mymod import Foo` alone since deleting the sole
+	// statement of the `if TYPE_CHECKING:` block would be invalid Python.
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestPyTidySkipsNestedTryImport(t *testing.T) {
+	requirePython3(t)
+	src := "try:\n    import simplejson\nexcept ImportError:\n    pass\n\n\ndef test_x():\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestPyTidySkipsImportWithTrailingComment(t *testing.T) {
+	requirePython3(t)
+	// Fully unused, with a trailing comment.
+	src := "import os  # note\n\n\ndef test_x():\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+
+	// Partially unused, with a trailing comment.
+	src2 := "from itertools import chain, count  # note\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
+	out2, removed2, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out2) != src2 {
+		t.Errorf("out = %q, want unchanged %q", out2, src2)
+	}
+	if len(removed2) != 0 {
+		t.Errorf("removed = %v, want none", removed2)
+	}
+}
+
+func TestPyTidySkipsMultilineImportWithInteriorComment(t *testing.T) {
+	requirePython3(t)
+	src := "from itertools import (\n    chain,\n    # keep this one documented\n    count,\n)\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestPyTidyRevertsOnPostCheckFailure(t *testing.T) {
+	requirePython3(t)
+	t.Setenv("CULL_TIDY_TEST_FORCE_BROKEN", "1")
+	src := "import os\n\n\ndef test_x():\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged original %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none (post-check failure must not report removals)", removed)
+	}
+}
+
 func TestTidyEnvHasNoKey(t *testing.T) {
 	requirePython3(t)
 	t.Setenv("TYPESAFE_API_KEY", "sk-secret")

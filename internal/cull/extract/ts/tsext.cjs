@@ -293,6 +293,29 @@ function collectUsedIdentifiers(sf) {
   return used;
 }
 
+// collectCommentLines scans the full text for // and /* */ comments and
+// returns the set of 0-indexed line numbers each one occupies (a
+// multi-line /* */ comment occupies every line it spans). Used so tidy
+// leaves any import statement with a comment on any of its lines
+// completely untouched -- rewriting/deleting it would silently drop the
+// comment, whether it's a same-line trailing comment (which lives in the
+// trivia *after* the statement's own end, not inside it) or one on its
+// own line inside a multi-line named-import list.
+function collectCommentLines(sf, text) {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, sf.languageVariant, text);
+  const lines = new Set();
+  for (;;) {
+    const kind = scanner.scan();
+    if (kind === ts.SyntaxKind.EndOfFileToken) break;
+    if (kind === ts.SyntaxKind.SingleLineCommentTrivia || kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+      const start = sf.getLineAndCharacterOfPosition(scanner.getTokenPos()).line;
+      const end = sf.getLineAndCharacterOfPosition(scanner.getTextPos()).line;
+      for (let l = start; l <= end; l++) lines.add(l);
+    }
+  }
+  return lines;
+}
+
 // tidySource rewrites src (one file's full text) dropping import
 // specifiers whose bound identifier is never used elsewhere in the file.
 // A side-effect import (`import "x"`, no importClause) is always kept.
@@ -302,6 +325,14 @@ function collectUsedIdentifiers(sf) {
 // the statement originally ended in a semicolon). Every other byte of
 // src is returned unchanged, including each line's own line ending. If
 // src fails to parse, it is returned unchanged.
+//
+// Only sf.statements (top-level statements) are ever considered, so an
+// import can never be "nested" here (ES import declarations are only
+// legal at the top level of a module). An import declaration with a
+// comment on any of its lines is left alone entirely. As a final safety
+// net, the rewritten source is re-parsed before being returned; if that
+// introduces new parse errors, the original source is returned unchanged
+// with an empty removed list.
 function tidySource(src, relpath) {
   let sf;
   try {
@@ -314,6 +345,7 @@ function tidySource(src, relpath) {
   }
 
   const used = collectUsedIdentifiers(sf);
+  const commentLines = collectCommentLines(sf, src);
   const lines = splitLinesKeepEnds(src);
   const actions = new Map(); // startLine (0-indexed) -> {endLine, kind, text}
   const removed = [];
@@ -321,6 +353,17 @@ function tidySource(src, relpath) {
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st)) continue;
     if (!st.importClause) continue; // side-effect import: always kept
+
+    const startLine = sf.getLineAndCharacterOfPosition(st.getStart(sf, false)).line;
+    const endLine = sf.getLineAndCharacterOfPosition(st.getEnd()).line;
+    let hasComment = false;
+    for (let l = startLine; l <= endLine; l++) {
+      if (commentLines.has(l)) {
+        hasComment = true;
+        break;
+      }
+    }
+    if (hasComment) continue; // leave any import with a comment on one of its lines untouched
 
     const clause = st.importClause;
     const moduleText = st.moduleSpecifier.getText(sf);
@@ -358,9 +401,6 @@ function tidySource(src, relpath) {
       (!hadNamespace || keepNamespace) &&
       (!hadNamed || keepNamed.length === clause.namedBindings.elements.length);
     if (nothingDropped) continue;
-
-    const startLine = sf.getLineAndCharacterOfPosition(st.getStart(sf, false)).line;
-    const endLine = sf.getLineAndCharacterOfPosition(st.getEnd()).line;
 
     const keepAnything = keepDefault || keepNamespace || (keepNamed && keepNamed.length > 0);
     if (!keepAnything) {
@@ -408,7 +448,30 @@ function tidySource(src, relpath) {
     i++;
   }
 
-  return { source: out.join(""), removed };
+  let outSource = out.join("");
+
+  // Test-only seam (see task-3-brief fix): forces the post-check below
+  // to fail, so the revert-to-original path can be exercised without a
+  // real bug. Never set outside tests.
+  if (process.env.CULL_TIDY_TEST_FORCE_BROKEN) {
+    outSource += "import {\n";
+  }
+
+  // Safety net: if the rewrite somehow produced a source with new parse
+  // errors, return the original source untouched rather than emit a
+  // broken file.
+  let outDiagnostics = 0;
+  try {
+    const outSf = ts.createSourceFile(relpath || "input.ts", outSource, ts.ScriptTarget.Latest, true, scriptKindFor(relpath || ""));
+    outDiagnostics = (outSf.parseDiagnostics && outSf.parseDiagnostics.length) || 0;
+  } catch (e) {
+    outDiagnostics = Infinity;
+  }
+  if (outDiagnostics > 0) {
+    return { source: src, removed: [] };
+  }
+
+  return { source: outSource, removed };
 }
 
 function tidyMain(args) {

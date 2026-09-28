@@ -19,10 +19,12 @@ per-line and col is already UTF-8 bytes), class-method Parent (the class
 itself is never emitted), and the skip protocol for unparsable files.
 """
 import ast
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 
 MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 24000)
 
@@ -68,6 +70,22 @@ def _collect_used_names(tree):
     return used
 
 
+def _collect_comment_lines(src):
+    """Line numbers (1-indexed) that contain a `#` comment anywhere --
+    trailing on a statement's own line, or on its own line inside a
+    parenthesized multi-line statement. Used so tidy leaves any import
+    statement with a comment on one of its lines completely untouched
+    (rewriting/deleting it would silently drop the comment)."""
+    lines = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.COMMENT:
+                lines.add(tok.start[0])
+    except Exception:
+        pass
+    return lines
+
+
 def tidy_source(data):
     """Rewrite an unused-import-free version of a Python source file.
     Returns (new_source, removed) where removed is a list of
@@ -78,6 +96,16 @@ def tidy_source(data):
     a statement left with no used aliases is deleted whole; a statement
     with some unused aliases is rewritten keeping only the used ones. If
     the source fails to parse, it is returned unchanged.
+
+    Only module-level (top-level) import statements are ever touched: one
+    nested inside any block (if/try/with/def/class, including a
+    `TYPE_CHECKING` guard) is left alone, since deleting the sole
+    statement of an indented block would produce invalid Python. An
+    import statement with a comment on any of its lines is also left
+    alone: dropping/rewriting it would silently discard the comment. As a
+    final safety net, the rewritten source is re-parsed before being
+    returned; if that fails, the original source is returned unchanged
+    with an empty removed list.
     """
     try:
         src = data.decode("utf-8")
@@ -89,15 +117,20 @@ def tidy_source(data):
         return src, []
 
     used = _collect_used_names(tree)
+    comment_lines = _collect_comment_lines(src)
     lines = src.splitlines(keepends=True)
 
     # lineno (1-indexed) -> (end_lineno, "delete"|"replace", text_or_None)
     actions = {}
     removed = []
 
-    for n in ast.walk(tree):
+    # Only tree.body (module-level statements), never ast.walk(tree): an
+    # import nested inside any block is never touched.
+    for n in tree.body:
         if isinstance(n, ast.ImportFrom):
             if n.module == "__future__" or any(a.name == "*" for a in n.names):
+                continue
+            if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
                 continue
             keep = [a for a in n.names if (a.asname or a.name) in used]
             if len(keep) == len(n.names):
@@ -113,6 +146,8 @@ def tidy_source(data):
                 text = "from " + module + " import " + ", ".join(_alias_str(a) for a in keep)
                 actions[n.lineno] = (n.end_lineno, "replace", text)
         elif isinstance(n, ast.Import):
+            if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
+                continue
             keep = [a for a in n.names if _import_bound_name(a) in used]
             if len(keep) == len(n.names):
                 continue
@@ -153,7 +188,22 @@ def tidy_source(data):
         out_lines.append(lines[i - 1])
         i += 1
 
-    return "".join(out_lines), removed
+    out_source = "".join(out_lines)
+
+    # Test-only seam (see task-3-brief fix): forces the post-check below
+    # to fail, so the revert-to-original path can be exercised without a
+    # real bug. Never set outside tests.
+    if os.environ.get("CULL_TIDY_TEST_FORCE_BROKEN"):
+        out_source += "def (:\n"
+
+    # Safety net: if the rewrite somehow produced invalid Python, return
+    # the original source untouched rather than emit a broken file.
+    try:
+        ast.parse(out_source)
+    except Exception:
+        return src, []
+
+    return out_source, removed
 
 
 if len(sys.argv) > 1 and sys.argv[1] == "--tidy":
