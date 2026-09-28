@@ -30,6 +30,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/propose"
 	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tools-common/localweb"
+	"github.com/schuettc/tools-common/localweb/page"
 )
 
 //go:embed assets
@@ -600,7 +601,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if assetsFS == nil {
 		assetsFS, _ = fs.Sub(assets, "assets")
 	}
-	srv, err := localweb.Start(ctx, localweb.Config{Tool: config.Tool, Assets: assetsFS, API: s.Handler(), Port: o.Port})
+	srv, err := localweb.Start(ctx, localweb.Config{Tool: config.Tool, Assets: page.With(assetsFS), API: s.Handler(), Port: o.Port})
 	if err != nil {
 		return err
 	}

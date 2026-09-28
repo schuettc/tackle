@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "user": "schuettc",
+  "owners": {
+    "schuettc": {
+      "login": "schuettc",
+      "reachable": true,
+      "fetched_at": "2026-09-27T12:00:00Z",
+      "repos": [
+        {
+          "repo": "schuettc/hail",
+          "pushed_at": "2026-09-20T00:00:00Z",
+          "default_branch": "main",
+          "prs": [
+            {
+              "repo": "schuettc/hail",
+              "number": 3,
+              "title": "fix nudge",
+              "author": "bob",
+              "state": "OPEN",
+              "created_at": "2026-08-01T00:00:00Z",
+              "updated_at": "2026-08-01T00:00:00Z"
+            }
+          ],
+          "issues": [
+            {
+              "repo": "schuettc/hail",
+              "number": 4,
+              "title": "crash on start",
+              "author": "alice",
+              "state": "OPEN",
+              "created_at": "2026-08-02T00:00:00Z",
+              "updated_at": "2026-08-02T00:00:00Z"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "authored_at": "2026-09-27T12:00:00Z",
+  "refs": {},
+  "merged_prs": {
+    "schuettc/hail": {
+      "fetched": true,
+      "at": "2026-09-27T12:00:00Z"
+    }
+  }
+}

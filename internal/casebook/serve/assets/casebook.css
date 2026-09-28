@@ -1,0 +1,97 @@
+/* casebook.css */
+.cb-board {
+  display: flex;
+  gap: 16px;
+  padding: 16px;
+  overflow-x: auto;
+  flex: 1;
+  min-height: 0;
+}
+.cb-lane {
+  width: 280px;
+  flex: none;
+  background: var(--kit-panel);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.cb-lane-head {
+  font: 10.5px var(--kit-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kit-muted);
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--kit-line);
+}
+.cb-lane-rows {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+}
+.cb-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, 100vw);
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  box-shadow: var(--kit-lift);
+  padding: 20px 24px 24px;
+  z-index: 100;
+}
+.cb-sheet-head {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  margin-bottom: 14px;
+}
+.cb-sheet-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+.cb-needs-you {
+  border-left: 3px solid var(--kit-signal);
+}
+.cb-dock-threads {
+  display: flex;
+  gap: 6px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--kit-line);
+}
+.cb-dock-messages {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cb-dock-composer {
+  border-top: 1px solid var(--kit-line);
+  padding: 12px 14px;
+}
+.cb-dock-composer textarea {
+  width: 100%;
+  font: 14px var(--kit-sans);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  resize: none;
+  min-height: 60px;
+  line-height: 1.5;
+}
+.cb-dock-composer textarea:focus-visible {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: 0;
+}
