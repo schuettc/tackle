@@ -102,54 +102,64 @@
 }
 
 /* ---- board cards ---------------------------------------------------------- */
+/*
+ * Cards use the kit's .kit-card (background, border, border-radius) and
+ * .kit-card-head (mono uppercase kicker row).  Only board-specific overrides
+ * are added here: tighter padding/margin for lane columns, the selected-edge
+ * shadow, the flex head layout, and ellipsis overflow on text lines.
+ */
 
-.cb-board-card {
-  background: var(--kit-card);
-  border: 1px solid var(--kit-line);
-  border-radius: 8px;
+/* Tighter padding/margin than kit-card's default 14px/14px for board lanes. */
+.cb-lane .kit-card {
   padding: 10px 12px;
-  margin-bottom: 6px;
+  margin: 0 0 6px;
   cursor: pointer;
   transition: border-color 0.1s;
 }
 
-.cb-board-card:hover {
+.cb-lane .kit-card:hover {
   border-color: var(--kit-muted);
 }
 
-.cb-board-card.on {
+/* Selected card: signal-coloured left inset shadow (kit-card.edge-signal uses
+ * a left border; inset shadow avoids shifting text and is thinner visually). */
+.cb-lane .kit-card.on {
   border-color: var(--kit-signal);
   box-shadow: inset 3px 0 0 var(--kit-signal);
 }
 
-.cb-board-card .kit-box {
+/* .kit-box inside board cards: same sizing as kit's row checkbox. */
+.cb-lane .kit-card .kit-box {
   width: 14px;
   height: 14px;
   flex: none;
   margin-top: 1px;
 }
 
-.cb-board-card .kit-box.on {
+.cb-lane .kit-card .kit-box.on {
   background: var(--kit-signal);
   border-color: var(--kit-signal);
 }
 
-.cb-card-head {
+/* kit-card-head is a flex row in the board (checkbox + kicker text). Override
+ * the kit's display (block) and text-transform so keys show unmodified. */
+.cb-lane .kit-card-head {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  text-transform: none;
   margin-bottom: 4px;
 }
 
+/* Kicker text: ellipsis on long keys. */
 .cb-card-kk {
-  font: 11px var(--kit-mono);
-  color: var(--kit-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
 }
 
+/* Title line: ellipsis on long titles. */
 .cb-card-title {
   font-size: 13.5px;
   line-height: 1.4;

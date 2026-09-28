@@ -125,7 +125,14 @@ export function makeAttention(ctx: Ctx): Section {
   // Render the empty state for the reading column (no item open).
   // Shows the section name, current view count, and a prompt.
   function renderReadEmpty(): HTMLElement {
-    const nameEl = h('p', { class: 'cb-read-empty-section' }, 'attention');
+    // Use .kit-label for the eyebrow (uppercase mono label, matches the
+    // reading-column section headers in item.ts and the kit's own eyebrow
+    // style).
+    const nameEl = h(
+      'p',
+      { class: 'cb-read-empty-section kit-label' },
+      'attention',
+    );
     const countEl = h(
       'p',
       { class: 'cb-read-empty-count' },
@@ -249,7 +256,9 @@ export function makeAttention(ctx: Ctx): Section {
       return {
         id: it.key,
         key: kindKey,
-        title: it.title ?? it.key,
+        // Fallback: use display key (without kind prefix) so titleless items
+        // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client".
+        title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         sub: proposal,
         selectable: true,
@@ -596,7 +605,34 @@ export function makeAttention(ctx: Ctx): Section {
         } else {
           void reload();
         }
-      } else if (type === 'decided' || type === 'proposals') {
+      } else if (type === 'decided') {
+        // A live decided event can originate from the CLI or another client.
+        // Deselect the decided keys so the bar's "Decide N" doesn't include
+        // items that are already gone (the server's payload shape is
+        // {keys: string[], disposition, by, proposed_by}).
+        const decidedPayload = data as { keys?: string[] };
+        const decidedKeys = decidedPayload?.keys ?? [];
+        if (decidedKeys.length > 0) {
+          selection.deselect(decidedKeys);
+        }
+        // Re-fetch summary so view-chip counts stay correct.
+        void ctx.api
+          .get<SummaryView>('/summary')
+          .then((s) => applyCounts(s.counts))
+          .catch(() => {});
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
+      } else if (type === 'proposals') {
+        // A proposals event is emitted by the agent without a follow-up index,
+        // so re-fetch the summary to update view-chip counts (particularly the
+        // "proposed" chip).
+        void ctx.api
+          .get<SummaryView>('/summary')
+          .then((s) => applyCounts(s.counts))
+          .catch(() => {});
         if (boardHandle) {
           void boardHandle.refresh();
         } else {

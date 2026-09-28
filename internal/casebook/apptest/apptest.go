@@ -37,7 +37,9 @@ func (FakeGh) Gh(_ context.Context, args ...string) ([]byte, error) {
 		  "pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":3,"title":"fix nudge","state":"OPEN","createdAt":"2026-08-01T00:00:00Z",
 		   "updatedAt":"2026-08-01T00:00:00Z","author":{"login":"bob","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]},
 		  "issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4,"title":"crash on start","state":"OPEN","createdAt":"2026-08-02T00:00:00Z",
-		   "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]}}]}}}}`), nil
+		   "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}},
+		   {"number":5,"title":"docs missing","state":"OPEN","createdAt":"2026-08-03T00:00:00Z",
+		    "updatedAt":"2026-08-03T00:00:00Z","author":{"login":"carol","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]}}]}}}}`), nil
 	case strings.Contains(j, "search("):
 		return []byte(`{"data":{"search":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}`), nil
 	case strings.Contains(j, "k0:"):

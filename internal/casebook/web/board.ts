@@ -114,23 +114,30 @@ export function makeBoard(
     const box = h('span', { class: 'kit-box' + (selected ? ' on' : '') });
 
     // Kind + key in monospace (untrusted, set via textContent).
-    const kk = h('div', { class: 'cb-card-kk' });
+    // Use .kit-card-head for the kicker row (kit mono/uppercase style);
+    // .cb-card-kk handles ellipsis overflow for long keys.
+    const kk = h('span', { class: 'cb-card-kk' });
     // Show kind once; strip the kind prefix from the key for display.
     const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
 
     // Title (untrusted, set via textContent).
+    // Fallback: use the display key (without kind prefix) so titleless items
+    // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client"
+    // rather than repeating the kind that already appears in the kicker.
     const titleEl = h('div', { class: 'cb-card-title' });
-    titleEl.textContent = it.title ?? it.key;
+    titleEl.textContent = it.title ?? displayKey;
 
     const card = h(
       'div',
       {
-        class: 'cb-board-card' + (selected ? ' on' : ''),
+        // Use .kit-card for background/border/radius from the kit;
+        // .on marks the card as selected (adds signal-coloured left shadow).
+        class: 'kit-card' + (selected ? ' on' : ''),
         tabindex: '0',
         'data-id': it.key,
       },
-      h('div', { class: 'cb-card-head' }, box, kk),
+      h('div', { class: 'kit-card-head' }, box, kk),
       titleEl,
     );
 
@@ -210,7 +217,7 @@ export function makeBoard(
       const rowsEl = laneRowsEl.get(laneId);
       if (!rowsEl) continue;
       const state = laneState.get(laneId)!;
-      const cards = rowsEl.querySelectorAll<HTMLElement>('.cb-board-card');
+      const cards = rowsEl.querySelectorAll<HTMLElement>('.kit-card');
       cards.forEach((card, i) => {
         const it = state.items[i];
         if (!it) return;

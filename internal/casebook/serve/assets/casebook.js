@@ -8,8 +8,7 @@ import {
   h
 } from "/_kit/kit.js";
 
-// router.ts
-var listeners = [];
+// router-helpers.ts
 function safeDecode(s) {
   try {
     return decodeURIComponent(s);
@@ -31,6 +30,9 @@ function parse(hash) {
     sub: safeDecode(path.slice(slash + 1))
   };
 }
+
+// router.ts
+var listeners = [];
 function go(section, sub) {
   location.hash = sub ? `#/${section}/${pathEscape(sub)}` : `#/${section}`;
 }
@@ -653,7 +655,9 @@ function renderItem(ctx, detail) {
   const displayKey = keyWithoutKind(it.key);
   const kickerParts = [it.kind, displayKey, it.relation].filter(Boolean).join(" · ");
   el.append(h3("p", { class: "cb-kicker kit-kick" }, kickerParts));
-  el.append(h3("h1", { class: "cb-title kit-h1" }, it.title ?? it.key));
+  el.append(
+    h3("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
+  );
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
   if (it.status) factPairs.push(["status", it.status]);
@@ -726,19 +730,21 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
   function buildCard(it, laneId) {
     const selected = sel.has(it.key);
     const box = h4("span", { class: "kit-box" + (selected ? " on" : "") });
-    const kk = h4("div", { class: "cb-card-kk" });
+    const kk = h4("span", { class: "cb-card-kk" });
     const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
     const titleEl = h4("div", { class: "cb-card-title" });
-    titleEl.textContent = it.title ?? it.key;
+    titleEl.textContent = it.title ?? displayKey;
     const card2 = h4(
       "div",
       {
-        class: "cb-board-card" + (selected ? " on" : ""),
+        // Use .kit-card for background/border/radius from the kit;
+        // .on marks the card as selected (adds signal-coloured left shadow).
+        class: "kit-card" + (selected ? " on" : ""),
         tabindex: "0",
         "data-id": it.key
       },
-      h4("div", { class: "cb-card-head" }, box, kk),
+      h4("div", { class: "kit-card-head" }, box, kk),
       titleEl
     );
     const age = ageOf(it);
@@ -799,7 +805,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
       const rowsEl = laneRowsEl.get(laneId);
       if (!rowsEl) continue;
       const state = laneState.get(laneId);
-      const cards = rowsEl.querySelectorAll(".cb-board-card");
+      const cards = rowsEl.querySelectorAll(".kit-card");
       cards.forEach((card2, i) => {
         const it = state.items[i];
         if (!it) return;
@@ -952,7 +958,11 @@ function makeAttention(ctx) {
   const viewCounts = {};
   let boardHandle = null;
   function renderReadEmpty() {
-    const nameEl = h5("p", { class: "cb-read-empty-section" }, "attention");
+    const nameEl = h5(
+      "p",
+      { class: "cb-read-empty-section kit-label" },
+      "attention"
+    );
     const countEl = h5(
       "p",
       { class: "cb-read-empty-count" },
@@ -1055,7 +1065,9 @@ function makeAttention(ctx) {
       return {
         id: it.key,
         key: kindKey,
-        title: it.title ?? it.key,
+        // Fallback: use display key (without kind prefix) so titleless items
+        // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client".
+        title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         sub: proposal,
         selectable: true
@@ -1311,7 +1323,22 @@ function makeAttention(ctx) {
         } else {
           void reload();
         }
-      } else if (type === "decided" || type === "proposals") {
+      } else if (type === "decided") {
+        const decidedPayload = data;
+        const decidedKeys = decidedPayload?.keys ?? [];
+        if (decidedKeys.length > 0) {
+          selection.deselect(decidedKeys);
+        }
+        void ctx.api.get("/summary").then((s) => applyCounts(s.counts)).catch(() => {
+        });
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
+      } else if (type === "proposals") {
+        void ctx.api.get("/summary").then((s) => applyCounts(s.counts)).catch(() => {
+        });
         if (boardHandle) {
           void boardHandle.refresh();
         } else {

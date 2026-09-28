@@ -3,40 +3,12 @@
 // Run with: node --test router.test.ts
 // (Node 24 strips TypeScript natively; no compiler step needed.)
 //
-// These tests exercise the pure helper functions inline (the actual router.ts
-// uses window.location and window.addEventListener which are not available in
-// Node).  The implementations here must stay byte-for-byte identical to the
-// ones in router.ts.
+// Imports the real helpers from router-helpers.ts (no window access at module
+// scope) so that breaking a helper makes these tests fail immediately.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-
-// ---- inline copies of the pure helpers from router.ts ----------------------
-// Keep these in sync with router.ts whenever the helpers change.
-
-function safeDecode(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-}
-
-function pathEscape(s: string): string {
-  return encodeURIComponent(s).replace(/%3A/gi, ':').replace(/%40/gi, '@');
-}
-
-function parse(hash: string): { section: string; sub: string } {
-  const path = hash.replace(/^#\//, '');
-  const slash = path.indexOf('/');
-  if (slash === -1) {
-    return { section: path || 'attention', sub: '' };
-  }
-  return {
-    section: path.slice(0, slash),
-    sub: safeDecode(path.slice(slash + 1)),
-  };
-}
+import { safeDecode, pathEscape, parse } from './router-helpers.ts';
 
 // Build an item hash the same way go('item', key) does.
 function buildItemHash(key: string): string {
@@ -51,8 +23,6 @@ describe('parse', () => {
   });
 
   test('#/ → attention with empty sub', () => {
-    // path becomes '' after removing '#/', indexOf('/') = -1,
-    // so section = '' || 'attention' = 'attention'.
     assert.deepStrictEqual(parse('#/'), { section: 'attention', sub: '' });
   });
 
@@ -125,24 +95,24 @@ describe('parse', () => {
     assert.strictEqual(r.sub, 'bad%GGkey');
   });
 
-  test('raw form (unencoded / and #) is still parseable', () => {
-    // The sub after the first slash is taken literally; only the sub is decoded.
-    // A raw key passed through location.hash by older code still works.
+  test('raw form (repo key with path slash) is still parseable', () => {
+    // parse splits at the FIRST slash in the path after #/:
+    // '#/item/repo:schuettc/hail' → section='item', sub='repo:schuettc/hail'
     const r = parse('#/item/repo:schuettc/hail');
     assert.strictEqual(r.section, 'item');
-    // 'repo:schuettc/hail' — the router takes the first slash as the
-    // section/sub boundary, so sub = 'repo:schuettc' (only the part after
-    // the first slash is the sub; the rest is not re-split).
-    // Actually parse splits at the FIRST slash after #/: 'item' | 'repo:schuettc/hail'.
-    // The slash indexOf finds the first slash in 'item/repo:schuettc/hail'.
-    // section = 'item', sub = 'repo:schuettc/hail' (everything after first slash).
-    // Hmm wait — let me re-check. hash = '#/item/repo:schuettc/hail'.
-    // path = 'item/repo:schuettc/hail'
-    // slash = path.indexOf('/') = 4  (after 'item')
-    // section = 'item', sub = 'repo:schuettc/hail'
-    // So sub IS 'repo:schuettc/hail'. The second slash is part of the sub, not
-    // a path segment separator.
     assert.strictEqual(r.sub, 'repo:schuettc/hail');
+  });
+
+  test('safeDecode: plain string unchanged', () => {
+    assert.strictEqual(safeDecode('hello'), 'hello');
+  });
+
+  test('safeDecode: encoded → decoded', () => {
+    assert.strictEqual(safeDecode('a%20b'), 'a b');
+  });
+
+  test('safeDecode: malformed → raw (no throw)', () => {
+    assert.strictEqual(safeDecode('bad%GGkey'), 'bad%GGkey');
   });
 });
 
@@ -176,6 +146,10 @@ describe('pathEscape', () => {
     assert.strictEqual(pathEscape('a b'), 'a%20b');
   });
 
+  test('% is encoded as %25', () => {
+    assert.strictEqual(pathEscape('a%b'), 'a%25b');
+  });
+
   test('full issue key round-trips', () => {
     const key = 'issue:schuettc/hail#4';
     assert.strictEqual(pathEscape(key), 'issue:schuettc%2Fhail%234');
@@ -198,6 +172,7 @@ describe('pathEscape + parse round-trip', () => {
     'worktree:machine/path to dir',
     'issue:user@org/repo#10',
     'issue:nested:colon/slash#5',
+    'issue:foo%bar/baz#6', // key containing a literal % character
   ];
 
   for (const key of keys) {

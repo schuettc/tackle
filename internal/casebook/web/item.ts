@@ -239,7 +239,12 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
   el.append(h('p', { class: 'cb-kicker kit-kick' }, kickerParts));
 
   // ---- title ----------------------------------------------------------------
-  el.append(h('h1', { class: 'cb-title kit-h1' }, it.title ?? it.key));
+  // Fallback: use the display key (without kind prefix) so titleless items
+  // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client"
+  // rather than repeating the kind already shown in the kicker.
+  el.append(
+    h('h1', { class: 'cb-title kit-h1' }, it.title ?? keyWithoutKind(it.key)),
+  );
 
   // ---- facts ----------------------------------------------------------------
   const factPairs: Array<[string, string]> = [];
