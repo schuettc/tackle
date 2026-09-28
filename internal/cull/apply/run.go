@@ -170,6 +170,10 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 			if ctx.Err() != nil {
 				return out, exitf(2, "interrupted during the baseline test run; nothing changed")
 			}
+			if r, ok := startFailure(out.Baseline); ok {
+				return out, exitf(2, "test command could not start (%s: %s); nothing changed",
+					r.Command, strings.TrimSpace(r.OutputTail))
+			}
 			return out, exitf(2, "tests already fail before any change; nothing changed")
 		}
 	}

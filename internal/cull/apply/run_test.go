@@ -269,6 +269,32 @@ func TestBroken(t *testing.T) {
 	}
 }
 
+// TestApplyBaselineStartFailure: a baseline command that cannot start is
+// reported as such, not as "tests already fail" (M-3).
+func TestApplyBaselineStartFailure(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	orig := runVerify
+	runVerify = func(ctx context.Context, _ []verify.Command, timeout time.Duration) []verify.Result {
+		return orig(ctx, []verify.Command{{Dir: root, Argv: []string{filepath.Join(root, "no-such-test-binary")}}}, timeout)
+	}
+	t.Cleanup(func() { runVerify = orig })
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if strings.Contains(err.Error(), "tests already fail") || !strings.Contains(err.Error(), "test command could not start") {
+		t.Errorf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "no-such-test-binary") {
+		t.Errorf("err %v should name the command", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo || out.Snapshot != "" {
+		t.Errorf("Snapshot = %q; file changed:\n%s", out.Snapshot, got)
+	}
+}
+
 // afterOnly swaps runVerify so the baseline runs the real commands but the
 // after-run runs cmds instead (e.g. a missing binary that fails to start).
 func afterOnly(t *testing.T, after []verify.Command) {
