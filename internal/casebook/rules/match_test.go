@@ -17,45 +17,6 @@ import (
 
 var testNow = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 
-// branchFields returns a Fields for a branch item with the given landed info.
-// landedVia is the machine-readable code (e.g. "default-branch", "merged-pr").
-func branchFields(landed string, landedVia ...string) engine.Fields {
-	return engine.Fields{
-		Kind:      "branch",
-		Repo:      "schuettc/galley",
-		Owner:     "schuettc",
-		Landed:    landed,
-		LandedHow: landedVia,
-		Worktree:  "none",
-	}
-}
-
-// repoFields returns a Fields for a repo item.
-func repoFields(archived bool, openPRs, openIssues int) engine.Fields {
-	return engine.Fields{
-		Kind:       "repo",
-		Repo:       "schuettc/galley",
-		Owner:      "schuettc",
-		Archived:   archived,
-		OpenPRs:    openPRs,
-		OpenIssues: openIssues,
-	}
-}
-
-// prFields returns a Fields for a PR item.
-func prFields(direction, title string, age time.Duration, labels []string) engine.Fields {
-	return engine.Fields{
-		Kind:      "pr",
-		Repo:      "schuettc/galley",
-		Owner:     "schuettc",
-		Direction: direction,
-		Relation:  direction,
-		Title:     title,
-		Age:       age,
-		Labels:    labels,
-	}
-}
-
 // --- operator tests ---
 
 func TestEveryOperatorOnEveryFieldType(t *testing.T) {

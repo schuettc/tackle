@@ -17,15 +17,15 @@ func ShellSplit(s string) ([]string, error) {
 	inWord := false
 	for i := 0; i < len(s); {
 		c := s[i]
-		switch {
-		case c == ' ' || c == '\t':
+		switch c {
+		case ' ', '\t':
 			if inWord {
 				words = append(words, string(cur))
 				cur = cur[:0]
 				inWord = false
 			}
 			i++
-		case c == '\'':
+		case '\'':
 			inWord = true
 			i++
 			for i < len(s) && s[i] != '\'' {
@@ -36,7 +36,7 @@ func ShellSplit(s string) ([]string, error) {
 				return nil, fmt.Errorf("unterminated single quote in %q", s)
 			}
 			i++ // closing quote
-		case c == '"':
+		case '"':
 			inWord = true
 			i++
 			for i < len(s) && s[i] != '"' {

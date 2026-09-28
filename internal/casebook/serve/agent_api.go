@@ -18,11 +18,6 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/propose"
 )
 
-func jsonString(v any) (string, error) {
-	b, err := json.Marshal(v)
-	return string(b), err
-}
-
 // source names a session as a proposer or author: "<harness>:<id>".
 func source(sess deliver.Session) string {
 	h := sess.Harness

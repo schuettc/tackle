@@ -47,7 +47,7 @@ func TestPreviewCountsMatchesByReason(t *testing.T) {
 	if preview.Total < 1 {
 		t.Fatalf("preview total %d, want >=1", preview.Total)
 	}
-	if preview.Page == nil || len(preview.Page) == 0 {
+	if len(preview.Page) == 0 {
 		t.Fatal("preview page is empty")
 	}
 }
