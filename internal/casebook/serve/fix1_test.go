@@ -30,7 +30,10 @@ func TestBuildJobBodyTellsAgentToWaitForBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	body := buildJobBody(job)
+	body, err := buildJobBody(job)
+	if err != nil {
+		t.Fatalf("buildJobBody: %v", err)
+	}
 	for _, want := range []string{
 		"Do not run any step until Court confirms the batch.",
 		"The confirmation arrives as a message in this thread.",

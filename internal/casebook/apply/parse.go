@@ -5,11 +5,13 @@ import (
 	"strings"
 )
 
-// shellSplit splits a POSIX shell command line produced by command.go into its
+// ShellSplit splits a POSIX shell command line produced by command.go into its
 // words, honouring single and double quotes (the only quoting shellQuote emits).
 // It is not a general shell parser: it covers exactly the commands casebook
 // generates so the lane runner can turn a stored command back into (dir, args).
-func shellSplit(s string) ([]string, error) {
+// ShellSplit is the single shared parser used by both the casebook-lane runner
+// and the serve layer that executes restore commands.
+func ShellSplit(s string) ([]string, error) {
 	var words []string
 	var cur []byte
 	inWord := false
@@ -60,7 +62,7 @@ func shellSplit(s string) ([]string, error) {
 // gitCommand parses a "git -C <dir> <args...>" command into its working
 // directory and the argument list to pass to RunGit.
 func gitCommand(cmd string) (dir string, args []string, err error) {
-	w, err := shellSplit(cmd)
+	w, err := ShellSplit(cmd)
 	if err != nil {
 		return "", nil, err
 	}

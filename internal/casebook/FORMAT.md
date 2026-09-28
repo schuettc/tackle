@@ -73,7 +73,7 @@ Never stored: command lines, commit or tag messages, titles, bodies, field value
 This machine's clones under its configured roots. Each clone has:
 - path, identifying GitHub repo, remotes (non-GitHub URLs redacted)
 - bare, dirty, stash count, local `core.hooksPath`, adopted (casebook's shims chained in)
-- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip, tip_at (committer date), landed_state ("yes" | "no" | "unknown" | "" = never checked), landed ("in <default>" or "merged #<n>", set only when landed_state=="yes"), landed_tip (tip SHA, set only when landed_state=="yes"), landed_how ("default-branch" or "merged-pr", set only when landed_state=="yes")
+- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip, tip_at (committer date), remote_tip (the tip SHA of the upstream remote branch at snapshot time; empty when no upstream is set or the remote branch is absent), landed_state ("yes" | "no" | "unknown" | "" = never checked), landed ("in <default>" or "merged #<n>", set only when landed_state=="yes"), landed_tip (tip SHA, set only when landed_state=="yes"), landed_how ("default-branch" or "merged-pr", set only when landed_state=="yes")
 - linked worktrees: path, branch, head, detached, dirty
 
 The file is deterministic and holds no timestamps of its own, so an unchanged machine produces no commit.
@@ -153,7 +153,26 @@ The `field` in each `[[match]]` condition must be one of the following. Operator
 
 ## Restore records: `restores/`
 
-Reserved for P3 (apply). A restore record captures the state of an item before a destructive step (branch delete, repo archive, etc.) so the step can be undone. Format to be documented in P3.
+One TSV file per UTC calendar date at `restores/<YYYY-MM-DD>.tsv`. The file is appended (not replaced) as destructive steps run; one line is written immediately before each destructive step executes, so the record is always present if the step ran.
+
+**Header line** (written once, on first creation of the file for that date):
+
+```
+key	action	before	restore-command
+```
+
+**Fields** (TAB-separated, one per line):
+
+| Field | Content |
+|---|---|
+| `key` | Item key (e.g. `branch:schuettc/hail@feat/x`) |
+| `action` | Apply action (e.g. `branch-delete-local`) |
+| `before` | Live value overwritten by the step (branch tip SHA, etc.) |
+| `restore-command` | Single shell command that reverses the step (e.g. `git -C '/path' branch 'feat/x' <tip>`) |
+
+**Commit subject**: `restore record for <key> (<action>)` — one commit per appended line.
+
+**Constraints**: tabs and newlines are refused in any field value; a step whose key or command contains a tab or newline fails before the precondition check.
 
 ## Not in the repository
 

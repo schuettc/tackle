@@ -3,6 +3,7 @@ package serve
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,5 +467,98 @@ func TestJobAskRefuses409ForInvalidJobState(t *testing.T) {
 	}, &out)
 	if code != http.StatusConflict {
 		t.Fatalf("job-ask on done job: got %d %v, want 409", code, out)
+	}
+}
+
+// ── Final fix round: Issue 4 – unknown precondition is a dispatch error ───────
+
+// TestUnknownPreconditionRefusesDispatch verifies that dispatching a job whose
+// agent-lane steps contain an unknown precondition name is refused with a
+// meaningful error, and the agent never receives a message with the bare token.
+func TestUnknownPreconditionRefusesDispatch(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// Build a job with an agent-lane step containing an unknown precondition.
+	plan := apply.Plan{
+		BuiltAt: time.Now(),
+		Head:    "abc123",
+		Steps: []apply.Step{
+			{
+				Key:          "pr:schuettc/hail#42",
+				Action:       "pr-close",
+				Lane:         apply.LaneAgent,
+				Command:      "gh pr close 42 -R schuettc/hail",
+				Precondition: "unknown-precondition-xyz",
+			},
+		},
+	}
+	job, err := r.s.Apply.Create(ctx, plan, "mbp")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job, err = r.s.Apply.Approve(ctx, job.ID, "s1")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	// dispatchAgentJob must return an error and send nothing to the agent.
+	if err := r.s.dispatchAgentJob(ctx, job, "s1"); err == nil {
+		t.Fatal("dispatchAgentJob: expected error for unknown precondition, got nil")
+	}
+
+	// The agent must not receive any delivery.
+	var w struct {
+		Delivery *struct{ ID int64 } `json:"delivery"`
+	}
+	if code := r.do(t, "GET", "/api/agent/wait?session=s1&timeout=1", nil, &w); code != 204 {
+		t.Fatalf("agent received a delivery despite unknown precondition (code=%d, delivery=%+v)", code, w.Delivery)
+	}
+}
+
+// TestKnownPreconditionIsDescribed verifies that known precondition names are
+// expanded to human-readable descriptions in the job body.
+func TestKnownPreconditionIsDescribed(t *testing.T) {
+	plan := apply.Plan{
+		BuiltAt: time.Now(),
+		Head:    "abc",
+		Steps: []apply.Step{
+			{
+				Key:          "pr:schuettc/hail#7",
+				Action:       "pr-close",
+				Lane:         apply.LaneAgent,
+				Command:      "gh pr close 7 -R schuettc/hail",
+				Precondition: "pr-no-new-activity",
+			},
+			{
+				Key:          "repo:schuettc/hail",
+				Action:       "repo-archive",
+				Lane:         apply.LaneAgent,
+				Command:      "gh repo archive schuettc/hail",
+				Precondition: "repo-no-open-human-prs",
+			},
+		},
+	}
+	job := apply.Job{ID: 1, Steps: func() []apply.JobStep {
+		var out []apply.JobStep
+		for _, s := range plan.Steps {
+			out = append(out, apply.JobStep{
+				Key:          s.Key,
+				Action:       s.Action,
+				Lane:         s.Lane,
+				Command:      s.Command,
+				Precondition: s.Precondition,
+			})
+		}
+		return out
+	}()}
+	body, err := buildJobBody(job)
+	if err != nil {
+		t.Fatalf("buildJobBody: %v", err)
+	}
+	for _, want := range []string{"pr view", "pr list"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("job body missing %q; body:\n%s", want, body)
+		}
 	}
 }

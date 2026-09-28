@@ -191,6 +191,20 @@ func (s *Server) laneCtx() context.Context {
 	return context.Background()
 }
 
+// settleJob calls Store.Settle for jobID and, when the state changes,
+// publishes a "job" event on the bus so watchers see the terminal state.
+// Errors are logged to stderr (non-fatal: the step state is already persisted).
+func (s *Server) settleJob(ctx context.Context, jobID int64) {
+	newState, changed, err := s.Apply.Settle(ctx, jobID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: Settle job %d: %v\n", jobID, err)
+		return
+	}
+	if changed {
+		s.Bus.Publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
+	}
+}
+
 // startCasebookLane launches the casebook lane for a job at most once at a time
 // (a per-job single-flight guard). If a lane is already running for the job the
 // call is a no-op. The guard entry is cleared when the lane goroutine returns.
@@ -243,6 +257,9 @@ func (s *Server) startCasebookLane(job apply.Job) {
 		if err := s.Apply.RunCasebookLane(bgCtx, job, s.Runner, env, pauseFn); err != nil {
 			fmt.Fprintf(os.Stderr, "casebook serve: RunCasebookLane job %d: %v\n", job.ID, err)
 		}
+		// After the casebook lane drains, check whether the job has reached a
+		// terminal state (all steps done or nothing left to run).
+		s.settleJob(bgCtx, job.ID)
 	}()
 }
 

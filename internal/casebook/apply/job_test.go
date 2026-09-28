@@ -1293,3 +1293,261 @@ func TestReleaseUndoClaimUpdatesUpdatedAt(t *testing.T) {
 		t.Errorf("ReleaseUndoClaim: updated_at = %d; want %d (t1)", updatedAt, ms(t1))
 	}
 }
+
+// ── Final fix round: Issue 1 – Store.Settle drives jobs to terminal state ─────
+
+// makeJob creates a casebook-only job, approves it, and runs it through the
+// given step state sequence.
+func makeJob(t *testing.T, s *Store, steps []Step) (Job, []JobStep) {
+	t.Helper()
+	ctx := context.Background()
+	job, err := s.Create(ctx, Plan{BuiltAt: time.Now(), Steps: steps}, "mac")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Determine whether any agent lane steps exist.
+	session := ""
+	for _, st := range steps {
+		if st.Lane == LaneAgent {
+			session = "sess-settle"
+			break
+		}
+	}
+	job, err = s.Approve(ctx, job.ID, session)
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	_ = s.SetJobState(ctx, job.ID, JobRunning)
+	job, _ = s.Get(ctx, job.ID)
+	return job, job.Steps
+}
+
+// TestSettleCasebookOnlyJobEndsDone verifies that Settle transitions a
+// casebook-only job to done once all its steps are verified or skipped.
+func TestSettleCasebookOnlyJobEndsDone(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+		{Key: "k2", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D y"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	// Before settling: job stays running with mixed step states.
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if changed {
+		t.Error("Settle should not change state when steps are still pending")
+	}
+	if state != JobRunning {
+		t.Errorf("state = %q; want running", state)
+	}
+
+	// Advance both steps to verified.
+	for _, st := range jsteps {
+		_ = s.SetStepState(ctx, st.ID, StepRunning, "")
+		_ = s.SetStepState(ctx, st.ID, StepReported, "")
+		_ = s.SetStepState(ctx, st.ID, StepVerified, "")
+	}
+
+	state, changed, err = s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if !changed {
+		t.Error("Settle should have changed state to done")
+	}
+	if state != JobDone {
+		t.Errorf("state = %q; want done", state)
+	}
+	got, _ := s.Get(ctx, job.ID)
+	if got.State != JobDone {
+		t.Errorf("persisted state = %q; want done", got.State)
+	}
+	if got.FinishedAt.IsZero() {
+		t.Error("FinishedAt should be set after Settle→done")
+	}
+}
+
+// TestSettleAgentOnlyJobEndsDone verifies that Settle transitions an
+// agent-only job to done after its last step is verified.
+func TestSettleAgentOnlyJobEndsDone(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "pr:schuettc/hail#1", Action: "pr-close", Lane: LaneAgent,
+			Command: "gh pr close 1 -R schuettc/hail"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepReported, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepVerified, "")
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if !changed || state != JobDone {
+		t.Errorf("Settle = (%q, %v); want (done, true)", state, changed)
+	}
+}
+
+// TestSettleMixedJobStaysPendingUntilBothLanesDone verifies that a job with
+// both casebook-lane and agent-lane steps stays running until all steps
+// across both lanes are terminal.
+func TestSettleMixedJobStaysPendingUntilBothLanesDone(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+		{Key: "pr:schuettc/hail#5", Action: "pr-close", Lane: LaneAgent, Command: "gh pr close 5 -R schuettc/hail"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	// Finish only the casebook step.
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepReported, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepVerified, "")
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if changed {
+		t.Error("Settle should not finish a mixed job when the agent lane is still pending")
+	}
+	if state != JobRunning {
+		t.Errorf("state = %q; want running", state)
+	}
+
+	// Now finish the agent step too.
+	_ = s.SetStepState(ctx, jsteps[1].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[1].ID, StepReported, "")
+	_ = s.SetStepState(ctx, jsteps[1].ID, StepVerified, "")
+
+	state, changed, err = s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle mixed done: %v", err)
+	}
+	if !changed || state != JobDone {
+		t.Errorf("Settle = (%q, %v); want (done, true)", state, changed)
+	}
+}
+
+// TestSettleFailedStepWithNoCardEndsFailed verifies that a job whose step
+// failed and has no open needs-you card transitions to failed.
+func TestSettleFailedStepWithNoCardEndsFailed(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepFailed, "network error")
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if !changed || state != JobFailed {
+		t.Errorf("Settle = (%q, %v); want (failed, true)", state, changed)
+	}
+}
+
+// TestSettleJobWithOpenCardStaysRunning verifies that a job with a failed step
+// and an open needs-you card does not transition (Court must act first).
+func TestSettleJobWithOpenCardStaysRunning(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepRunning, "")
+	// PauseStepWithCard fails→paused, opening a card atomically.
+	_, err := s.PauseStepWithCard(ctx, jsteps[0].ID, StepFailed, "failed", "network error")
+	if err != nil {
+		t.Fatalf("PauseStepWithCard: %v", err)
+	}
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if changed {
+		t.Error("Settle should not change state while an open needs-you card exists")
+	}
+	if state != JobRunning {
+		t.Errorf("state = %q; want running", state)
+	}
+}
+
+// TestSettleSkippedStepsCountAsDone verifies that skipped steps count as done
+// for the purposes of job completion.
+func TestSettleSkippedStepsCountAsDone(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	steps := []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+		{Key: "k2", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D y"},
+	}
+	job, jsteps := makeJob(t, s, steps)
+
+	// First step verified, second step skipped.
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepReported, "")
+	_ = s.SetStepState(ctx, jsteps[0].ID, StepVerified, "")
+	_ = s.SetStepState(ctx, jsteps[1].ID, StepRunning, "")
+	_ = s.SetStepState(ctx, jsteps[1].ID, StepSkipped, "precondition failed")
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle: %v", err)
+	}
+	if !changed || state != JobDone {
+		t.Errorf("Settle = (%q, %v); want (done, true)", state, changed)
+	}
+}
+
+// TestSettleAlreadyTerminalIsNoop verifies that Settle on a terminal job
+// returns changed=false and the current state.
+func TestSettleAlreadyTerminalIsNoop(t *testing.T) {
+	ctx := context.Background()
+	s := NewStore(openTestDB(t))
+
+	job, err := s.Create(ctx, Plan{BuiltAt: time.Now(), Steps: []Step{
+		{Key: "k1", Action: "branch-delete-local", Lane: LaneCasebook, Command: "git -C /x branch -D x"},
+	}}, "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, job.ID, JobDone); err != nil {
+		t.Fatal(err)
+	}
+
+	state, changed, err := s.Settle(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("Settle on done: %v", err)
+	}
+	if changed {
+		t.Error("Settle on done job should not change state")
+	}
+	if state != JobDone {
+		t.Errorf("state = %q; want done", state)
+	}
+}

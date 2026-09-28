@@ -547,6 +547,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 				s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
 			}
 		}
+		// Check whether the job has reached a terminal state after this report.
+		s.settleJob(ctx, job.ID)
 
 	case "paused":
 		// Fix 2: atomic step state + card.
@@ -567,6 +569,9 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
 		s.Bus.Publish(ctx, "needs_you", ny)
+		// A failed step with an open card does not immediately end the job, but
+		// trigger Settle so it can detect completion if all other steps are done.
+		s.settleJob(ctx, job.ID)
 	}
 
 	reply(w, JobStepResult{JobID: in.Job, StepID: step.ID, State: in.State}, nil)
@@ -630,7 +635,10 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 		return fmt.Errorf("dispatchAgentJob: create thread: %w", err)
 	}
 
-	body := buildJobBody(job)
+	body, err := buildJobBody(job)
+	if err != nil {
+		return fmt.Errorf("dispatchAgentJob: %w", err)
+	}
 	att := deliver.Attached{Job: strconv.FormatInt(job.ID, 10)}
 	if _, err := s.Queue.Post(ctx, thread.ID, body, att, false); err != nil {
 		return fmt.Errorf("dispatchAgentJob: post: %w", err)
@@ -643,7 +651,7 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 // It lists every agent-lane step with its command and precondition, calls out
 // steps that post public text (requiring casebook_job_ask before posting), and
 // describes the protocol for working the job with casebook_job_step.
-func buildJobBody(job apply.Job) string {
+func buildJobBody(job apply.Job) (string, error) {
 	var b strings.Builder
 
 	// Count agent-lane steps.
@@ -673,7 +681,11 @@ func buildJobBody(job apply.Job) string {
 		fmt.Fprintf(&b, "[s-%d] %s · %s\n", st.ID, st.Key, st.Action)
 		fmt.Fprintf(&b, "  command: %s\n", st.Command)
 		if st.Precondition != "" {
-			fmt.Fprintf(&b, "  precondition: %s\n", describePrecondition(st.Precondition, st.Key))
+			desc, err := describePrecondition(st.Precondition, st.Key)
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(&b, "  precondition: %s\n", desc)
 		}
 		if st.Posts {
 			b.WriteString("  ⚠ posts public text: draft text first with casebook_job_ask; wait for Court's approval before running\n")
@@ -691,17 +703,20 @@ func buildJobBody(job apply.Job) string {
 	fmt.Fprintf(&b, "  5. casebook_job_step(job=%d, step=<step_id>, state=\"failed\", detail=\"reason\") on error\n", job.ID)
 	b.WriteString("casebook verifies each reported step's outcome by a fresh observation.\n")
 
-	return b.String()
+	return b.String(), nil
 }
 
 // describePrecondition translates a machine precondition name into a human
 // description the agent can act on, including the live check to perform.
-func describePrecondition(precondition, key string) string {
+// An unknown precondition name is a programming error: a bare token would be
+// sent to the agent, which would silently skip a real check. An error is
+// returned so buildJobBody and dispatchAgentJob can refuse to dispatch.
+func describePrecondition(precondition, key string) (string, error) {
 	switch precondition {
 	case "pr-no-new-activity":
-		return precondition + " (run: gh pr view <num> -R <repo> --json updatedAt; confirm updatedAt ≤ decision time)"
+		return precondition + " (run: gh pr view <num> -R <repo> --json updatedAt; confirm updatedAt ≤ decision time)", nil
 	case "repo-no-open-human-prs":
-		return precondition + " (run: gh pr list -R <repo> --state open --json author; confirm no human authors)"
+		return precondition + " (run: gh pr list -R <repo> --state open --json author; confirm no human authors)", nil
 	}
-	return precondition
+	return "", fmt.Errorf("unknown precondition %q for step %s: add a description in describePrecondition before dispatching", precondition, key)
 }

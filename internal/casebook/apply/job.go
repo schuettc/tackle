@@ -342,6 +342,85 @@ func (s *Store) Cancel(ctx context.Context, jobID int64) error {
 	})
 }
 
+// Settle checks whether the job with jobID has reached a terminal state and,
+// if so, transitions it. It returns the final state, whether it changed, and
+// any error.
+//
+// Completion rules (applied only to non-terminal, non-planned jobs):
+//
+//   - every step is verified, skipped, or undone (undone_at != 0) → JobDone;
+//   - no step is pending/running/reported/paused/needs_you, no open needs-you
+//     card exists, and at least one step is failed-and-not-undone → JobFailed;
+//   - otherwise the job stays as-is.
+func (s *Store) Settle(ctx context.Context, jobID int64) (JobState, bool, error) {
+	var current JobState
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT state FROM jobs WHERE id = ?`, jobID).Scan(&current); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, fmt.Errorf("job %d not found", jobID)
+		}
+		return "", false, err
+	}
+	// Terminal or planned jobs are never touched.
+	switch current {
+	case JobDone, JobFailed, JobCancelled, JobPlanned:
+		return current, false, nil
+	}
+
+	steps, err := s.Steps(ctx, jobID)
+	if err != nil {
+		return "", false, err
+	}
+
+	// A step with undone_at set is always settled, whatever its state column.
+	// Otherwise: verified and skipped are settled; failed is a blocker;
+	// anything else (pending/running/reported/paused/needs_you) is in-progress.
+	var (
+		allSettled = true
+		anyFailed  bool
+		hasPending bool
+	)
+	for _, st := range steps {
+		if !st.UndoneAt.IsZero() {
+			continue // undone: settled
+		}
+		switch st.State {
+		case StepVerified, StepSkipped:
+			// settled
+		case StepFailed:
+			allSettled = false
+			anyFailed = true
+		default:
+			allSettled = false
+			hasPending = true
+		}
+	}
+
+	if allSettled {
+		if err := s.Finish(ctx, jobID, JobDone); err != nil {
+			return "", false, err
+		}
+		return JobDone, true, nil
+	}
+
+	if !hasPending && anyFailed {
+		var openCards int
+		if err := s.DB.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM needs_you WHERE job_id = ? AND state = 'open'`,
+			jobID).Scan(&openCards); err != nil {
+			return "", false, err
+		}
+		if openCards == 0 {
+			if err := s.Finish(ctx, jobID, JobFailed); err != nil {
+				return "", false, err
+			}
+			return JobFailed, true, nil
+		}
+	}
+
+	return current, false, nil
+}
+
 // Get returns the job with the given ID, including its steps.
 func (s *Store) Get(ctx context.Context, id int64) (Job, error) {
 	row := s.DB.QueryRowContext(ctx,

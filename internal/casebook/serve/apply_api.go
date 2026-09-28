@@ -528,7 +528,7 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 	if !strings.HasPrefix(restore, "git -C ") {
 		return fmt.Errorf("unsupported restore command format: %q", restore)
 	}
-	words, err := parseShellWords(restore)
+	words, err := apply.ShellSplit(restore)
 	if err != nil || len(words) < 4 {
 		return fmt.Errorf("could not parse restore command %q: %v", restore, err)
 	}
@@ -544,42 +544,6 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// parseShellWords splits a simple shell command into words, handling
-// single-quoted arguments (as produced by RestoreFor's shellQuote). This is
-// not a full shell parser; it handles the exact format RestoreFor generates.
-func parseShellWords(s string) ([]string, error) {
-	var words []string
-	var cur strings.Builder
-	inSingle := false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case inSingle:
-			if c == '\'' {
-				inSingle = false
-			} else {
-				cur.WriteByte(c)
-			}
-		case c == '\'':
-			inSingle = true
-		case c == ' ' || c == '\t':
-			if cur.Len() > 0 {
-				words = append(words, cur.String())
-				cur.Reset()
-			}
-		default:
-			cur.WriteByte(c)
-		}
-	}
-	if inSingle {
-		return nil, fmt.Errorf("unterminated single quote")
-	}
-	if cur.Len() > 0 {
-		words = append(words, cur.String())
-	}
-	return words, nil
 }
 
 // postJobsAnswer is POST /api/jobs/answer.
@@ -657,6 +621,10 @@ func (s *Server) postJobsAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// After any card answer, check whether the job has reached a terminal state.
+	// This handles skip-batch (agent steps skipped), skip (step skipped or failed
+	// step's card closed), and any other action that may drain remaining work.
+	s.settleJob(ctx, card.JobID)
 	s.Bus.Publish(ctx, "needs_you", card)
 	reply(w, AnswerResult{NeedsYou: card}, nil)
 }
