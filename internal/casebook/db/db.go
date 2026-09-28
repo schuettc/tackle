@@ -138,6 +138,7 @@ CREATE TABLE steps (
   posts        INTEGER NOT NULL DEFAULT 0,
   text         TEXT NOT NULL DEFAULT '',
   restore      TEXT NOT NULL DEFAULT '',
+  expected_tip TEXT NOT NULL DEFAULT '',
   state        TEXT NOT NULL,
   detail       TEXT NOT NULL DEFAULT '',
   updated_at   INTEGER NOT NULL,
