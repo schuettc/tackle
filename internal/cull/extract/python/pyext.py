@@ -22,17 +22,10 @@ import ast
 import io
 import json
 import os
-import re
 import sys
 import tokenize
 
 MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 24000)
-
-
-def _alias_str(a):
-    """Rewritten text for one kept `import`/`from ... import` alias,
-    preserving its `as` if any."""
-    return a.name if not a.asname else f"{a.name} as {a.asname}"
 
 
 def _import_bound_name(a):
@@ -98,9 +91,11 @@ def tidy_source(data, before=b""):
     is left exactly as it was, including each line's own line ending.
     A source that is not valid UTF-8 returns (None, []): no change.
     `from x import *` and `from __future__ import ...` are never touched;
-    a statement left with no used aliases is deleted whole; a statement
-    with some unused aliases is rewritten keeping only the used ones. If
-    the source fails to parse, it is returned unchanged.
+    a statement left with no used aliases is deleted whole (with the
+    blank lines after it, keeping the file's own separator); from a
+    statement with some unused aliases only those aliases are cut, in
+    place (never re-rendered). If the source fails to parse, it is
+    returned unchanged.
 
     Only module-level (top-level) import statements are ever touched: one
     nested inside any block (if/try/with/def/class, including a
@@ -130,12 +125,49 @@ def tidy_source(data, before=b""):
 
     def dropped(name):
         return name not in used and name in used_before
-    comment_lines = _collect_comment_lines(src)
-    lines = src.splitlines(keepends=True)
 
-    # lineno (1-indexed) -> (end_lineno, "delete"|"replace", text_or_None)
-    actions = {}
+    comment_lines = _collect_comment_lines(src)
+    # Lines split on "\n" only (ast counts lines the same way for "\n" and
+    # "\r\n"); each keeps its own ending.
+    lines = src.split("\n")
+    lines = [l + "\n" for l in lines[:-1]] + ([lines[-1]] if lines[-1] else [])
+    starts = [0]
+    for l in lines:
+        starts.append(starts[-1] + len(l))
+
+    def off(lineno, col):
+        """Char offset of (1-indexed line, UTF-8 byte column)."""
+        line = lines[lineno - 1] if lineno - 1 < len(lines) else ""
+        return starts[lineno - 1] + len(line.encode("utf-8")[:col].decode("utf-8", errors="ignore"))
+
+    deleted = set()  # 1-indexed lines of statements deleted whole
+    cuts = []  # (start, end) char ranges inside kept statements
     removed = []
+
+    def plan(n, keep, names):
+        """Delete n whole, or cut each run of dropped aliases out of it
+        in place: a run followed by a kept alias goes up to that alias
+        (its own line in a parenthesised list, else "name, "); a run at
+        the end goes from the previous kept alias's end (", name")."""
+        if not keep:
+            deleted.update(range(n.lineno, n.end_lineno + 1))
+            return True
+        if any(getattr(a, "end_col_offset", None) is None for a in names):
+            return False  # Python < 3.10: no alias positions; leave it
+        i = 0
+        while i < len(names):
+            if names[i] in keep:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(names) and names[j + 1] not in keep:
+                j += 1
+            if j + 1 < len(names):
+                cuts.append((off(names[i].lineno, names[i].col_offset), off(names[j + 1].lineno, names[j + 1].col_offset)))
+            else:
+                cuts.append((off(names[i - 1].end_lineno, names[i - 1].end_col_offset), off(names[j].end_lineno, names[j].end_col_offset)))
+            i = j + 1
+        return True
 
     # Lines holding more than one top-level statement (`import os; import
     # sys`): the line-based edit below would take the neighbour with it,
@@ -149,72 +181,65 @@ def tidy_source(data, before=b""):
     # Only tree.body (module-level statements), never ast.walk(tree): an
     # import nested inside any block is never touched.
     for n in tree.body:
-        if isinstance(n, (ast.Import, ast.ImportFrom)) and any(
-            l in shared_lines for l in range(n.lineno, n.end_lineno + 1)
-        ):
+        if not isinstance(n, (ast.Import, ast.ImportFrom)):
+            continue
+        if any(l in shared_lines or l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
             continue
         if isinstance(n, ast.ImportFrom):
             if n.module == "__future__" or any(a.name == "*" for a in n.names):
                 continue
-            if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
-                continue
             keep = [a for a in n.names if not dropped(a.asname or a.name)]
-            if len(keep) == len(n.names):
-                continue
-            dots = "." * n.level
-            module = dots + (n.module or "")
-            for a in n.names:
-                if a not in keep:
-                    removed.append(f"{module}.{a.name}" if module else a.name)
-            if not keep:
-                actions[n.lineno] = (n.end_lineno, "delete", None)
-            else:
-                text = "from " + module + " import " + ", ".join(_alias_str(a) for a in keep)
-                actions[n.lineno] = (n.end_lineno, "replace", text)
-        elif isinstance(n, ast.Import):
-            if any(l in comment_lines for l in range(n.lineno, n.end_lineno + 1)):
-                continue
+            module = "." * n.level + (n.module or "")
+            gone = [f"{module}.{a.name}" if module else a.name for a in n.names if a not in keep]
+        else:
             keep = [a for a in n.names if not dropped(_import_bound_name(a))]
-            if len(keep) == len(n.names):
-                continue
-            for a in n.names:
-                if a not in keep:
-                    removed.append(a.name)
-            if not keep:
-                actions[n.lineno] = (n.end_lineno, "delete", None)
-            else:
-                text = "import " + ", ".join(_alias_str(a) for a in keep)
-                actions[n.lineno] = (n.end_lineno, "replace", text)
+            gone = [a.name for a in n.names if a not in keep]
+        if len(keep) == len(n.names):
+            continue
+        if plan(n, keep, n.names):
+            removed.extend(gone)
 
-    if not actions:
+    if not deleted and not cuts:
         return src, []
 
-    out_lines = []
-    i = 1
-    n_lines = len(lines)
-    while i <= n_lines:
-        action = actions.get(i)
-        if action is not None:
-            end, kind, text = action
-            if kind == "delete":
-                i = end + 1
-                continue
-            indent_match = re.match(r"[ \t]*", lines[i - 1])
-            indent = indent_match.group() if indent_match else ""
-            last_line = lines[end - 1]
-            if last_line.endswith("\r\n"):
-                nl = "\r\n"
-            elif last_line.endswith("\n"):
-                nl = "\n"
-            else:
-                nl = ""
-            out_lines.append(indent + text + nl)
-            i = end + 1
-            continue
-        out_lines.append(lines[i - 1])
-        i += 1
+    # Settle the blank lines around each run of deleted statements: keep
+    # the larger of the blank runs before and after it, or none at the
+    # start or end of the file (the same rule apply uses for tests).
+    def blank(i):
+        return lines[i - 1].strip() == ""
 
-    out_source = "".join(out_lines)
+    drop = set()
+    n_lines = len(lines)
+    i = 1
+    while i <= n_lines:
+        if i not in deleted:
+            i += 1
+            continue
+        lo = i
+        while lo > 1 and blank(lo - 1) and (lo - 1) not in deleted:
+            lo -= 1
+        hi = i
+        while hi < n_lines and ((hi + 1) in deleted or blank(hi + 1)):
+            hi += 1
+        last_del = max(d for d in range(lo, hi + 1) if d in deleted)
+        first_del = min(d for d in range(lo, hi + 1) if d in deleted)
+        region = set(range(first_del, last_del + 1))
+        n_before = first_del - lo
+        n_after = hi - last_del
+        if lo == 1 or hi == n_lines:
+            region.update(range(lo, hi + 1))
+        elif n_after > n_before:
+            region.update(range(lo, first_del))
+        else:
+            region.update(range(last_del + 1, hi + 1))
+        drop.update(region)
+        i = hi + 1
+
+    for l in drop:
+        cuts.append((starts[l - 1], starts[l]))
+    out_source = src
+    for a, b in sorted(cuts, reverse=True):
+        out_source = out_source[:a] + out_source[b:]
 
     # Test-only seam (see task-3-brief fix): forces the post-check below
     # to fail, so the revert-to-original path can be exercised without a

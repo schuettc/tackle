@@ -319,10 +319,9 @@ function collectCommentLines(sf, text) {
 // tidySource rewrites src (one file's full text) dropping import
 // specifiers whose bound identifier is never used elsewhere in the file.
 // A side-effect import (`import "x"`, no importClause) is always kept.
-// An import declaration left with nothing used is deleted whole; one
-// with some specifiers unused is rewritten keeping only the used ones
-// (and the original module specifier text, quotes included, and whether
-// the statement originally ended in a semicolon). Every other byte of
+// An import declaration left with nothing used is deleted whole (with the
+// blank lines after it, keeping the file's own separator); from one with
+// some specifiers unused only those are cut, in place (never re-rendered). Every other byte of
 // src is returned unchanged, including each line's own line ending. If
 // src fails to parse, it is returned unchanged.
 //
@@ -358,7 +357,8 @@ function tidySource(src, relpath, before) {
   const dropped = (name) => !used.has(name) && usedBefore.has(name);
   const commentLines = collectCommentLines(sf, src);
   const lines = splitLinesKeepEnds(src);
-  const actions = new Map(); // startLine (0-indexed) -> {endLine, kind, text}
+  const deleted = new Set(); // 0-indexed lines of statements deleted whole
+  const cuts = []; // [start, end) ranges cut in place inside kept statements
   const removed = [];
 
   // Lines holding more than one top-level statement (`import {a} from
@@ -430,51 +430,79 @@ function tidySource(src, relpath, before) {
 
     const keepAnything = keepDefault || keepNamespace || (keepNamed && keepNamed.length > 0);
     if (!keepAnything) {
-      actions.set(startLine, { endLine, kind: "delete" });
+      for (let l = startLine; l <= endLine; l++) deleted.add(l);
       continue;
     }
 
-    const hadSemi = src[st.getEnd() - 1] === ";";
-    const typePrefix = clause.isTypeOnly ? "type " : "";
-    const parts = [];
-    if (keepDefault) parts.push(keepDefault);
-    if (keepNamespace) {
-      parts.push(`* as ${keepNamespace}`);
-    } else if (keepNamed && keepNamed.length > 0) {
-      const specs = keepNamed.map((el) => {
-        const tp = el.isTypeOnly ? "type " : "";
-        return el.propertyName ? `${tp}${el.propertyName.text} as ${el.name.text}` : `${tp}${el.name.text}`;
-      });
-      parts.push(`{ ${specs.join(", ")} }`);
+    // Cut the dropped parts in place; the statement is never re-rendered.
+    const nb = clause.namedBindings;
+    if (hadDefault && !keepDefault) {
+      cuts.push([clause.name.getStart(sf), nb.getStart(sf)]); // "D, "
+    } else if (hadDefault && nb && (hadNamespace ? !keepNamespace : keepNamed.length === 0)) {
+      cuts.push([clause.name.getEnd(), nb.getEnd()]); // ", { b }"
     }
-    const text = `import ${typePrefix}${parts.join(", ")} from ${moduleText}${hadSemi ? ";" : ""}`;
-
-    const indentMatch = lines[startLine].match(/^[ \t]*/);
-    const indent = indentMatch ? indentMatch[0] : "";
-    const lastLine = lines[endLine];
-    let nl = "";
-    if (lastLine.endsWith("\r\n")) nl = "\r\n";
-    else if (lastLine.endsWith("\n")) nl = "\n";
-
-    actions.set(startLine, { endLine, kind: "replace", text: indent + text + nl });
+    if (hadNamed && keepNamed.length > 0 && keepNamed.length < nb.elements.length) {
+      // A run of dropped names followed by a kept one goes up to it (its
+      // own line in a multi-line list, else "b, "); a run at the end
+      // goes from the previous kept name's end (", b").
+      const els = nb.elements;
+      const kept = new Set(keepNamed);
+      let i = 0;
+      while (i < els.length) {
+        if (kept.has(els[i])) {
+          i++;
+          continue;
+        }
+        let j = i;
+        while (j + 1 < els.length && !kept.has(els[j + 1])) j++;
+        if (j + 1 < els.length) cuts.push([els[i].getStart(sf), els[j + 1].getStart(sf)]);
+        else cuts.push([els[i - 1].getEnd(), els[j].getEnd()]);
+        i = j + 1;
+      }
+    }
   }
 
-  if (actions.size === 0) return { source: src, removed: [] };
+  if (deleted.size === 0 && cuts.length === 0) return { source: src, removed: [] };
 
-  const out = [];
+  // Settle the blank lines around each run of deleted statements: keep
+  // the larger of the blank runs before and after it, or none at the
+  // start or end of the file (the same rule apply uses for tests).
+  const lineStarts = [0];
+  for (const l of lines) lineStarts.push(lineStarts[lineStarts.length - 1] + l.length);
+  const blank = (i) => lines[i].trim() === "";
+  const n = lines.length;
   let i = 0;
-  while (i < lines.length) {
-    const action = actions.get(i);
-    if (action) {
-      if (action.kind !== "delete") out.push(action.text);
-      i = action.endLine + 1;
+  while (i < n) {
+    if (!deleted.has(i)) {
+      i++;
       continue;
     }
-    out.push(lines[i]);
-    i++;
+    let lo = i;
+    while (lo > 0 && blank(lo - 1) && !deleted.has(lo - 1)) lo--;
+    let hi = i;
+    while (hi + 1 < n && (deleted.has(hi + 1) || blank(hi + 1))) hi++;
+    let firstDel = i;
+    let lastDel = i;
+    for (let l = i; l <= hi; l++) if (deleted.has(l)) lastDel = l;
+    let from = firstDel;
+    let to = lastDel;
+    const nBefore = firstDel - lo;
+    const nAfter = hi - lastDel;
+    if (lo === 0 || hi === n - 1) {
+      from = lo;
+      to = hi;
+    } else if (nAfter > nBefore) {
+      from = lo;
+    } else {
+      to = hi;
+    }
+    cuts.push([lineStarts[from], lineStarts[to + 1]]);
+    i = hi + 1;
   }
 
-  let outSource = out.join("");
+  cuts.sort((x, y) => y[0] - x[0]);
+  let outSource = src;
+  for (const [a, b] of cuts) outSource = outSource.slice(0, a) + outSource.slice(b);
 
   // Test-only seam (see task-3-brief fix): forces the post-check below
   // to fail, so the revert-to-original path can be exercised without a

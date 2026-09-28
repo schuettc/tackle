@@ -42,7 +42,8 @@ func TestTidyDispatchesPython(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "\n\ndef test_x():\n    assert True\n"
+	// The deleted import takes the blank lines after it (I-1).
+	want := "def test_x():\n    assert True\n"
 	if string(out) != want {
 		t.Errorf("out = %q, want %q", out, want)
 	}

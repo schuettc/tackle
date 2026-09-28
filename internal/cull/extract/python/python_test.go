@@ -482,3 +482,42 @@ func TestPyTidyRefusesNonUTF8(t *testing.T) {
 func cutUsing(src string, names ...string) []byte {
 	return []byte(src + "\n\ndef test_gone():\n    assert " + strings.Join(append(names, "True"), " and ") + "\n")
 }
+
+// TestPyTidyEditsImportsInPlace (I-1): partial imports lose only the
+// unused name (its own line in a parenthesised list, else its segment and
+// one comma), never re-rendered; a deleted statement takes the blank
+// lines after it, keeping the file's own separator.
+func TestPyTidyEditsImportsInPlace(t *testing.T) {
+	requirePython3(t)
+	body := "\n\n\ndef test_x():\n    assert a and c\n"
+	for _, c := range []struct {
+		name, imports string
+		gone          []string
+		want          string
+	}{
+		{"multi-line middle", "from m import (\n    a,\n    b,\n    c,\n)", []string{"b"},
+			"from m import (\n    a,\n    c,\n)"},
+		{"multi-line last no comma", "from m import (\n    a,\n    c,\n    b\n)", []string{"b"},
+			"from m import (\n    a,\n    c\n)"},
+		{"one line middle", "from m import a, b, c", []string{"b"}, "from m import a, c"},
+		{"one line last", "from m import a, c, b", []string{"b"}, "from m import a, c"},
+		{"one line first two", "from m import b, bb as x, a, c", []string{"b", "x"}, "from m import a, c"},
+		{"plain import", "import b, a, c", []string{"b"}, "import a, c"},
+		{"own block after", "import a\nimport c\n\nimport b", []string{"b"}, "import a\nimport c"},
+		{"own block first", "import b\n\nimport a\nimport c", []string{"b"}, "import a\nimport c"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := c.imports + body
+			out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", cutUsing(src, c.gone...), []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := c.want + body; string(out) != want {
+				t.Errorf("out = %q\nwant  %q", out, want)
+			}
+			if len(removed) != len(c.gone) {
+				t.Errorf("removed = %v, want %d", removed, len(c.gone))
+			}
+		})
+	}
+}

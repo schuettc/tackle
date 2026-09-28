@@ -394,3 +394,44 @@ func TestTsTidyRefusesNonUTF8(t *testing.T) {
 func cutUsing(src string, names ...string) []byte {
 	return []byte(src + "\ntest(\"gone\", () => {\n  use(" + strings.Join(names, ", ") + ");\n});\n")
 }
+
+// TestTsTidyEditsImportsInPlace (I-1): partial imports lose only the
+// unused name (its own line in a braced list, else its segment and one
+// comma), never re-rendered; a deleted statement takes the blank lines
+// after it.
+func TestTsTidyEditsImportsInPlace(t *testing.T) {
+	requireTS(t)
+	body := "\n\ntest(\"x\", () => {\n  expect(a(c)).toBe(D);\n});\n"
+	for _, c := range []struct {
+		name, imports string
+		gone          []string
+		want          string
+	}{
+		{"multi-line middle", "import {\n  a,\n  b,\n  c,\n} from \"./m\";", []string{"b"},
+			"import {\n  a,\n  c,\n} from \"./m\";"},
+		{"multi-line last no comma", "import {\n  a,\n  c,\n  b\n} from \"./m\";", []string{"b"},
+			"import {\n  a,\n  c\n} from \"./m\";"},
+		{"one line middle", "import { a, b, c } from \"./m\";", []string{"b"}, "import { a, c } from \"./m\";"},
+		{"one line last two", "import { a, c, b, x as y } from \"./m\";", []string{"b", "y"}, "import { a, c } from \"./m\";"},
+		{"type-only kept", "import { type T, a, b, c } from \"./m\";", []string{"b"}, "import { type T, a, c } from \"./m\";"},
+		{"default kept", "import D, { b } from \"./m\";\nimport { a, c } from \"./n\";", []string{"b"},
+			"import D from \"./m\";\nimport { a, c } from \"./n\";"},
+		{"default dropped", "import b, { a, c, D } from \"./m\";", []string{"b"}, "import { a, c, D } from \"./m\";"},
+		{"own block", "import { a, c, D } from \"./m\";\n\nimport { b } from \"./b\";", []string{"b"},
+			"import { a, c, D } from \"./m\";"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := c.imports + body
+			out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, c.gone...), []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := c.want + body; string(out) != want {
+				t.Errorf("out = %q\nwant  %q", out, want)
+			}
+			if len(removed) != len(c.gone) {
+				t.Errorf("removed = %v, want %d", removed, len(c.gone))
+			}
+		})
+	}
+}
