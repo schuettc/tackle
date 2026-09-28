@@ -168,7 +168,7 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {
-		s.Bus.Publish(ctx, "interrupted", map[string]int{"deliveries": n})
+		s.publish(ctx, "interrupted", map[string]int{"deliveries": n})
 	}
 	if err := s.rebuild(ctx); err != nil {
 		return nil, err
@@ -192,6 +192,16 @@ func (s *Server) laneCtx() context.Context {
 	return context.Background()
 }
 
+// publish fires a bus event and, if the INSERT fails, logs the kind and error
+// to stderr. Bus.Publish fails only when the events INSERT fails, after the
+// change it announces is already committed — so we log and continue rather
+// than failing the enclosing request.
+func (s *Server) publish(ctx context.Context, kind string, payload any) {
+	if _, err := s.Bus.Publish(ctx, kind, payload); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: publish %s: %v\n", kind, err)
+	}
+}
+
 // settleJob calls Store.Settle for jobID and, when the state changes,
 // publishes a "job" event on the bus so watchers see the terminal state.
 // Errors are logged to stderr (non-fatal: the step state is already persisted).
@@ -202,7 +212,7 @@ func (s *Server) settleJob(ctx context.Context, jobID int64) {
 		return
 	}
 	if changed {
-		s.Bus.Publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
+		s.publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
 	}
 }
 

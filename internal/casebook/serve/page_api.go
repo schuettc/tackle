@@ -193,7 +193,7 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 		n++
 	}
 	if n > 0 {
-		s.Bus.Publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
+		s.publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
 	}
 	pushed, errs := s.finishDecides(ctx, n, errs)
 	return n, done, errs, pushed, nil
@@ -300,7 +300,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		_ = s.Props.Settle(ctx, id, propose.Accepted, "")
-		s.Bus.Publish(ctx, "decided", map[string]any{
+		s.publish(ctx, "decided", map[string]any{
 			"keys":        []string{normed},
 			"disposition": p.Disposition,
 			"by":          by,
@@ -309,7 +309,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		total++
 	}
 	pushed, errs := s.finishDecides(ctx, total, errs)
-	s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
 	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Pushed: pushed}, nil)
 }
 
@@ -335,7 +335,7 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	n, done, errs, pushed, err := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
 	if err == nil && n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
-		s.Bus.Publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
+		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
 	}
 	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, err)
 }
@@ -356,7 +356,7 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 			n++
 		}
 	}
-	s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
 	reply(w, RejectResult{Rejected: n}, nil)
 }
 
@@ -388,7 +388,7 @@ func (s *Server) postThread(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Queue.NewThread(r.Context(), in.Session, in.Name)
 	if err == nil {
-		s.Bus.Publish(r.Context(), "thread", t)
+		s.publish(r.Context(), "thread", t)
 	}
 	reply(w, t, err)
 }
@@ -404,7 +404,7 @@ func (s *Server) postMoveThread(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.MoveThread(r.Context(), in.Thread, in.Session)
 	if err == nil {
-		s.Bus.Publish(r.Context(), "thread", map[string]any{"id": in.Thread, "session_id": in.Session})
+		s.publish(r.Context(), "thread", map[string]any{"id": in.Thread, "session_id": in.Session})
 		s.wake(in.Session)
 	}
 	reply(w, nil, err)
@@ -450,7 +450,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	s.Bus.Publish(ctx, "message", m)
+	s.publish(ctx, "message", m)
 	if !in.Batch {
 		s.wake(t.SessionID)
 	}
@@ -486,7 +486,7 @@ func (s *Server) postResend(w http.ResponseWriter, r *http.Request) {
 	for _, sess := range s.sessionsOf(r.Context(), in.IDs) {
 		s.wake(sess)
 	}
-	s.Bus.Publish(r.Context(), "messages", map[string]any{"ids": in.IDs, "state": deliver.Queued})
+	s.publish(r.Context(), "messages", map[string]any{"ids": in.IDs, "state": deliver.Queued})
 	reply(w, ResendResult{Resent: n}, err)
 }
 
@@ -501,7 +501,7 @@ func (s *Server) postEditDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.EditDraft(r.Context(), in.ID, in.Body)
 	if err == nil {
-		s.Bus.Publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
+		s.publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
 	}
 	reply(w, nil, err)
 }
@@ -516,7 +516,7 @@ func (s *Server) postRemoveDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.RemoveDraft(r.Context(), in.ID)
 	if err == nil {
-		s.Bus.Publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
+		s.publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
 	}
 	reply(w, nil, err)
 }
@@ -534,7 +534,7 @@ func (s *Server) postReorder(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		err = bad("%v", err)
 	} else {
-		s.Bus.Publish(r.Context(), "drafts", map[string]int64{"batch": in.Batch})
+		s.publish(r.Context(), "drafts", map[string]int64{"batch": in.Batch})
 	}
 	reply(w, nil, err)
 }
@@ -561,7 +561,7 @@ func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 	if t, err := s.Queue.Thread(ctx, thread); err == nil {
 		s.wake(t.SessionID)
 	}
-	s.Bus.Publish(ctx, "batch", map[string]any{"batch": in.Batch, "sent": n})
+	s.publish(ctx, "batch", map[string]any{"batch": in.Batch, "sent": n})
 	reply(w, SendBatchResult{Sent: n}, nil)
 }
 
@@ -579,7 +579,7 @@ func (s *Server) postRelease(w http.ResponseWriter, r *http.Request) {
 		err = s.Queue.Release(ctx, in.ID)
 	}
 	if err == nil {
-		s.Bus.Publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Released})
+		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Released})
 		s.wake(d.SessionID)
 	}
 	reply(w, nil, err)
@@ -603,7 +603,7 @@ func (s *Server) postMoveDelivery(w http.ResponseWriter, r *http.Request) {
 		err = s.Queue.MoveDelivery(ctx, in.ID, in.Session)
 	}
 	if err == nil {
-		s.Bus.Publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
+		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
 		s.wake(d.SessionID) // parity with postRelease: wake the old session
 		s.wake(in.Session)
 	}

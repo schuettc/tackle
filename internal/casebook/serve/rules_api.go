@@ -107,7 +107,7 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, in.ID)
 	preview := buildPreview(in, s.Index.Result(), now, 0, 200)
@@ -206,7 +206,7 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "excluded", "key": in.Key})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "excluded", "key": in.Key})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
 	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
@@ -274,7 +274,7 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "included", "key": in.Key})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "included", "key": in.Key})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
 	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
@@ -308,7 +308,7 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n > 0 {
-		s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
+		s.publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
 	}
 	if proposals == nil {
 		proposals = []propose.Proposal{}
@@ -355,7 +355,7 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "activated", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "activated", "by": by})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
 	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
@@ -395,7 +395,7 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "deactivated", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "deactivated", "by": by})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
 	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
@@ -486,7 +486,7 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
 
 	rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
 	preview := buildPreview(in.Rule, s.Index.Result(), now, 0, 200)
