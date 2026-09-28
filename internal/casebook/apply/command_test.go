@@ -45,7 +45,7 @@ func TestShellQuoteSpaceInPath(t *testing.T) {
 func TestBranchDeleteCommandIsExact(t *testing.T) {
 	// Verify the full command format for a branch name with a single quote.
 	// Branch name: feat/it's-done (contains a single quote)
-	cmd := branchDeleteLocalCmd("/Users/me/repos/myrepo", "feat/it's-done")
+	cmd := branchDeleteLocalCmd("/Users/me/repos/myrepo", "feat/it's-done", "deadbeef")
 	// The command must be copy-pasteable.
 	if !strings.HasPrefix(cmd, "git -C ") {
 		t.Errorf("command missing 'git -C': %q", cmd)
@@ -57,9 +57,9 @@ func TestBranchDeleteCommandIsExact(t *testing.T) {
 }
 
 func TestBranchDeleteRemoteCommandIsExact(t *testing.T) {
-	cmd := branchDeleteRemoteCmd("/Users/me/repos/myrepo", "origin", "feat/my branch")
-	// Branch name has a space — must be quoted.
-	want := "git -C '/Users/me/repos/myrepo' push 'origin' --delete 'feat/my branch'"
+	cmd := branchDeleteRemoteCmd("/Users/me/repos/myrepo", "origin", "feat/my branch", "deadbeef")
+	// Branch name has a space — the ref-bearing args must be quoted.
+	want := "git -C '/Users/me/repos/myrepo' push '--force-with-lease=refs/heads/feat/my branch:deadbeef' 'origin' ':refs/heads/feat/my branch'"
 	if cmd != want {
 		t.Errorf("branchDeleteRemoteCmd =\n  %q\nwant\n  %q", cmd, want)
 	}

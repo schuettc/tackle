@@ -42,7 +42,7 @@ func TestRemoteBranchDeletedThenVerified(t *testing.T) {
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-remote",
 		Lane:         LaneCasebook,
-		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x"),
+		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x", tip),
 		Precondition: "remote-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	})
@@ -77,7 +77,7 @@ func TestAbsentRemoteBranchIsDone(t *testing.T) {
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-remote",
 		Lane:         LaneCasebook,
-		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x"),
+		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x", "0000000000000000000000000000000000000000"),
 		Precondition: "remote-tip-unchanged-and-landed",
 	})
 	r := Runner{Repo: cb, RunGit: spy.run, Now: func() time.Time { return time.Unix(0, 0) }}
@@ -89,7 +89,7 @@ func TestAbsentRemoteBranchIsDone(t *testing.T) {
 	if got.Steps[0].State != StepVerified {
 		t.Fatalf("step state = %q, want verified", got.Steps[0].State)
 	}
-	if spy.ran("--delete") {
+	if spy.ran("--force-with-lease") {
 		t.Error("a delete ran for an already-absent remote branch")
 	}
 	if got.Steps[0].Restore != "" {
@@ -107,7 +107,7 @@ func TestLiveRemoteTipDiffersFromExpected(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-remote",
-		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x"),
+		Command:      branchDeleteRemoteCmd(clone, "origin", "feat/x", "0000000000000000000000000000000000000000"),
 		Precondition: "remote-tip-unchanged-and-landed",
 		ExpectedTip:  "0000000000000000000000000000000000000000",
 	}
@@ -118,7 +118,7 @@ func TestLiveRemoteTipDiffersFromExpected(t *testing.T) {
 	if !strings.Contains(res.Detail, "remote tip moved") {
 		t.Errorf("reason = %q, want remote-tip-moved", res.Detail)
 	}
-	if spy.ran("--delete") {
+	if spy.ran("--force-with-lease") {
 		t.Error("a delete ran despite the tip mismatch")
 	}
 }
@@ -132,9 +132,9 @@ func TestPauseStopsLaneAfterStep(t *testing.T) {
 	cb := casebookRepo(t)
 	s, job := laneJob(t, ctx,
 		JobStep{Key: "branch:schuettc/hail@feat/x", Action: "branch-delete-local", Lane: LaneCasebook,
-			Command: branchDeleteLocalCmd(cloneA, "feat/x"), Precondition: "branch-tip-unchanged-and-landed", ExpectedTip: tipA},
+			Command: branchDeleteLocalCmd(cloneA, "feat/x", tipA), Precondition: "branch-tip-unchanged-and-landed", ExpectedTip: tipA},
 		JobStep{Key: "branch:schuettc/hail@feat/x", Action: "branch-delete-local", Lane: LaneCasebook,
-			Command: branchDeleteLocalCmd(cloneB, "feat/x"), Precondition: "branch-tip-unchanged-and-landed", ExpectedTip: tipB},
+			Command: branchDeleteLocalCmd(cloneB, "feat/x", tipB), Precondition: "branch-tip-unchanged-and-landed", ExpectedTip: tipB},
 	)
 	r := Runner{Repo: cb, RunGit: spy.run, Now: func() time.Time { return time.Unix(0, 0) }}
 	// Pause after the first step.

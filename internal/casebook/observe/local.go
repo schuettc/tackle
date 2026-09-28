@@ -165,6 +165,14 @@ func inspect(ctx context.Context, dir string) (Clone, error) {
 				b.Gone = true
 			}
 		}
+		// The upstream remote-tracking tip, when an upstream exists and is not
+		// gone. Plan-time compare-and-delete uses this as the remote step's
+		// expected tip; empty means no remote delete step is planned.
+		if b.Upstream != "" && !b.Gone {
+			if rt, err := gitx.Run(ctx, dir, "rev-parse", b.Upstream); err == nil {
+				b.RemoteTip = strings.TrimSpace(rt)
+			}
+		}
 		if out, err := gitx.Run(ctx, dir, "log", "--format=%ct", "-n", strconv.Itoa(maxUnpushed), "refs/heads/"+f[0], "--not", "--remotes"); err == nil && out != "" {
 			lines := strings.Split(out, "\n")
 			b.Unpushed = len(lines)

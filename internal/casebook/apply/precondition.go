@@ -81,16 +81,21 @@ func Check(ctx context.Context, step JobStep, env Env) (Checked, error) {
 // refs/heads/<b> in the clone equals the step's ExpectedTip, and that commit is
 // landed. A branch that no longer exists locally is already done.
 func checkBranchLocal(ctx context.Context, step JobStep, env Env) (Checked, error) {
-	dir, args, err := gitCommand(step.Command)
+	dir, branch, _, err := parseLocalDelete(step.Command)
 	if err != nil {
 		return Checked{}, err
 	}
-	branch := args[len(args)-1]
 	if _, err := os.Stat(dir); err != nil {
 		return Checked{Reason: "clone missing: " + dir}, nil
 	}
 	live, err := env.RunGit(ctx, dir, "rev-parse", "--verify", "refs/heads/"+branch)
 	if err != nil {
+		// The branch is not there. Before concluding "already done", make sure
+		// this is really a git repo: a non-repo or corrupt clone is not ok, so a
+		// missing branch there never counts as done (§ non-repo ruling).
+		if _, gd := env.RunGit(ctx, dir, "rev-parse", "--git-dir"); gd != nil {
+			return Checked{Reason: "not a git repo: " + dir}, nil
+		}
 		// The branch is already gone locally: already done, not a failure.
 		return Checked{Done: true}, nil
 	}
@@ -109,7 +114,7 @@ func checkBranchLocal(ctx context.Context, step JobStep, env Env) (Checked, erro
 // live tip (read with ls-remote) is landed, and equals ExpectedTip when that is
 // set. An already-absent remote branch is already done.
 func checkBranchRemote(ctx context.Context, step JobStep, env Env) (Checked, error) {
-	dir, remote, branch, err := parseRemoteDelete(step.Command)
+	dir, remote, branch, _, err := parseRemoteDelete(step.Command)
 	if err != nil {
 		return Checked{}, err
 	}
@@ -218,18 +223,19 @@ func checkRepoNoHumanPRs(ctx context.Context, step JobStep, env Env) (Checked, e
 	if err != nil {
 		return Checked{Reason: "gh pr list failed: " + err.Error()}, nil
 	}
+	// `gh pr list --json author` returns author objects carrying `login` and
+	// `is_bot` (no `__typename`); is_bot is the one authoritative bot signal.
 	var prs []struct {
 		Author struct {
 			Login string `json:"login"`
 			IsBot bool   `json:"is_bot"`
-			Type  string `json:"__typename"`
 		} `json:"author"`
 	}
 	if err := json.Unmarshal(b, &prs); err != nil {
 		return Checked{Reason: "gh pr list parse: " + err.Error()}, nil
 	}
 	for _, pr := range prs {
-		if !pr.Author.IsBot && pr.Author.Type != "Bot" {
+		if !pr.Author.IsBot {
 			return Checked{Reason: "repo has an open human PR"}, nil
 		}
 	}
@@ -256,10 +262,9 @@ func isLanded(ctx context.Context, env Env, dir, tip, key string) (bool, string)
 		}
 	}
 	refs = append(refs, "refs/heads/"+def)
-	for _, ref := range refs {
-		if _, err := env.RunGit(ctx, dir, "merge-base", "--is-ancestor", tip, ref); err == nil {
-			return true, ""
-		}
+	// One landed definition, shared with the snapshot pass (observe.TipLanded).
+	if observe.TipLanded(ctx, observe.GitRun(env.RunGit), dir, tip, refs, observe.MergedPRList{}).Landed {
+		return true, ""
 	}
 	// Merged-PR head (or an ancestor of one).
 	if env.MergedPRs == nil {
@@ -269,19 +274,8 @@ func isLanded(ctx context.Context, env Env, dir, tip, key string) (bool, string)
 	if !ok || !ml.Fetched {
 		return false, "cannot verify landed: merged-PR list unavailable"
 	}
-	for _, pr := range ml.PRs {
-		if pr.HeadRefOid == "" {
-			continue
-		}
-		if pr.HeadRefOid == tip {
-			return true, ""
-		}
-		if _, err := env.RunGit(ctx, dir, "cat-file", "-e", pr.HeadRefOid); err != nil {
-			continue
-		}
-		if _, err := env.RunGit(ctx, dir, "merge-base", "--is-ancestor", tip, pr.HeadRefOid); err == nil {
-			return true, ""
-		}
+	if observe.TipLanded(ctx, observe.GitRun(env.RunGit), dir, tip, nil, ml).Landed {
+		return true, ""
 	}
 	return false, "branch is not landed"
 }

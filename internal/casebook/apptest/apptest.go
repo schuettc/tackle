@@ -45,6 +45,12 @@ func (FakeGh) Gh(_ context.Context, args ...string) ([]byte, error) {
 	case strings.Contains(j, "pr list") && strings.Contains(j, "--state merged"):
 		// Merged PR list: no merged PRs in the test fixture.
 		return []byte(`[]`), nil
+	case strings.Contains(j, "pr list") && strings.Contains(j, "--state open") && strings.Contains(j, "author"):
+		// `gh pr list --json author` returns author objects with `login` and
+		// `is_bot` (no `__typename`). hail's only open PR (#3) is by bob, a human.
+		return []byte(`[{"author":{"login":"bob","is_bot":false}}]`), nil
+	case strings.Contains(j, "pr view") && strings.Contains(j, "updatedAt"):
+		return []byte(`{"updatedAt":"2026-08-01T00:00:00Z"}`), nil
 	}
 	return nil, fmt.Errorf("apptest.FakeGh: unexpected %s", j)
 }

@@ -10,6 +10,12 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
+// DetailDrift is the step detail recorded when a step's command "ran" but a
+// fresh observation contradicts the intended result (the target is still
+// present). It is a StepFailed with no needs-you card of its own; later tasks
+// key on this exact value to route the item back to Attention (\u00a75.5).
+const DetailDrift = "drift"
+
 // Runner executes a single casebook-lane step and re-observes it. Repo is the
 // casebook-data repository where restore records are committed; RunGit is the
 // git seam (gitx.Run in production, a spy in tests) that runs the destructive
@@ -50,6 +56,12 @@ type StepResult struct {
 //  4. Return StepReported. Verification is a separate, observation-driven
 //     promotion (RunCasebookLane calls Verify).
 func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult, error) {
+	// TSV safety: a tab or newline anywhere in the command or key would corrupt
+	// a restores/<date>.tsv line (its fields are TAB-separated, one per line).
+	// Refuse such a step outright, before the precondition or any command runs.
+	if strings.ContainsAny(step.Command, "\t\n") || strings.ContainsAny(step.Key, "\t\n") {
+		return StepResult{State: StepFailed, Detail: "unsafe path: contains a tab or newline"}, nil
+	}
 	chk, err := Check(ctx, step, env)
 	if err != nil {
 		return StepResult{State: StepFailed, Detail: err.Error()}, nil
@@ -87,15 +99,14 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 func (r Runner) Observe(ctx context.Context, step JobStep) item.Observed {
 	switch step.Action {
 	case "branch-delete-local":
-		dir, args, err := gitCommand(step.Command)
+		dir, branch, _, err := parseLocalDelete(step.Command)
 		if err != nil {
 			return item.Observed{}
 		}
-		branch := args[len(args)-1]
 		_, err = r.RunGit(ctx, dir, "rev-parse", "--verify", "refs/heads/"+branch)
 		return item.Observed{Known: true, Exists: err == nil}
 	case "branch-delete-remote":
-		dir, remote, branch, err := parseRemoteDelete(step.Command)
+		dir, remote, branch, _, err := parseRemoteDelete(step.Command)
 		if err != nil {
 			return item.Observed{}
 		}
@@ -174,7 +185,7 @@ func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env,
 					return err
 				}
 			case StepFailed:
-				if err := s.SetStepState(ctx, step.ID, StepFailed, "drift"); err != nil {
+				if err := s.SetStepState(ctx, step.ID, StepFailed, DetailDrift); err != nil {
 					return err
 				}
 			}

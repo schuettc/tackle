@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/testgit"
 )
 
@@ -380,5 +381,30 @@ func TestReposWithUnlandedBranches(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("FetchMergedPRs not called for repo-b: calls = %v", runner.calls)
+	}
+}
+
+// TestTipLandedSharedDefinition locks the one shared "landed" definition used
+// by both ComputeMergedPRLanded and the apply precondition's live isLanded.
+func TestTipLandedSharedDefinition(t *testing.T) {
+	dir, featTip, _ := setupAncestorRepo(t)
+	// Ancestor of the default branch → landed via default-branch.
+	res := TipLanded(ctx, gitx.Run, dir, featTip, []string{"refs/remotes/origin/main"}, MergedPRList{})
+	if !res.Landed || res.How != "default-branch" {
+		t.Fatalf("ancestor: %+v, want landed via default-branch", res)
+	}
+
+	// Diverged tip, matched only by a merged PR head → landed via merged-pr.
+	dir2, feat2 := setupDivergedRepo(t)
+	ml := MergedPRList{Fetched: true, PRs: []MergedPR{{Number: 12, HeadRefName: "feat", HeadRefOid: feat2}}}
+	res = TipLanded(ctx, gitx.Run, dir2, feat2, nil, ml)
+	if !res.Landed || res.How != "merged-pr" || res.PR == nil || res.PR.Number != 12 {
+		t.Fatalf("merged: %+v, want landed via merged-pr #12", res)
+	}
+
+	// Unavailable merged list and not an ancestor → not landed.
+	res = TipLanded(ctx, gitx.Run, dir2, feat2, nil, MergedPRList{Fetched: false})
+	if res.Landed {
+		t.Fatalf("unavailable merged list: %+v, want not landed", res)
 	}
 }

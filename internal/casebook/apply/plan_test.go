@@ -64,7 +64,7 @@ func TestPlanGroupsByActionAndLane(t *testing.T) {
 		Path:     "/Users/me/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/thing", Upstream: "origin/x", Tip: "aaa"}},
+		Branches: []observe.Branch{{Name: "feat/thing", Upstream: "origin/x", Tip: "aaa", RemoteTip: "aaa"}},
 	}})
 	plan, err := Build([]engine.Item{br, rp}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestBranchDeleteIsCasebookLaneWithExactCommand(t *testing.T) {
 		Path:     "/Users/me/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/my-branch", Upstream: "origin/x", Tip: "tip123"}},
+		Branches: []observe.Branch{{Name: "feat/my-branch", Upstream: "origin/x", Tip: "tip123", RemoteTip: "tip123"}},
 	}})
 	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -133,7 +133,7 @@ func TestBranchDeleteIsCasebookLaneWithExactCommand(t *testing.T) {
 	if local.Key != k.String() {
 		t.Errorf("Steps[0].Key = %q, want %q", local.Key, k.String())
 	}
-	wantLocal := "git -C '/Users/me/repos/myrepo' branch -D 'feat/my-branch'"
+	wantLocal := "git -C '/Users/me/repos/myrepo' update-ref -d 'refs/heads/feat/my-branch' tip123"
 	if local.Command != wantLocal {
 		t.Errorf("Steps[0].Command =\n  %q\nwant\n  %q", local.Command, wantLocal)
 	}
@@ -151,7 +151,7 @@ func TestBranchDeleteIsCasebookLaneWithExactCommand(t *testing.T) {
 	if remote.Lane != LaneCasebook {
 		t.Errorf("Steps[1].Lane = %q, want %q", remote.Lane, LaneCasebook)
 	}
-	wantRemote := "git -C '/Users/me/repos/myrepo' push 'origin' --delete 'feat/my-branch'"
+	wantRemote := "git -C '/Users/me/repos/myrepo' push '--force-with-lease=refs/heads/feat/my-branch:tip123' 'origin' ':refs/heads/feat/my-branch'"
 	if remote.Command != wantRemote {
 		t.Errorf("Steps[1].Command =\n  %q\nwant\n  %q", remote.Command, wantRemote)
 	}
@@ -291,7 +291,7 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 		Path:     "/Users/A/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/shared", Upstream: "origin/x", Tip: "tipA"}},
+		Branches: []observe.Branch{{Name: "feat/shared", Upstream: "origin/x", Tip: "tipA", RemoteTip: "tipA"}},
 	}})
 	plan, err := Build([]engine.Item{branch, worktree}, snapA, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -308,7 +308,7 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 	if local.Action != "branch-delete-local" {
 		t.Errorf("Steps[0].Action = %q, want branch-delete-local", local.Action)
 	}
-	wantLocal := "git -C '/Users/A/repos/myrepo' branch -D 'feat/shared'"
+	wantLocal := "git -C '/Users/A/repos/myrepo' update-ref -d 'refs/heads/feat/shared' tipA"
 	if local.Command != wantLocal {
 		t.Errorf("Steps[0].Command =\n  %q\nwant\n  %q", local.Command, wantLocal)
 	}
@@ -317,7 +317,7 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 	if remote.Action != "branch-delete-remote" {
 		t.Errorf("Steps[1].Action = %q, want branch-delete-remote", remote.Action)
 	}
-	wantRemote := "git -C '/Users/A/repos/myrepo' push 'origin' --delete 'feat/shared'"
+	wantRemote := "git -C '/Users/A/repos/myrepo' push '--force-with-lease=refs/heads/feat/shared:tipA' 'origin' ':refs/heads/feat/shared'"
 	if remote.Command != wantRemote {
 		t.Errorf("Steps[1].Command =\n  %q\nwant\n  %q", remote.Command, wantRemote)
 	}
@@ -365,9 +365,10 @@ func TestRemoteNameFromSnapshotUpstream(t *testing.T) {
 			"upstream": "schuettc/myrepo",
 		},
 		Branches: []observe.Branch{{
-			Name:     "feat/my-branch",
-			Upstream: "upstream/feat/my-branch",
-			Tip:      "abc1234deadbeef",
+			Name:      "feat/my-branch",
+			Upstream:  "upstream/feat/my-branch",
+			Tip:       "abc1234deadbeef",
+			RemoteTip: "abc1234deadbeef",
 		}},
 	}})
 
@@ -383,7 +384,7 @@ func TestRemoteNameFromSnapshotUpstream(t *testing.T) {
 	if remote.Action != "branch-delete-remote" {
 		t.Fatalf("Steps[1].Action = %q, want branch-delete-remote", remote.Action)
 	}
-	wantCmd := "git -C '/Users/me/repos/myrepo' push 'upstream' --delete 'feat/my-branch'"
+	wantCmd := "git -C '/Users/me/repos/myrepo' push '--force-with-lease=refs/heads/feat/my-branch:abc1234deadbeef' 'upstream' ':refs/heads/feat/my-branch'"
 	if remote.Command != wantCmd {
 		t.Errorf("remote Command =\n  %q\nwant\n  %q", remote.Command, wantCmd)
 	}
@@ -455,9 +456,10 @@ func TestBranchStepsHaveExpectedTips(t *testing.T) {
 			"origin": "schuettc/myrepo",
 		},
 		Branches: []observe.Branch{{
-			Name:     "feat/tips",
-			Upstream: "origin/feat/tips",
-			Tip:      wantTip,
+			Name:      "feat/tips",
+			Upstream:  "origin/feat/tips",
+			Tip:       wantTip,
+			RemoteTip: wantTip,
 		}},
 	}})
 
@@ -518,53 +520,76 @@ func TestWorktreeStepUsesSnapshotClone(t *testing.T) {
 	}
 }
 
-func TestNoRemoteStepForAnUnpushedBranch(t *testing.T) {
+func TestNoRemoteStepForABranchWithNoRemoteTip(t *testing.T) {
 	now := time.Now()
-	it, snap := remoteFixture(t, "never-pushed", "", false, 0)
+	// No upstream: the snapshot records no RemoteTip, so no remote step.
+	it, snap := remoteFixture(t, "never-pushed", "", false)
 	p, err := Build([]engine.Item{it}, snap, now, now, 30*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, s := range p.Steps {
 		if s.Action == "branch-delete-remote" {
-			t.Fatalf("remote step planned for a branch with no upstream: %+v", s)
+			t.Fatalf("remote step planned for a branch with no remote tip: %+v", s)
 		}
 	}
 }
 
-func TestRemoteStepExpectsTipOnlyWhenNothingUnpushed(t *testing.T) {
+// TestRemoteStepUsesRemoteTip: the remote step is planned only when the
+// snapshot recorded RemoteTip, and its ExpectedTip is exactly that RemoteTip
+// (replacing the earlier "tip only when nothing is unpushed" rule).
+func TestRemoteStepUsesRemoteTip(t *testing.T) {
 	now := time.Now()
 	for _, c := range []struct {
-		unpushed int
-		want     string
-	}{{0, "abc123"}, {2, ""}} {
-		it, snap := remoteFixture(t, "feat", "origin/feat", false, c.unpushed)
-		p, err := Build([]engine.Item{it}, snap, now, now, 30*time.Minute)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got *Step
-		for i := range p.Steps {
-			if p.Steps[i].Action == "branch-delete-remote" {
-				got = &p.Steps[i]
+		name     string
+		upstream string
+		gone     bool
+		want     string // "" means no remote step
+	}{
+		{"has upstream", "origin/feat", false, "abc123"},
+		{"upstream gone", "origin/feat", true, ""},
+		{"no upstream", "", false, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			it, snap := remoteFixture(t, "feat", c.upstream, c.gone)
+			p, err := Build([]engine.Item{it}, snap, now, now, 30*time.Minute)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if got == nil || got.ExpectedTip != c.want {
-			t.Fatalf("unpushed %d: remote step %+v, want expected tip %q", c.unpushed, got, c.want)
-		}
+			var got *Step
+			for i := range p.Steps {
+				if p.Steps[i].Action == "branch-delete-remote" {
+					got = &p.Steps[i]
+				}
+			}
+			if c.want == "" {
+				if got != nil {
+					t.Fatalf("unexpected remote step %+v", got)
+				}
+				return
+			}
+			if got == nil || got.ExpectedTip != c.want {
+				t.Fatalf("remote step %+v, want ExpectedTip %q", got, c.want)
+			}
+		})
 	}
 }
 
 // remoteFixture is a landed branch in one clone on machine "m" with the given
-// upstream, gone flag and unpushed count; its tip is "abc123".
-func remoteFixture(t *testing.T, branch, upstream string, gone bool, unpushed int) (engine.Item, observe.Snapshot) {
+// upstream and gone flag; its tip is "abc123". RemoteTip mirrors what observe
+// records: the tip when an upstream exists and is not gone, else empty.
+func remoteFixture(t *testing.T, branch, upstream string, gone bool) (engine.Item, observe.Snapshot) {
 	t.Helper()
 	it := branchItem("schuettc/repo", branch, "m", "/src/repo")
+	rt := ""
+	if upstream != "" && !gone {
+		rt = "abc123"
+	}
 	snap := snapWith("m", []observe.Clone{{
 		Path:     "/src/repo",
 		Repo:     "schuettc/repo",
 		Remotes:  map[string]string{"origin": "schuettc/repo"},
-		Branches: []observe.Branch{{Name: branch, Tip: "abc123", Upstream: upstream, Gone: gone, Unpushed: unpushed}},
+		Branches: []observe.Branch{{Name: branch, Tip: "abc123", Upstream: upstream, Gone: gone, RemoteTip: rt}},
 	}})
 	return it, snap
 }

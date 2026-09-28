@@ -12,15 +12,24 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
 }
 
-// branchDeleteLocalCmd renders the exact command to delete a local branch.
-func branchDeleteLocalCmd(clonePath, branch string) string {
-	return fmt.Sprintf("git -C %s branch -D %s", shellQuote(clonePath), shellQuote(branch))
+// branchDeleteLocalCmd renders the exact compare-and-delete command for a local
+// branch: update-ref -d carries the expected tip, so git refuses to delete if
+// the branch moved between the precondition and the command (closes the
+// check\u2192delete race). The tip is always known for local steps.
+func branchDeleteLocalCmd(clonePath, branch, tip string) string {
+	return fmt.Sprintf("git -C %s update-ref -d %s %s",
+		shellQuote(clonePath), shellQuote("refs/heads/"+branch), tip)
 }
 
-// branchDeleteRemoteCmd renders the exact command to delete a remote branch.
-func branchDeleteRemoteCmd(clonePath, remote, branch string) string {
-	return fmt.Sprintf("git -C %s push %s --delete %s",
-		shellQuote(clonePath), shellQuote(remote), shellQuote(branch))
+// branchDeleteRemoteCmd renders the exact compare-and-delete command for a
+// remote branch: --force-with-lease pins the expected tip so the remote refuses
+// the delete if the branch moved since the snapshot recorded it.
+func branchDeleteRemoteCmd(clonePath, remote, branch, tip string) string {
+	return fmt.Sprintf("git -C %s push %s %s %s",
+		shellQuote(clonePath),
+		shellQuote("--force-with-lease=refs/heads/"+branch+":"+tip),
+		shellQuote(remote),
+		shellQuote(":refs/heads/"+branch))
 }
 
 // worktreeRemoveCmd renders the exact command to remove a linked worktree.

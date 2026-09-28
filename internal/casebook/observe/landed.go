@@ -142,6 +142,54 @@ func ReposWithUnlandedBranches(snap Snapshot, repos map[string]RepoObs) []string
 	return out
 }
 
+// GitRun runs git in dir and returns its stdout (trimmed by the caller as
+// needed). It is the seam TipLanded uses so the same landed definition serves
+// both the snapshot pass (production gitx.Run) and the live apply precondition.
+type GitRun func(ctx context.Context, dir string, args ...string) (string, error)
+
+// LandedResult is the outcome of TipLanded: whether the tip is landed, how it
+// was proven ("default-branch" or "merged-pr"), and the merged PR that matched
+// when How == "merged-pr".
+type LandedResult struct {
+	Landed bool
+	How    string
+	PR     *MergedPR
+}
+
+// TipLanded is THE one definition of "landed": a tip is landed when it is an
+// ancestor of any default-branch ref in defRefs, or (when ml.Fetched) when it
+// equals or is an ancestor of a merged PR's head. run executes git in dir; an
+// unavailable or unmatched merged list simply yields not-landed. Callers layer
+// their own reasons and states on top of this shared decision.
+func TipLanded(ctx context.Context, run GitRun, dir, tip string, defRefs []string, ml MergedPRList) LandedResult {
+	for _, ref := range defRefs {
+		if _, err := run(ctx, dir, "merge-base", "--is-ancestor", tip, ref); err == nil {
+			return LandedResult{Landed: true, How: "default-branch"}
+		}
+	}
+	if !ml.Fetched {
+		return LandedResult{}
+	}
+	for i := range ml.PRs {
+		pr := &ml.PRs[i]
+		if pr.HeadRefOid == "" {
+			continue
+		}
+		if pr.HeadRefOid == tip {
+			return LandedResult{Landed: true, How: "merged-pr", PR: pr}
+		}
+		// Squash merge: our tip may be an ancestor of the merged head. Only
+		// test it when the object is present locally.
+		if _, err := run(ctx, dir, "cat-file", "-e", pr.HeadRefOid); err != nil {
+			continue
+		}
+		if _, err := run(ctx, dir, "merge-base", "--is-ancestor", tip, pr.HeadRefOid); err == nil {
+			return LandedResult{Landed: true, How: "merged-pr", PR: pr}
+		}
+	}
+	return LandedResult{}
+}
+
 // ComputeMergedPRLanded checks merged-PR data for every non-default branch
 // whose LandedState is not yet "yes". After this call:
 //   - LandedState = "yes", Landed = "merged #N", LandedHow = "merged-pr",
@@ -165,28 +213,20 @@ func ComputeMergedPRLanded(ctx context.Context, snap *Snapshot, merged map[strin
 				b.LandedState = "unknown"
 				continue
 			}
-			// Merged list available; search for a matching PR.
+			// Merged list available; search for a matching PR of the same name
+			// using the shared landed definition (TipLanded).
+			named := MergedPRList{Fetched: true}
 			for _, pr := range ml.PRs {
-				if pr.HeadRefName != b.Name {
-					continue
-				}
-				if pr.HeadRefOid == b.Tip {
-					b.Landed = "merged #" + strconv.Itoa(pr.Number)
-					b.LandedState = "yes"
-					b.LandedTip = b.Tip
-					b.LandedHow = "merged-pr"
-					break
-				}
-				// Squash merge: our tip may be an ancestor of the merged head.
-				if _, err := gitx.Run(ctx, c.Path, "merge-base", "--is-ancestor", b.Tip, pr.HeadRefOid); err == nil {
-					b.Landed = "merged #" + strconv.Itoa(pr.Number)
-					b.LandedState = "yes"
-					b.LandedTip = b.Tip
-					b.LandedHow = "merged-pr"
-					break
+				if pr.HeadRefName == b.Name {
+					named.PRs = append(named.PRs, pr)
 				}
 			}
-			if b.LandedState != "yes" {
+			if res := TipLanded(ctx, gitx.Run, c.Path, b.Tip, nil, named); res.Landed {
+				b.Landed = "merged #" + strconv.Itoa(res.PR.Number)
+				b.LandedState = "yes"
+				b.LandedTip = b.Tip
+				b.LandedHow = "merged-pr"
+			} else {
 				b.LandedState = "no"
 			}
 		}

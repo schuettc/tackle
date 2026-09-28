@@ -44,11 +44,12 @@ type Step struct {
 	// Posts is true when executing this step publishes public text and requires
 	// a per-item confirmation before the text is sent (§5.4).
 	Posts bool `json:"posts,omitempty"`
-	// ExpectedTip is the branch tip SHA we expect to see at execution time.
-	// For local-delete steps it is the snapshot's local branch tip for that
-	// clone; for remote-delete steps it is the snapshot tip from the first
-	// clone used for the push. Task 10 compares this against the live tip
-	// before executing, and treats an already-absent remote branch as done.
+	// ExpectedTip is the branch tip SHA we expect to see at execution time and
+	// is baked into the compare-and-delete command. For local-delete steps it is
+	// the snapshot's local branch tip for that clone; for remote-delete steps it
+	// is the snapshot's upstream remote tip (RemoteTip) for the clone used for
+	// the push. The precondition compares this against the live tip before
+	// executing, and treats an already-absent remote branch as done.
 	ExpectedTip string `json:"expected_tip,omitempty"`
 }
 
@@ -244,14 +245,14 @@ func machineClones(it engine.Item, machine string) []string {
 //
 // Remote delete: one step from the first clone (stable order) that has a
 // remote whose Remotes value equals the item's repo (case-insensitive). The
-// remote name comes from that Remotes entry. The branch is on the remote only
-// when that clone's branch has an upstream that isn't gone; a branch that was
-// never pushed, or whose upstream the remote already deleted, gets no remote
-// step. ExpectedTip is set only when the local tip equals what the remote has
-// (no unpushed commits); otherwise it is empty, and the precondition
-// (remote-tip-unchanged-and-landed) reads the remote's tip live and requires
-// that exact commit to be landed. Omitted when no clone on this machine has a
-// matching remote.
+// remote name comes from that Remotes entry. The remote step is planned only
+// when the snapshot recorded the clone's upstream remote tip (RemoteTip): a
+// non-empty RemoteTip means an upstream exists and is not gone. ExpectedTip is
+// that RemoteTip, baked into the force-with-lease push so the remote refuses a
+// moved branch; the precondition (remote-tip-unchanged-and-landed) reads the
+// remote's tip live, requires it to equal ExpectedTip, and requires that commit
+// to be landed. Omitted when no clone on this machine has a matching remote, or
+// the branch has no live upstream.
 func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
 	if it.Decision.Disposition != item.Delete {
 		return nil
@@ -262,34 +263,36 @@ func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) [
 
 	var steps []Step
 
-	// One local-delete step per clone on this machine.
+	// One local-delete step per clone on this machine. The expected tip is the
+	// snapshot's local branch tip, always known for local steps, and baked into
+	// the update-ref command so it refuses a moved branch.
 	for _, clonePath := range localClones {
+		tip := sl.branchTip(clonePath, branch)
 		steps = append(steps, Step{
 			Key:          it.ID,
 			Action:       "branch-delete-local",
 			Lane:         LaneCasebook,
-			Command:      branchDeleteLocalCmd(clonePath, branch),
+			Command:      branchDeleteLocalCmd(clonePath, branch, tip),
 			Precondition: "branch-tip-unchanged-and-landed",
-			ExpectedTip:  sl.branchTip(clonePath, branch),
+			ExpectedTip:  tip,
 		})
 	}
 
-	// Remote delete: once, from the first clone that has a matching remote,
-	// and only if that clone's branch is on the remote.
+	// Remote delete: once, from the first clone that has a matching remote, and
+	// only when the snapshot recorded that clone's upstream remote tip
+	// (RemoteTip). An empty RemoteTip means there is no upstream or it is gone,
+	// so no remote step is planned. The recorded tip is the force-with-lease
+	// expected tip, so the push refuses a moved remote branch.
 	remoteName, remoteClone := sl.identityRemote(localClones, it.Key.Repo())
 	if remoteName != "" {
-		if b, ok := sl.branch(remoteClone.Path, branch); ok && b.Upstream != "" && !b.Gone {
-			tip := ""
-			if b.Unpushed == 0 {
-				tip = b.Tip
-			}
+		if b, ok := sl.branch(remoteClone.Path, branch); ok && b.RemoteTip != "" {
 			steps = append(steps, Step{
 				Key:          it.ID,
 				Action:       "branch-delete-remote",
 				Lane:         LaneCasebook,
-				Command:      branchDeleteRemoteCmd(remoteClone.Path, remoteName, branch),
+				Command:      branchDeleteRemoteCmd(remoteClone.Path, remoteName, branch, b.RemoteTip),
 				Precondition: "remote-tip-unchanged-and-landed",
-				ExpectedTip:  tip,
+				ExpectedTip:  b.RemoteTip,
 			})
 		}
 	}

@@ -22,6 +22,7 @@ type gitSpy struct {
 	casebook                 string // casebook-data dir; checked at delete time
 	restoreCommittedAtDelete int    // -1 unknown, 0 no, 1 yes
 	intercept                bool   // when true, the destructive command is a no-op
+	mutate                   func() // when set, runs just before the destructive command (moves the branch to force the race)
 }
 
 func newSpy() *gitSpy { return &gitSpy{restoreCommittedAtDelete: -1} }
@@ -54,11 +55,11 @@ func laneJob(t *testing.T, ctx context.Context, steps ...JobStep) (*Store, Job) 
 
 func isDestructive(args []string) bool {
 	switch {
-	case len(args) >= 2 && args[0] == "branch" && args[1] == "-D":
+	case len(args) >= 2 && args[0] == "update-ref" && args[1] == "-d":
 		return true
 	case len(args) >= 1 && args[0] == "push":
 		for _, a := range args {
-			if a == "--delete" {
+			if strings.HasPrefix(a, "--force-with-lease") {
 				return true
 			}
 		}
@@ -81,6 +82,10 @@ func (g *gitSpy) run(ctx context.Context, dir string, args ...string) (string, e
 		}
 		if g.intercept {
 			return "", nil
+		}
+		if g.mutate != nil {
+			g.mutate()
+			g.mutate = nil
 		}
 	}
 	return gitx.Run(ctx, dir, args...)
@@ -136,7 +141,7 @@ func TestPreconditionFailSkipsAndReturnsToAttention(t *testing.T) {
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
 		Lane:         LaneCasebook,
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", oldTip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  oldTip,
 	}
@@ -147,8 +152,8 @@ func TestPreconditionFailSkipsAndReturnsToAttention(t *testing.T) {
 	if res.State != StepSkipped {
 		t.Fatalf("state = %q, want skipped (reason %q)", res.State, res.Detail)
 	}
-	if spy.ran("branch -D") {
-		t.Error("branch -D ran despite precondition failure")
+	if spy.ran("update-ref -d") {
+		t.Error("update-ref -d ran despite precondition failure")
 	}
 	if _, err := os.Stat(filepath.Join(cb.Dir, "restores")); err == nil {
 		t.Error("a restore record was written on a skipped step")
@@ -171,7 +176,7 @@ func TestPreconditionReadsTheRepoNotTheSnapshot(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", snapTip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  snapTip,
 	}
@@ -195,7 +200,7 @@ func TestRestoreRecordCommittedBeforeStep(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	}
@@ -207,10 +212,10 @@ func TestRestoreRecordCommittedBeforeStep(t *testing.T) {
 		t.Fatalf("state = %q, want reported (detail %q)", res.State, res.Detail)
 	}
 	if spy.restoreCommittedAtDelete != 1 {
-		t.Errorf("restore record was not committed before branch -D (flag=%d)", spy.restoreCommittedAtDelete)
+		t.Errorf("restore record was not committed before update-ref -d (flag=%d)", spy.restoreCommittedAtDelete)
 	}
-	if !spy.ran("branch -D") {
-		t.Error("branch -D never ran")
+	if !spy.ran("update-ref -d") {
+		t.Error("update-ref -d never ran")
 	}
 	if branchExists(t, clone, "feat/x") {
 		t.Error("branch still exists after delete")
@@ -244,7 +249,7 @@ func TestStepAbortedWhenRestoreCommitFails(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	}
@@ -255,8 +260,8 @@ func TestStepAbortedWhenRestoreCommitFails(t *testing.T) {
 	if res.State != StepFailed {
 		t.Fatalf("state = %q, want failed", res.State)
 	}
-	if spy.ran("branch -D") {
-		t.Error("branch -D ran even though the restore commit failed")
+	if spy.ran("update-ref -d") {
+		t.Error("update-ref -d ran even though the restore commit failed")
 	}
 	if !branchExists(t, clone, "feat/x") {
 		t.Error("branch was deleted despite the restore commit failure")
@@ -273,7 +278,7 @@ func TestBranchDeletedThenVerifiedByObservation(t *testing.T) {
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
 		Lane:         LaneCasebook,
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	})
@@ -304,7 +309,7 @@ func TestVerificationMismatchIsDrift(t *testing.T) {
 		Key:          "branch:schuettc/hail@feat/x",
 		Action:       "branch-delete-local",
 		Lane:         LaneCasebook,
-		Command:      branchDeleteLocalCmd(clone, "feat/x"),
+		Command:      branchDeleteLocalCmd(clone, "feat/x", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	})
@@ -421,7 +426,7 @@ func TestMergedPRListUnavailableIsNotOK(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/y",
 		Action:       "branch-delete-local",
-		Command:      branchDeleteLocalCmd(clone, "feat/y"),
+		Command:      branchDeleteLocalCmd(clone, "feat/y", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	}
@@ -437,8 +442,8 @@ func TestMergedPRListUnavailableIsNotOK(t *testing.T) {
 	if !strings.Contains(res.Detail, "merged-PR list unavailable") {
 		t.Errorf("reason = %q, want merged-PR list unavailable", res.Detail)
 	}
-	if spy.ran("branch -D") {
-		t.Error("branch -D ran when landed could not be verified")
+	if spy.ran("update-ref -d") {
+		t.Error("update-ref -d ran when landed could not be verified")
 	}
 }
 
@@ -455,7 +460,7 @@ func TestBranchLandedViaMergedPR(t *testing.T) {
 	step := JobStep{
 		Key:          "branch:schuettc/hail@feat/y",
 		Action:       "branch-delete-local",
-		Command:      branchDeleteLocalCmd(clone, "feat/y"),
+		Command:      branchDeleteLocalCmd(clone, "feat/y", tip),
 		Precondition: "branch-tip-unchanged-and-landed",
 		ExpectedTip:  tip,
 	}

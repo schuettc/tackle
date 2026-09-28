@@ -1,6 +1,9 @@
 package apply
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // shellSplit splits a POSIX shell command line produced by command.go into its
 // words, honouring single and double quotes (the only quoting shellQuote emits).
@@ -67,16 +70,39 @@ func gitCommand(cmd string) (dir string, args []string, err error) {
 	return w[2], w[3:], nil
 }
 
-// parseRemoteDelete parses "git -C <dir> push <remote> --delete <branch>".
-func parseRemoteDelete(cmd string) (dir, remote, branch string, err error) {
+// parseLocalDelete parses the compare-and-delete local command
+// "git -C <dir> update-ref -d refs/heads/<branch> <tip>".
+func parseLocalDelete(cmd string) (dir, branch, tip string, err error) {
 	d, args, err := gitCommand(cmd)
 	if err != nil {
 		return "", "", "", err
 	}
-	if len(args) != 4 || args[0] != "push" || args[2] != "--delete" {
-		return "", "", "", fmt.Errorf("not a remote-delete command: %q", cmd)
+	if len(args) != 4 || args[0] != "update-ref" || args[1] != "-d" {
+		return "", "", "", fmt.Errorf("not a local-delete command: %q", cmd)
 	}
-	return d, args[1], args[3], nil
+	ref := args[2]
+	if !strings.HasPrefix(ref, "refs/heads/") {
+		return "", "", "", fmt.Errorf("not a branch ref: %q", ref)
+	}
+	return d, strings.TrimPrefix(ref, "refs/heads/"), args[3], nil
+}
+
+// parseRemoteDelete parses the compare-and-delete remote command
+// "git -C <dir> push --force-with-lease=refs/heads/<branch>:<tip> <remote> :refs/heads/<branch>".
+func parseRemoteDelete(cmd string) (dir, remote, branch, tip string, err error) {
+	d, args, err := gitCommand(cmd)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	if len(args) != 4 || args[0] != "push" || !strings.HasPrefix(args[1], "--force-with-lease=refs/heads/") {
+		return "", "", "", "", fmt.Errorf("not a remote-delete command: %q", cmd)
+	}
+	lease := strings.TrimPrefix(args[1], "--force-with-lease=refs/heads/")
+	b, tp, ok := strings.Cut(lease, ":")
+	if !ok {
+		return "", "", "", "", fmt.Errorf("malformed force-with-lease: %q", args[1])
+	}
+	return d, args[2], b, tp, nil
 }
 
 // parseWorktreeRemove parses "git -C <dir> worktree remove <path>".
