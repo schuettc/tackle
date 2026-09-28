@@ -23,11 +23,11 @@ const ownerQuery = `query($login: String!, $after: String) {
         latestRelease { publishedAt }
         pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
           pageInfo { hasNextPage }
-          nodes { number title url state isDraft createdAt updatedAt author { login } bodyText labels(first: 10) { nodes { name } } comments(last: 1) { nodes { author { login } createdAt } } }
+          nodes { number title url state isDraft createdAt updatedAt author { login __typename } bodyText labels(first: 10) { nodes { name } } comments(last: 1) { nodes { author { login __typename } createdAt } } }
         }
         issues(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
           pageInfo { hasNextPage }
-          nodes { number title url state createdAt updatedAt author { login } bodyText labels(first: 10) { nodes { name } } comments(last: 1) { nodes { author { login } createdAt } } }
+          nodes { number title url state createdAt updatedAt author { login __typename } bodyText labels(first: 10) { nodes { name } } comments(last: 1) { nodes { author { login __typename } createdAt } } }
         }
       }
     }
@@ -37,7 +37,7 @@ const ownerQuery = `query($login: String!, $after: String) {
 const searchQuery = `query($q: String!, $after: String) {
   search(query: $q, type: ISSUE, first: 100, after: $after) {
     pageInfo { hasNextPage endCursor }
-    nodes { ... on PullRequest { number title url state isDraft createdAt updatedAt author { login } bodyText labels(first: 10) { nodes { name } } repository { nameWithOwner } comments(last: 1) { nodes { author { login } createdAt } } } }
+    nodes { ... on PullRequest { number title url state isDraft createdAt updatedAt author { login __typename } bodyText labels(first: 10) { nodes { name } } repository { nameWithOwner } comments(last: 1) { nodes { author { login __typename } createdAt } } } }
   }
 }`
 
@@ -53,7 +53,8 @@ type pageInfo struct {
 }
 
 type loginNode struct {
-	Login string `json:"login"`
+	Login    string `json:"login"`
+	TypeName string `json:"__typename"` // "User" | "Bot" | "Organization" | ""
 }
 
 type gqlPR struct {
@@ -356,6 +357,7 @@ func toPR(n gqlPR, repo string) PRObs {
 		CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt, URL: n.URL, Author: "ghost"}
 	if n.Author != nil {
 		p.Author = n.Author.Login
+		p.AuthorIsBot = n.Author.TypeName == "Bot"
 	}
 	if len(n.Comments.Nodes) > 0 {
 		c := n.Comments.Nodes[len(n.Comments.Nodes)-1]
@@ -363,6 +365,7 @@ func toPR(n gqlPR, repo string) PRObs {
 		p.LastCommentAuthor = "ghost"
 		if c.Author != nil {
 			p.LastCommentAuthor = c.Author.Login
+			p.LastCommentAuthorIsBot = c.Author.TypeName == "Bot"
 		}
 	}
 	for _, l := range n.Labels.Nodes {

@@ -139,7 +139,7 @@ The `field` in each `[[match]]` condition must be one of the following. Operator
 | `pushed` | duration | time since last push |
 | `updated` | duration | time since last update |
 | `landed` | enum | `all-machines` \| `some-machines` \| `none` \| `unknown` |
-| `landed-how` | enum | `default-branch` \| `merged-pr` |
+| `landed-how` | text | `default-branch` \| `merged-pr`; multi-valued (`is` = contains; `in`/`not-in` check any element) |
 | `gone-upstream` | bool | branch merged and remote ref gone |
 | `unpushed` | bool | has local-only commits |
 | `dirty` | bool | has uncommitted changes |

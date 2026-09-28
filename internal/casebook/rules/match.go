@@ -85,7 +85,7 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 	case "landed":
 		return evalString(c.Op, f.Landed, c.Value)
 	case "landed-how":
-		return evalString(c.Op, f.LandedHow, c.Value)
+		return evalMultiString(c.Op, f.LandedHow, c.Value)
 	case "gone-upstream":
 		return evalBool(c.Op, f.GoneUpstream, c.Value)
 	case "unpushed":
@@ -203,34 +203,70 @@ func evalMultiString(op string, vals []string, cval string) (bool, error) {
 	return false, fmt.Errorf("unsupported multi-string op %q", op)
 }
 
+// regexEntry pairs a compiled regex with the field it applies to (fix D).
+type regexEntry struct {
+	field string
+	re    *regexp.Regexp
+}
+
 // compiledRule pairs a rule's conditions with pre-compiled regexes for the
-// "matches" operator. Regexes are compiled once per MatchAll call.
+// "matches" operator. Regexes are compiled once per MatchAll call and
+// remember which field they match against.
 type compiledRule struct {
 	conds []Condition
-	regs  map[int]*regexp.Regexp // index → compiled *regexp.Regexp
+	regs  map[int]regexEntry // index → {field, *regexp.Regexp}
 }
 
 // compileRule pre-compiles any "matches" conditions in r.Match.
 func compileRule(r Rule) (compiledRule, error) {
-	regs := map[int]*regexp.Regexp{}
+	regs := map[int]regexEntry{}
 	for i, c := range r.Match {
 		if c.Op == "matches" {
 			re, err := regexp.Compile(c.Value)
 			if err != nil {
 				return compiledRule{}, fmt.Errorf("condition %d: matches: %w", i, err)
 			}
-			regs[i] = re
+			regs[i] = regexEntry{field: c.Field, re: re}
 		}
 	}
 	return compiledRule{conds: r.Match, regs: regs}, nil
+}
+
+// regexFieldValue returns the string value of a text field from f for regex
+// matching. Only text fields support the "matches" operator (fix D).
+func regexFieldValue(f engine.Fields, field string) string {
+	switch field {
+	case "title":
+		return f.Title
+	case "repo":
+		return f.Repo
+	case "owner":
+		return f.Owner
+	case "author":
+		return f.Author
+	case "relation":
+		return f.Relation
+	case "direction":
+		return f.Direction
+	case "status":
+		return f.Status
+	case "worktree":
+		return f.Worktree
+	case "landed":
+		return f.Landed
+	case "kind":
+		return f.Kind
+	default:
+		return ""
+	}
 }
 
 // evalAll returns true only if every condition holds for f.
 func (cr compiledRule) evalAll(f engine.Fields) (bool, error) {
 	for i, c := range cr.conds {
 		var ok bool
-		if re, isMatch := cr.regs[i]; isMatch {
-			ok = re.MatchString(f.Title)
+		if entry, isMatch := cr.regs[i]; isMatch {
+			ok = entry.re.MatchString(regexFieldValue(f, entry.field))
 		} else {
 			var err error
 			ok, err = c.Eval(f)
@@ -245,16 +281,15 @@ func (cr compiledRule) evalAll(f engine.Fields) (bool, error) {
 	return true, nil
 }
 
-// howReason maps machine-readable LandedHow types to human-readable reasons
-// for grouping matches on the page (spec §4.3).
-func howReason(landedHowType string) string {
-	if landedHowType == "" {
+// howReason maps a slice of machine-readable LandedVia codes to a
+// human-readable reason for grouping matches on the page (spec §4.3).
+func howReason(codes []string) string {
+	if len(codes) == 0 {
 		return ""
 	}
-	parts := strings.Split(landedHowType, ";")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		switch strings.TrimSpace(p) {
+	out := make([]string, 0, len(codes))
+	for _, p := range codes {
+		switch p {
 		case "default-branch":
 			out = append(out, "in main")
 		case "merged-pr":

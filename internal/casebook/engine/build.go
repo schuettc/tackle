@@ -24,28 +24,30 @@ type Input struct {
 
 // Item is one tracked thing with its computed status.
 type Item struct {
-	Key        item.Key          `json:"-"`
-	ID         string            `json:"key"`
-	Kind       item.Kind         `json:"kind"`
-	Repo       string            `json:"repo,omitempty"`
-	Title      string            `json:"title,omitempty"`
-	URL        string            `json:"url,omitempty"`
-	Relation   string            `json:"relation,omitempty"`
-	Status     item.Status       `json:"status"`
-	Decision   *item.Decision    `json:"decision,omitempty"`
-	Hits       []item.Hit        `json:"hits,omitempty"`
-	Observed   item.Observed     `json:"observed"`
-	Stale      bool              `json:"stale,omitempty"`
-	Locations  []string          `json:"locations,omitempty"`
-	Evidence   []string          `json:"evidence,omitempty"`
-	Author     string            `json:"author,omitempty"`
-	CreatedAt  time.Time         `json:"created_at,omitzero"`
-	UpdatedAt  time.Time         `json:"updated_at,omitzero"`
-	Labels     []string          `json:"labels,omitempty"`
-	Body       string            `json:"body,omitempty"`
-	Landed     string            `json:"landed,omitempty"`      // combined across machines: "all-machines", "some-machines", "none", "unknown"
-	LandedHow  string            `json:"landed_how,omitempty"`  // machine-readable how type: "default-branch", "merged-pr", or ";" joined when both
-	LandedTips map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
+	Key         item.Key          `json:"-"`
+	ID          string            `json:"key"`
+	Kind        item.Kind         `json:"kind"`
+	Repo        string            `json:"repo,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Relation    string            `json:"relation,omitempty"`
+	Status      item.Status       `json:"status"`
+	Decision    *item.Decision    `json:"decision,omitempty"`
+	Hits        []item.Hit        `json:"hits,omitempty"`
+	Observed    item.Observed     `json:"observed"`
+	Stale       bool              `json:"stale,omitempty"`
+	Locations   []string          `json:"locations,omitempty"`
+	Evidence    []string          `json:"evidence,omitempty"`
+	Author      string            `json:"author,omitempty"`
+	AuthorIsBot bool              `json:"author_is_bot,omitempty"` // true when GitHub GraphQL __typename == "Bot"
+	CreatedAt   time.Time         `json:"created_at,omitzero"`
+	UpdatedAt   time.Time         `json:"updated_at,omitzero"`
+	Labels      []string          `json:"labels,omitempty"`
+	Body        string            `json:"body,omitempty"`
+	Landed      string            `json:"landed,omitempty"`      // combined across machines: "all-machines", "some-machines", "none", "unknown"
+	LandedHow   string            `json:"landed_how,omitempty"`  // human-readable: "in main", "merged #N", or "; "-joined when both
+	LandedVia   []string          `json:"landed_via,omitempty"`  // machine codes: "default-branch", "merged-pr" (multi-valued)
+	LandedTips  map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
 	fresh         bool // observed from a fresh owner listing
 	signals       item.Signals
@@ -233,7 +235,7 @@ func (b *builder) pr(k item.Key, p observe.PRObs, dir string, fresh bool) {
 	it.Observed = item.Observed{Known: true, Exists: true, State: p.State}
 	it.fresh, it.Stale = fresh, !fresh
 	it.Title, it.URL, it.Relation = p.Title, p.URL, dir
-	it.Author, it.CreatedAt, it.UpdatedAt, it.Labels, it.Body = p.Author, p.CreatedAt, p.UpdatedAt, p.Labels, p.Body
+	it.Author, it.AuthorIsBot, it.CreatedAt, it.UpdatedAt, it.Labels, it.Body = p.Author, p.AuthorIsBot, p.CreatedAt, p.UpdatedAt, p.Labels, p.Body
 	last := p.CreatedAt
 	if p.LastCommentAt.After(last) {
 		last = p.LastCommentAt
@@ -388,14 +390,12 @@ func (b *builder) finishLanded(it *Item) {
 	if len(tips) > 0 {
 		it.LandedTips = tips
 	}
-	// LandedHow stores the machine-readable how type for rule matching
-	// ("default-branch", "merged-pr", or both joined with ";").
-	// Human-readable reasons ("in main", "merged #N") are kept in LandedTips evidence.
+	// LandedVia holds the machine-readable how codes for rule conditions.
+	// LandedHow holds the human-readable text for display (templates, page).
 	if len(howTypes) > 0 {
-		it.LandedHow = strings.Join(howTypes, ";")
-	} else if len(reasons) > 0 {
-		// Fallback for old snapshots that set Landed/LandedState but not LandedHow:
-		// preserve the human-readable reason so it's not silently dropped.
+		it.LandedVia = howTypes
+	}
+	if len(reasons) > 0 {
 		it.LandedHow = strings.Join(reasons, "; ")
 	}
 	switch {

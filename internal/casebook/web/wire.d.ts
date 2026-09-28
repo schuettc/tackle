@@ -126,12 +126,14 @@ export interface ItemView {
   locations?: string[];
   evidence?: string[];
   author?: string;
+  author_is_bot?: boolean;
   created_at?: string;
   updated_at?: string;
   labels?: string[];
   body?: string;
   landed?: string;
   landed_how?: string;
+  landed_via?: string[];
   landed_tips?: Record<string, string>;
   proposal?: Proposal;
 }

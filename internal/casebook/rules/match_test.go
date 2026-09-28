@@ -2,10 +2,12 @@ package rules
 
 import (
 	"context"
+	"path/filepath"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/schuettc/tackle/internal/casebook/db"
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/propose"
@@ -16,13 +18,14 @@ import (
 var testNow = time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 
 // branchFields returns a Fields for a branch item with the given landed info.
-func branchFields(landed, landedHow string) engine.Fields {
+// landedVia is the machine-readable code (e.g. "default-branch", "merged-pr").
+func branchFields(landed string, landedVia ...string) engine.Fields {
 	return engine.Fields{
 		Kind:      "branch",
 		Repo:      "schuettc/galley",
 		Owner:     "schuettc",
 		Landed:    landed,
-		LandedHow: landedHow,
+		LandedHow: landedVia,
 		Worktree:  "none",
 	}
 }
@@ -151,14 +154,15 @@ func TestLandedBranchesRuleMatchesByReason(t *testing.T) {
 		Propose: Action{Disposition: "delete"},
 	}
 
-	// Two branch items with different how types
+	// Two branch items with different how types (codes in LandedVia).
 	inMainItem := engine.Item{
 		ID:        "branch:schuettc/galley@feat/foo",
 		Kind:      item.KindBranch,
 		Repo:      "schuettc/galley",
 		Status:    item.StatusNew,
 		Landed:    "all-machines",
-		LandedHow: "default-branch",
+		LandedHow: "in main", // human text
+		LandedVia: []string{"default-branch"},
 	}
 	viaPRItem := engine.Item{
 		ID:        "branch:schuettc/galley@feat/bar",
@@ -166,7 +170,8 @@ func TestLandedBranchesRuleMatchesByReason(t *testing.T) {
 		Repo:      "schuettc/galley",
 		Status:    item.StatusNew,
 		Landed:    "all-machines",
-		LandedHow: "merged-pr",
+		LandedHow: "via merged PR", // human text
+		LandedVia: []string{"merged-pr"},
 	}
 	result := engine.Result{Items: []engine.Item{inMainItem, viaPRItem}}
 
@@ -309,13 +314,105 @@ func TestNeverOverridesADecision(t *testing.T) {
 }
 
 // TestRuleRecordCounts verifies that RuleRecord counts accepted/rejected/pending
-// proposals from a fake store.
+// proposals from a real propose.Store: accepted+changed → Accepted, rejected →
+// Rejected, pending → Pending; proposals from other sources are ignored.
 func TestRuleRecordCounts(t *testing.T) {
-	// This test uses a nil *propose.Store and is expected to fail until
-	// RuleRecord is implemented with real DB access. For now we exercise
-	// the signature only via context.Background().
-	_ = context.Background()
-	// The function is tested via integration with the real store in propose_test.
-	// Here we just confirm the types compile correctly.
-	var _ TrackRecord
+	d, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "casebook.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	s := propose.New(d)
+	s.Now = func() time.Time { return now }
+	// Need a session row for the source to be valid (proposals don't require sessions,
+	// but the db schema needs to be set up; Open already runs migrations).
+
+	ctx := context.Background()
+	source := "rule:my-rule"
+	other := "pi:s1"
+
+	// Insert proposals via direct SQL (Propose validates item keys; we bypass
+	// that by inserting rows directly to test RuleRecord in isolation).
+	for _, row := range []struct{ source, state string }{
+		{source, "accepted"},
+		{source, "changed"},
+		{source, "rejected"},
+		{source, "pending"},
+		{other, "accepted"}, // different source → must not count
+	} {
+		_, err := d.ExecContext(ctx, "INSERT INTO proposals(key, disposition, source, state, created_at) VALUES (?, 'delete', ?, ?, ?)",
+			"branch:a/b@feat", row.source, row.state, now.UnixMilli())
+		if err != nil {
+			t.Fatalf("insert %v: %v", row, err)
+		}
+	}
+
+	rec, err := RuleRecord(ctx, s, "my-rule")
+	if err != nil {
+		t.Fatalf("RuleRecord: %v", err)
+	}
+	if rec.Accepted != 2 {
+		t.Errorf("Accepted = %d, want 2 (accepted+changed)", rec.Accepted)
+	}
+	if rec.Rejected != 1 {
+		t.Errorf("Rejected = %d, want 1", rec.Rejected)
+	}
+	if rec.Pending != 1 {
+		t.Errorf("Pending = %d, want 1", rec.Pending)
+	}
+}
+
+// TestCompiledRegexUsesCorrectField verifies that the compiled "matches" op is
+// evaluated against the field it names, NOT hard-coded against Title.
+// Fix D: compiledRule must remember its field; evalAll uses it.
+func TestCompiledRegexUsesCorrectField(t *testing.T) {
+	// Rule matches on "repo" field, not "title".
+	r := Rule{
+		ID:     "repo-match",
+		Status: StatusActive,
+		Match: []Condition{
+			{Field: "repo", Op: "matches", Value: `schuettc/.*`},
+		},
+		Propose: Action{Disposition: "archive"},
+	}
+
+	// Item with matching Repo but non-matching Title.
+	it := engine.Item{
+		ID:    "repo:schuettc/galley",
+		Kind:  item.KindRepo,
+		Repo:  "schuettc/galley",
+		Title: "some-unrelated-title", // does NOT match schuettc/.*
+	}
+	result := engine.Result{Items: []engine.Item{it}}
+
+	matches, err := r.MatchAll(result, testNow)
+	if err != nil {
+		t.Fatalf("MatchAll: %v", err)
+	}
+	// Should match because Repo matches, not Title.
+	if len(matches) != 1 {
+		t.Errorf("got %d matches, want 1 (regex must match Repo, not Title)", len(matches))
+	}
+}
+
+// TestDeterministicTip verifies that Fields.Tip is always the tip of the
+// lexically first machine in LandedTips, not an arbitrary map iteration.
+// Fix E: fields.go must sort LandedTips keys before picking the tip.
+func TestDeterministicTip(t *testing.T) {
+	it := engine.Item{
+		ID:   "branch:schuettc/hail@feat",
+		Kind: item.KindBranch,
+		Repo: "schuettc/hail",
+		// Two machines: "mbp" > "air" lexically, so "air" is first.
+		LandedTips: map[string]string{
+			"mbp": "tip-mbp",
+			"air": "tip-air",
+		},
+	}
+	f := it.Fields(testNow)
+	if f.Tip != "tip-air" {
+		t.Errorf("Tip = %q, want %q (lexically first machine is \"air\")", f.Tip, "tip-air")
+	}
 }

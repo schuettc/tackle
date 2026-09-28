@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,13 +27,13 @@ type Fields struct {
 	Updated time.Duration // now - UpdatedAt
 
 	// Landing / branch
-	Landed       string // "all-machines" | "some-machines" | "none" | "unknown"
-	LandedHow    string // machine-readable: "default-branch", "merged-pr", or ""
-	Tip          string // tip SHA of the first machine that landed (for {tip} template)
-	GoneUpstream bool   // branch upstream was deleted on the remote
-	Unpushed     bool   // has unpushed local-only commits
-	Dirty        bool   // worktree item: has uncommitted changes; branch: has dirty worktree
-	Worktree     string // branch: "dirty", "clean", or "none"
+	Landed       string   // "all-machines" | "some-machines" | "none" | "unknown"
+	LandedHow    []string // machine codes: "default-branch", "merged-pr" (from Item.LandedVia)
+	Tip          string   // tip SHA of the lexically first machine that landed (for {tip} template)
+	GoneUpstream bool     // branch upstream was deleted on the remote
+	Unpushed     bool     // has unpushed local-only commits
+	Dirty        bool     // worktree item: has uncommitted changes; branch: has dirty worktree
+	Worktree     string   // branch: "dirty", "clean", or "none"
 
 	// Repository attributes (set on repo items)
 	Archived   bool
@@ -62,8 +63,9 @@ func (it Item) Fields(now time.Time) Fields {
 		owner = it.Repo[:i]
 	}
 
-	// Bot: author ends "[bot]" (GitHub's convention).
-	bot := strings.HasSuffix(strings.ToLower(it.Author), "[bot]")
+	// Bot: derived from AuthorIsBot (set from GraphQL __typename == "Bot").
+	// No suffix check — GitHub Bot accounts may not carry the [bot] login suffix.
+	bot := it.AuthorIsBot
 
 	// Fork: repo items whose Relation starts with "fork-of:".
 	fork := strings.HasPrefix(it.Relation, "fork-of:")
@@ -78,11 +80,15 @@ func (it Item) Fields(now time.Time) Fields {
 	// worktree when worktreeState == "dirty".
 	dirty := it.dirty || it.worktreeState == "dirty"
 
-	// Tip: first tip SHA from the landed tips map (deterministic via sorted keys).
+	// Tip: tip SHA of the lexically first machine in LandedTips (deterministic).
 	var tip string
-	for _, t := range it.LandedTips {
-		tip = t
-		break
+	if len(it.LandedTips) > 0 {
+		machines := make([]string, 0, len(it.LandedTips))
+		for m := range it.LandedTips {
+			machines = append(machines, m)
+		}
+		sort.Strings(machines)
+		tip = it.LandedTips[machines[0]]
 	}
 
 	// Policy hit rule names from the computed hits slice.
@@ -106,7 +112,7 @@ func (it Item) Fields(now time.Time) Fields {
 		Pushed:       pushed,
 		Updated:      updated,
 		Landed:       it.Landed,
-		LandedHow:    it.LandedHow,
+		LandedHow:    it.LandedVia,
 		Tip:          tip,
 		GoneUpstream: it.goneUpstream,
 		Unpushed:     !it.signals.OldestUnpushed.IsZero(),
