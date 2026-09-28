@@ -27,6 +27,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/propose"
+	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tools-common/localweb"
 )
 
@@ -53,6 +54,7 @@ type Server struct {
 	activity atomic.Int64             // unix ms of the last API request
 	streams  atomic.Int32             // open page event streams (connected tabs)
 	streamWG sync.WaitGroup           // Run waits for streams to end before closing the database
+	rebuilds atomic.Int32             // count of rebuild calls; exposed for tests to verify no loops
 	life     context.Context          // Run's context; done while shutting down
 	stop     context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
@@ -154,14 +156,58 @@ func (s *Server) repoHead(ctx context.Context) string {
 	return h
 }
 
-// rebuild recomputes the index from the current repo state and announces it.
+// rebuild recomputes the index from the current repo state, evaluates active
+// rules and announces the new state. It is the only trigger for rule
+// evaluation: a sync moves HEAD, serve's watch sees it and calls rebuild, and
+// serve evaluates rules on its first build. The CLI sync never opens the
+// database and never evaluates rules (spec
+// §4.2 updated: rules run in serve, not in casebook sync).
 func (s *Server) rebuild(ctx context.Context) error {
+	s.rebuilds.Add(1)
 	if err := s.Index.rebuild(ctx, s.build, s.repoHead(ctx), s.Now()); err != nil {
 		return err
 	}
+
+	// Load rules and evaluate active ones. Rule-load errors are surfaced as
+	// index notices so the page can show them; they never abort the rebuild.
+	allRules, ruleErrs := s.App.Repo.Rules()
+	var notices []string
+	for _, re := range ruleErrs {
+		notices = append(notices, "rule: "+re.Error())
+	}
+	var active []rules.Rule
+	for _, r := range allRules {
+		if err := r.Validate(); err != nil {
+			notices = append(notices, "rule "+r.ID+": "+err.Error())
+			continue
+		}
+		if r.Status == rules.StatusActive {
+			active = append(active, r)
+		}
+	}
+	s.Index.appendNotices(notices)
+
+	// Evaluate active rules against the freshly built index. Proposals are
+	// written to SQLite only; they do not move HEAD and cannot trigger another
+	// rebuild (the watch loop only rebuilds on a HEAD change).
+	var proposed int
+	if len(active) > 0 {
+		var err error
+		proposed, err = rules.EvaluateActive(ctx, active, s.Index.Result(), s.Now(), s.Props)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "casebook serve: rules evaluate: %v\n", err)
+		}
+	}
+
 	pending, _ := s.Props.Pending(ctx)
-	_, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()})
-	return err
+	if _, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()}); err != nil {
+		return err
+	}
+	if proposed > 0 {
+		_, err := s.Bus.Publish(ctx, "rules", map[string]int{"proposed": proposed})
+		return err
+	}
+	return nil
 }
 
 // watch rebuilds whenever the casebook repo's HEAD moves (a sync or a CLI

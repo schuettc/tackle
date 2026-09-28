@@ -160,6 +160,25 @@ func (x *Index) Notices() []string {
 	return x.res.Notices
 }
 
+// Result returns the current engine.Result. Callers that need to evaluate
+// rules against the live index use this to get a consistent snapshot.
+func (x *Index) Result() engine.Result {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.res
+}
+
+// appendNotices appends additional notices (e.g. rule-load errors) to the
+// index so the page can display them alongside engine notices.
+func (x *Index) appendNotices(notices []string) {
+	if len(notices) == 0 {
+		return
+	}
+	x.mu.Lock()
+	x.res.Notices = append(x.res.Notices, notices...)
+	x.mu.Unlock()
+}
+
 // BuiltAt is when the index was last built.
 func (x *Index) BuiltAt() time.Time {
 	x.mu.RLock()

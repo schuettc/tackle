@@ -233,6 +233,28 @@ func (s *Store) Tally(ctx context.Context, source string, since time.Time) (Tall
 	return t, rows.Err()
 }
 
+// RejectedFor returns the set of item keys for which source's proposals were
+// rejected since t. Keys with rejections before t are not returned, because a
+// rule re-edited after the rejection may re-propose them (spec §4.2).
+func (s *Store) RejectedFor(ctx context.Context, source string, since time.Time) (map[string]bool, error) {
+	rows, err := s.DB.QueryContext(ctx,
+		"SELECT key FROM proposals WHERE source = ? AND state = 'rejected' AND settled_at >= ?",
+		source, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		out[key] = true
+	}
+	return out, rows.Err()
+}
+
 // Overruled returns source's proposals Court changed or rejected since t,
 // newest first, at most limit of them, and how many there are in all.
 func (s *Store) Overruled(ctx context.Context, source string, since time.Time, limit int) ([]Proposal, int, error) {
