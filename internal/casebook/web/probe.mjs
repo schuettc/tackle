@@ -266,8 +266,126 @@ async function run() {
       await page.waitForTimeout(600);
     }
 
-    // Check: opening a row shows item detail in .kit-read.
-    // (Free-text search lands when tools-common v0.11.0 ships list({search}).)
+    // ---- scenario: search the Attention list (kit v0.11.0) -----------------
+    console.log('\nscenario: search the Attention list (kit v0.11.0)');
+
+    {
+      // Navigate to waiting view and count the full row set.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+
+      const fullCount = await page.$$eval('.kit-row', (rows) => rows.length);
+
+      // 1. Typing narrows the list to the matching fixture item (after debounce).
+      {
+        const searchField = await page.$('.kit-search');
+        if (searchField) {
+          await searchField.click();
+          await searchField.fill('nudge');
+          // Wait for 200ms debounce + network round-trip.
+          await page.waitForTimeout(500);
+          const narrowCount = await page.$$eval(
+            '.kit-row',
+            (rows) => rows.length,
+          );
+          check(
+            "typing 'nudge' narrows the list after the debounce",
+            narrowCount < fullCount || narrowCount <= 1,
+          );
+          const texts = await page.$$eval('.kit-row', (rows) =>
+            rows.map((r) => (r.textContent || '').toLowerCase()),
+          );
+          check(
+            'narrowed rows all contain the search term',
+            texts.length === 0 || texts.every((t) => t.includes('nudge')),
+          );
+        } else {
+          check("typing 'nudge' narrows the list after the debounce", false);
+          check('narrowed rows all contain the search term', false);
+        }
+      }
+
+      // 2. Esc clears the search and the list returns to the full count.
+      {
+        const searchField = await page.$('.kit-search');
+        if (searchField) {
+          await searchField.press('Escape');
+          // Wait for 200ms debounce + reload.
+          await page.waitForTimeout(500);
+          const afterEscCount = await page.$$eval(
+            '.kit-row',
+            (rows) => rows.length,
+          );
+          check(
+            'Esc clears the search and restores the full list',
+            afterEscCount === fullCount,
+          );
+          const clearedVal = await searchField.inputValue();
+          check('search field is empty after Esc', clearedVal === '');
+        } else {
+          check('Esc clears the search and restores the full list', false);
+          check('search field is empty after Esc', false);
+        }
+      }
+
+      // 3. / focuses the search field.
+      {
+        // Blur any focused element first.
+        await page.evaluate(() => {
+          if (document.activeElement instanceof HTMLElement)
+            document.activeElement.blur();
+        });
+        await page.keyboard.press('/');
+        await page.waitForTimeout(150);
+        const focused = await page
+          .$eval('.kit-search', (el) => document.activeElement === el)
+          .catch(() => false);
+        check('/ focuses the search field', focused);
+        // Press Esc to leave the field cleanly.
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(200);
+      }
+
+      // 4. Reload with search in URL restores the narrowed list and field text.
+      {
+        const reloadPage = await context.newPage();
+        try {
+          // Navigate to /?q=nudge#/attention/waiting. The context's cookie
+          // provides auth; no ?t= needed.
+          const baseUrl = serveHandle.base.replace(/\/$/, '');
+          await reloadPage.goto(baseUrl + '/?q=nudge#/attention/waiting', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          await reloadPage.waitForSelector('.kit-bar', { timeout: 8000 });
+          await reloadPage
+            .waitForSelector('.kit-row', { timeout: 8000 })
+            .catch(() => {});
+          const reloadCount = await reloadPage.$$eval(
+            '.kit-row',
+            (rows) => rows.length,
+          );
+          check(
+            'reload with ?q=nudge shows the narrowed list',
+            reloadCount < fullCount || reloadCount <= 1,
+          );
+          const fieldText = await reloadPage
+            .$eval('.kit-search', (el) => el.value)
+            .catch(() => '');
+          check(
+            'reload with ?q=nudge restores text in the search field',
+            fieldText === 'nudge',
+          );
+        } finally {
+          await reloadPage.close();
+        }
+      }
+    }
+
+    // ---- Check: opening a row shows item detail in .kit-read ----------------
     // ---- scenario: direct item link -----------------------------------------
     // Note: this check runs before the row-click check below so that the
     // reading column is empty when we navigate directly to the item.

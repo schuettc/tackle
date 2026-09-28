@@ -402,8 +402,23 @@ function emptyFilters() {
     relation: "",
     bot: "",
     age: "",
-    rule: ""
+    rule: "",
+    q: ""
   };
+}
+function getUrlQ() {
+  return new URLSearchParams(location.search).get("q") ?? "";
+}
+function setUrlQ(q) {
+  const p = new URLSearchParams(location.search);
+  if (q) {
+    p.set("q", q);
+  } else {
+    p.delete("q");
+  }
+  const qs = p.toString();
+  const newUrl = location.pathname + (qs ? "?" + qs : "") + location.hash;
+  history.replaceState(null, "", newUrl);
 }
 function ageOf(it) {
   if (!it.created_at) return "";
@@ -421,6 +436,7 @@ function makeAttention(ctx) {
   const filters = emptyFilters();
   let loading = false;
   let footEl = null;
+  let searchDebounceTimer = null;
   function buildFoot() {
     footEl = h3(
       "div",
@@ -444,6 +460,18 @@ function makeAttention(ctx) {
     filters: FILTER_CHIPS,
     selection,
     openOnMove: false,
+    search: {
+      placeholder: "search by key or title",
+      onInput(text) {
+        if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+          searchDebounceTimer = null;
+          filters.q = text;
+          setUrlQ(text);
+          void reload();
+        }, 200);
+      }
+    },
     row(it) {
       const kindKey = `${it.kind} · ${it.key}`;
       const age = ageOf(it);
@@ -521,6 +549,7 @@ function makeAttention(ctx) {
     if (filters.bot) p["bot"] = filters.bot;
     if (filters.age) p["age"] = filters.age;
     if (filters.rule) p["rule"] = filters.rule;
+    if (filters.q) p["q"] = filters.q;
     return p;
   }
   async function reload() {
@@ -588,7 +617,28 @@ function makeAttention(ctx) {
       }))
     );
   }
+  {
+    const urlQ = getUrlQ();
+    if (urlQ) {
+      filters.q = urlQ;
+      handle.setSearch(urlQ);
+    }
+  }
   void reload();
+  if (typeof handle.focusSearch === "function") {
+    const focusFn = handle.focusSearch.bind(handle);
+    try {
+      ctx.keys.register({
+        keys: "/",
+        label: "search",
+        group: "family",
+        run() {
+          focusFn();
+        }
+      });
+    } catch {
+    }
+  }
   void ctx.api.get("/summary").then((s) => {
     applyCounts(s.counts);
   }).catch(() => {
@@ -596,6 +646,11 @@ function makeAttention(ctx) {
   function show(sub) {
     if (sub === "board") {
       return;
+    }
+    const urlQ = getUrlQ();
+    if (urlQ !== filters.q) {
+      filters.q = urlQ;
+      handle.setSearch(urlQ);
     }
     const view = sub || "waiting";
     if (VIEWS.some((v) => v.id === view) && view !== "board") {

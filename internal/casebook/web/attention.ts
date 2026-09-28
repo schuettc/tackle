@@ -61,6 +61,7 @@ interface Filters extends Record<string, string> {
   bot: string;
   age: string;
   rule: string;
+  q: string;
 }
 
 function emptyFilters(): Filters {
@@ -72,7 +73,26 @@ function emptyFilters(): Filters {
     bot: '',
     age: '',
     rule: '',
+    q: '',
   };
+}
+
+// ---- URL search param helpers -----------------------------------------------
+
+function getUrlQ(): string {
+  return new URLSearchParams(location.search).get('q') ?? '';
+}
+
+function setUrlQ(q: string): void {
+  const p = new URLSearchParams(location.search);
+  if (q) {
+    p.set('q', q);
+  } else {
+    p.delete('q');
+  }
+  const qs = p.toString();
+  const newUrl = location.pathname + (qs ? '?' + qs : '') + location.hash;
+  history.replaceState(null, '', newUrl);
 }
 
 function ageOf(it: ItemView): string {
@@ -92,6 +112,7 @@ export function makeAttention(ctx: Ctx): Section {
   const filters = emptyFilters();
   let loading = false;
   let footEl: HTMLElement | null = null;
+  let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ---- foot "show 200 more" control ----------------------------------------
 
@@ -114,8 +135,6 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // ---- list -----------------------------------------------------------------
-  // Search (free-text) is waiting on tools-common v0.11.0 list({search}).
-  // No stub UI or hidden element; a later dispatch adds it.
 
   const handle: ListHandle<ItemView> = list<ItemView>({
     label: 'attention',
@@ -123,6 +142,18 @@ export function makeAttention(ctx: Ctx): Section {
     filters: FILTER_CHIPS,
     selection,
     openOnMove: false,
+    search: {
+      placeholder: 'search by key or title',
+      onInput(text: string) {
+        if (searchDebounceTimer !== null) clearTimeout(searchDebounceTimer);
+        searchDebounceTimer = setTimeout(() => {
+          searchDebounceTimer = null;
+          filters.q = text;
+          setUrlQ(text);
+          void reload();
+        }, 200);
+      },
+    },
     row(it: ItemView) {
       const kindKey = `${it.kind} · ${it.key}`;
       const age = ageOf(it);
@@ -219,6 +250,7 @@ export function makeAttention(ctx: Ctx): Section {
     if (filters.bot) p['bot'] = filters.bot;
     if (filters.age) p['age'] = filters.age;
     if (filters.rule) p['rule'] = filters.rule;
+    if (filters.q) p['q'] = filters.q;
     return p;
   }
 
@@ -298,8 +330,34 @@ export function makeAttention(ctx: Ctx): Section {
     );
   }
 
-  // Initial load.
+  // Initial load: restore search text from URL if present.
+  {
+    const urlQ = getUrlQ();
+    if (urlQ) {
+      filters.q = urlQ;
+      handle.setSearch(urlQ);
+    }
+  }
   void reload();
+
+  // Register / to focus the search field (kit v0.11.0).
+  // createKeys() in app.ts is called before sections are created, so we
+  // register this binding here rather than via the list option.
+  if (typeof handle.focusSearch === 'function') {
+    const focusFn = handle.focusSearch.bind(handle);
+    try {
+      ctx.keys.register({
+        keys: '/',
+        label: 'search',
+        group: 'family',
+        run() {
+          focusFn();
+        },
+      });
+    } catch {
+      // Already registered (e.g. createKeys was given this list).
+    }
+  }
 
   // Load summary for initial counts.
   void ctx.api
@@ -315,6 +373,12 @@ export function makeAttention(ctx: Ctx): Section {
     if (sub === 'board') {
       // Board is Task 4.
       return;
+    }
+    // Restore search text from URL (?q=...) on every navigation into this section.
+    const urlQ = getUrlQ();
+    if (urlQ !== filters.q) {
+      filters.q = urlQ;
+      handle.setSearch(urlQ);
     }
     const view = sub || 'waiting';
     if (VIEWS.some((v) => v.id === view) && view !== 'board') {
