@@ -72,6 +72,7 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 		Bot:      q.Get("bot"),
 		Age:      q.Get("age"),
 		Rule:     q.Get("rule"),
+		Now:      s.Now(),
 		Offset:   atoi(q.Get("offset")),
 		Limit:    atoi(q.Get("limit")),
 	}

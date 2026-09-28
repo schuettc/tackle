@@ -61,7 +61,6 @@ interface Filters extends Record<string, string> {
   bot: string;
   age: string;
   rule: string;
-  q: string;
 }
 
 function emptyFilters(): Filters {
@@ -73,7 +72,6 @@ function emptyFilters(): Filters {
     bot: '',
     age: '',
     rule: '',
-    q: '',
   };
 }
 
@@ -115,28 +113,14 @@ export function makeAttention(ctx: Ctx): Section {
     return footEl;
   }
 
-  // ---- text search input ----------------------------------------------------
-
-  const textInput = h('input', {
-    type: 'search',
-    class: 'cb-text-filter',
-    placeholder: 'search key · title',
-    oninput() {
-      filters.q = textInput.value.trim();
-      void reload();
-    },
-  }) as HTMLInputElement;
-
   // ---- list -----------------------------------------------------------------
+  // Search (free-text) is waiting on tools-common v0.11.0 list({search}).
+  // No stub UI or hidden element; a later dispatch adds it.
 
   const handle: ListHandle<ItemView> = list<ItemView>({
     label: 'attention',
     views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
-    filters: [
-      // Text search chip rendered as a real input node.
-      { id: 'text', label: 'search' },
-      ...FILTER_CHIPS,
-    ],
+    filters: FILTER_CHIPS,
     selection,
     openOnMove: false,
     row(it: ItemView) {
@@ -209,16 +193,16 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   function updateFilterChips(): void {
-    handle.setChips('filter', [
-      { id: 'text', label: 'search' },
-      ...FILTER_CHIPS.map((c) => ({
+    handle.setChips(
+      'filter',
+      FILTER_CHIPS.map((c) => ({
         ...c,
         on: Boolean((filters as Record<string, string>)[c.id]),
         label: (filters as Record<string, string>)[c.id]
           ? `${c.label}: ${(filters as Record<string, string>)[c.id]}`
           : c.label,
       })),
-    ]);
+    );
   }
 
   // ---- API ------------------------------------------------------------------
@@ -235,7 +219,6 @@ export function makeAttention(ctx: Ctx): Section {
     if (filters.bot) p['bot'] = filters.bot;
     if (filters.age) p['age'] = filters.age;
     if (filters.rule) p['rule'] = filters.rule;
-    if (filters.q) p['q'] = filters.q;
     return p;
   }
 
@@ -315,13 +298,6 @@ export function makeAttention(ctx: Ctx): Section {
     );
   }
 
-  // Listen for summary-level index rebuild events to refresh counts.
-  ctx.on('index', (data: unknown) => {
-    const s = data as SummaryView;
-    applyCounts(s?.counts ?? null);
-    void reload();
-  });
-
   // Initial load.
   void reload();
 
@@ -336,18 +312,13 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- show(sub) -- router hook --------------------------------------------
 
   function show(sub: string): void {
-    if (sub.startsWith('item/') || sub === 'item') {
-      // #/item/<key> is handled by app.ts routing section; nothing to do here
-      // because the router routes to the 'item' section which maps back to
-      // attention's reading column via app.ts.
-      return;
-    }
     if (sub === 'board') {
       // Board is Task 4.
       return;
     }
     const view = sub || 'waiting';
     if (VIEWS.some((v) => v.id === view) && view !== 'board') {
+      // Known view chip: switch to it.
       filters.view = view;
       handle.setChips(
         'view',
@@ -356,6 +327,11 @@ export function makeAttention(ctx: Ctx): Section {
           on: v.id === filters.view,
         })),
       );
+      void reload();
+    } else if (sub) {
+      // Not a view id: treat as an item key from a direct #/item/<key> link.
+      // Open the item's detail and reload the list with the current view.
+      void openDetail(sub);
       void reload();
     }
   }
@@ -366,10 +342,16 @@ export function makeAttention(ctx: Ctx): Section {
     read: readEl,
     show,
     onLive(type: string, data: unknown) {
-      if (type === 'index' || type === 'decided' || type === 'proposals') {
+      if (type === 'index') {
+        // One reload per index event: apply counts from the event payload and
+        // refresh the list.  Previously ctx.on('index') + onLive both called
+        // reload(); folding them here means a single index event ⇒ one reload.
+        const s = data as { counts?: Record<string, number> };
+        applyCounts(s?.counts ?? null);
+        void reload();
+      } else if (type === 'decided' || type === 'proposals') {
         void reload();
       }
-      void data;
     },
     primary() {
       return null;

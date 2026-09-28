@@ -402,8 +402,7 @@ function emptyFilters() {
     relation: "",
     bot: "",
     age: "",
-    rule: "",
-    q: ""
+    rule: ""
   };
 }
 function ageOf(it) {
@@ -439,23 +438,10 @@ function makeAttention(ctx) {
     );
     return footEl;
   }
-  const textInput = h3("input", {
-    type: "search",
-    class: "cb-text-filter",
-    placeholder: "search key · title",
-    oninput() {
-      filters.q = textInput.value.trim();
-      void reload();
-    }
-  });
   const handle = list({
     label: "attention",
     views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
-    filters: [
-      // Text search chip rendered as a real input node.
-      { id: "text", label: "search" },
-      ...FILTER_CHIPS
-    ],
+    filters: FILTER_CHIPS,
     selection,
     openOnMove: false,
     row(it) {
@@ -514,14 +500,14 @@ function makeAttention(ctx) {
     }
   }
   function updateFilterChips() {
-    handle.setChips("filter", [
-      { id: "text", label: "search" },
-      ...FILTER_CHIPS.map((c) => ({
+    handle.setChips(
+      "filter",
+      FILTER_CHIPS.map((c) => ({
         ...c,
         on: Boolean(filters[c.id]),
         label: filters[c.id] ? `${c.label}: ${filters[c.id]}` : c.label
       }))
-    ]);
+    );
   }
   function buildQuery(pageOffset) {
     const p = {
@@ -535,7 +521,6 @@ function makeAttention(ctx) {
     if (filters.bot) p["bot"] = filters.bot;
     if (filters.age) p["age"] = filters.age;
     if (filters.rule) p["rule"] = filters.rule;
-    if (filters.q) p["q"] = filters.q;
     return p;
   }
   async function reload() {
@@ -603,20 +588,12 @@ function makeAttention(ctx) {
       }))
     );
   }
-  ctx.on("index", (data) => {
-    const s = data;
-    applyCounts(s?.counts ?? null);
-    void reload();
-  });
   void reload();
   void ctx.api.get("/summary").then((s) => {
     applyCounts(s.counts);
   }).catch(() => {
   });
   function show(sub) {
-    if (sub.startsWith("item/") || sub === "item") {
-      return;
-    }
     if (sub === "board") {
       return;
     }
@@ -631,6 +608,9 @@ function makeAttention(ctx) {
         }))
       );
       void reload();
+    } else if (sub) {
+      void openDetail(sub);
+      void reload();
     }
   }
   return {
@@ -639,10 +619,13 @@ function makeAttention(ctx) {
     read: readEl,
     show,
     onLive(type, data) {
-      if (type === "index" || type === "decided" || type === "proposals") {
+      if (type === "index") {
+        const s = data;
+        applyCounts(s?.counts ?? null);
+        void reload();
+      } else if (type === "decided" || type === "proposals") {
         void reload();
       }
-      void data;
     },
     primary() {
       return null;

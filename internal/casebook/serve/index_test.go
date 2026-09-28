@@ -63,7 +63,9 @@ func TestListFiltersByRelationBotAndAge(t *testing.T) {
 	_ = pending
 
 	// Helper to list with no pending proposals.
+	// Always sets Now to the fixed clock so the age filter can never drift.
 	list := func(q Query) []ItemView {
+		q.Now = now
 		items, _ := idx.List(q, nil)
 		return items
 	}
@@ -114,6 +116,27 @@ func TestListFiltersByRelationBotAndAge(t *testing.T) {
 		got := list(Query{Relation: "incoming", Bot: "human"})
 		if len(got) != 1 || got[0].ID != prIncoming.ID {
 			t.Fatalf("relation=incoming bot=human: got %v", ids(got))
+		}
+	})
+
+	t.Run("age=1h narrows to items older than 1 hour", func(t *testing.T) {
+		// All three items are >1h old (57d, 5d, 60d) → all 3 match.
+		got := list(Query{Age: "1h"})
+		if len(got) != 3 {
+			t.Fatalf("age=1h: want 3, got %v", ids(got))
+		}
+	})
+
+	t.Run("age=1w narrows to items older than 1 week", func(t *testing.T) {
+		// prIncoming (57d) and issueSelf (60d) are >1w; prOutgoing (5d) is not.
+		got := list(Query{Age: "1w"})
+		if len(got) != 2 {
+			t.Fatalf("age=1w: want 2, got %v", ids(got))
+		}
+		for _, it := range got {
+			if it.ID == prOutgoing.ID {
+				t.Fatalf("age=1w: prOutgoing (5d) should not appear")
+			}
 		}
 	})
 }

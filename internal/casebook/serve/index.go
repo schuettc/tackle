@@ -2,7 +2,6 @@ package serve
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -65,9 +64,10 @@ type Query struct {
 	Text     string          // substring of key or title
 	Relation string          // incoming / outgoing / self (own)
 	Bot      string          // "bot" or "human"
-	Age      string          // duration string, e.g. "30d"; matches items older than the duration
+	Age      string          // casebook duration (<n>h, <n>d, <n>w); matches items older than the duration
 	Rule     string          // rule id whose matched keys are in MatchSet
 	MatchSet map[string]bool // precomputed by getItems when Rule != ""
+	Now      time.Time       // clock for the age filter; zero falls back to time.Now()
 	Offset   int
 	Limit    int
 }
@@ -96,20 +96,6 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 		return ok
 	}
 	return true
-}
-
-// parseAgeDays parses a duration string like "30d" or "7d" and returns the
-// number of days. Only the "d" suffix is accepted. Returns 0 on parse failure.
-func parseAgeDays(s string) int {
-	s = strings.TrimSpace(s)
-	if !strings.HasSuffix(s, "d") {
-		return 0
-	}
-	n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
-	if err != nil || n <= 0 {
-		return 0
-	}
-	return n
 }
 
 func matches(q Query, it engine.Item) bool {
@@ -149,11 +135,20 @@ func matches(q Query, it engine.Item) bool {
 			}
 		}
 	}
-	if days := parseAgeDays(q.Age); days > 0 {
+	if q.Age != "" {
+		d, err := item.ParseDuration(strings.TrimSpace(q.Age))
+		if err != nil || d <= 0 {
+			// Unparseable age: exclude all items (strict: bad filter, no results).
+			return false
+		}
 		if it.CreatedAt.IsZero() {
 			return false
 		}
-		threshold := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+		now := q.Now
+		if now.IsZero() {
+			now = time.Now()
+		}
+		threshold := now.Add(-d)
 		if !it.CreatedAt.Before(threshold) {
 			return false
 		}

@@ -266,40 +266,43 @@ async function run() {
       await page.waitForTimeout(600);
     }
 
-    // Check: a free-text filter narrows the list.
+    // Check: opening a row shows item detail in .kit-read.
+    // (Free-text search lands when tools-common v0.11.0 ships list({search}).)
+    // ---- scenario: direct item link -----------------------------------------
+    // Note: this check runs before the row-click check below so that the
+    // reading column is empty when we navigate directly to the item.
+    console.log('\nscenario: direct #/item/<key> link loads item detail');
     {
-      const beforeCount = await page.$$eval('.kit-row', (rows) => rows.length);
-
-      // Type into the text search input (if present).
-      const searchInput = await page.$('input.cb-text-filter');
-      if (searchInput) {
-        await searchInput.click();
-        // headless Chrome withholds focus/blur without window focus; dispatch
-        // them explicitly per the probe rules.
-        await page.evaluate((el) => {
-          el.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
-        }, searchInput);
-        await searchInput.type('nudge');
-        await page.evaluate((el) => {
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        }, searchInput);
-        await page.waitForTimeout(800);
-        const afterCount = await page.$$eval('.kit-row', (rows) => rows.length);
+      // Use a fresh page and set the hash to simulate a direct link.
+      // pr:schuettc/hail#3 is in the fixture with title "fix nudge".
+      const directPage = await context.newPage();
+      try {
+        await directPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await directPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        // Set the hash to the item key (simulates navigating to a direct link;
+        // the hashchange event triggers show() on the attention section).
+        await directPage.evaluate(() => {
+          location.hash = '#/item/pr:schuettc/hail#3';
+        });
+        // Wait for the reading column to populate via openDetail().
+        await directPage
+          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
+          .catch(() => {});
+        const title = await directPage
+          .$eval('.kit-read .cb-title', (el) => el.textContent ?? '')
+          .catch(() => '');
         check(
-          'free-text filter narrows the list',
-          afterCount < beforeCount || afterCount <= 1,
+          'direct #/item/<key> shows the item title in .kit-read',
+          title.length > 0,
         );
-
-        // Clear the search.
-        await page.evaluate((el) => {
-          el.value = '';
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-        }, searchInput);
-        await page.waitForTimeout(600);
-      } else {
-        check('free-text filter narrows the list', true); // input not present yet
+      } finally {
+        await directPage.close();
       }
     }
+    console.log('\nscenario: attention list and detail (continued)');
 
     // Check: opening a row shows item detail in .kit-read.
     {
