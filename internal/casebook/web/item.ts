@@ -19,7 +19,13 @@ import type {
   RejectResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import { openDecideSheet, allowedForKind, DANGER_DISPS } from './decide.ts';
+import {
+  openDecideSheet,
+  DANGER_DISPS,
+  getVocab,
+  allowedForKind,
+} from './decide.ts';
+import type { DecisionVocabView } from './wire.d.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
 const BODY_CAP = 600;
@@ -122,12 +128,7 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
 
 // ---- proposal card ----------------------------------------------------------
 
-function renderProposalCard(
-  ctx: Ctx,
-  p: Proposal,
-  key: string,
-  kind: string,
-): HTMLElement {
+function renderProposalCard(ctx: Ctx, p: Proposal, key: string): HTMLElement {
   const stateLabel =
     p.state === 'pending' ? 'pending proposal' : `proposal · ${p.state}`;
   const lines: Array<Node | string> = [
@@ -154,7 +155,7 @@ function renderProposalCard(
     {
       label: 'change\u2026',
       run() {
-        openDecideSheet(ctx, [key], allowedForKind(kind), () => {});
+        openDecideSheet(ctx, [key], () => {});
       },
     },
     {
@@ -177,40 +178,41 @@ function renderProposalCard(
 
 // ---- decide buttons ---------------------------------------------------------
 
-// Dispositions that need an until condition (shown with '…' to hint at the sheet).
-const NEEDS_ELLIPSIS = new Set(['wait', 'watch']);
-
 function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
   const section = h('section', { class: 'cb-decide' });
   section.append(h('h2', { class: 'cb-section-label' }, 'decide'));
 
-  const allowed = allowedForKind(kind);
-
-  // Use .cb-sheet-disp class so the probe can find them and so decide.ts
-  // can reuse the same styling for both the list sheet and the item detail.
   const dispRow = h('div', { class: 'cb-decide-btns' });
-  for (const d of allowed) {
-    const label = NEEDS_ELLIPSIS.has(d) ? `${d}\u2026` : d;
-    dispRow.append(
-      h(
-        'button',
-        {
-          type: 'button',
-          class:
-            'cb-sheet-disp' +
-            (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : ''),
-          onclick() {
-            openDecideSheet(ctx, [key], allowed, () => {
-              // The 'decided' live event triggers a list reload.
-            });
-          },
-        },
-        label,
-      ),
-    );
-  }
-
   section.append(dispRow);
+
+  // The vocabulary is fetched once and cached; this resolves instantly after the
+  // first call.  Buttons appear after the micro-task queue drains.
+  void getVocab(ctx).then((vocab: DecisionVocabView) => {
+    const vocabKind = (vocab.kinds ?? []).find((k) => k.kind === kind);
+    const kindAllowed = allowedForKind(vocab, kind);
+    const needsUntilSet = new Set(vocabKind?.needs_until ?? []);
+    for (const d of kindAllowed) {
+      const label = needsUntilSet.has(d) ? `${d}\u2026` : d;
+      dispRow.append(
+        h(
+          'button',
+          {
+            type: 'button',
+            class:
+              'cb-sheet-disp' +
+              (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : ''),
+            onclick() {
+              openDecideSheet(ctx, [key], () => {
+                // The 'decided' live event triggers a list reload.
+              });
+            },
+          },
+          label,
+        ),
+      );
+    }
+  });
+
   return section;
 }
 
@@ -257,7 +259,7 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
 
   // ---- pending proposal card ------------------------------------------------
   if (it.proposal) {
-    el.append(renderProposalCard(ctx, it.proposal, it.key, it.kind));
+    el.append(renderProposalCard(ctx, it.proposal, it.key));
   }
 
   // ---- decide ---------------------------------------------------------------

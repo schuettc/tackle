@@ -157,6 +157,11 @@ export interface VocabularyView {
   fields: Field[] | null;
 }
 
+export interface DecisionVocabView {
+  kinds: KindVocab[] | null;
+  until_forms: UntilForm[] | null;
+}
+
 export interface JobStepResult {
   job_id: number;
   step_id: number;
@@ -361,6 +366,18 @@ export interface Field {
   type: number;
   ops: string[] | null;
   values: string[] | null;
+}
+
+export interface KindVocab {
+  kind: string;
+  allowed: string[] | null;
+  needs_until: string[] | null;
+}
+
+export interface UntilForm {
+  op: string;
+  syntax: string;
+  example: string;
 }
 
 export interface NeedsYou {

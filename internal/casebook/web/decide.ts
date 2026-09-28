@@ -1,17 +1,25 @@
 // decide.ts — the decide sheet (single and bulk) and selection wiring.
 //
-// openDecideSheet(ctx, keys, allowed, onDone) opens a kit sheet() with a
-// disposition picker, an optional `until` field, a note, and a live preview
-// ("close 4 items").  On success it calls onDone(keys) so the caller can
-// deselect decided ids and trigger a refresh.
+// The server is the single source of truth for the decision vocabulary
+// (which dispositions are valid per kind, which need an `until` condition,
+// and the supported `until` forms).  GET /api/decisions/vocabulary is fetched
+// once and cached; the sheet and the selection wiring read from it.
+//
+// Exported pure functions (no server calls):
+//   kindFromKey(key)               — "pr:owner/repo#1" → "pr"
+//   allowedForKind(vocab, kind)    — allowed dispositions for one kind
+//   allowedForKeys(vocab, keys)    — intersection for a mixed-kind selection
+//
+// openDecideSheet(ctx, keys, onDone) opens a kit sheet() with:
+//   - disposition picker (buttons for each intersected disposition)
+//   - optional `until` field (shown/hidden by vocab's needs_until per kind)
+//   - note field
+//   - live preview ("close 4 items")
+//   - debounced dry-run validation of `until` (server's error message shown)
+//   - a filled "Decide N" button that POSTs to /api/decide
 //
 // wireSelection(ctx, listHandle) subscribes to the shared selection store and
-// (a) updates the primary bar button ("Decide N"), and (b) updates the
-// .cb-sel-count element in the list foot.  The "d" key is registered to open
-// the decide sheet for the current selection.
-//
-// allowedForKind(kind) mirrors Go's item.Allowed() — the ONLY dispositions
-// the server accepts for a given item kind.
+// updates the bar primary button and the .cb-sel-count element.
 
 import {
   sheet,
@@ -20,92 +28,54 @@ import {
   type SheetHandle,
   type ListHandle,
 } from '/_kit/kit.js';
-import type { DecideResult, ItemView } from './wire.d.ts';
+import type { DecideResult, DecisionVocabView, ItemView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
+import { kindFromKey, allowedForKind, allowedForKeys } from './decide-math.ts';
 
-// ---- disposition tables (mirror Go item.Allowed()) -------------------------
+// Re-export the pure functions so callers only need one import.
+export { kindFromKey, allowedForKind, allowedForKeys };
 
-// These must stay in sync with internal/casebook/item/decision.go.  The server
-// validates the disposition anyway; this client-side table lets us show only
-// valid choices and provide a clear "until required" message.
-const KIND_ALLOWED: Record<string, string[]> = {
-  repo: ['keep', 'archive', 'delete', 'wait', 'watch', 'ignore'],
-  pr: ['keep', 'close', 'merge', 'wait', 'watch', 'ignore'],
-  issue: ['keep', 'close', 'wait', 'watch', 'ignore'],
-  branch: ['keep', 'delete', 'wait', 'watch', 'ignore'],
-  worktree: ['keep', 'delete', 'wait', 'ignore'],
-};
+// ---- module-level vocab cache -----------------------------------------------
 
-const FALLBACK_ALLOWED = ['keep', 'close', 'wait', 'watch', 'ignore'];
+let _vocab: DecisionVocabView | null = null;
 
-// Dispositions that require an `until` condition.
-const NEEDS_UNTIL = new Set(['wait', 'watch']);
+/** getVocab fetches and caches the decision vocabulary from the server.
+ *  Call it from any module that needs the vocab (cached after first call). */
+export async function getVocab(ctx: Ctx): Promise<DecisionVocabView> {
+  if (_vocab !== null) return _vocab;
+  _vocab = await ctx.api.get<DecisionVocabView>('/decisions/vocabulary');
+  return _vocab;
+}
+
+// ---- helpers ----------------------------------------------------------------
+
+/** Returns true when a given disposition requires an `until` condition for
+ *  any of the selected keys' kinds (after intersection they'll all agree). */
+function dispositionNeedsUntil(
+  vocab: DecisionVocabView,
+  keys: string[],
+  disp: string,
+): boolean {
+  const selectedKinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
+  return (vocab.kinds ?? [])
+    .filter((k) => selectedKinds.includes(k.kind))
+    .some((k) => (k.needs_until ?? []).includes(disp));
+}
 
 // Dispositions that are destructive (rendered with danger styling).
 // Exported so item.ts can import it instead of duplicating.
 export const DANGER_DISPS = new Set(['close', 'delete', 'archive']);
 
-/** allowedForKind returns the valid dispositions for one item kind. */
-export function allowedForKind(kind: string): string[] {
-  return KIND_ALLOWED[kind] ?? FALLBACK_ALLOWED;
-}
-
-/**
- * kindFromKey extracts the kind from a key by taking the prefix before the
- * first colon.  "pr:schuettc/hail#3" → "pr".
- */
-function kindFromKey(key: string): string {
-  const i = key.indexOf(':');
-  return i > 0 ? key.slice(0, i) : '';
-}
-
-/**
- * allowedForKeys returns the intersection of allowed dispositions for every
- * key in the slice, derived from each key's kind prefix.  This is the correct
- * way to compute allowed for a selection: it works for keys on unrendered
- * pages (where no ItemView is available) as well as rendered ones.
- */
-export function allowedForKeys(keys: string[]): string[] {
-  if (keys.length === 0) return FALLBACK_ALLOWED;
-  const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
-  if (kinds.length === 0) return FALLBACK_ALLOWED;
-  const sets = kinds.map((k) => new Set(allowedForKind(k)));
-  const first = [...(sets[0] ?? new Set(FALLBACK_ALLOWED))];
-  return first.filter((d) => sets.every((s) => s.has(d)));
-}
-
-// ---- until validation -------------------------------------------------------
-
-// Validates an `until` string client-side (mirrors Go item.ParseUntil).
-// Returns an error message, or null if valid.
-function validateUntil(s: string): string | null {
-  const v = s.trim();
-  if (!v) {
-    return 'until is required for wait/watch — e.g. date(2026-12-01) or inactive(90d)';
-  }
-  const open = v.indexOf('(');
-  if (open <= 0 || !v.endsWith(')')) {
-    return 'until must be one of: date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d), released(<repo>)';
-  }
-  const op = v.slice(0, open);
-  const arg = v.slice(open + 1, v.length - 1).trim();
-  if (!['date', 'merged', 'closed', 'inactive', 'released'].includes(op)) {
-    return `unknown until op "${op}": use date, merged, closed, inactive, or released`;
-  }
-  if (op === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
-    return 'date must be YYYY-MM-DD';
-  }
-  return null;
-}
-
 // ---- openDecideSheet --------------------------------------------------------
 
 /**
- * openDecideSheet opens a kit sheet with:
- *  - disposition picker (buttons for each allowed disposition)
- *  - optional `until` field (shown when wait/watch is selected)
+ * openDecideSheet fetches the decision vocabulary (cached after the first
+ * call) and opens a kit sheet with:
+ *  - disposition picker (buttons for the intersection of allowed dispositions)
+ *  - optional `until` field (shown when the disposition needs it, per vocab)
  *  - note field
  *  - live preview ("close 4 items")
+ *  - debounced dry-run until validation (server's error message shown while typing)
  *  - a filled "Decide N" button that POSTs once to /api/decide
  *
  * On success, calls onDone(keys) with the keys that were decided.
@@ -114,15 +84,29 @@ function validateUntil(s: string): string | null {
 export function openDecideSheet(
   ctx: Ctx,
   keys: string[],
-  allowed: string[],
+  onDone: (decided: string[]) => void,
+): void {
+  void getVocab(ctx).then((vocab) => {
+    openDecideSheetWithVocab(ctx, keys, vocab, onDone);
+  });
+}
+
+function openDecideSheetWithVocab(
+  ctx: Ctx,
+  keys: string[],
+  vocab: DecisionVocabView,
   onDone: (decided: string[]) => void,
 ): void {
   const n = keys.length;
+  const allowed = allowedForKeys(vocab, keys);
+
   let disposition = '';
   let until = '';
   let note = '';
   let submitting = false;
   let sh: SheetHandle | null = null;
+  let dryRunTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastDryRunError: string | null = null;
 
   // ---- preview ---------------------------------------------------------------
 
@@ -130,7 +114,7 @@ export function openDecideSheet(
   previewEl.textContent = `${n} item${n === 1 ? '' : 's'}`;
 
   function updatePreview(): void {
-    previewEl.textContent = `${disposition || '…'} ${n} item${n === 1 ? '' : 's'}`;
+    previewEl.textContent = `${disposition || '\u2026'} ${n} item${n === 1 ? '' : 's'}`;
   }
 
   // ---- until field -----------------------------------------------------------
@@ -138,11 +122,10 @@ export function openDecideSheet(
   const untilInputEl = h('input', {
     type: 'text',
     class: 'cb-sheet-input',
-    placeholder: 'date(YYYY-MM-DD), merged(<pr>), inactive(90d) …',
+    placeholder:
+      (vocab.until_forms ?? []).map((f) => f.syntax).join(', ') ||
+      'date(YYYY-MM-DD), inactive(90d) \u2026',
   }) as HTMLInputElement;
-  untilInputEl.addEventListener('input', () => {
-    until = untilInputEl.value;
-  });
 
   const untilRow = h(
     'div',
@@ -151,6 +134,51 @@ export function openDecideSheet(
     untilInputEl,
   );
   untilRow.hidden = true;
+
+  // ---- error display ---------------------------------------------------------
+
+  const errEl = h('p', { class: 'cb-sheet-err' });
+  errEl.hidden = true;
+
+  // ---- dry-run validator ------------------------------------------------------
+
+  async function runDryRun(): Promise<void> {
+    if (!disposition) return;
+    if (!dispositionNeedsUntil(vocab, keys, disposition)) return;
+    const currentUntil = untilInputEl.value.trim();
+    if (!currentUntil) {
+      lastDryRunError = `until is required for ${disposition}`;
+      errEl.textContent = lastDryRunError;
+      errEl.hidden = false;
+      return;
+    }
+    try {
+      const result = await ctx.api.post<DecideResult>('/decide', {
+        keys,
+        disposition,
+        until: currentUntil,
+        dry_run: true,
+      });
+      if (result.errors && result.errors.length > 0) {
+        lastDryRunError = result.errors.join('; ');
+        errEl.textContent = lastDryRunError;
+        errEl.hidden = false;
+      } else {
+        lastDryRunError = null;
+        errEl.hidden = true;
+      }
+    } catch {
+      // Ignore network errors during debounced typing; the submit will catch them.
+    }
+  }
+
+  untilInputEl.addEventListener('input', () => {
+    until = untilInputEl.value;
+    lastDryRunError = null;
+    errEl.hidden = true;
+    if (dryRunTimer !== null) clearTimeout(dryRunTimer);
+    dryRunTimer = setTimeout(() => void runDryRun(), 400);
+  });
 
   // ---- note field ------------------------------------------------------------
 
@@ -167,11 +195,6 @@ export function openDecideSheet(
     noteInputEl,
   );
 
-  // ---- error display ---------------------------------------------------------
-
-  const errEl = h('p', { class: 'cb-sheet-err' });
-  errEl.hidden = true;
-
   // ---- disposition buttons ---------------------------------------------------
 
   const dispContainer = h('div', { class: 'cb-sheet-disps' });
@@ -187,8 +210,11 @@ export function openDecideSheet(
         onclick() {
           disposition = d;
           updatePreview();
-          untilRow.hidden = !NEEDS_UNTIL.has(d);
+          const needsUntil = dispositionNeedsUntil(vocab, keys, d);
+          untilRow.hidden = !needsUntil;
           errEl.hidden = true;
+          lastDryRunError = null;
+          if (dryRunTimer !== null) clearTimeout(dryRunTimer);
           for (const el of dispContainer.querySelectorAll('.cb-sheet-disp')) {
             el.classList.toggle('on', el === btn);
           }
@@ -220,12 +246,18 @@ export function openDecideSheet(
       errEl.hidden = false;
       return;
     }
-    if (NEEDS_UNTIL.has(disposition)) {
+    if (dispositionNeedsUntil(vocab, keys, disposition)) {
       const currentUntil = untilInputEl.value.trim();
-      const err = validateUntil(currentUntil);
-      if (err) {
-        errEl.textContent = err;
+      if (!currentUntil) {
+        errEl.textContent = `until is required for ${disposition}`;
         errEl.hidden = false;
+        return;
+      }
+      // Cancel any pending debounce and run a blocking dry run before submit.
+      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
+      await runDryRun();
+      if (lastDryRunError) {
+        // runDryRun already updated errEl.
         return;
       }
       until = currentUntil;
@@ -239,16 +271,11 @@ export function openDecideSheet(
       if (until) payload['until'] = until;
       if (note) payload['note'] = note;
       const result = await ctx.api.post<DecideResult>('/decide', payload);
-      // decided_keys lists the keys that were actually committed.  Deselect
-      // those whether or not some keys also failed, so partial success is
-      // reflected immediately.
       const decidedKeys = result.decided_keys ?? [];
       if (decidedKeys.length > 0) {
         onDone(decidedKeys);
       }
       if (result.errors && result.errors.length > 0) {
-        // Show per-key errors; keep the sheet open so the user can retry or
-        // dismiss.  The succeeded keys have already been deselected above.
         errEl.textContent = result.errors.join('; ');
         errEl.hidden = false;
         submitting = false;
@@ -279,6 +306,7 @@ export function openDecideSheet(
     ],
     onClose() {
       sh = null;
+      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
     },
   });
 }
@@ -305,18 +333,12 @@ export function wireSelection(
   function openSheetForSelection(): void {
     const keys = listHandle.selectedIds();
     if (keys.length === 0) return;
-    // Derive allowed dispositions from the key prefixes so that items on
-    // unrendered pages (selected via select-all across pages) are counted too.
-    const allowed = allowedForKeys(keys);
-    openDecideSheet(ctx, keys, allowed, (decided) => {
+    openDecideSheet(ctx, keys, (decided) => {
       listHandle.deselect(decided);
-      // A "decided" live event will trigger the list reload; no manual
-      // reload needed here.
     });
   }
 
   listHandle.selection.onChange((ids) => {
-    // Update the foot count element (placed inside listHandle.el by buildFoot).
     const countEl = listHandle.el.querySelector('.cb-sel-count');
     if (countEl instanceof HTMLElement) {
       if (ids.length > 0) {
@@ -327,7 +349,6 @@ export function wireSelection(
       }
     }
 
-    // Update the primary button.
     if (ids.length === 0) {
       ctx.setPrimary(null);
     } else {
@@ -338,10 +359,6 @@ export function wireSelection(
     }
   });
 
-  // Register "d" to decide the selection.
-  // The kit throws with a message starting "key clash:" when the key is
-  // already registered (e.g. another section registered "d").  We swallow
-  // only that error and rethrow anything else.
   try {
     ctx.keys.register({
       keys: 'd',
@@ -356,6 +373,5 @@ export function wireSelection(
     if (!msg.startsWith('key clash:')) {
       throw err;
     }
-    // Clash with an existing binding: this section's "d" key is taken.
   }
 }

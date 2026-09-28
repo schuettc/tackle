@@ -199,12 +199,40 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 	return n, done, errs, pushed, nil
 }
 
+func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
+	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
+	vocab := DecisionVocabView{
+		Kinds:      make([]KindVocab, len(kinds)),
+		UntilForms: nil,
+	}
+	for i, k := range kinds {
+		allowed := item.Allowed(k)
+		strs := make([]string, len(allowed))
+		var needsUntil []string
+		for j, d := range allowed {
+			strs[j] = string(d)
+			if d == item.Wait || d == item.Watch {
+				needsUntil = append(needsUntil, string(d))
+			}
+		}
+		if needsUntil == nil {
+			needsUntil = []string{}
+		}
+		vocab.Kinds[i] = KindVocab{Kind: string(k), Allowed: strs, NeedsUntil: needsUntil}
+	}
+	for _, f := range item.UntilForms() {
+		vocab.UntilForms = append(vocab.UntilForms, UntilForm{Op: f.Op, Syntax: f.Syntax, Example: f.Example})
+	}
+	reply(w, vocab, nil)
+}
+
 func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Keys        []string `json:"keys"`
 		Disposition string   `json:"disposition"`
 		Until       string   `json:"until"`
 		Note        string   `json:"note"`
+		DryRun      bool     `json:"dry_run"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -212,6 +240,28 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Keys) == 0 {
 		reply(w, nil, bad("no keys"))
+		return
+	}
+	if in.DryRun {
+		// Validate without writing any decision.
+		d := item.Decision{
+			Disposition: item.Disposition(in.Disposition),
+			Until:       in.Until,
+			DecidedBy:   s.App.Cfg.User,
+			DecidedAt:   s.Now(),
+		}
+		var errs []string
+		for _, key := range in.Keys {
+			k, err := item.ParseKey(key)
+			if err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			if err := d.Validate(k.Kind); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+		reply(w, DecideResult{Decided: 0, DecidedKeys: []string{}, Errors: nonNil(errs), Pushed: false}, nil)
 		return
 	}
 	n, done, errs, pushed, err := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)

@@ -44,7 +44,7 @@ jobs:
           go-version-file: go.mod
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: internal/casebook/web/package-lock.json
       - name: Cache web/node_modules
@@ -58,6 +58,9 @@ jobs:
       - name: Generate kit types
         working-directory: internal/casebook/web
         run: npm run kit-types
+      - name: Test
+        working-directory: internal/casebook/web
+        run: npm test
       - name: Typecheck
         working-directory: internal/casebook/web
         run: npm run typecheck

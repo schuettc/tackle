@@ -64,6 +64,7 @@ var wireRoots = []any{
 	RepoGroup{},
 	MatchRow{},
 	VocabularyView{},
+	DecisionVocabView{},
 	JobStepResult{},
 	JobAskResult{},
 	PlanView{},

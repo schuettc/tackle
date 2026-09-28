@@ -39,7 +39,11 @@ export default [
     files: ['**/*.ts'],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // *.test.ts files use node: imports excluded from the browser tsconfig;
+          // allow them to be linted without full project type information.
+          allowDefaultProject: ['*.test.ts'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
       globals: { ...globals.browser },

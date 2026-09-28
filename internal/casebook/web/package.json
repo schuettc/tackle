@@ -14,6 +14,7 @@
     "build:js": "esbuild entry.ts --bundle --format=esm --external:/_kit/* --charset=utf8 --outfile=../serve/assets/casebook.js",
     "build:css": "esbuild casebook.css --bundle --charset=utf8 --outfile=../serve/assets/casebook.css",
     "probe": "node probe.mjs",
+    "test": "node --test *.test.ts",
     "build": "npm run --silent build:js && npm run --silent build:css && node probe.mjs"
   },
   "devDependencies": {

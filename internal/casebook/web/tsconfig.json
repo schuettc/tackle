@@ -15,5 +15,6 @@
       "/_kit/kit.js": ["./kit.d.ts"]
     }
   },
-  "include": ["*.ts", "wire.d.ts"]
+  "include": ["*.ts", "wire.d.ts"],
+  "exclude": ["*.test.ts"]
 }

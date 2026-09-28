@@ -218,57 +218,51 @@ import {
   h as h2,
   noteField
 } from "/_kit/kit.js";
-var KIND_ALLOWED = {
-  repo: ["keep", "archive", "delete", "wait", "watch", "ignore"],
-  pr: ["keep", "close", "merge", "wait", "watch", "ignore"],
-  issue: ["keep", "close", "wait", "watch", "ignore"],
-  branch: ["keep", "delete", "wait", "watch", "ignore"],
-  worktree: ["keep", "delete", "wait", "ignore"]
-};
-var FALLBACK_ALLOWED = ["keep", "close", "wait", "watch", "ignore"];
-var NEEDS_UNTIL = /* @__PURE__ */ new Set(["wait", "watch"]);
-var DANGER_DISPS = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
-function allowedForKind(kind) {
-  return KIND_ALLOWED[kind] ?? FALLBACK_ALLOWED;
-}
+
+// decide-math.ts
 function kindFromKey(key) {
   const i = key.indexOf(":");
   return i > 0 ? key.slice(0, i) : "";
 }
-function allowedForKeys(keys) {
-  if (keys.length === 0) return FALLBACK_ALLOWED;
+function allowedForKind(vocab, kind) {
+  return (vocab.kinds ?? []).find((k) => k.kind === kind)?.allowed ?? [];
+}
+function allowedForKeys(vocab, keys) {
+  if (keys.length === 0) return [];
   const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
-  if (kinds.length === 0) return FALLBACK_ALLOWED;
-  const sets = kinds.map((k) => new Set(allowedForKind(k)));
-  const first = [...sets[0] ?? new Set(FALLBACK_ALLOWED)];
+  if (kinds.length === 0) return [];
+  const sets = kinds.map((k) => new Set(allowedForKind(vocab, k)));
+  const first = [...sets[0] ?? /* @__PURE__ */ new Set()];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
-function validateUntil(s) {
-  const v = s.trim();
-  if (!v) {
-    return "until is required for wait/watch — e.g. date(2026-12-01) or inactive(90d)";
-  }
-  const open = v.indexOf("(");
-  if (open <= 0 || !v.endsWith(")")) {
-    return "until must be one of: date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d), released(<repo>)";
-  }
-  const op = v.slice(0, open);
-  const arg = v.slice(open + 1, v.length - 1).trim();
-  if (!["date", "merged", "closed", "inactive", "released"].includes(op)) {
-    return `unknown until op "${op}": use date, merged, closed, inactive, or released`;
-  }
-  if (op === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
-    return "date must be YYYY-MM-DD";
-  }
-  return null;
+
+// decide.ts
+var _vocab = null;
+async function getVocab(ctx) {
+  if (_vocab !== null) return _vocab;
+  _vocab = await ctx.api.get("/decisions/vocabulary");
+  return _vocab;
 }
-function openDecideSheet(ctx, keys, allowed, onDone) {
+function dispositionNeedsUntil(vocab, keys, disp) {
+  const selectedKinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
+  return (vocab.kinds ?? []).filter((k) => selectedKinds.includes(k.kind)).some((k) => (k.needs_until ?? []).includes(disp));
+}
+var DANGER_DISPS = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
+function openDecideSheet(ctx, keys, onDone) {
+  void getVocab(ctx).then((vocab) => {
+    openDecideSheetWithVocab(ctx, keys, vocab, onDone);
+  });
+}
+function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
   const n = keys.length;
+  const allowed = allowedForKeys(vocab, keys);
   let disposition = "";
   let until = "";
   let note = "";
   let submitting = false;
   let sh = null;
+  let dryRunTimer = null;
+  let lastDryRunError = null;
   const previewEl = h2("p", { class: "cb-sheet-preview" });
   previewEl.textContent = `${n} item${n === 1 ? "" : "s"}`;
   function updatePreview() {
@@ -277,10 +271,7 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
   const untilInputEl = h2("input", {
     type: "text",
     class: "cb-sheet-input",
-    placeholder: "date(YYYY-MM-DD), merged(<pr>), inactive(90d) …"
-  });
-  untilInputEl.addEventListener("input", () => {
-    until = untilInputEl.value;
+    placeholder: (vocab.until_forms ?? []).map((f) => f.syntax).join(", ") || "date(YYYY-MM-DD), inactive(90d) …"
   });
   const untilRow = h2(
     "div",
@@ -289,6 +280,43 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
     untilInputEl
   );
   untilRow.hidden = true;
+  const errEl = h2("p", { class: "cb-sheet-err" });
+  errEl.hidden = true;
+  async function runDryRun() {
+    if (!disposition) return;
+    if (!dispositionNeedsUntil(vocab, keys, disposition)) return;
+    const currentUntil = untilInputEl.value.trim();
+    if (!currentUntil) {
+      lastDryRunError = `until is required for ${disposition}`;
+      errEl.textContent = lastDryRunError;
+      errEl.hidden = false;
+      return;
+    }
+    try {
+      const result = await ctx.api.post("/decide", {
+        keys,
+        disposition,
+        until: currentUntil,
+        dry_run: true
+      });
+      if (result.errors && result.errors.length > 0) {
+        lastDryRunError = result.errors.join("; ");
+        errEl.textContent = lastDryRunError;
+        errEl.hidden = false;
+      } else {
+        lastDryRunError = null;
+        errEl.hidden = true;
+      }
+    } catch {
+    }
+  }
+  untilInputEl.addEventListener("input", () => {
+    until = untilInputEl.value;
+    lastDryRunError = null;
+    errEl.hidden = true;
+    if (dryRunTimer !== null) clearTimeout(dryRunTimer);
+    dryRunTimer = setTimeout(() => void runDryRun(), 400);
+  });
   const noteInputEl = noteField({
     placeholder: "optional note",
     onCommit(v) {
@@ -301,8 +329,6 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
     h2("label", { class: "cb-sheet-label" }, "note"),
     noteInputEl
   );
-  const errEl = h2("p", { class: "cb-sheet-err" });
-  errEl.hidden = true;
   const dispContainer = h2("div", { class: "cb-sheet-disps" });
   for (const d of allowed) {
     const btn = h2(
@@ -313,8 +339,11 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
         onclick() {
           disposition = d;
           updatePreview();
-          untilRow.hidden = !NEEDS_UNTIL.has(d);
+          const needsUntil = dispositionNeedsUntil(vocab, keys, d);
+          untilRow.hidden = !needsUntil;
           errEl.hidden = true;
+          lastDryRunError = null;
+          if (dryRunTimer !== null) clearTimeout(dryRunTimer);
           for (const el of dispContainer.querySelectorAll(".cb-sheet-disp")) {
             el.classList.toggle("on", el === btn);
           }
@@ -340,12 +369,16 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
       errEl.hidden = false;
       return;
     }
-    if (NEEDS_UNTIL.has(disposition)) {
+    if (dispositionNeedsUntil(vocab, keys, disposition)) {
       const currentUntil = untilInputEl.value.trim();
-      const err = validateUntil(currentUntil);
-      if (err) {
-        errEl.textContent = err;
+      if (!currentUntil) {
+        errEl.textContent = `until is required for ${disposition}`;
         errEl.hidden = false;
+        return;
+      }
+      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
+      await runDryRun();
+      if (lastDryRunError) {
         return;
       }
       until = currentUntil;
@@ -390,6 +423,7 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
     ],
     onClose() {
       sh = null;
+      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
     }
   });
 }
@@ -397,8 +431,7 @@ function wireSelection(ctx, listHandle) {
   function openSheetForSelection() {
     const keys = listHandle.selectedIds();
     if (keys.length === 0) return;
-    const allowed = allowedForKeys(keys);
-    openDecideSheet(ctx, keys, allowed, (decided) => {
+    openDecideSheet(ctx, keys, (decided) => {
       listHandle.deselect(decided);
     });
   }
@@ -513,7 +546,7 @@ function renderHistory(events, decisions) {
   }
   return section;
 }
-function renderProposalCard(ctx, p, key, kind) {
+function renderProposalCard(ctx, p, key) {
   const stateLabel = p.state === "pending" ? "pending proposal" : `proposal · ${p.state}`;
   const lines = [
     h3(
@@ -538,7 +571,7 @@ function renderProposalCard(ctx, p, key, kind) {
     {
       label: "change…",
       run() {
-        openDecideSheet(ctx, [key], allowedForKind(kind), () => {
+        openDecideSheet(ctx, [key], () => {
         });
       }
     },
@@ -558,30 +591,33 @@ function renderProposalCard(ctx, p, key, kind) {
     actions: cardActions
   });
 }
-var NEEDS_ELLIPSIS = /* @__PURE__ */ new Set(["wait", "watch"]);
 function renderDecideSection(ctx, key, kind) {
   const section = h3("section", { class: "cb-decide" });
   section.append(h3("h2", { class: "cb-section-label" }, "decide"));
-  const allowed = allowedForKind(kind);
   const dispRow = h3("div", { class: "cb-decide-btns" });
-  for (const d of allowed) {
-    const label = NEEDS_ELLIPSIS.has(d) ? `${d}…` : d;
-    dispRow.append(
-      h3(
-        "button",
-        {
-          type: "button",
-          class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
-          onclick() {
-            openDecideSheet(ctx, [key], allowed, () => {
-            });
-          }
-        },
-        label
-      )
-    );
-  }
   section.append(dispRow);
+  void getVocab(ctx).then((vocab) => {
+    const vocabKind = (vocab.kinds ?? []).find((k) => k.kind === kind);
+    const kindAllowed = allowedForKind(vocab, kind);
+    const needsUntilSet = new Set(vocabKind?.needs_until ?? []);
+    for (const d of kindAllowed) {
+      const label = needsUntilSet.has(d) ? `${d}…` : d;
+      dispRow.append(
+        h3(
+          "button",
+          {
+            type: "button",
+            class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
+            onclick() {
+              openDecideSheet(ctx, [key], () => {
+              });
+            }
+          },
+          label
+        )
+      );
+    }
+  });
   return section;
 }
 function renderItem(ctx, detail) {
@@ -612,7 +648,7 @@ function renderItem(ctx, detail) {
     el.append(bodyWrap);
   }
   if (it.proposal) {
-    el.append(renderProposalCard(ctx, it.proposal, it.key, it.kind));
+    el.append(renderProposalCard(ctx, it.proposal, it.key));
   }
   el.append(renderDecideSection(ctx, it.key, it.kind));
   el.append(renderEvidence(detail.evidence ?? []));

@@ -209,6 +209,30 @@ type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`
 }
 
+// DecisionVocabView is the response body of GET /api/decisions/vocabulary.
+// It is generated from the Go item package and is the single source of truth
+// for which dispositions are valid per kind and which ones require an until
+// condition.  The page deletes its hand-copied tables and reads this instead.
+type DecisionVocabView struct {
+	Kinds      []KindVocab `json:"kinds"`
+	UntilForms []UntilForm `json:"until_forms"`
+}
+
+// KindVocab describes the valid decisions for one item kind.
+type KindVocab struct {
+	Kind       string   `json:"kind"`
+	Allowed    []string `json:"allowed"`
+	NeedsUntil []string `json:"needs_until"`
+}
+
+// UntilForm is one until operator with its syntax pattern and one example
+// value, generated from item.UntilForms().
+type UntilForm struct {
+	Op      string `json:"op"`
+	Syntax  string `json:"syntax"`
+	Example string `json:"example"`
+}
+
 // JobStepResult is the response body of POST /api/agent/job-step.
 type JobStepResult struct {
 	JobID  int64  `json:"job_id"`

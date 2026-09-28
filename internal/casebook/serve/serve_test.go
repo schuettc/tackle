@@ -378,6 +378,112 @@ func (r *rig) gitRemoteHead(t *testing.T) string {
 	return out
 }
 
+// TestDecisionVocabulary checks that GET /api/decisions/vocabulary returns
+// item.Allowed for every kind and the expected until forms.
+func TestDecisionVocabulary(t *testing.T) {
+	r := newRig(t)
+	var vocab struct {
+		Kinds []struct {
+			Kind       string   `json:"kind"`
+			Allowed    []string `json:"allowed"`
+			NeedsUntil []string `json:"needs_until"`
+		} `json:"kinds"`
+		UntilForms []struct {
+			Op      string `json:"op"`
+			Syntax  string `json:"syntax"`
+			Example string `json:"example"`
+		} `json:"until_forms"`
+	}
+	if c := r.do(t, "GET", "/api/decisions/vocabulary", nil, &vocab); c != 200 {
+		t.Fatalf("vocabulary %d", c)
+	}
+	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
+	if len(vocab.Kinds) != len(kinds) {
+		t.Fatalf("kinds %d, want %d", len(vocab.Kinds), len(kinds))
+	}
+	for i, k := range kinds {
+		got := vocab.Kinds[i]
+		if got.Kind != string(k) {
+			t.Errorf("kinds[%d].Kind = %q, want %q", i, got.Kind, k)
+		}
+		want := item.Allowed(k)
+		if len(got.Allowed) != len(want) {
+			t.Errorf("kinds[%d].Allowed = %v, want %v", i, got.Allowed, want)
+			continue
+		}
+		for j, d := range want {
+			if got.Allowed[j] != string(d) {
+				t.Errorf("kinds[%d].Allowed[%d] = %q, want %q", i, j, got.Allowed[j], d)
+			}
+		}
+	}
+	// Five until forms: date, merged, closed, inactive, released.
+	if len(vocab.UntilForms) != 5 {
+		t.Fatalf("until_forms %d, want 5", len(vocab.UntilForms))
+	}
+	for _, f := range vocab.UntilForms {
+		if f.Op == "" || f.Syntax == "" || f.Example == "" {
+			t.Errorf("until_form missing fields: %+v", f)
+		}
+	}
+}
+
+// TestDecideDryRun verifies that dry_run=true validates but writes no decision.
+func TestDecideDryRun(t *testing.T) {
+	r := newRig(t)
+	// dry run with an invalid until: must return errors, write nothing.
+	var res struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+		Pushed      bool     `json:"pushed"`
+	}
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "wait",
+		"until":       "not-valid-until",
+		"dry_run":     true,
+	}, &res); c != 200 {
+		t.Fatalf("dry run %d", c)
+	}
+	if res.Decided != 0 {
+		t.Fatalf("dry run wrote %d decisions, want 0", res.Decided)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("expected errors for invalid until, got none")
+	}
+	// No decision file written.
+	d, _ := r.App.Repo.ReadDecision(item.PRKey("schuettc/hail", 3))
+	if d != nil {
+		t.Fatalf("dry run wrote a decision file: %+v", d)
+	}
+
+	// dry run with valid disposition+until: must return no errors.
+	var ok struct {
+		Decided int      `json:"decided"`
+		Errors  []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "wait",
+		"until":       "date(2026-12-01)",
+		"dry_run":     true,
+	}, &ok); c != 200 {
+		t.Fatalf("valid dry run %d", c)
+	}
+	if ok.Decided != 0 {
+		t.Fatalf("valid dry run wrote %d decisions, want 0", ok.Decided)
+	}
+	if len(ok.Errors) != 0 {
+		t.Fatalf("valid dry run got errors: %v", ok.Errors)
+	}
+	// Confirm no decision was written.
+	d2, _ := r.App.Repo.ReadDecision(item.PRKey("schuettc/hail", 3))
+	if d2 != nil {
+		t.Fatalf("valid dry run wrote a decision file: %+v", d2)
+	}
+}
+
 // TestDecideReturnsDecidedKeys verifies that DecideResult carries decided_keys
 // holding every normalized key that was actually committed.
 // Fail-before evidence: before adding DecidedKeys to the struct, the response

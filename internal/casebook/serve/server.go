@@ -448,6 +448,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/summary", s.getSummary)
 	m.HandleFunc("GET /api/items", s.getItems)
 	m.HandleFunc("GET /api/item", s.getItem)
+	m.HandleFunc("GET /api/decisions/vocabulary", s.getDecisionsVocabulary)
 	m.HandleFunc("POST /api/decide", s.postDecide)
 	m.HandleFunc("POST /api/proposals/accept", s.postAccept)
 	m.HandleFunc("POST /api/proposals/change", s.postChange)
