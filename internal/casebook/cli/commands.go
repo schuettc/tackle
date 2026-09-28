@@ -428,8 +428,12 @@ func commands(stdin io.Reader) []tools.Command {
 					return nil
 				}
 				max := 8
-				fmt.Sscanf(strFlag(fs, "max"), "%d", &max)
-				fmt.Fprint(out, engine.Brief(res, repo, max))
+				if s := strFlag(fs, "max"); s != "" {
+					if _, err := fmt.Sscanf(s, "%d", &max); err != nil {
+						return fmt.Errorf("--max: %w", err)
+					}
+				}
+				_, _ = fmt.Fprint(out, engine.Brief(res, repo, max))
 				return nil
 			},
 		},

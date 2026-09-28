@@ -244,7 +244,7 @@ func (a *App) Events() ([]journal.Event, error) {
 				out = append(out, ev)
 			}
 		}
-		fh.Close()
+		_ = fh.Close() // read-only; error not actionable
 	}
 	return out, nil
 }
