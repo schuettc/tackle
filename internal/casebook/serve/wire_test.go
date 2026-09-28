@@ -236,7 +236,7 @@ func jsonName(f reflect.StructField) (string, jsonOpts) {
 	}
 	var o jsonOpts
 	for _, p := range parts[1:] {
-		if p == "omitempty" {
+		if p == "omitempty" || p == "omitzero" { // encoding/json honours omitzero since Go 1.24
 			o.omitempty = true
 		}
 	}
@@ -294,7 +294,7 @@ const wireHeader = `// wire.d.ts — THE GO↔JS CONTRACT, GENERATED. DO NOT EDI
 //
 // READING THE OPTIONALITY:
 //
-//   - ` + "`x?: T`" + ` — the Go field carries ` + "`omitempty`" + `, so the key is ABSENT from
+//   - ` + "`x?: T`" + ` — the Go field carries ` + "`omitempty`" + ` or ` + "`omitzero`" + `, so the key is ABSENT from
 //     the payload when it is the zero value.
 //   - ` + "`x: T[] | null`" + ` — no ` + "`omitempty`" + `, so a nil slice is serialized as JSON
 //     ` + "`null`" + `. The type says so rather than promising an array.

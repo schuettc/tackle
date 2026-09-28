@@ -10,7 +10,7 @@
 //
 // READING THE OPTIONALITY:
 //
-//   - `x?: T` — the Go field carries `omitempty`, so the key is ABSENT from
+//   - `x?: T` — the Go field carries `omitempty` or `omitzero`, so the key is ABSENT from
 //     the payload when it is the zero value.
 //   - `x: T[] | null` — no `omitempty`, so a nil slice is serialized as JSON
 //     `null`. The type says so rather than promising an array.
@@ -138,7 +138,7 @@ export interface Proposal {
   state: string;
   reason?: string;
   created_at: string;
-  settled_at: string;
+  settled_at?: string;
 }
 
 export interface Evidence {
@@ -182,7 +182,7 @@ export interface Session {
   pid: number;
   first_seen: string;
   last_seen: string;
-  looked_at: string;
+  looked_at?: string;
   busy: boolean;
 }
 
@@ -205,8 +205,8 @@ export interface Message {
   reply_to?: number;
   state: string;
   created_at: string;
-  queued_at: string;
-  settled_at: string;
+  queued_at?: string;
+  settled_at?: string;
 }
 
 export interface Delivery {
@@ -215,8 +215,8 @@ export interface Delivery {
   state: string;
   sent_at: string;
   touched_at: string;
-  finished_at: string;
-  shown_at: string;
+  finished_at?: string;
+  shown_at?: string;
   stuck: boolean;
   messages: Message[] | null;
 }
