@@ -1426,9 +1426,14 @@ func TestSettleMixedJobStaysPendingUntilBothLanesDone(t *testing.T) {
 		t.Errorf("state = %q; want running", state)
 	}
 
-	// Now finish the agent step too.
+	// The agent reports its step, but casebook hasn't verified it yet: still not done.
 	_ = s.SetStepState(ctx, jsteps[1].ID, StepRunning, "")
 	_ = s.SetStepState(ctx, jsteps[1].ID, StepReported, "")
+	if state, changed, err := s.Settle(ctx, job.ID); err != nil || changed || state != JobRunning {
+		t.Fatalf("Settle with a reported-but-unverified step = (%q, %v, %v); want (running, false, nil)", state, changed, err)
+	}
+
+	// Verified: now the job is done.
 	_ = s.SetStepState(ctx, jsteps[1].ID, StepVerified, "")
 
 	state, changed, err = s.Settle(ctx, job.ID)
