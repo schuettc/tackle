@@ -250,8 +250,8 @@ func atomicWrite(path, content string, mode os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func(e error) error {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return e
 	}
 	if err := tmp.Chmod(mode); err != nil {
@@ -264,11 +264,11 @@ func atomicWrite(path, content string, mode os.FileMode) error {
 		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename %s to %s: %w", tmpName, path, err)
 	}
 	return nil

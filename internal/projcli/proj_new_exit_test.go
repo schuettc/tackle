@@ -27,7 +27,7 @@ func TestRunNewCommandExit3OnReuse(t *testing.T) {
 
 	const projName = "projexit3"
 	sock := proj.SocketFor(projName)
-	defer proj.Run(sock, "kill-server")
+	defer func() { _, _ = proj.Run(sock, "kill-server") }()
 
 	out1, code1 := captureStdout(t, []string{"new", projName + "/w", "--agent", "none", "--json", "--command", "sleep", "30"})
 	if code1 != 0 {

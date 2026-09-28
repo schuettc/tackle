@@ -182,17 +182,17 @@ func mergeEnv(base []string, pairs []envPair) []string {
 func runExec(cwd string, argv []string, stdout, stderr io.Writer) int {
 	e, err := parseExecArgs(argv)
 	if err != nil {
-		fmt.Fprintf(stderr, "creel exec: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2
 	}
 	dest, err := ResolveDest(cwd, e.dest)
 	if err != nil {
-		fmt.Fprintf(stderr, "creel exec: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2
 	}
 	pairs, err := readValues(dest, e.names)
 	if err != nil {
-		fmt.Fprintf(stderr, "creel exec: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2
 	}
 
@@ -200,7 +200,7 @@ func runExec(cwd string, argv []string, stdout, stderr io.Writer) int {
 	if err := execFn(e.command[0], e.command, env); err != nil {
 		// The error names only the command (LookPath) or is an errno on the
 		// command path (Exec) — never a value.
-		fmt.Fprintf(stderr, "creel exec: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 127
 	}
 	return 0 // reached only when execFn is injected (tests)
