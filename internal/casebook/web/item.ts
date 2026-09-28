@@ -17,7 +17,7 @@ import {
   getVocab,
   allowedForKind,
 } from './decide.ts';
-import { keyWithoutKind } from './decide-math.ts';
+import { keyWithoutKind, stripOwnKey } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 import { proposalCard } from './proposals.ts';
 
@@ -83,7 +83,11 @@ function renderEvidence(evs: Evidence[]): HTMLElement {
 
 // ---- history ----------------------------------------------------------------
 
-function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
+function renderHistory(
+  events: Event[],
+  decisions: LogEntry[],
+  ownKey: string,
+): HTMLElement {
   const section = h('section', { class: 'cb-history' });
   section.append(h('h3', { class: 'kit-label' }, 'history'));
 
@@ -92,14 +96,16 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
     return section;
   }
 
-  // Decisions (git log).
+  // Decisions (git log): strip the item's own key from the subject so entries
+  // read as "decide \u2192 close by schuettc" rather than repeating the key.
   for (const entry of decisions) {
+    const display = stripOwnKey(entry.Subject, ownKey);
     section.append(
       h(
         'div',
         { class: 'cb-history-item cb-history-decision' },
         h('span', { class: 'cb-history-time' }, fmtShortDate(entry.Time)),
-        h('span', { class: 'cb-history-msg' }, entry.Subject),
+        h('span', { class: 'cb-history-msg' }, display),
       ),
     );
   }
@@ -233,7 +239,9 @@ export function renderItem(
   el.append(renderEvidence(detail.evidence ?? []));
 
   // ---- history (journal + decision commits) ---------------------------------
-  el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
+  el.append(
+    renderHistory(detail.history ?? [], detail.decisions ?? [], it.key),
+  );
 
   // Wrap in .kit-doc for the kit's centred, max-width reading column.
   return h('div', { class: 'kit-doc' }, el);

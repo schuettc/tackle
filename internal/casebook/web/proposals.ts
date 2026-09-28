@@ -1,10 +1,10 @@
 // proposals.ts — accept, change and reject proposals.
 //
 // Exported:
-//   agentFromSource(source)          — "pi:session-id" → "pi"
-//   proposalCard(ctx, detail, onDone) — amber card above the decide section
-//   openRejectSheet(ctx, ids, onDone) — reason field + POST /proposals/reject
-//   bulkProposalFoot(ctx, onDone)    — accept N / reject N… foot; call .update()
+//   agentFromSource(source)            — "pi:session-id" → "pi"
+//   proposalCard(ctx, detail, onDone)   — amber card above the decide section
+//   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
+//   bulkProposalActions(ctx, onDone)    — accept N / reject N… foot; call .update()
 
 import { card, sheet, noteField, h, type Button } from '/_kit/kit.js';
 import type {
@@ -191,8 +191,8 @@ export function proposalCard(
 
 // ---- bulk proposal foot -----------------------------------------------------
 
-/** Handle returned by bulkProposalFoot; call update() when selection changes. */
-export interface BulkProposalFoot {
+/** Handle returned by bulkProposalActions; call update() when selection changes. */
+export interface BulkProposalActions {
   el: HTMLElement;
   /**
    * update recalculates which selected items have pending proposals and updates
@@ -203,17 +203,17 @@ export interface BulkProposalFoot {
 }
 
 /**
- * bulkProposalFoot creates the accept N / reject N… foot buttons for the
+ * bulkProposalActions creates the accept N / reject N… foot buttons for the
  * proposed view.  Returns { el, update } — the caller must call update()
  * whenever the selection changes or items are reloaded.
  *
  * onDone(keys) is called after a successful accept/reject with the item keys
  * to deselect.
  */
-export function bulkProposalFoot(
+export function bulkProposalActions(
   ctx: Ctx,
   onDone: (keys: string[]) => void,
-): BulkProposalFoot {
+): BulkProposalActions {
   let _ids: number[] = [];
   let _keys: string[] = [];
 

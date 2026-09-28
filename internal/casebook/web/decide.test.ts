@@ -284,3 +284,41 @@ describe('allowedForKeys', () => {
     ]);
   });
 });
+
+// ---- stripOwnKey (item history display) -------------------------------------
+
+import { stripOwnKey } from './decide-math.ts';
+
+describe('stripOwnKey', () => {
+  test('removes own key followed by a space', () => {
+    assert.equal(
+      stripOwnKey(
+        'decide pr:schuettc/hail#3 \u2192 close by schuettc',
+        'pr:schuettc/hail#3',
+      ),
+      'decide \u2192 close by schuettc',
+    );
+  });
+
+  test('removes own key at end of string', () => {
+    assert.equal(
+      stripOwnKey('evidence for pr:schuettc/hail#3', 'pr:schuettc/hail#3'),
+      'evidence for ',
+    );
+  });
+
+  test('leaves a different key unchanged', () => {
+    const subject = 'decide pr:schuettc/hail#5 \u2192 close by schuettc';
+    assert.equal(stripOwnKey(subject, 'pr:schuettc/hail#3'), subject);
+  });
+
+  test('empty key returns subject unchanged', () => {
+    const subject = 'decide \u2192 close by schuettc';
+    assert.equal(stripOwnKey(subject, ''), subject);
+  });
+
+  test('subject not containing key is unchanged', () => {
+    const subject = 'decide \u2192 close by schuettc';
+    assert.equal(stripOwnKey(subject, 'pr:schuettc/hail#3'), subject);
+  });
+});

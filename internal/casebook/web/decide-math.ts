@@ -56,3 +56,26 @@ export function allowedForKeys(
   const first = [...(sets[0] ?? new Set())];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
+
+// ---- history display helpers ------------------------------------------------
+
+/**
+ * stripOwnKey removes the item's own key from a history entry subject line,
+ * in display only.
+ * e.g. "decide pr:schuettc/hail#3 → close by schuettc"
+ *   → "decide → close by schuettc"
+ *
+ * Only the exact key (and any immediately trailing space) is removed.
+ * Entries that mention a different key are left unchanged.
+ */
+export function stripOwnKey(subject: string, key: string): string {
+  if (!key) return subject;
+  const withSpace = key + ' ';
+  if (subject.includes(withSpace)) {
+    return subject.replace(withSpace, '');
+  }
+  if (subject.includes(key)) {
+    return subject.replace(key, '');
+  }
+  return subject;
+}

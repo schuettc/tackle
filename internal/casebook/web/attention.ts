@@ -28,9 +28,9 @@ import { keyWithoutKind } from './decide-math.ts';
 import { makeBoard } from './board.ts';
 import {
   agentFromSource,
-  bulkProposalFoot,
+  bulkProposalActions,
   openRejectSheet,
-  type BulkProposalFoot,
+  type BulkProposalActions,
 } from './proposals.ts';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
@@ -121,7 +121,7 @@ export function makeAttention(ctx: Ctx): Section {
   const filters = emptyFilters();
   let loading = false;
   let footEl: HTMLElement | null = null;
-  let propFoot: BulkProposalFoot | null = null;
+  let propFoot: BulkProposalActions | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let totalItemsForView = 0; // updated after every load; used by select-all
   // currentOpenKey is the key of the item currently shown in the reading column;
@@ -194,7 +194,7 @@ export function makeAttention(ctx: Ctx): Section {
     );
 
     // Bulk proposal buttons (only visible in the 'proposed' view).
-    propFoot = bulkProposalFoot(ctx, (keys: string[]) => {
+    propFoot = bulkProposalActions(ctx, (keys: string[]) => {
       selection.deselect(keys);
       void reload();
     });
@@ -500,48 +500,42 @@ export function makeAttention(ctx: Ctx): Section {
   });
 
   // Register 'a' and 'r' keys to accept/reject the open item's proposal.
-  try {
-    ctx.keys.register({
-      keys: 'a',
-      label: 'accept proposal',
-      group: 'page',
-      run() {
-        if (!currentOpenKey) return;
-        const it = loadedItems.find((x) => x.key === currentOpenKey);
-        if (!it?.proposal || it.proposal.state !== 'pending') return;
-        void ctx.api
-          .post('/proposals/accept', { ids: [it.proposal.id] })
-          .then(() => {
-            selection.deselect([currentOpenKey!]);
-            void openDetail(currentOpenKey!);
-            void reload();
-          })
-          .catch(() => {});
-      },
-    });
-  } catch {
-    // already registered
-  }
-
-  try {
-    ctx.keys.register({
-      keys: 'r',
-      label: 'reject proposal',
-      group: 'page',
-      run() {
-        if (!currentOpenKey) return;
-        const it = loadedItems.find((x) => x.key === currentOpenKey);
-        if (!it?.proposal || it.proposal.state !== 'pending') return;
-        openRejectSheet(ctx, [it.proposal.id], () => {
+  // The handler checks scope (currentOpenKey + pending proposal); no try/catch
+  // is needed because the keys are unique and registered exactly once here.
+  ctx.keys.register({
+    keys: 'a',
+    label: 'accept proposal',
+    group: 'page',
+    run() {
+      if (!currentOpenKey) return;
+      const it = loadedItems.find((x) => x.key === currentOpenKey);
+      if (!it?.proposal || it.proposal.state !== 'pending') return;
+      void ctx.api
+        .post('/proposals/accept', { ids: [it.proposal.id] })
+        .then(() => {
           selection.deselect([currentOpenKey!]);
           void openDetail(currentOpenKey!);
           void reload();
-        });
-      },
-    });
-  } catch {
-    // already registered
-  }
+        })
+        .catch(() => {});
+    },
+  });
+
+  ctx.keys.register({
+    keys: 'r',
+    label: 'reject proposal',
+    group: 'page',
+    run() {
+      if (!currentOpenKey) return;
+      const it = loadedItems.find((x) => x.key === currentOpenKey);
+      if (!it?.proposal || it.proposal.state !== 'pending') return;
+      openRejectSheet(ctx, [it.proposal.id], () => {
+        selection.deselect([currentOpenKey!]);
+        void openDetail(currentOpenKey!);
+        void reload();
+      });
+    },
+  });
 
   // Register / to focus the search field (kit v0.11.0).
   // createKeys() in app.ts is called before sections are created, so we

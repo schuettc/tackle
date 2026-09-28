@@ -261,6 +261,17 @@ function allowedForKeys(vocab, keys) {
   const first = [...sets[0] ?? /* @__PURE__ */ new Set()];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
+function stripOwnKey(subject, key) {
+  if (!key) return subject;
+  const withSpace = key + " ";
+  if (subject.includes(withSpace)) {
+    return subject.replace(withSpace, "");
+  }
+  if (subject.includes(key)) {
+    return subject.replace(key, "");
+  }
+  return subject;
+}
 
 // decide.ts
 var _vocab = null;
@@ -627,7 +638,7 @@ function proposalCard(ctx, detail, onDone) {
   el.classList.add("cb-proposal-card");
   return el;
 }
-function bulkProposalFoot(ctx, onDone) {
+function bulkProposalActions(ctx, onDone) {
   let _ids = [];
   let _keys = [];
   const acceptBtn = h3("button", {
@@ -722,7 +733,7 @@ function renderEvidence(evs) {
   }
   return section;
 }
-function renderHistory(events, decisions) {
+function renderHistory(events, decisions, ownKey) {
   const section = h4("section", { class: "cb-history" });
   section.append(h4("h3", { class: "kit-label" }, "history"));
   if (events.length === 0 && decisions.length === 0) {
@@ -730,12 +741,13 @@ function renderHistory(events, decisions) {
     return section;
   }
   for (const entry of decisions) {
+    const display = stripOwnKey(entry.Subject, ownKey);
     section.append(
       h4(
         "div",
         { class: "cb-history-item cb-history-decision" },
         h4("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
-        h4("span", { class: "cb-history-msg" }, entry.Subject)
+        h4("span", { class: "cb-history-msg" }, display)
       )
     );
   }
@@ -817,7 +829,9 @@ function renderItem(ctx, detail, onRefresh) {
   }
   el.append(renderDecideSection(ctx, it.key, it.kind));
   el.append(renderEvidence(detail.evidence ?? []));
-  el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
+  el.append(
+    renderHistory(detail.history ?? [], detail.decisions ?? [], it.key)
+  );
   return h4("div", { class: "kit-doc" }, el);
 }
 
@@ -1137,7 +1151,7 @@ function makeAttention(ctx) {
       },
       "select all 0 in view"
     );
-    propFoot = bulkProposalFoot(ctx, (keys) => {
+    propFoot = bulkProposalActions(ctx, (keys) => {
       selection.deselect(keys);
       void reload();
     });
@@ -1378,43 +1392,37 @@ function makeAttention(ctx) {
   selection.onChange((ids) => {
     updateProposalBulk(ids);
   });
-  try {
-    ctx.keys.register({
-      keys: "a",
-      label: "accept proposal",
-      group: "page",
-      run() {
-        if (!currentOpenKey) return;
-        const it = loadedItems.find((x) => x.key === currentOpenKey);
-        if (!it?.proposal || it.proposal.state !== "pending") return;
-        void ctx.api.post("/proposals/accept", { ids: [it.proposal.id] }).then(() => {
-          selection.deselect([currentOpenKey]);
-          void openDetail(currentOpenKey);
-          void reload();
-        }).catch(() => {
-        });
-      }
-    });
-  } catch {
-  }
-  try {
-    ctx.keys.register({
-      keys: "r",
-      label: "reject proposal",
-      group: "page",
-      run() {
-        if (!currentOpenKey) return;
-        const it = loadedItems.find((x) => x.key === currentOpenKey);
-        if (!it?.proposal || it.proposal.state !== "pending") return;
-        openRejectSheet(ctx, [it.proposal.id], () => {
-          selection.deselect([currentOpenKey]);
-          void openDetail(currentOpenKey);
-          void reload();
-        });
-      }
-    });
-  } catch {
-  }
+  ctx.keys.register({
+    keys: "a",
+    label: "accept proposal",
+    group: "page",
+    run() {
+      if (!currentOpenKey) return;
+      const it = loadedItems.find((x) => x.key === currentOpenKey);
+      if (!it?.proposal || it.proposal.state !== "pending") return;
+      void ctx.api.post("/proposals/accept", { ids: [it.proposal.id] }).then(() => {
+        selection.deselect([currentOpenKey]);
+        void openDetail(currentOpenKey);
+        void reload();
+      }).catch(() => {
+      });
+    }
+  });
+  ctx.keys.register({
+    keys: "r",
+    label: "reject proposal",
+    group: "page",
+    run() {
+      if (!currentOpenKey) return;
+      const it = loadedItems.find((x) => x.key === currentOpenKey);
+      if (!it?.proposal || it.proposal.state !== "pending") return;
+      openRejectSheet(ctx, [it.proposal.id], () => {
+        selection.deselect([currentOpenKey]);
+        void openDetail(currentOpenKey);
+        void reload();
+      });
+    }
+  });
   if (typeof handle.focusSearch === "function") {
     const focusFn = handle.focusSearch.bind(handle);
     try {

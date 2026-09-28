@@ -675,16 +675,20 @@ async function run() {
     console.log('\nscenario: decide in bulk');
 
     {
-      // Navigate to waiting view and collect rows.
+      // Navigate to the 'new' view (shows all undecided items).
+      // We use 'new' instead of 'waiting' so that waiting items (incoming PRs
+      // and issues with incoming-no-reply hits) are preserved for the board
+      // scenario that runs later and requires items in the waiting lane.
       await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForFunction(() => location.hash === '#/attention/new');
       await page.waitForTimeout(600);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
       const boxes = await page.$$('.kit-row .kit-box');
-      const selectCount = Math.min(4, boxes.length);
+      // Select only 2 items to leave enough items alive for subsequent tests.
+      const selectCount = Math.min(2, boxes.length);
 
       for (let i = 0; i < selectCount; i++) {
         await boxes[i].click();
@@ -712,27 +716,36 @@ async function run() {
 
         const sheetEl = await page.$('.kit-sheet');
         if (sheetEl) {
-          // Find and click the 'close' disposition button.
+          // Click the first available disposition button (keep is valid for all kinds).
           const dispBtns = await page.$$('.kit-sheet .cb-sheet-disp');
-          let clickedClose = false;
+          let clickedDisp = false;
+          let clickedLabel = '';
+          // Try 'keep' first (valid for all kinds); fall back to any button.
           for (const btn of dispBtns) {
             const t = (await btn.textContent()) ?? '';
-            if (t.trim() === 'close') {
+            if (t.trim() === 'keep') {
               await btn.click();
-              clickedClose = true;
+              clickedDisp = true;
+              clickedLabel = 'keep';
               break;
             }
           }
+          if (!clickedDisp && dispBtns.length > 0) {
+            const t = (await dispBtns[0].textContent()) ?? '';
+            await dispBtns[0].click();
+            clickedDisp = true;
+            clickedLabel = t.trim();
+          }
           await page.waitForTimeout(150);
 
-          // 2. Preview shows 'close N items'.
+          // 2. Preview shows '<disposition> N items'.
           const preview = await page
             .$eval('.cb-sheet-preview', (el) => el.textContent ?? '')
             .catch(() => '');
           check(
             'the sheet previews the count',
-            clickedClose &&
-              preview.includes('close') &&
+            clickedDisp &&
+              preview.includes(clickedLabel) &&
               preview.includes(`${selectCount} item`),
           );
 
@@ -1542,7 +1555,7 @@ async function run() {
         // Navigate to the server-encoded URL: url.PathEscape('issue:schuettc/hail#4')
         // → 'issue:schuettc%2Fhail%234'.
         await encPage.evaluate(() => {
-          location.hash = '#/item/issue:schuettc%2Fhail%234';
+          location.hash = '#/item/issue:schuettc%2Fhail%236';
         });
 
         // Wait for the reading column to populate.
@@ -2151,12 +2164,12 @@ async function run() {
         });
         await acceptPage.waitForSelector('.kit-bar', { timeout: 8000 });
 
-        // Create a fresh proposal on issue:schuettc/hail#4 from pi session.
+        // Create a fresh proposal on issue:schuettc/hail#6 from pi session.
         const propResult = await agentPropose(
           acceptPage,
           'probe-accept-sess',
           'pi',
-          'issue:schuettc/hail#4',
+          'issue:schuettc/hail#6',
           'keep',
           'accept probe',
         );
@@ -2164,7 +2177,7 @@ async function run() {
         if (proposed > 0) {
           // Navigate to the item detail.
           await acceptPage.evaluate(() => {
-            location.hash = '#/item/issue:schuettc%2Fhail%234';
+            location.hash = '#/item/issue:schuettc%2Fhail%236';
           });
           await acceptPage
             .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
@@ -2212,16 +2225,18 @@ async function run() {
               .catch(() => []);
             check(
               'accepted item leaves the proposed view',
-              !proposedRows.includes('issue:schuettc/hail#4'),
+              !proposedRows.includes('issue:schuettc/hail#6'),
             );
           } else {
             check('accept removes the proposal card from item detail', false);
             check('accepted item leaves the proposed view', false);
           }
         } else {
-          // Item was already decided; skip but mark as expected.
-          check('accept removes the proposal card from item detail', true);
-          check('accepted item leaves the proposed view', true);
+          // proposal was not created — this is a real failure in a fresh probe run
+          check(
+            'fresh proposal created for accept test (issue:schuettc/hail#6)',
+            false,
+          );
         }
       } finally {
         await acceptPage.close();
@@ -2309,26 +2324,55 @@ async function run() {
                   !cardAfterReject,
                 );
 
-                // The item must still be undecided (decision label not present).
-                // (item stays in the list — it just leaves the proposed view)
+                // Verify via GET /api/item that the proposal is rejected and
+                // the reason text is recorded.
+                const itemState = await rejectPage
+                  .evaluate(
+                    async ({ base }) => {
+                      const r = await fetch(
+                        base + '/api/item?key=repo:schuettc/hail',
+                      );
+                      return r.ok ? r.json() : null;
+                    },
+                    { base: serveHandle.base.replace(/\/$/, '') },
+                  )
+                  .catch(() => null);
+                const proposals = itemState?.proposals ?? [];
+                const rejected = proposals.find((p) => p.state === 'rejected');
+                check(
+                  'reject records state=rejected in GET /api/item',
+                  Boolean(rejected),
+                );
+                check(
+                  'reject records the reason text in GET /api/item',
+                  Boolean(rejected?.reason?.includes('not needed right now')),
+                );
               } else {
                 check(
                   'reject removes the proposal card from item detail',
                   false,
                 );
+                check('reject records state=rejected in GET /api/item', false);
+                check('reject records the reason text in GET /api/item', false);
               }
             } else {
               check('reject opens the reason sheet', false);
               check('reject removes the proposal card from item detail', false);
+              check('reject records state=rejected in GET /api/item', false);
+              check('reject records the reason text in GET /api/item', false);
             }
           } else {
             check('reject opens the reason sheet', false);
             check('reject removes the proposal card from item detail', false);
+            check('reject records state=rejected in GET /api/item', false);
+            check('reject records the reason text in GET /api/item', false);
           }
         } else {
-          // Already decided — skip gracefully.
-          check('reject opens the reason sheet', true);
-          check('reject removes the proposal card from item detail', true);
+          // proposal was not created — real failure in a fresh probe run
+          check(
+            'fresh proposal created for reject test (repo:schuettc/hail)',
+            false,
+          );
         }
       } finally {
         await rejectPage.close();
@@ -2336,6 +2380,10 @@ async function run() {
     }
 
     // ---- D: change opens the seeded decide sheet ---------------------------
+    // pr:schuettc/hail#3 has a pending proposal from the chip-count scenario;
+    // D reads that proposal and tests the "change" flow. After change, pr#3 is
+    // decided. D's item is dedicated in the sense that A only reads it (no
+    // decision) and D is the only scenario that decides it via change.
     {
       const changePage = await context.newPage();
       try {
@@ -2345,8 +2393,8 @@ async function run() {
         });
         await changePage.waitForSelector('.kit-bar', { timeout: 8000 });
 
-        // pr:schuettc/hail#3 still has its pending proposal from the chip-count
-        // test (disposition: 'keep').  Use it to test change.
+        // Navigate to the item detail for pr:schuettc/hail#3.
+        // This item has a pending proposal from the chip-count scenario.
         await changePage.evaluate(() => {
           location.hash = '#/item/pr:schuettc%2Fhail%233';
         });
@@ -2387,7 +2435,7 @@ async function run() {
             check('change… opens the decide sheet', sheetOpen);
 
             if (sheetOpen) {
-              // The seeded disposition 'keep' must be pre-selected (has class 'on').
+              // The seeded disposition 'keep' must be pre-selected.
               const keepIsSelected = await changePage
                 .$eval(
                   '.kit-sheet .cb-sheet-disp.on',
@@ -2427,9 +2475,10 @@ async function run() {
                   !cardAfterChange,
                 );
               } else {
+                // No alternate disposition button found — should not happen for PR.
                 check(
                   'change confirms and decides the item (proposal card removed)',
-                  true, // only one disposition available — seeded is already shown
+                  false,
                 );
               }
             } else {
@@ -2458,16 +2507,11 @@ async function run() {
             );
           }
         } else {
-          // No card — item already decided.
+          // No card: the chip-count proposal for pr#3 was not found.
+          // This is a real failure — pr#3 should have a pending proposal.
           check(
-            'change… button is the second action in the proposal card',
-            true,
-          );
-          check('change… opens the decide sheet', true);
-          check("change sheet is seeded with the proposal's disposition", true);
-          check(
-            'change confirms and decides the item (proposal card removed)',
-            true,
+            'proposal card present for change test (pr:schuettc/hail#3)',
+            false,
           );
         }
       } finally {
@@ -2490,7 +2534,7 @@ async function run() {
           keyPage,
           'probe-key-a-sess',
           'pi',
-          'issue:schuettc/hail#5',
+          'issue:schuettc/hail#7',
           'keep',
           'key test a',
         );
@@ -2557,9 +2601,10 @@ async function run() {
             );
           }
         } else {
+          // proposal was not created — real failure in a fresh probe run
           check(
-            '"a" key accepts the open item\'s proposal (card disappears)',
-            true, // item already decided; skip
+            'fresh proposal created for "a" key test (issue:schuettc/hail#7)',
+            false,
           );
         }
 
@@ -2569,7 +2614,7 @@ async function run() {
           keyPage,
           'probe-key-r-sess',
           'pi',
-          'branch:schuettc/hail@feat/client',
+          'repo:schuettc/hail',
           'keep',
           'key test r',
         );
@@ -2640,9 +2685,10 @@ async function run() {
             );
           }
         } else {
+          // proposal was not created — real failure in a fresh probe run
           check(
-            '"r" key opens the reject reason sheet for the open item',
-            true, // already decided
+            'fresh proposal created for "r" key test (repo:schuettc/hail)',
+            false,
           );
         }
       } finally {
@@ -2710,16 +2756,9 @@ async function run() {
             rejectBtnVisible,
           );
         } else {
-          // No proposed items left — earlier tests accepted them all.
-          check(
-            'bulk accept button appears in proposed view foot when items with proposals are selected',
-            true,
-          );
-          check('bulk accept button shows count of items with proposals', true);
-          check(
-            'bulk reject button appears in proposed view foot when items are selected',
-            true,
-          );
+          // No proposed items in the view — this is a real failure: branch:schuettc/hail@feat/client
+          // should still have a pending proposal from the 'r' key scenario.
+          check('proposed view has rows for bulk accept/reject test', false);
         }
       } finally {
         await bulkPage.close();
@@ -2777,10 +2816,11 @@ async function run() {
             hasClaudeText,
           );
         } else {
-          // Issue was already decided; skip.
+          // proposal was not created — real failure in a fresh probe run
+          // (repo:schuettc/hail should be undecided after scenario C rejected its proposal)
           check(
-            'a proposal from claude shows "claude" in the list row sub-line',
-            true,
+            'fresh proposal created for claude-name test (repo:schuettc/hail)',
+            false,
           );
         }
       } finally {
@@ -2827,28 +2867,30 @@ async function run() {
           );
         }
 
-        // Create a fresh proposal so the item detail has a proposal card.
+        // Use repo:schuettc/hail for the proposal card screenshot.
+        // At this point repo has a pending proposal from the claude-name test (G).
+        // We create one more from probe-t5-sess to ensure the card is visible.
         await agentPropose(
           t5Page,
           'probe-t5-sess',
           'pi',
-          'pr:schuettc/hail#3',
-          'keep',
+          'repo:schuettc/hail',
+          'archive',
           't5 screenshot note',
         );
 
         // Light: item detail with proposal card.
         await forceThemeT5(t5Page, 'light');
         await t5Page.evaluate(() => {
-          location.hash = '#/item/pr:schuettc%2Fhail%233';
+          location.hash = '#/item/repo:schuettc%2Fhail';
         });
         await t5Page
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
         await t5Page.waitForTimeout(1000);
-        await t5Page.screenshot({ path: '/tmp/t5-light-item.png' });
+        await t5Page.screenshot({ path: '/tmp/t5fix-light-item.png' });
 
-        // Light: proposed view.
+        // Light: proposed view with a selection (so bulk buttons are visible).
         await t5Page.evaluate(() => {
           location.hash = '#/attention/proposed';
         });
@@ -2859,29 +2901,43 @@ async function run() {
           .waitForSelector('.kit-chip[data-id="proposed"]', { timeout: 5000 })
           .catch(() => {});
         await t5Page.waitForTimeout(600);
-        await t5Page.screenshot({ path: '/tmp/t5-light-proposed.png' });
+        // Select all rows so the bulk accept/reject buttons appear in the foot.
+        const t5PropBoxes = await t5Page.$$('.kit-row .kit-box');
+        for (const box of t5PropBoxes) {
+          await box.click();
+          await t5Page.waitForTimeout(50);
+        }
+        await t5Page.waitForTimeout(400);
+        await t5Page.screenshot({ path: '/tmp/t5fix-light-proposed.png' });
 
         // Dark: same pages.
         await forceThemeT5(t5Page, 'dark');
         const darkTheme = await detectThemeT5(t5Page);
         check('t5 dark theme is dark', darkTheme === 'dark');
 
-        await t5Page.screenshot({ path: '/tmp/t5-dark-proposed.png' });
+        // Re-select rows for dark proposed screenshot.
+        const t5DarkBoxes = await t5Page.$$('.kit-row .kit-box');
+        for (const box of t5DarkBoxes) {
+          await box.click();
+          await t5Page.waitForTimeout(50);
+        }
+        await t5Page.waitForTimeout(400);
+        await t5Page.screenshot({ path: '/tmp/t5fix-dark-proposed.png' });
 
         await t5Page.evaluate(() => {
-          location.hash = '#/item/pr:schuettc%2Fhail%233';
+          location.hash = '#/item/repo:schuettc%2Fhail';
         });
         await t5Page
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
         await t5Page.waitForTimeout(1000);
-        await t5Page.screenshot({ path: '/tmp/t5-dark-item.png' });
+        await t5Page.screenshot({ path: '/tmp/t5fix-dark-item.png' });
 
         console.log(
-          '  t5 screenshots: /tmp/t5-light-item.png  /tmp/t5-light-proposed.png',
+          '  t5fix screenshots: /tmp/t5fix-light-item.png  /tmp/t5fix-light-proposed.png',
         );
         console.log(
-          '                  /tmp/t5-dark-item.png   /tmp/t5-dark-proposed.png',
+          '                     /tmp/t5fix-dark-item.png   /tmp/t5fix-dark-proposed.png',
         );
       } finally {
         await t5Page.close();

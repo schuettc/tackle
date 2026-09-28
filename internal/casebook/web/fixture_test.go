@@ -85,6 +85,12 @@ func TestFixture(t *testing.T) {
 	testgit.Git(t, clone, "update-ref", "refs/remotes/origin/main", c1)
 	testgit.Git(t, clone, "switch", "-q", "-c", "feat/client")
 	testgit.Commit(t, clone, "b", "2")
+	// Add a second local branch so the 'decide in bulk' probe scenario has
+	// two non-waiting items (branches) to select without consuming the three
+	// waiting items (PR #3, issue #4, issue #5) that later board tests need.
+	testgit.Git(t, clone, "switch", "-q", "-c", "fix/login")
+	testgit.Commit(t, clone, "c", "3")
+	testgit.Git(t, clone, "switch", "-q", "feat/client")
 
 	// Add the scan root to the config.
 	cfg, err := config.Load()
