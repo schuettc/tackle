@@ -57,7 +57,7 @@ func Load(root string) (check.Report, error) {
 // With verdictCut, every test whose verdict is cut is a candidate: one
 // with no parent becomes a Target; one with a parent (it lives inside
 // another top-level test/suite) needs a human or agent to edit by hand,
-// so its id is returned in needsAgent instead.
+// so it is returned in needsAgent instead, with the reason.
 //
 // With ids (verdictCut false), each id is looked up in the report: an id
 // not present is refused ("not in last.json"); an id with a parent is
@@ -66,14 +66,14 @@ func Load(root string) (check.Report, error) {
 //
 // Exactly one of ids or verdictCut is meant to be used per call; the
 // caller (the apply command) enforces that they are mutually exclusive.
-func Select(r check.Report, ids []string, verdictCut bool) (targets []Target, refused []Refusal, needsAgent []string) {
+func Select(r check.Report, ids []string, verdictCut bool) (targets []Target, refused []Refusal, needsAgent []Refusal) {
 	if verdictCut {
 		for _, t := range r.Tests {
 			if t.Verdict != "cut" {
 				continue
 			}
 			if t.Parent != "" {
-				needsAgent = append(needsAgent, t.ID)
+				needsAgent = append(needsAgent, Refusal{ID: t.ID, Reason: insideReason(t)})
 				continue
 			}
 			targets = append(targets, Target{ID: t.ID, File: t.File, Lang: t.Lang, Hash: t.Hash, Span: t.Span})
@@ -92,12 +92,69 @@ func Select(r check.Report, ids []string, verdictCut bool) (targets []Target, re
 			continue
 		}
 		if t.Parent != "" {
-			refused = append(refused, Refusal{ID: id, Reason: fmt.Sprintf("%s is inside %s; edit it by hand, then run cull check", id, t.Parent)})
+			refused = append(refused, Refusal{ID: id, Reason: insideReason(t)})
 			continue
 		}
 		targets = append(targets, Target{ID: t.ID, File: t.File, Lang: t.Lang, Hash: t.Hash, Span: t.Span})
 	}
 	return targets, refused, needsAgent
+}
+
+// HoldEmptiedFiles splits off every target in a file the targets would
+// leave with no tests at all (each test in it is a target, or inside
+// one): pytest and vitest fail on such a file, and deleting whole files
+// is out of scope, so those are held back with the reason
+// "would leave <file> with no tests".
+func HoldEmptiedFiles(r check.Report, ts []Target) (keep []Target, held []Refusal) {
+	targeted := map[string]bool{}
+	for _, t := range ts {
+		targeted[t.ID] = true
+	}
+	parent := map[string]string{}
+	for _, t := range r.Tests {
+		parent[t.ID] = t.Parent
+	}
+	removed := func(id string) bool {
+		for n := 0; id != "" && n < 64; n++ {
+			if targeted[id] {
+				return true
+			}
+			id = parent[id]
+		}
+		return false
+	}
+	emptied := map[string]bool{}
+	for _, t := range ts {
+		if _, seen := emptied[t.File]; seen {
+			continue
+		}
+		// Every test the file holds: check's inventory plus the report's
+		// tests (which carry the parents).
+		all := true
+		for _, ft := range r.Files[t.File].Tests {
+			if !removed(ft.ID) {
+				all = false
+			}
+		}
+		for _, tc := range r.Tests {
+			if tc.File == t.File && !removed(tc.ID) {
+				all = false
+			}
+		}
+		emptied[t.File] = all
+	}
+	for _, t := range ts {
+		if emptied[t.File] {
+			held = append(held, Refusal{ID: t.ID, Reason: fmt.Sprintf("would leave %s with no tests", t.File)})
+			continue
+		}
+		keep = append(keep, t)
+	}
+	return keep, held
+}
+
+func insideReason(t check.TestResult) string {
+	return fmt.Sprintf("%s is inside %s; edit it by hand, then run cull check", t.ID, t.Parent)
 }
 
 // Preflight re-checks, right before editing, that each target's file

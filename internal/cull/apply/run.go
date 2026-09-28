@@ -40,7 +40,7 @@ type Options struct {
 type Outcome struct {
 	Applied         []string            `json:"applied"`
 	Refused         []Refusal           `json:"refused"`
-	NeedsAgent      []string            `json:"needs_agent"`
+	NeedsAgent      []Refusal           `json:"needs_agent"`
 	Files           []string            `json:"files"`
 	ImportsRemoved  map[string][]string `json:"imports_removed"`
 	OrphanedHelpers map[string][]string `json:"orphaned_helpers"`
@@ -144,6 +144,15 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 			return out, exitf(2, "refused %d test id(s); nothing changed", len(pre))
 		}
 		targets = dropRefused(targets, pre)
+	}
+	// A file the cut would empty is left alone (--ids: refused).
+	targets, held := HoldEmptiedFiles(report, targets)
+	if len(held) > 0 {
+		if !opt.VerdictCut {
+			out.Refused = append(out.Refused, held...)
+			return out, exitf(2, "refused %d test id(s); nothing changed", len(held))
+		}
+		out.NeedsAgent = append(out.NeedsAgent, held...)
 	}
 	if len(targets) == 0 {
 		return out, nil

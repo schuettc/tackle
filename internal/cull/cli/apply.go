@@ -118,9 +118,9 @@ func writeOutcome(w io.Writer, o apply.Outcome) {
 		}
 	}
 	if len(o.NeedsAgent) > 0 {
-		fmt.Fprintf(w, "needs an agent (inside another test; edit by hand, then run cull check) (%d):\n", len(o.NeedsAgent))
-		for _, id := range o.NeedsAgent {
-			fmt.Fprintf(w, "  %s\n", id)
+		fmt.Fprintf(w, "needs an agent (%d):\n", len(o.NeedsAgent))
+		for _, r := range o.NeedsAgent {
+			fmt.Fprintf(w, "  %s: %s\n", r.ID, r.Reason)
 		}
 	}
 	writeResults(w, "baseline tests", o.Baseline)

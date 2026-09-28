@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/cull/cases"
@@ -80,7 +81,7 @@ func TestSelectVerdictCut(t *testing.T) {
 	if len(refused) != 0 {
 		t.Fatalf("refused = %+v, want none", refused)
 	}
-	if len(needsAgent) != 1 || needsAgent[0] != "go:a_test.go:TestNested" {
+	if len(needsAgent) != 1 || needsAgent[0].ID != "go:a_test.go:TestNested" || !strings.Contains(needsAgent[0].Reason, "edit it by hand") {
 		t.Fatalf("needsAgent = %+v", needsAgent)
 	}
 }

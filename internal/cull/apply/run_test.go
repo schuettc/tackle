@@ -524,7 +524,7 @@ func TestAdd(t *testing.T) {
 	if code := exitCode(err); code != 0 {
 		t.Fatalf("exit %d, want 0: %v", code, err)
 	}
-	if len(out.NeedsAgent) != 1 || out.NeedsAgent[0] != sub || len(out.Applied) != 0 {
+	if len(out.NeedsAgent) != 1 || out.NeedsAgent[0].ID != sub || len(out.Applied) != 0 {
 		t.Errorf("NeedsAgent = %v Applied = %v", out.NeedsAgent, out.Applied)
 	}
 
@@ -782,5 +782,37 @@ func TestUtil(t *testing.T) {
 	}
 	if got := readFile(t, root, "calc_test.go"); got != src {
 		t.Errorf("not restored:\n%s", got)
+	}
+}
+
+// TestApplyWontEmptyAFile (I-8): cutting every test in a file would leave
+// a file pytest/vitest reject; those tests go to needs_agent (with
+// --verdict cut) or are refused (with --ids), and the file is untouched.
+func TestApplyWontEmptyAFile(t *testing.T) {
+	only := "package calc\n\nimport \"testing\"\n\nfunc TestOnlyA(t *testing.T) {\n\t_ = Add(1, 1)\n}\n\nfunc TestOnlyB(t *testing.T) {\n\t_ = Add(2, 2)\n}\n"
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo, "only_test.go": only})
+	writeReport(t, root, []string{"calc_test.go", "only_test.go"}, "TestUpper", "TestOnlyA", "TestOnlyB")
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	if got := readFile(t, root, "only_test.go"); got != only {
+		t.Errorf("only_test.go changed:\n%s", got)
+	}
+	if len(out.Applied) != 1 || out.Applied[0] != "go:calc_test.go:TestUpper" {
+		t.Errorf("Applied = %v", out.Applied)
+	}
+	want := "would leave only_test.go with no tests"
+	if len(out.NeedsAgent) != 2 || out.NeedsAgent[0].Reason != want || out.NeedsAgent[1].Reason != want {
+		t.Errorf("NeedsAgent = %+v, want both only_test.go tests with %q", out.NeedsAgent, want)
+	}
+
+	_, err = runApply(t, Options{Root: root, IDs: []string{"go:only_test.go:TestOnlyA", "go:only_test.go:TestOnlyB"}})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("--ids: exit %d, want 2: %v", code, err)
+	}
+	if got := readFile(t, root, "only_test.go"); got != only {
+		t.Errorf("only_test.go changed by --ids:\n%s", got)
 	}
 }
