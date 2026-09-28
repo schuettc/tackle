@@ -76,7 +76,7 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 					fmt.Fprintln(out, "casebook serve stopped")
 					return nil
 				}
-				port, _ := strconv.Atoi(strFlag(fs, "port"))
+				port := intFlag(fs, "port")
 				if boolFlag(fs, "foreground") {
 					a, err := open()
 					if err != nil {

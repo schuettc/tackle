@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -96,9 +97,18 @@ func (b *Bus) Head(ctx context.Context) (int64, error) {
 	return c, err
 }
 
-// Trim drops events older than age.
+// Trim drops events older than age, and also trims progress_log rows for
+// sessions that have not been seen since before the same cutoff.
 func (b *Bus) Trim(ctx context.Context, age time.Duration) error {
-	_, err := b.db.ExecContext(ctx, "DELETE FROM events WHERE created_at < ?", time.Now().Add(-age).UnixMilli())
+	cutoff := time.Now().Add(-age).UnixMilli()
+	if _, err := b.db.ExecContext(ctx, "DELETE FROM events WHERE created_at < ?", cutoff); err != nil {
+		return err
+	}
+	// Remove orphaned progress_log rows for sessions that have been absent
+	// longer than the trim window (sessions are never deleted, but their log
+	// rows can accumulate if a session died without settling its turn).
+	_, err := b.db.ExecContext(ctx,
+		"DELETE FROM progress_log WHERE session_id IN (SELECT id FROM sessions WHERE last_seen < ?)", cutoff)
 	return err
 }
 
@@ -136,7 +146,9 @@ func (b *Bus) ServePoll(w http.ResponseWriter, r *http.Request) {
 		evs = []Event{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"cursor": cur, "events": evs})
+	if err := json.NewEncoder(w).Encode(map[string]any{"cursor": cur, "events": evs}); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook bus: ServePoll encode: %v\n", err)
+	}
 }
 
 // ServeSSE streams events after Last-Event-ID (or ?since) until the client
@@ -163,7 +175,10 @@ func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, e := range evs {
 			line, _ := json.Marshal(e)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, line)
+			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, line); err != nil {
+				fmt.Fprintf(os.Stderr, "casebook bus: ServeSSE write: %v\n", err)
+				return
+			}
 		}
 		if len(evs) > 0 {
 			fl.Flush()
@@ -175,7 +190,10 @@ func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-sig:
 		case <-tick.C:
-			fmt.Fprint(w, ": keepalive\n\n")
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				fmt.Fprintf(os.Stderr, "casebook bus: ServeSSE keepalive: %v\n", err)
+				return
+			}
 			fl.Flush()
 		}
 	}

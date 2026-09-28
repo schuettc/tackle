@@ -1,7 +1,6 @@
 package serve
 
 import (
-	"context"
 	"sort"
 	"strings"
 	"sync"
@@ -160,19 +159,17 @@ func (x *Index) Notices() []string {
 	return x.res.Notices
 }
 
+// Result returns the current engine.Result. Callers that need to evaluate
+// rules against the live index use this to get a consistent snapshot.
+func (x *Index) Result() engine.Result {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.res
+}
+
 // BuiltAt is when the index was last built.
 func (x *Index) BuiltAt() time.Time {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.builtAt
-}
-
-// rebuild recomputes the index; build is app.Build.
-func (x *Index) rebuild(ctx context.Context, build func(context.Context) (engine.Result, error), head string, now time.Time) error {
-	r, err := build(ctx)
-	if err != nil {
-		return err
-	}
-	x.set(r, head, now)
-	return nil
 }

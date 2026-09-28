@@ -9,7 +9,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/schuettc/tools-common v0.8.2
-	modernc.org/sqlite v1.59.0
+	github.com/schuettc/tools-common/sqlitedb v0.1.0
 )
 
 require (
@@ -41,4 +41,5 @@ require (
 	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
+	modernc.org/sqlite v1.59.0 // indirect
 )

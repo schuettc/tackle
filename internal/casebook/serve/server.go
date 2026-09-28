@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/app"
+	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/bus"
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/db"
@@ -27,6 +28,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/propose"
+	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tools-common/localweb"
 )
 
@@ -35,26 +37,36 @@ var assets embed.FS
 
 // Server is a running casebook serve.
 type Server struct {
-	App   *app.App
-	DB    *db.DB
-	Queue *deliver.Queue
-	Props *propose.Store
-	Bus   *bus.Bus
-	Index *Index
-	Now   func() time.Time
+	App    *app.App
+	DB     *db.DB
+	Queue  *deliver.Queue
+	Props  *propose.Store
+	Apply  *apply.Store
+	Bus    *bus.Bus
+	Index  *Index
+	Now    func() time.Time
+	Runner apply.Runner // for the casebook lane (nil: no-op runner)
 
 	// Wait is the long-poll timeout cap and WatchEvery the HEAD poll; tests
 	// shorten them.
 	Wait       time.Duration
 	WatchEvery time.Duration
 
-	mu       sync.Mutex
-	waiters  map[string]chan struct{} // session → wake
-	activity atomic.Int64             // unix ms of the last API request
-	streams  atomic.Int32             // open page event streams (connected tabs)
-	streamWG sync.WaitGroup           // Run waits for streams to end before closing the database
-	life     context.Context          // Run's context; done while shutting down
-	stop     context.CancelFunc
+	mu        sync.Mutex
+	rebuildMu sync.Mutex               // serializes rebuild: one at a time, including rule evaluation
+	waiters   map[string]chan struct{} // session → wake
+	streamMu  sync.Mutex               // guards streams counter + setPageOpen decision (one critical section)
+
+	laneMu           sync.Mutex        // guards laneRun
+	laneRun          map[int64]bool    // job id → a casebook lane is running for it
+	onLaneStart      func(jobID int64) // test hook: called once per lane that actually starts
+	onBeforeLaneExit func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
+	activity         atomic.Int64      // unix ms of the last API request
+	streams          atomic.Int32      // open page event streams (connected tabs)
+	streamWG         sync.WaitGroup    // Run waits for streams to end before closing the database
+	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
+	life             context.Context   // Run's context; done while shutting down
+	stop             context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -97,9 +109,15 @@ func (s *Server) pageStream(w http.ResponseWriter, r *http.Request) {
 		defer context.AfterFunc(s.life, cancel)()
 	}
 	r = r.WithContext(ctx)
+	// Increment and the flag write are one critical section: a concurrent
+	// decrement+clear between our Add and setPageOpen would otherwise leave the
+	// flag stuck at "1" after the last tab closes.
+	connCtx := r.Context()
+	s.streamMu.Lock()
 	if s.streams.Add(1) == 1 {
-		s.setPageOpen(r.Context(), true)
+		s.setPageOpen(connCtx, true)
 	}
+	s.streamMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		t := time.NewTicker(15 * time.Second)
@@ -117,9 +135,13 @@ func (s *Server) pageStream(w http.ResponseWriter, r *http.Request) {
 		close(done)
 		// A stream that ends because serve is stopping doesn't mean the tab
 		// closed: leave the flag set so the next serve reopens the page.
+		// Decrement and the flag write are one critical section (mirrors the
+		// increment path above).
+		s.streamMu.Lock()
 		if s.streams.Add(-1) == 0 && (s.life == nil || s.life.Err() == nil) {
 			s.setPageOpen(context.Background(), false)
 		}
+		s.streamMu.Unlock()
 	}()
 	s.Bus.ServeSSE(w, r)
 }
@@ -130,8 +152,18 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 // New wires a server over an opened app and database. It marks deliveries a
 // previous serve left in flight as interrupted and builds the index.
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
-	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Bus: bus.New(d), Index: &Index{},
-		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}}
+	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
+		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
+	// Record the serve lifetime context now so lanes started during New (a
+	// restart resume) are cancelled when serve stops. Run passes the same
+	// cancelable context and re-records it alongside s.stop.
+	s.life = ctx
+	s.Runner = apply.Runner{
+		Repo:   a.Repo,
+		Gh:     a.Gh,
+		RunGit: gitx.Run,
+		Now:    s.Now,
+	}
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {
@@ -140,8 +172,130 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	if err := s.rebuild(ctx); err != nil {
 		return nil, err
 	}
+	// Resume jobs a previous serve left mid-run: casebook-lane steps stuck in
+	// running go back to pending and their lanes relaunch (each step re-checks
+	// the world first, so this is safe).
+	if err := s.resumeInterruptedJobs(ctx); err != nil {
+		return nil, err
+	}
 	s.activity.Store(time.Now().UnixMilli())
 	return s, nil
+}
+
+// laneCtx is the context casebook lanes run under: serve's lifetime, so lanes
+// are cancelled when serve stops (never context.Background()).
+func (s *Server) laneCtx() context.Context {
+	if s.life != nil {
+		return s.life
+	}
+	return context.Background()
+}
+
+// settleJob calls Store.Settle for jobID and, when the state changes,
+// publishes a "job" event on the bus so watchers see the terminal state.
+// Errors are logged to stderr (non-fatal: the step state is already persisted).
+func (s *Server) settleJob(ctx context.Context, jobID int64) {
+	newState, changed, err := s.Apply.Settle(ctx, jobID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: Settle job %d: %v\n", jobID, err)
+		return
+	}
+	if changed {
+		s.Bus.Publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
+	}
+}
+
+// startCasebookLane launches the casebook lane for a job at most once at a time
+// (a per-job single-flight guard). If a lane is already running for the job the
+// call is a no-op. The guard entry is cleared when the lane goroutine returns.
+func (s *Server) startCasebookLane(job apply.Job) {
+	s.laneMu.Lock()
+	if s.laneRun == nil {
+		s.laneRun = map[int64]bool{}
+	}
+	if s.laneRun[job.ID] {
+		s.laneMu.Unlock()
+		return
+	}
+	s.laneRun[job.ID] = true
+	s.laneMu.Unlock()
+
+	if s.onLaneStart != nil {
+		s.onLaneStart(job.ID)
+	}
+
+	go func() {
+		bgCtx := s.laneCtx()
+		env := s.buildEnv()
+		pauseFn := func() bool {
+			j, err := s.Apply.Get(bgCtx, job.ID)
+			return err == nil && j.Paused
+		}
+		defer func() {
+			// Lost-wakeup guard: a resume that arrived while this lane was still
+			// registered (laneRun[id]=true) would have been a no-op. After we
+			// clear the entry, re-check whether the job has pending casebook
+			// steps and is not paused; if so, restart a new lane so those steps
+			// are not left stranded.
+			if s.onBeforeLaneExit != nil {
+				s.onBeforeLaneExit(job.ID)
+			}
+			s.laneMu.Lock()
+			delete(s.laneRun, job.ID)
+			s.laneMu.Unlock()
+			if j, err := s.Apply.Get(bgCtx, job.ID); err == nil {
+				if !j.Paused && (j.State == apply.JobRunning || j.State == apply.JobApproved) {
+					for _, st := range j.Steps {
+						if st.Lane == apply.LaneCasebook && st.State == apply.StepPending {
+							s.startCasebookLane(j)
+							break
+						}
+					}
+				}
+			}
+		}()
+		if err := s.Apply.RunCasebookLane(bgCtx, job, s.Runner, env, pauseFn); err != nil {
+			fmt.Fprintf(os.Stderr, "casebook serve: RunCasebookLane job %d: %v\n", job.ID, err)
+		}
+		// After the casebook lane drains, check whether the job has reached a
+		// terminal state (all steps done or nothing left to run).
+		s.settleJob(bgCtx, job.ID)
+	}()
+}
+
+// resumeInterruptedJobs relaunches casebook lanes for jobs a previous serve
+// left running (or approved with casebook steps). Casebook-lane steps stuck in
+// running are requeued to pending; agent-lane steps are left as they are (the
+// agent reports them).
+func (s *Server) resumeInterruptedJobs(ctx context.Context) error {
+	jobs, err := s.Apply.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.State != apply.JobRunning && job.State != apply.JobApproved {
+			continue
+		}
+		var hasCasebook bool
+		for _, st := range job.Steps {
+			if st.Lane == apply.LaneCasebook {
+				hasCasebook = true
+				break
+			}
+		}
+		if !hasCasebook {
+			continue
+		}
+		if _, err := s.Apply.RequeueRunningCasebookSteps(ctx, job.ID); err != nil {
+			return err
+		}
+		fresh, err := s.Apply.Get(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		s.startCasebookLane(fresh)
+	}
+	return nil
 }
 
 func (s *Server) build(ctx context.Context) (engine.Result, error) {
@@ -154,14 +308,82 @@ func (s *Server) repoHead(ctx context.Context) string {
 	return h
 }
 
-// rebuild recomputes the index from the current repo state and announces it.
+// rebuild recomputes the index from the current repo state, evaluates active
+// rules and announces the new state. It is the only trigger for rule
+// evaluation: a sync moves HEAD, serve's watch sees it and calls rebuild, and
+// serve evaluates rules on its first build. The CLI sync never opens the
+// database and never evaluates rules (spec
+// §4.2 updated: rules run in serve, not in casebook sync).
+//
+// rebuild is serialized by rebuildMu so that rule evaluation never runs twice
+// at once. Rule-error notices are set atomically with the rebuilt result under
+// one Index lock (via Index.set), so a concurrent reader never sees a new Head
+// without the accompanying notices.
 func (s *Server) rebuild(ctx context.Context) error {
-	if err := s.Index.rebuild(ctx, s.build, s.repoHead(ctx), s.Now()); err != nil {
+	// Bug 2 fix: serialize rebuilds so rule evaluation never overlaps.
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
+	s.rebuilds.Add(1)
+
+	// Build the engine result first (outside any Index lock).
+	now := s.Now()
+	head := s.repoHead(ctx)
+	res, err := s.build(ctx)
+	if err != nil {
 		return err
 	}
+
+	// Load rules and evaluate active ones. Rule-load and validation errors are
+	// collected as notices; they never abort the rebuild.
+	allRules, ruleErrs := s.App.Repo.Rules()
+	var notices []string
+	for _, re := range ruleErrs {
+		notices = append(notices, "rule: "+re.Error())
+	}
+	var active []rules.Rule
+	for _, r := range allRules {
+		if err := r.Validate(); err != nil {
+			notices = append(notices, "rule "+r.ID+": "+err.Error())
+			continue
+		}
+		if r.Status == rules.StatusActive {
+			active = append(active, r)
+		}
+	}
+
+	// Evaluate active rules against the freshly built result. Proposals are
+	// written to SQLite only; they do not move HEAD and cannot trigger another
+	// rebuild (the watch loop only rebuilds on a HEAD change).
+	//
+	// Bug 1: EvaluateActive now returns rule-level Propose errors (joined).
+	// Surface them as index notices so the page can display them, and log
+	// to stderr for diagnostics.
+	var proposed int
+	if len(active) > 0 {
+		var evalErr error
+		proposed, evalErr = rules.EvaluateActive(ctx, active, res, now, s.Props)
+		if evalErr != nil {
+			fmt.Fprintf(os.Stderr, "casebook serve: rules evaluate: %v\n", evalErr)
+			notices = append(notices, "rules: "+evalErr.Error())
+		}
+	}
+
+	// Bug 3 fix: set the index result and all its notices atomically under one
+	// Index lock. Append rule notices to the engine result's own notices so
+	// that a reader who sees the new Head also sees all notices immediately.
+	res.Notices = append(res.Notices, notices...)
+	s.Index.set(res, head, now)
+
 	pending, _ := s.Props.Pending(ctx)
-	_, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()})
-	return err
+	if _, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()}); err != nil {
+		return err
+	}
+	if proposed > 0 {
+		_, err := s.Bus.Publish(ctx, "rules", map[string]int{"proposed": proposed})
+		return err
+	}
+	return nil
 }
 
 // watch rebuilds whenever the casebook repo's HEAD moves (a sync or a CLI
@@ -182,6 +404,9 @@ func (s *Server) watch(ctx context.Context) {
 			}
 			if time.Since(lastTrim) > 24*time.Hour {
 				_ = s.Bus.Trim(ctx, 7*24*time.Hour)
+				if err := s.Props.TrimProgressLog(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "casebook serve: trim progress_log: %v\n", err)
+				}
 				lastTrim = time.Now()
 			}
 		}
@@ -250,6 +475,30 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/agent/status", s.agentStatus)
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
+	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
+	m.HandleFunc("POST /api/agent/job-step", s.agentJobStep)
+	m.HandleFunc("POST /api/agent/job-ask", s.agentJobAsk)
+	// apply
+	m.HandleFunc("POST /api/apply/plan", s.postApplyPlan)
+	m.HandleFunc("POST /api/apply/approve", s.postApplyApprove)
+	m.HandleFunc("GET /api/jobs", s.getJobs)
+	m.HandleFunc("GET /api/job", s.getJob)
+	m.HandleFunc("GET /api/needs-you", s.getNeedsYou)
+	m.HandleFunc("POST /api/jobs/pause", s.postJobsPause)
+	m.HandleFunc("POST /api/jobs/resume", s.postJobsResume)
+	m.HandleFunc("POST /api/jobs/undo", s.postJobsUndo)
+	m.HandleFunc("POST /api/jobs/answer", s.postJobsAnswer)
+	// rules
+	m.HandleFunc("GET /api/rules", s.getRules)
+	m.HandleFunc("GET /api/rule", s.getRule)
+	m.HandleFunc("POST /api/rules/draft", s.postRulesDraft)
+	m.HandleFunc("POST /api/rules/preview", s.postRulesPreview)
+	m.HandleFunc("POST /api/rules/exclude", s.postRulesExclude)
+	m.HandleFunc("POST /api/rules/include", s.postRulesInclude)
+	m.HandleFunc("POST /api/rules/propose-once", s.postRulesProposeOnce)
+	m.HandleFunc("POST /api/rules/activate", s.postRulesActivate)
+	m.HandleFunc("POST /api/rules/deactivate", s.postRulesDeactivate)
+	m.HandleFunc("GET /api/rules/vocabulary", s.getRulesVocabulary)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.activity.Store(time.Now().UnixMilli())
 		m.ServeHTTP(w, r)
@@ -334,7 +583,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if err := os.MkdirAll(config.StateDir(), 0o700); err != nil {
 		return err
 	}
-	d, err := db.Open(config.StateDir() + "/casebook.db")
+	d, err := db.Open(ctx, config.StateDir()+"/casebook.db")
 	if err != nil {
 		return err
 	}
@@ -360,7 +609,11 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC(),
 		Reopened: wasOpen}
 	if o.Open != nil {
+		// Guard the write: agentOpen reads openPage concurrently once the
+		// handler is registered (localweb.Start already began serving above).
+		s.mu.Lock()
 		s.openPage = func(fragment string) error { return o.Open(srv.URL + fragment) }
+		s.mu.Unlock()
 	}
 	if err := writeAdvert(adv); err != nil {
 		cancel()

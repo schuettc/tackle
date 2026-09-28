@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
 )
@@ -250,5 +251,28 @@ func TestRefreshWithoutGh(t *testing.T) {
 	g, rep := Refresh(ctx, gh, prev, RefreshOptions{Now: time.Now()})
 	if len(rep.Errors) != 1 || !g.Owners["acme"].Stale || len(g.Owners["acme"].Repos) != 1 {
 		t.Fatalf("got %+v %v", g.Owners["acme"], rep.Errors)
+	}
+}
+
+// TestBodyTruncationIsRuneSafe verifies that toPR truncates body to exactly
+// 600 runes (not 600 bytes), producing valid UTF-8.
+func TestBodyTruncationIsRuneSafe(t *testing.T) {
+	// "é" is 2 UTF-8 bytes; 601 of them = 1202 bytes, must truncate to 600 runes.
+	body601 := strings.Repeat("é", 601)
+	n := gqlPR{BodyText: body601}
+	p := toPR(n, "owner/repo")
+	runes := []rune(p.Body)
+	if len(runes) != 600 {
+		t.Errorf("Body has %d runes, want exactly 600", len(runes))
+	}
+	if !utf8.ValidString(p.Body) {
+		t.Error("Body is not valid UTF-8 after truncation")
+	}
+	// Sanity: the body must consist entirely of the multibyte character.
+	for i, r := range runes {
+		if r != 'é' {
+			t.Errorf("rune[%d] = %q, want 'é'", i, r)
+			break
+		}
 	}
 }

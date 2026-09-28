@@ -50,6 +50,14 @@ type Evidence struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ProgressLine is one progress update recorded during a turn.
+type ProgressLine struct {
+	Text  string    `json:"text"`
+	N     int       `json:"n,omitempty"`
+	Total int       `json:"total,omitempty"`
+	At    time.Time `json:"at"`
+}
+
 // Progress is a session's live progress line.
 type Progress struct {
 	SessionID string    `json:"session_id"`
@@ -194,9 +202,10 @@ func (s *Store) Settle(ctx context.Context, id int64, state, reason string) erro
 	return nil
 }
 
-// SupersedeKey retires every pending proposal for a key except one (0 for
-// none): when Court decides the key directly, or accepts one proposal among
-// several.
+// SupersedeKey retires every pending proposal for a key except one. Pass
+// except=0 to supersede all pending proposals for the key (e.g. when Court
+// decides directly); pass a non-zero proposal ID to spare that one (e.g.
+// when accepting one proposal among several from different sources).
 func (s *Store) SupersedeKey(ctx context.Context, key string, except int64) error {
 	_, err := s.DB.ExecContext(ctx, "UPDATE proposals SET state = 'superseded', settled_at = ? WHERE key = ? AND state = 'pending' AND id != ?",
 		ms(s.Now()), key, except)
@@ -218,7 +227,9 @@ func (s *Store) Tally(ctx context.Context, source string, since time.Time) (Tall
 	for rows.Next() {
 		var st string
 		var n int
-		rows.Scan(&st, &n)
+		if err := rows.Scan(&st, &n); err != nil {
+			return t, err
+		}
 		switch st {
 		case Accepted:
 			t.Accepted = n
@@ -231,6 +242,28 @@ func (s *Store) Tally(ctx context.Context, source string, since time.Time) (Tall
 		}
 	}
 	return t, rows.Err()
+}
+
+// RejectedFor returns the set of item keys for which source's proposals were
+// rejected since t. Keys with rejections before t are not returned, because a
+// rule re-edited after the rejection may re-propose them (spec §4.2).
+func (s *Store) RejectedFor(ctx context.Context, source string, since time.Time) (map[string]bool, error) {
+	rows, err := s.DB.QueryContext(ctx,
+		"SELECT key FROM proposals WHERE source = ? AND state = 'rejected' AND settled_at >= ?",
+		source, ms(since))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		out[key] = true
+	}
+	return out, rows.Err()
 }
 
 // Overruled returns source's proposals Court changed or rejected since t,
@@ -274,20 +307,30 @@ func (s *Store) Evidence(ctx context.Context, key string) ([]Evidence, error) {
 	for rows.Next() {
 		var e Evidence
 		var c int64
-		rows.Scan(&e.ID, &e.Key, &e.Text, &e.Author, &c)
+		if err := rows.Scan(&e.ID, &e.Key, &e.Text, &e.Author, &c); err != nil {
+			return nil, err
+		}
 		e.CreatedAt = tm(c)
 		out = append(out, e)
 	}
 	return out, rows.Err()
 }
 
-// SetProgress updates a session's progress line, keeping its start time.
+// SetProgress updates a session's progress line, keeping its start time, and
+// appends the update to progress_log so ClearProgress can return the history.
+// Both the progress upsert and the progress_log insert are required to
+// succeed; any error from either is returned to the caller.
 func (s *Store) SetProgress(ctx context.Context, session, text string, n, total int) (Progress, error) {
 	now := ms(s.Now())
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO progress(session_id, text, n, total, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT(session_id) DO UPDATE SET text = excluded.text, n = excluded.n, total = excluded.total, updated_at = excluded.updated_at`,
 		session, text, n, total, now, now)
 	if err != nil {
+		return Progress{}, err
+	}
+	// Append to the history log for this turn; surface any error (no silent discard).
+	if _, err := s.DB.ExecContext(ctx, `INSERT INTO progress_log(session_id, text, n, total, at) VALUES (?, ?, ?, ?, ?)`,
+		session, text, n, total, now); err != nil {
 		return Progress{}, err
 	}
 	p, _, err := s.Progress(ctx, session)
@@ -307,15 +350,74 @@ func (s *Store) Progress(ctx context.Context, session string) (Progress, bool, e
 	return p, err == nil, err
 }
 
-// ClearProgress removes a session's line when its turn ends and returns how
-// long it ran (0 if there was none).
-func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duration, error) {
-	p, ok, err := s.Progress(ctx, session)
-	if err != nil || !ok {
-		return 0, err
+// ClearProgress removes a session's progress line and history when its turn
+// ends. It runs entirely inside one transaction so that concurrent callers
+// cannot both read the same rows: only one caller receives the lines.
+//
+// The returned duration is measured from the first progress update
+// (started_at) to the moment ClearProgress is called (s.Now()), capturing
+// the full turn length rather than just the gap between the first and last
+// progress reports.
+func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duration, []ProgressLine, error) {
+	now := s.Now()
+	var (
+		lines []ProgressLine
+		dur   time.Duration
+	)
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Read started_at from the progress row inside the transaction.
+		var startedAtMs int64
+		err := tx.QueryRowContext(ctx, "SELECT started_at FROM progress WHERE session_id = ?", session).Scan(&startedAtMs)
+		if errors.Is(err, sql.ErrNoRows) {
+			// No progress row — nothing to clear.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		// Collect progress_log lines in order.
+		rows, err := tx.QueryContext(ctx, "SELECT text, n, total, at FROM progress_log WHERE session_id = ? ORDER BY id", session)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var l ProgressLine
+			var at int64
+			if err := rows.Scan(&l.Text, &l.N, &l.Total, &at); err != nil {
+				rows.Close()
+				return err
+			}
+			l.At = tm(at)
+			lines = append(lines, l)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+
+		// Delete both tables' rows in the same transaction (atomic with the read).
+		if _, err := tx.ExecContext(ctx, "DELETE FROM progress_log WHERE session_id = ?", session); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "DELETE FROM progress WHERE session_id = ?", session); err != nil {
+			return err
+		}
+
+		// Duration = from the turn's first progress to the settlement moment.
+		dur = now.Sub(tm(startedAtMs))
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
 	}
-	if _, err := s.DB.ExecContext(ctx, "DELETE FROM progress WHERE session_id = ?", session); err != nil {
-		return 0, err
-	}
-	return p.UpdatedAt.Sub(p.StartedAt), nil
+	return dur, lines, nil
+}
+
+// TrimProgressLog removes progress_log rows whose session no longer exists in
+// the sessions table.  It is called by the daily trim in serve's watch loop
+// to prevent unbounded growth from sessions that ended without a clean clear.
+func (s *Store) TrimProgressLog(ctx context.Context) error {
+	_, err := s.DB.ExecContext(ctx,
+		"DELETE FROM progress_log WHERE session_id NOT IN (SELECT id FROM sessions)")
+	return err
 }

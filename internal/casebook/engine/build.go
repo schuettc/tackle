@@ -24,23 +24,38 @@ type Input struct {
 
 // Item is one tracked thing with its computed status.
 type Item struct {
-	Key       item.Key       `json:"-"`
-	ID        string         `json:"key"`
-	Kind      item.Kind      `json:"kind"`
-	Repo      string         `json:"repo,omitempty"`
-	Title     string         `json:"title,omitempty"`
-	URL       string         `json:"url,omitempty"`
-	Relation  string         `json:"relation,omitempty"`
-	Status    item.Status    `json:"status"`
-	Decision  *item.Decision `json:"decision,omitempty"`
-	Hits      []item.Hit     `json:"hits,omitempty"`
-	Observed  item.Observed  `json:"observed"`
-	Stale     bool           `json:"stale,omitempty"`
-	Locations []string       `json:"locations,omitempty"`
-	Evidence  []string       `json:"evidence,omitempty"`
+	Key         item.Key          `json:"-"`
+	ID          string            `json:"key"`
+	Kind        item.Kind         `json:"kind"`
+	Repo        string            `json:"repo,omitempty"`
+	Title       string            `json:"title,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Relation    string            `json:"relation,omitempty"`
+	Status      item.Status       `json:"status"`
+	Decision    *item.Decision    `json:"decision,omitempty"`
+	Hits        []item.Hit        `json:"hits,omitempty"`
+	Observed    item.Observed     `json:"observed"`
+	Stale       bool              `json:"stale,omitempty"`
+	Locations   []string          `json:"locations,omitempty"`
+	Evidence    []string          `json:"evidence,omitempty"`
+	Author      string            `json:"author,omitempty"`
+	AuthorIsBot bool              `json:"author_is_bot,omitempty"` // true when GitHub GraphQL __typename == "Bot"
+	CreatedAt   time.Time         `json:"created_at,omitzero"`
+	UpdatedAt   time.Time         `json:"updated_at,omitzero"`
+	Labels      []string          `json:"labels,omitempty"`
+	Body        string            `json:"body,omitempty"`
+	Landed      string            `json:"landed,omitempty"`      // combined across machines: "all-machines", "some-machines", "none", "unknown"
+	LandedHow   string            `json:"landed_how,omitempty"`  // human-readable: "in main", "merged #N", or "; "-joined when both
+	LandedVia   []string          `json:"landed_via,omitempty"`  // machine codes: "default-branch", "merged-pr" (multi-valued)
+	LandedTips  map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
-	fresh   bool // observed from a fresh owner listing
-	signals item.Signals
+	fresh         bool // observed from a fresh owner listing
+	signals       item.Signals
+	goneUpstream  bool   // branch: remote upstream was deleted
+	worktreeState string // branch: "dirty", "clean", or "" (none)
+	dirty         bool   // worktree: has uncommitted changes
+	openPRs       int    // repo: number of open PRs
+	openIssues    int    // repo: number of open issues
 }
 
 // Result is a build.
@@ -70,15 +85,26 @@ func (r Result) Attention() []Item {
 	return out
 }
 
+// machineLanded records the per-machine landed verdict for one branch item.
+type machineLanded struct {
+	Machine     string
+	Landed      string // "in main", "merged #N", or "" (not landed)
+	LandedState string // "yes" | "no" | "unknown" | "" (empty = snapshot written before LandedState existed)
+	Tip         string // tip SHA; non-empty only when LandedState == "yes"
+	HowType     string // "default-branch" or "merged-pr" (machine-readable; from Branch.LandedHow)
+}
+
 type builder struct {
-	in    Input
-	user  string
-	items map[string]*Item
-	f     facts
-	local map[string]bool // branch keys present in some snapshot
-	fresh map[string]bool // lower-case owners with a fresh, complete listing
-	stale map[string]bool // lower-case owners whose listing is stale
-	snaps map[string]bool // machines with a snapshot
+	in             Input
+	user           string
+	items          map[string]*Item
+	f              facts
+	local          map[string]bool            // branch keys present in some snapshot
+	fresh          map[string]bool            // lower-case owners with a fresh, complete listing
+	stale          map[string]bool            // lower-case owners whose listing is stale
+	snaps          map[string]bool            // machines with a snapshot
+	branchLanded   map[string][]machineLanded // branch item ID → per-machine verdicts
+	branchWorktree map[string]string          // branch item ID → "dirty" or "clean"
 }
 
 func (b *builder) get(k item.Key) *Item {
@@ -106,10 +132,12 @@ func Build(in Input) Result {
 			prs:   map[string]observe.PRObs{},
 			refs:  in.GitHub.Refs,
 		},
-		local: map[string]bool{},
-		fresh: map[string]bool{},
-		stale: map[string]bool{},
-		snaps: map[string]bool{},
+		local:          map[string]bool{},
+		fresh:          map[string]bool{},
+		stale:          map[string]bool{},
+		snaps:          map[string]bool{},
+		branchLanded:   map[string][]machineLanded{},
+		branchWorktree: map[string]string{},
 	}
 	b.f.items = b.items
 	var res Result
@@ -159,12 +187,14 @@ func (b *builder) owners(res *Result) {
 				it.Relation = "owned"
 			}
 			it.signals.UpdatedAt, it.signals.Archived = r.PushedAt, r.Archived
+			it.UpdatedAt = r.PushedAt
 			if !r.PushedAt.IsZero() {
 				it.Evidence = append(it.Evidence, "pushed "+r.PushedAt.Format("2006-01-02"))
 			}
 			if r.Archived {
 				it.Evidence = append(it.Evidence, "archived")
 			}
+			it.openPRs, it.openIssues = len(r.PRs), len(r.Issues)
 			if n := len(r.PRs); n > 0 {
 				it.Evidence = append(it.Evidence, fmt.Sprintf("%d open PRs", n))
 			}
@@ -205,6 +235,7 @@ func (b *builder) pr(k item.Key, p observe.PRObs, dir string, fresh bool) {
 	it.Observed = item.Observed{Known: true, Exists: true, State: p.State}
 	it.fresh, it.Stale = fresh, !fresh
 	it.Title, it.URL, it.Relation = p.Title, p.URL, dir
+	it.Author, it.AuthorIsBot, it.CreatedAt, it.UpdatedAt, it.Labels, it.Body = p.Author, p.AuthorIsBot, p.CreatedAt, p.UpdatedAt, p.Labels, p.Body
 	last := p.CreatedAt
 	if p.LastCommentAt.After(last) {
 		last = p.LastCommentAt
@@ -233,10 +264,25 @@ func (b *builder) snapshots() {
 				it.fresh, it.Repo, it.Title = true, c.Repo, w.Branch
 				it.Locations = append(it.Locations, where)
 				if w.Dirty {
+					it.dirty = true
 					it.Evidence = append(it.Evidence, "uncommitted changes")
 				}
-				if br, ok := branches[w.Branch]; ok && br.Unpushed > 0 && !br.Gone {
-					it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, snap.Machine+":"+w.Path
+				if br, ok := branches[w.Branch]; ok {
+					if br.Unpushed > 0 && !br.Gone {
+						it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, snap.Machine+":"+w.Path
+					}
+					if !br.TipAt.IsZero() {
+						it.UpdatedAt = br.TipAt
+					}
+				}
+				// Track worktree state for the branch item.
+				if c.Repo != "" && w.Branch != "" {
+					bk := item.BranchKey(c.Repo, w.Branch).String()
+					if w.Dirty {
+						b.branchWorktree[bk] = "dirty" // dirty overrides clean
+					} else if b.branchWorktree[bk] == "" {
+						b.branchWorktree[bk] = "clean"
+					}
 				}
 			}
 			if c.Repo == "" {
@@ -256,10 +302,29 @@ func (b *builder) snapshots() {
 				it.Observed = item.Observed{Known: true, Exists: true}
 				it.fresh = true
 				it.Locations = append(it.Locations, where)
+				// Carry tip time.
+				if !br.TipAt.IsZero() && (it.UpdatedAt.IsZero() || br.TipAt.After(it.UpdatedAt)) {
+					it.UpdatedAt = br.TipAt
+				}
+				// Record per-machine landed status for cross-machine combination.
+				// Treat an empty LandedState (snapshot written before the field
+				// existed) as "unknown" so we don't falsely count it as "no".
+				ls := br.LandedState
+				if ls == "" && br.Landed != "" {
+					ls = "yes" // old snapshot that set Landed but not LandedState
+				}
+				b.branchLanded[k.String()] = append(b.branchLanded[k.String()], machineLanded{
+					Machine:     snap.Machine,
+					Landed:      br.Landed,
+					LandedState: ls,
+					Tip:         br.LandedTip, // non-empty only when LandedState=="yes"
+					HowType:     br.LandedHow, // "default-branch" or "merged-pr"
+				})
 				if br.Gone {
 					// Upstream deleted on the remote: usually a squash-merged PR
 					// branch. Its local-only commits are not work at risk.
 					it.Evidence = append(it.Evidence, "upstream branch deleted (likely merged) on "+where)
+					it.goneUpstream = true
 					continue
 				}
 				if br.Unpushed > 0 {
@@ -270,6 +335,78 @@ func (b *builder) snapshots() {
 				}
 			}
 		}
+	}
+}
+
+// finishLanded computes it.Landed, it.LandedHow, and it.LandedTips from
+// the per-machine verdicts collected in b.branchLanded during snapshots().
+// Combined semantics (spec §4.1):
+//
+//   - "all-machines": landed on every machine (LandedState=="yes" everywhere)
+//   - "some-machines": landed>0 && notLanded>0 (regardless of unknown count)
+//   - "none": no landed, notLanded>0, no unknown
+//   - "unknown": any other combination (any unknown with no not-landed contradicting it)
+//
+// LandedTips holds only the tips of machines whose LandedState=="yes".
+func (b *builder) finishLanded(it *Item) {
+	if it.Kind != item.KindBranch {
+		return
+	}
+	verdicts := b.branchLanded[it.ID]
+	if len(verdicts) == 0 {
+		return
+	}
+	var (
+		landedCount    int
+		notLandedCount int
+		unknownCount   int
+		reasons        []string
+		howTypes       []string
+		tips           = map[string]string{}
+	)
+	seen := map[string]bool{}
+	seenHow := map[string]bool{}
+	for _, ml := range verdicts {
+		switch ml.LandedState {
+		case "yes":
+			landedCount++
+			if ml.Tip != "" {
+				tips[ml.Machine] = ml.Tip
+			}
+			if ml.Landed != "" && !seen[ml.Landed] {
+				seen[ml.Landed] = true
+				reasons = append(reasons, ml.Landed)
+			}
+			if ml.HowType != "" && !seenHow[ml.HowType] {
+				seenHow[ml.HowType] = true
+				howTypes = append(howTypes, ml.HowType)
+			}
+		case "no":
+			notLandedCount++
+		default: // "unknown" or "" (snapshot from before LandedState was added)
+			unknownCount++
+		}
+	}
+	if len(tips) > 0 {
+		it.LandedTips = tips
+	}
+	// LandedVia holds the machine-readable how codes for rule conditions.
+	// LandedHow holds the human-readable text for display (templates, page).
+	if len(howTypes) > 0 {
+		it.LandedVia = howTypes
+	}
+	if len(reasons) > 0 {
+		it.LandedHow = strings.Join(reasons, "; ")
+	}
+	switch {
+	case landedCount > 0 && notLandedCount == 0 && unknownCount == 0:
+		it.Landed = "all-machines"
+	case landedCount > 0 && notLandedCount > 0:
+		it.Landed = "some-machines" // regardless of unknown count
+	case landedCount == 0 && notLandedCount > 0 && unknownCount == 0:
+		it.Landed = "none"
+	default:
+		it.Landed = "unknown"
 	}
 }
 
@@ -312,6 +449,13 @@ func (b *builder) finish(it *Item) {
 		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)
 	}
 	sort.Strings(it.Locations)
+	// Set worktreeState on branch items from the worktree tracking map.
+	if it.Kind == item.KindBranch {
+		if state, ok := b.branchWorktree[it.ID]; ok {
+			it.worktreeState = state
+		}
+	}
+	b.finishLanded(it)
 }
 
 // NextSeen records decisions observed done, for drift detection. An entry

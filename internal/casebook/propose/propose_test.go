@@ -3,6 +3,7 @@ package propose
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,7 +14,7 @@ var ctx = context.Background()
 
 func newStore(t *testing.T) (*Store, *time.Time) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "casebook.db"))
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +92,142 @@ func TestEvidenceAndProgress(t *testing.T) {
 	if p.N != 3 || p.UpdatedAt.Sub(p.StartedAt) != 3*time.Minute {
 		t.Fatalf("progress %+v", p)
 	}
-	if d, _ := s.ClearProgress(ctx, "s1"); d != 3*time.Minute {
+	d, lines, err := s.ClearProgress(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ClearProgress: %v", err)
+	}
+	if d != 3*time.Minute {
 		t.Fatalf("worked for %v", d)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("progress lines: got %d, want 2", len(lines))
+	}
+	if lines[0].Text != "checking CI on #671" || lines[1].Text != "checking CI on #672" {
+		t.Fatalf("progress lines: %+v", lines)
+	}
+	// Each line must carry a non-zero timestamp (item 6).
+	for i, l := range lines {
+		if l.At.IsZero() {
+			t.Errorf("lines[%d].At is zero (want a real timestamp)", i)
+		}
 	}
 	if _, ok, _ := s.Progress(ctx, "s1"); ok {
 		t.Fatal("progress not cleared")
+	}
+}
+
+// TestClearProgressDurationToSettlement verifies that the worked-for duration
+// is measured from the turn's first progress update (started_at) to the moment
+// the turn ends (s.Now()), not to the last progress update (updated_at).
+//
+// One progress call at t0; ClearProgress at t0+10m → expect 10m.
+// The old code computed updated_at−started_at = 0 when there is only one
+// progress call (updated_at == started_at).
+func TestClearProgressDurationToSettlement(t *testing.T) {
+	s, now := newStore(t)
+	// Single progress call at t0: StartedAt = UpdatedAt = t0.
+	if _, err := s.SetProgress(ctx, "s1", "start", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Advance the clock by 10 minutes — this is when the turn ends (settled).
+	*now = now.Add(10 * time.Minute)
+	d, lines, err := s.ClearProgress(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d != 10*time.Minute {
+		t.Fatalf("worked-for duration = %v, want 10m (must measure first-progress→settlement, not first→last-update)", d)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("want 1 progress line, got %d", len(lines))
+	}
+	if lines[0].At.IsZero() {
+		t.Error("lines[0].At is zero (must be a real timestamp)")
+	}
+}
+
+// TestSetProgressReturnsLogError verifies that SetProgress surfaces the error
+// from the progress_log INSERT rather than discarding it silently.  We simulate
+// the failure by dropping the progress_log table before the call.
+func TestSetProgressReturnsLogError(t *testing.T) {
+	s, _ := newStore(t)
+	// Record one progress line to make the progress row exist (ON CONFLICT UPDATE path).
+	if _, err := s.SetProgress(ctx, "s1", "first", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Drop progress_log to make the INSERT fail on the next call.
+	if _, err := s.DB.ExecContext(ctx, "DROP TABLE progress_log"); err != nil {
+		t.Fatalf("drop progress_log: %v", err)
+	}
+	_, err := s.SetProgress(ctx, "s1", "second", 0, 0)
+	if err == nil {
+		t.Fatal("SetProgress must return the progress_log insert error, got nil")
+	}
+}
+
+// TestClearProgressAtomicOneCaller ensures that when multiple goroutines race
+// on ClearProgress for the same session, exactly one of them gets the progress
+// lines (the rest see nil).  The -race flag verifies that the implementation
+// accesses the DB without data races.
+func TestClearProgressAtomicOneCaller(t *testing.T) {
+	s, _ := newStore(t)
+	if _, err := s.SetProgress(ctx, "s1", "working", 1, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	const workers = 8
+	results := make([][]ProgressLine, workers)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range workers {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, lines, _ := s.ClearProgress(ctx, "s1")
+			results[i] = lines
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	got := 0
+	for _, lines := range results {
+		if len(lines) > 0 {
+			got++
+		}
+	}
+	if got != 1 {
+		t.Errorf("exactly 1 goroutine must get the progress lines; got %d", got)
+	}
+}
+
+// TestTrimProgressLog verifies that TrimProgressLog removes progress_log rows
+// for sessions that no longer exist, and leaves rows for live sessions alone.
+func TestTrimProgressLog(t *testing.T) {
+	s, _ := newStore(t)
+	// s1 is live; add a progress_log row via SetProgress.
+	if _, err := s.SetProgress(ctx, "s1", "ok", 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	// Insert an orphaned progress_log row for a session that doesn't exist.
+	// Temporarily disable FK enforcement so we can insert without a sessions row.
+	s.DB.Exec("PRAGMA foreign_keys = OFF")
+	s.DB.Exec("INSERT INTO progress_log(session_id, text, n, total, at) VALUES ('gone', 'old', 0, 0, 1)")
+	s.DB.Exec("PRAGMA foreign_keys = ON")
+
+	// Trim must remove orphaned rows but leave s1's row intact.
+	if err := s.TrimProgressLog(ctx); err != nil {
+		t.Fatalf("TrimProgressLog: %v", err)
+	}
+
+	var goneCount, s1Count int
+	s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 'gone'").Scan(&goneCount)
+	s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 's1'").Scan(&s1Count)
+	if goneCount != 0 {
+		t.Errorf("progress_log rows for vanished session 'gone': got %d, want 0", goneCount)
+	}
+	if s1Count != 1 {
+		t.Errorf("progress_log rows for live session 's1': got %d, want 1", s1Count)
 	}
 }

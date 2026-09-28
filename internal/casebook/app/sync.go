@@ -83,6 +83,31 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	for _, e := range scanErrs {
 		rep.ScanErrors = append(rep.ScanErrors, e.Error())
 	}
+
+	g, err := observe.LoadGitHub(config.CachePath())
+	if err != nil {
+		return rep, err
+	}
+	if !o.NoGitHub {
+		decisions, _ := a.Repo.Decisions()
+		var gr observe.RefreshReport
+		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
+		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
+		// Two-phase landed computation:
+		// 1. Git ancestry check for all non-default branches.
+		// 2. Fetch merged PRs only for repos that still have unlanded branches.
+		// 3. Merged-PR check for the remaining branches.
+		allRepos := observe.AllRepos(g)
+		observe.ComputeAncestorLanded(ctx, &snap, allRepos)
+		reposToCheck := observe.ReposWithUnlandedBranches(snap, allRepos)
+		g.MergedPRs = observe.FetchMergedPRs(ctx, a.Gh, reposToCheck, g.MergedPRs, a.Now())
+		observe.ComputeMergedPRLanded(ctx, &snap, g.MergedPRs)
+		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
+			return rep, err
+		}
+	}
+	// Encode the snapshot after landed computation so branch landed fields are
+	// persisted to machines/<machine>.json for other machines to read.
 	sb, err := observe.EncodeSnapshot(snap)
 	if err != nil {
 		return rep, err
@@ -96,20 +121,6 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	}
 	if err := a.journal(batch.Events, snaps); err != nil {
 		return rep, err
-	}
-
-	g, err := observe.LoadGitHub(config.CachePath())
-	if err != nil {
-		return rep, err
-	}
-	if !o.NoGitHub {
-		decisions, _ := a.Repo.Decisions()
-		var gr observe.RefreshReport
-		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
-		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
-		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
-			return rep, err
-		}
 	}
 	if err := a.render(g, snaps, &rep); err != nil {
 		return rep, err

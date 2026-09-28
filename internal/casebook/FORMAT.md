@@ -73,10 +73,106 @@ Never stored: command lines, commit or tag messages, titles, bodies, field value
 This machine's clones under its configured roots. Each clone has:
 - path, identifying GitHub repo, remotes (non-GitHub URLs redacted)
 - bare, dirty, stash count, local `core.hooksPath`, adopted (casebook's shims chained in)
-- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip
+- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip, tip_at (committer date), remote_tip (the tip SHA of the upstream remote branch at snapshot time; empty when no upstream is set or the remote branch is absent), landed_state ("yes" | "no" | "unknown" | "" = never checked), landed ("in <default>" or "merged #<n>", set only when landed_state=="yes"), landed_tip (tip SHA, set only when landed_state=="yes"), landed_how ("default-branch" or "merged-pr", set only when landed_state=="yes")
 - linked worktrees: path, branch, head, detached, dirty
 
 The file is deterministic and holds no timestamps of its own, so an unchanged machine produces no commit.
+
+## Standing rules: `rules/`
+
+One TOML file per rule at `rules/<id>.toml`. The `id` must match `^[a-z0-9-]+$`.
+
+```toml
+id = "landed-branches"
+name = "Landed branches → delete"
+status = "draft"                      # draft | active
+created_by = "court"                  # user login, or "pi:<session>"
+created_at = 2026-09-27T10:00:00Z
+edited_at = 2026-09-27T10:00:00Z     # last edit of the conditions or the proposal
+
+[[match]]                             # all conditions must hold
+field = "kind"
+op = "is"
+value = "branch"
+[[match]]
+field = "landed"
+op = "is"
+value = "all-machines"
+[[match]]
+field = "worktree"
+op = "is-not"
+value = "dirty"
+
+[propose]
+disposition = "delete"
+until = ""
+note = "landed ({how}); restore tip {tip}"
+
+[[exclude]]
+key = "branch:schuettc/galley@feat/headcount-licensing"
+reason = "keep for reference"
+by = "court"
+at = 2026-09-27T10:05:00Z
+```
+
+`status` is `draft` (no effect) or `active` (proposes matches after every sync). `edited_at` is updated on every edit of `[[match]]` or `[propose]`; §4.2 uses it to decide whether to re-propose items that were previously rejected.
+
+Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `rule <id> deactivated by <who>`.
+
+### Field vocabulary
+
+The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`.
+
+| Field | Type | Allowed values / notes |
+|---|---|---|
+| `kind` | enum | `repo` \| `pr` \| `issue` \| `branch` \| `worktree` |
+| `repo` | text | `owner/name` |
+| `owner` | text | GitHub login |
+| `relation` | enum | `outgoing` \| `incoming` \| `own` |
+| `status` | enum | `new` \| `to-apply` \| `waiting` \| `due` \| `done` \| `drift` \| `conflict` |
+| `direction` | enum | `outgoing` \| `incoming` \| `own` |
+| `author` | text | GitHub login |
+| `bot` | bool | `true` \| `false` |
+| `title` | text | supports `matches` (regex) |
+| `label` | text | label name |
+| `age` | duration | time since created; use `older-than`/`newer-than` |
+| `pushed` | duration | time since last push |
+| `updated` | duration | time since last update |
+| `landed` | enum | `all-machines` \| `some-machines` \| `none` \| `unknown` |
+| `landed-how` | text | `default-branch` \| `merged-pr`; multi-valued (`is` = contains; `in`/`not-in` check any element) |
+| `gone-upstream` | bool | branch merged and remote ref gone |
+| `unpushed` | bool | has local-only commits |
+| `dirty` | bool | has uncommitted changes |
+| `worktree` | enum | `dirty` \| `clean` \| `none` |
+| `archived` | bool | repo is archived on GitHub |
+| `fork` | bool | repo is a fork |
+| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` |
+| `open-issues` | count | number of open issues |
+| `has-decision` | bool | item has a recorded decision |
+| `policy-hit` | text | policy rule name, e.g. `outgoing-stale` |
+
+## Restore records: `restores/`
+
+One TSV file per UTC calendar date at `restores/<YYYY-MM-DD>.tsv`. The file is appended (not replaced) as destructive steps run; one line is written immediately before each destructive step executes, so the record is always present if the step ran.
+
+**Header line** (written once, on first creation of the file for that date):
+
+```
+key	action	before	restore-command
+```
+
+**Fields** (TAB-separated, one per line):
+
+| Field | Content |
+|---|---|
+| `key` | Item key (e.g. `branch:schuettc/hail@feat/x`) |
+| `action` | Apply action (e.g. `branch-delete-local`) |
+| `before` | Live value overwritten by the step (branch tip SHA, etc.) |
+| `restore-command` | Single shell command that reverses the step (e.g. `git -C '/path' branch 'feat/x' <tip>`) |
+
+**Commit subject**: `restore record for <key> (<action>)` — one commit per appended line.
+
+**Constraints**: tabs and newlines are refused in any field value; a step whose key or command contains a tab or newline fails before the precondition check.
 
 ## Not in the repository
 
@@ -87,4 +183,4 @@ So is `casebook serve`'s working state, `~/.local/state/casebook/casebook.db` (S
 ## Version history
 
 - **1** (casebook 0.1.x): decisions, journal, snapshots, views.
-- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Nothing else changes; the upgrade rewrites only `casebook.toml`.
+- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`.

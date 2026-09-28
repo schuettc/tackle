@@ -16,7 +16,7 @@ import (
 
 func newBus(t *testing.T) *Bus {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "casebook.db"))
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

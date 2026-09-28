@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -226,5 +227,242 @@ func TestRepoForPathAndHistory(t *testing.T) {
 	}
 	if count("repo:schuettc/hail") != 2 || count("branch:schuettc/hail@feat/client") != 1 || count("pr:schuettc/hail#3") != 1 || count("worktree:mbp:/w/hail-client") != 1 {
 		t.Errorf("history counts: repo %d branch %d pr %d worktree %d", count("repo:schuettc/hail"), count("branch:schuettc/hail@feat/client"), count("pr:schuettc/hail#3"), count("worktree:mbp:/w/hail-client"))
+	}
+}
+
+// TestItemsCarryAuthorTimesLabelsAndBody verifies that PR/issue/repo items
+// carry author, created_at, updated_at, labels, and body from the observation.
+func TestItemsCarryAuthorTimesLabelsAndBody(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	body900 := strings.Repeat("x", 900)
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", PushedAt: days(2), DefaultBranch: "main",
+			PRs: []observe.PRObs{{
+				Repo: "schuettc/hail", Number: 3, Author: "bob", State: "OPEN",
+				CreatedAt: days(10), UpdatedAt: days(5),
+				Labels: []string{"bug", "p0"},
+				Body:   body900[:600], // pre-truncated to 600
+				Title:  "fix nudge", URL: "https://github.com/schuettc/hail/pull/3",
+			}},
+			Issues: []observe.PRObs{{
+				Repo: "schuettc/hail", Number: 4, Author: "alice", State: "OPEN",
+				CreatedAt: days(8), UpdatedAt: days(3),
+				Labels: []string{"enhancement"},
+				Body:   "short body",
+			}},
+		},
+	}}
+	in := Input{
+		Now: now, GitHub: g, Snapshots: nil,
+		Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+		Seen: map[string]time.Time{},
+	}
+	r := Build(in)
+
+	pr := mustFind(t, r, "pr:schuettc/hail#3")
+	if pr.Author != "bob" {
+		t.Errorf("PR.Author = %q, want %q", pr.Author, "bob")
+	}
+	if !pr.CreatedAt.Equal(days(10)) {
+		t.Errorf("PR.CreatedAt = %v, want %v", pr.CreatedAt, days(10))
+	}
+	if !pr.UpdatedAt.Equal(days(5)) {
+		t.Errorf("PR.UpdatedAt = %v, want %v", pr.UpdatedAt, days(5))
+	}
+	if !slices.Equal(pr.Labels, []string{"bug", "p0"}) {
+		t.Errorf("PR.Labels = %v, want [bug p0]", pr.Labels)
+	}
+	if len(pr.Body) != 600 {
+		t.Errorf("PR.Body len = %d, want 600", len(pr.Body))
+	}
+
+	iss := mustFind(t, r, "issue:schuettc/hail#4")
+	if iss.Author != "alice" {
+		t.Errorf("issue.Author = %q, want %q", iss.Author, "alice")
+	}
+	if !slices.Equal(iss.Labels, []string{"enhancement"}) {
+		t.Errorf("issue.Labels = %v", iss.Labels)
+	}
+	if iss.Body != "short body" {
+		t.Errorf("issue.Body = %q", iss.Body)
+	}
+
+	// Repo gets UpdatedAt from PushedAt.
+	repo := mustFind(t, r, "repo:schuettc/hail")
+	if !repo.UpdatedAt.Equal(days(2)) {
+		t.Errorf("repo.UpdatedAt = %v, want %v", repo.UpdatedAt, days(2))
+	}
+}
+
+// TestLandedCombinedAcrossMachines verifies the cross-machine landed logic.
+func TestLandedCombinedAcrossMachines(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", DefaultBranch: "main"},
+	}}
+
+	// branchSnap builds a snapshot with one branch. landedState is "yes", "no",
+	// "unknown", or "" (never checked). LandedTip is set ONLY when state=="yes".
+	branchSnap := func(machine, landedState string) observe.Snapshot {
+		br := observe.Branch{Name: "feat", Tip: "abc", LandedState: landedState}
+		if landedState == "yes" {
+			br.Landed = "in main"
+			br.LandedHow = "default-branch"
+			br.LandedTip = "abc"
+		}
+		return observe.Snapshot{Version: 1, Machine: machine, Clones: []observe.Clone{{
+			Path: "/c/hail", Repo: "schuettc/hail",
+			Branches: []observe.Branch{br},
+		}}}
+	}
+
+	check := func(t *testing.T, label, wantLanded string, wantTips map[string]string, snaps ...observe.Snapshot) {
+		t.Helper()
+		in := Input{
+			Now: now, GitHub: g, Snapshots: snaps,
+			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+			Seen: map[string]time.Time{},
+		}
+		r := Build(in)
+		it := mustFind(t, r, "branch:schuettc/hail@feat")
+		if it.Landed != wantLanded {
+			t.Errorf("%s: Landed = %q, want %q", label, it.Landed, wantLanded)
+		}
+		// LandedTips must contain exactly the machines whose LandedState=="yes".
+		if len(it.LandedTips) != len(wantTips) {
+			t.Errorf("%s: LandedTips len = %d, want %d: got %v, want %v", label, len(it.LandedTips), len(wantTips), it.LandedTips, wantTips)
+		}
+		for m, tip := range wantTips {
+			if it.LandedTips[m] != tip {
+				t.Errorf("%s: LandedTips[%s] = %q, want %q", label, m, it.LandedTips[m], tip)
+			}
+		}
+	}
+
+	// both landed → "all-machines"; LandedTips has both machines.
+	check(t, "both landed",
+		"all-machines",
+		map[string]string{"mbp": "abc", "imac": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "yes"),
+	)
+
+	// A landed, B confirmed not landed → "some-machines"; only mbp in LandedTips.
+	check(t, "some-machines",
+		"some-machines",
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "no"),
+	)
+
+	// A landed, B unknown (ComputeLanded never ran) → "unknown"; only mbp in LandedTips.
+	check(t, "A landed B unknown",
+		"unknown",
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", ""),
+	)
+
+	// none landed, all checked → "none"; LandedTips empty.
+	check(t, "none",
+		"none",
+		map[string]string{},
+		branchSnap("mbp", "no"),
+		branchSnap("imac", "no"),
+	)
+
+	// A landed, B not landed, C unknown → "some-machines" (landed>0 && notLanded>0).
+	check(t, "some-machines with unknown",
+		"some-machines",
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "no"),
+		branchSnap("laptop", ""),
+	)
+
+	// none landed, one unknown → "unknown".
+	check(t, "none landed one unknown",
+		"unknown",
+		map[string]string{},
+		branchSnap("mbp", "no"),
+		branchSnap("imac", ""),
+	)
+}
+
+// TestFinishLandedCombinations is a table-driven test covering every combination
+// of {landed, notLanded, unknown} counts 0/1 for finishLanded cross-machine logic.
+//
+// Rules (spec §4.1):
+//   - all landed, no not, no unknown → "all-machines"
+//   - landed>0 && notLanded>0        → "some-machines" (regardless of unknown)
+//   - no landed, notLanded>0, no unknown → "none"
+//   - else                           → "unknown"
+func TestFinishLandedCombinations(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", DefaultBranch: "main"},
+	}}
+
+	// makeSnaps builds one snapshot per machine, with the given LandedState.
+	makeSnap := func(machine, landedState string) observe.Snapshot {
+		br := observe.Branch{Name: "feat", Tip: "t", LandedState: landedState}
+		if landedState == "yes" {
+			br.Landed = "in main"
+			br.LandedHow = "default-branch"
+			br.LandedTip = "t"
+		}
+		return observe.Snapshot{Version: 1, Machine: machine, Clones: []observe.Clone{{
+			Path: "/c/hail", Repo: "schuettc/hail",
+			Branches: []observe.Branch{br},
+		}}}
+	}
+	build := func(snaps []observe.Snapshot) Item {
+		in := Input{
+			Now: now, GitHub: g, Snapshots: snaps,
+			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+			Seen: map[string]time.Time{},
+		}
+		it, _ := Build(in).Find("branch:schuettc/hail@feat")
+		return it
+	}
+
+	tests := []struct {
+		name    string
+		landed  int // count of machines with LandedState=="yes"
+		not     int // count of machines with LandedState=="no"
+		unknown int // count of machines with LandedState=="" (never checked)
+		want    string
+	}{
+		// Single-machine cases.
+		{"1 landed, 0 not, 0 unknown", 1, 0, 0, "all-machines"},
+		{"0 landed, 1 not, 0 unknown", 0, 1, 0, "none"},
+		{"0 landed, 0 not, 1 unknown", 0, 0, 1, "unknown"},
+		// Two-machine mixed cases.
+		{"1 landed, 1 not, 0 unknown", 1, 1, 0, "some-machines"},
+		{"1 landed, 0 not, 1 unknown", 1, 0, 1, "unknown"},
+		{"0 landed, 1 not, 1 unknown", 0, 1, 1, "unknown"},
+		// Three-machine: landed + not + unknown → some-machines (landed wins over unknown).
+		{"1 landed, 1 not, 1 unknown", 1, 1, 1, "some-machines"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var snaps []observe.Snapshot
+			for i := 0; i < tt.landed; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("landed%d", i), "yes"))
+			}
+			for i := 0; i < tt.not; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("not%d", i), "no"))
+			}
+			for i := 0; i < tt.unknown; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("unknown%d", i), ""))
+			}
+			it := build(snaps)
+			if it.Landed != tt.want {
+				t.Errorf("Landed = %q, want %q", it.Landed, tt.want)
+			}
+		})
 	}
 }

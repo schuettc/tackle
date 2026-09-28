@@ -143,16 +143,19 @@ func inspect(ctx context.Context, dir string) (Clone, error) {
 		c.Adopted = true
 		c.LocalHooksPath = ""
 	}
-	branches, err := gitx.Run(ctx, dir, "for-each-ref", "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(objectname)", "refs/heads")
+	branches, err := gitx.Run(ctx, dir, "for-each-ref", "--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(objectname)%09%(committerdate:unix)", "refs/heads")
 	if err != nil {
 		return c, err
 	}
 	for _, line := range strings.Split(branches, "\n") {
 		f := strings.Split(line, "\t")
-		if len(f) != 4 {
+		if len(f) != 5 {
 			continue
 		}
 		b := Branch{Name: f[0], Upstream: f[1], Tip: f[3]}
+		if ts, err := strconv.ParseInt(strings.TrimSpace(f[4]), 10, 64); err == nil {
+			b.TipAt = time.Unix(ts, 0).UTC()
+		}
 		for _, part := range strings.Split(f[2], ",") {
 			part = strings.TrimSpace(part)
 			if n, ok := strings.CutPrefix(part, "ahead "); ok {
@@ -160,6 +163,14 @@ func inspect(ctx context.Context, dir string) (Clone, error) {
 			}
 			if part == "gone" {
 				b.Gone = true
+			}
+		}
+		// The upstream remote-tracking tip, when an upstream exists and is not
+		// gone. Plan-time compare-and-delete uses this as the remote step's
+		// expected tip; empty means no remote delete step is planned.
+		if b.Upstream != "" && !b.Gone {
+			if rt, err := gitx.Run(ctx, dir, "rev-parse", b.Upstream); err == nil {
+				b.RemoteTip = strings.TrimSpace(rt)
 			}
 		}
 		if out, err := gitx.Run(ctx, dir, "log", "--format=%ct", "-n", strconv.Itoa(maxUnpushed), "refs/heads/"+f[0], "--not", "--remotes"); err == nil && out != "" {
