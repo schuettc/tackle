@@ -876,6 +876,17 @@ func (s *Store) MarkUndone(ctx context.Context, stepID int64) error {
 	return nil
 }
 
+// ReleaseUndoClaim clears an undo claim on a step (resets undone_at to 0) and
+// records a failure detail. It is called when the restore command fails after a
+// successful MarkUndone, so Court can see why the restore failed and retry.
+func (s *Store) ReleaseUndoClaim(ctx context.Context, stepID int64, detail string) error {
+	now := s.Now()
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET undone_at = 0, detail = ?, updated_at = ? WHERE id = ?`,
+		detail, ms(now), stepID)
+	return err
+}
+
 // RequeueRunningCasebookSteps moves this job's casebook-lane steps that were
 // left in the running state back to pending, so a restarted serve can re-run
 // them safely. This is sound because every casebook step re-checks the world

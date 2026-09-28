@@ -457,10 +457,23 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 	// Use the runner's RunGit for casebook-lane restores (allows test injection).
 	runGit := s.Runner.RunGit
 
+	// Claim the undo BEFORE executing the restore. MarkUndone is a one-time
+	// compare-and-swap (WHERE undone_at = 0): only one concurrent caller wins;
+	// the other gets a conflict so the restore command never runs twice.
+	if err := s.Apply.MarkUndone(ctx, step.ID); err != nil {
+		reply(w, nil, httpError{
+			code: http.StatusConflict,
+			msg:  fmt.Sprintf("step %d is already being undone", step.ID),
+		})
+		return
+	}
+
 	var sent bool
 	if step.Lane == apply.LaneAgent {
 		// Agent-lane: unarchive/reopen goes to the agent as a message.
 		if job.Session == "" {
+			// Release the claim so Court can retry after fixing the session.
+			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "no session for agent-lane undo")
 			reply(w, nil, httpError{
 				code: http.StatusConflict,
 				msg:  fmt.Sprintf("job %d has no session; cannot send undo to agent", job.ID),
@@ -470,10 +483,12 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		body := fmt.Sprintf("casebook undo for job %d, step %d [%s]:\nRun: %s", job.ID, step.ID, step.Key, step.Restore)
 		thread, err := s.Queue.NewThread(ctx, job.Session, fmt.Sprintf("undo:job:%d:step:%d", job.ID, step.ID))
 		if err != nil {
+			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "create thread for undo failed: "+err.Error())
 			reply(w, nil, bad("create thread for undo: %v", err))
 			return
 		}
 		if _, err := s.Queue.Post(ctx, thread.ID, body, deliver.Attached{Job: strconv.FormatInt(job.ID, 10)}, false); err != nil {
+			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "post undo message failed: "+err.Error())
 			reply(w, nil, bad("post undo message: %v", err))
 			return
 		}
@@ -481,17 +496,13 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		sent = true
 	} else {
 		// Casebook-lane git restore: run locally via the runner's RunGit.
+		// If the restore fails, release the claim so Court can retry.
 		if err := runRestoreCommand(ctx, step.Restore, runGit); err != nil {
+			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "restore failed: "+err.Error())
 			reply(w, nil, bad("restore command failed: %v", err))
 			return
 		}
 		sent = false
-	}
-
-	// Record undo on the step.
-	if err := s.Apply.MarkUndone(ctx, step.ID); err != nil {
-		reply(w, nil, bad("mark undone: %v", err))
-		return
 	}
 
 	s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": step.JobID, "undone": true, "sent": sent})

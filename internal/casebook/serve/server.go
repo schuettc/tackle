@@ -56,15 +56,16 @@ type Server struct {
 	rebuildMu sync.Mutex               // serializes rebuild: one at a time, including rule evaluation
 	waiters   map[string]chan struct{} // session → wake
 
-	laneMu      sync.Mutex        // guards laneRun
-	laneRun     map[int64]bool    // job id → a casebook lane is running for it
-	onLaneStart func(jobID int64) // test hook: called once per lane that actually starts
-	activity    atomic.Int64      // unix ms of the last API request
-	streams     atomic.Int32      // open page event streams (connected tabs)
-	streamWG    sync.WaitGroup    // Run waits for streams to end before closing the database
-	rebuilds    atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
-	life        context.Context   // Run's context; done while shutting down
-	stop        context.CancelFunc
+	laneMu           sync.Mutex        // guards laneRun
+	laneRun          map[int64]bool    // job id → a casebook lane is running for it
+	onLaneStart      func(jobID int64) // test hook: called once per lane that actually starts
+	onBeforeLaneExit func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
+	activity         atomic.Int64      // unix ms of the last API request
+	streams          atomic.Int32      // open page event streams (connected tabs)
+	streamWG         sync.WaitGroup    // Run waits for streams to end before closing the database
+	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
+	life             context.Context   // Run's context; done while shutting down
+	stop             context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -199,17 +200,35 @@ func (s *Server) startCasebookLane(job apply.Job) {
 	}
 
 	go func() {
-		defer func() {
-			s.laneMu.Lock()
-			delete(s.laneRun, job.ID)
-			s.laneMu.Unlock()
-		}()
 		bgCtx := s.laneCtx()
 		env := s.buildEnv()
 		pauseFn := func() bool {
 			j, err := s.Apply.Get(bgCtx, job.ID)
 			return err == nil && j.Paused
 		}
+		defer func() {
+			// Lost-wakeup guard: a resume that arrived while this lane was still
+			// registered (laneRun[id]=true) would have been a no-op. After we
+			// clear the entry, re-check whether the job has pending casebook
+			// steps and is not paused; if so, restart a new lane so those steps
+			// are not left stranded.
+			if s.onBeforeLaneExit != nil {
+				s.onBeforeLaneExit(job.ID)
+			}
+			s.laneMu.Lock()
+			delete(s.laneRun, job.ID)
+			s.laneMu.Unlock()
+			if j, err := s.Apply.Get(bgCtx, job.ID); err == nil {
+				if !j.Paused && (j.State == apply.JobRunning || j.State == apply.JobApproved) {
+					for _, st := range j.Steps {
+						if st.Lane == apply.LaneCasebook && st.State == apply.StepPending {
+							s.startCasebookLane(j)
+							break
+						}
+					}
+				}
+			}
+		}()
 		if err := s.Apply.RunCasebookLane(bgCtx, job, s.Runner, env, pauseFn); err != nil {
 			fmt.Fprintf(os.Stderr, "casebook serve: RunCasebookLane job %d: %v\n", job.ID, err)
 		}
