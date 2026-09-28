@@ -199,7 +199,7 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 
 // tidyResult is the JSON the helper's --tidy mode prints on stdout.
 type tidyResult struct {
-	Source  string   `json:"source"`
+	Source  *string  `json:"source"` // null: the helper refused (not UTF-8)
 	Removed []string `json:"removed"`
 }
 
@@ -248,5 +248,8 @@ func Tidy(root, relpath string, src []byte) ([]byte, []string, error) {
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
 		return nil, nil, fmt.Errorf("extract/ts: decode helper --tidy output %q: %w", stdout.Bytes(), err)
 	}
-	return []byte(result.Source), result.Removed, nil
+	if result.Source == nil {
+		return src, nil, nil
+	}
+	return []byte(*result.Source), result.Removed, nil
 }

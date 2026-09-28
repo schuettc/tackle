@@ -496,7 +496,13 @@ function tidyMain(args) {
   const chunks = [];
   process.stdin.on("data", (c) => chunks.push(c));
   process.stdin.on("end", () => {
-    const src = Buffer.concat(chunks).toString("utf8");
+    const buf = Buffer.concat(chunks);
+    const src = buf.toString("utf8");
+    // Not valid UTF-8: refuse (null = "no change"); never write U+FFFD back.
+    if (!Buffer.from(src, "utf8").equals(buf)) {
+      console.log(JSON.stringify({ source: null, removed: [] }));
+      return;
+    }
     const { source, removed } = tidySource(src, relpath);
     console.log(JSON.stringify({ source, removed }));
   });

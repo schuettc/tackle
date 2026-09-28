@@ -92,6 +92,7 @@ def tidy_source(data):
     "module.name" (or bare "name" for plain `import name`) strings for
     every alias dropped. Every byte outside the changed import statements
     is left exactly as it was, including each line's own line ending.
+    A source that is not valid UTF-8 returns (None, []): no change.
     `from x import *` and `from __future__ import ...` are never touched;
     a statement left with no used aliases is deleted whole; a statement
     with some unused aliases is rewritten keeping only the used ones. If
@@ -110,7 +111,8 @@ def tidy_source(data):
     try:
         src = data.decode("utf-8")
     except UnicodeDecodeError:
-        return data.decode("utf-8", errors="replace"), []
+        # Not UTF-8: refuse (None = "no change"); never write U+FFFD back.
+        return None, []
     try:
         tree = ast.parse(src)
     except Exception:

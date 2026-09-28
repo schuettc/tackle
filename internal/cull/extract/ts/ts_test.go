@@ -373,3 +373,17 @@ func TestTsTidySkipsImportSharingALine(t *testing.T) {
 		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
 	}
 }
+
+// TestTsTidyRefusesNonUTF8: a file that is not valid UTF-8 is returned
+// byte-for-byte (M-2).
+func TestTsTidyRefusesNonUTF8(t *testing.T) {
+	requireTS(t)
+	src := "import { a } from \"./a\";\n\ntest(\"x\", () => {\n  expect(\"\xe9\").toBe(\"\xe9\");\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}

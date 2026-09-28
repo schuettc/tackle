@@ -461,3 +461,17 @@ func TestPyTidySkipsImportSharingALine(t *testing.T) {
 		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
 	}
 }
+
+// TestPyTidyRefusesNonUTF8: a latin-1 file is returned byte-for-byte,
+// never decoded with U+FFFD replacements (M-2).
+func TestPyTidyRefusesNonUTF8(t *testing.T) {
+	requirePython3(t)
+	src := "# -*- coding: latin-1 -*-\nimport os\n\n\ndef test_x():\n    assert '\xe9'\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}
