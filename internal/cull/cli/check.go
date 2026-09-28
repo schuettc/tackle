@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/jev"
@@ -26,6 +28,7 @@ var checkFlags = flags("check", "cull check [path] [--diff base] [--json] [--dry
 		fs.Bool("json", false, "print the full report as JSON instead of a table")
 		fs.Bool("dry-run", false, "print each state that would be sent; send nothing")
 		fs.Bool("refresh", false, "ignore cached answers")
+		fs.String("group", "", "verify a group id's rewrite (from the last check) instead of judging the suite")
 	})
 
 func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
@@ -44,8 +47,10 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		}
 		dryRun := boolFlag(fs, "dry-run")
 		jsonMode := boolFlag(fs, "json")
+		groupID := str(fs, "group")
 
-		if _, _, err := check.ResolveConfig(path, dryRun); err != nil {
+		root, _, err := check.ResolveConfig(path, dryRun)
+		if err != nil {
 			return tools.Exitf(2, "%v", err)
 		}
 
@@ -60,6 +65,12 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
+
+		if groupID != "" {
+			return runCheckGroup(ctx, ev, root, groupID, check.Options{
+				DryRun: dryRun, Refresh: boolFlag(fs, "refresh"), Stdout: out, Stderr: errw,
+			}, jsonMode, out)
+		}
 
 		report, err := check.Run(ctx, ev, check.Options{
 			Path: path, Diff: str(fs, "diff"), DryRun: dryRun, Refresh: boolFlag(fs, "refresh"), Stdout: out, Stderr: errw,
@@ -94,4 +105,58 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		}
 		return nil
 	}
+}
+
+// runCheckGroup runs `cull check --group <id>`: verifies an agent's
+// rewrite of one near-duplicate group into a table-driven test, prints the
+// result, and maps it to an exit code (0 all four checks passed, 1 one or
+// more failed, 2 error).
+func runCheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, opt check.Options, jsonMode bool, out io.Writer) error {
+	gc, err := check.CheckGroup(ctx, ev, root, groupID, opt)
+	if errors.Is(err, jev.ErrUnauthorized) {
+		return tools.Exitf(2, "%v", err).WithHint("creel exec TYPESAFE_API_KEY -- cull check ...")
+	}
+	if err != nil {
+		return tools.Exitf(2, "%v", err)
+	}
+
+	if jsonMode {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(gc); err != nil {
+			return err
+		}
+	} else {
+		writeGroupCheck(out, gc)
+	}
+
+	if !gc.OK {
+		return tools.Exitf(1, "group %s: not verified (originals_gone=%v, new=%d, missing_rows=%d, flagged=%d)",
+			groupID, gc.OriginalsGone, len(gc.NewTests), len(gc.MissingRows), len(gc.Flagged))
+	}
+	return nil
+}
+
+// writeGroupCheck renders a GroupCheck as a human-readable table.
+func writeGroupCheck(w io.Writer, gc check.GroupCheck) {
+	fmt.Fprintf(w, "%s  %s\n", gc.ID, gc.File)
+	fmt.Fprintf(w, "  originals gone: %v\n", gc.OriginalsGone)
+	if len(gc.StillPresent) > 0 {
+		fmt.Fprintf(w, "    still present: %s\n", strings.Join(gc.StillPresent, ", "))
+	}
+	fmt.Fprintf(w, "  new tests: %s\n", strings.Join(gc.NewTests, ", "))
+	if len(gc.MissingRows) > 0 {
+		fmt.Fprintf(w, "  missing rows: %s\n", strings.Join(gc.MissingRows, ", "))
+	}
+	if len(gc.Flagged) > 0 {
+		fmt.Fprintf(w, "  flagged: %s\n", strings.Join(gc.Flagged, ", "))
+	}
+	for _, r := range gc.Verify {
+		status := "ok"
+		if !r.OK {
+			status = "fail"
+		}
+		fmt.Fprintf(w, "  verify %s: %s\n", status, r.Command)
+	}
+	fmt.Fprintf(w, "  ok: %v\n", gc.OK)
 }
