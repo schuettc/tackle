@@ -30,11 +30,11 @@ type Command struct {
 
 // Result is the outcome of running one Command.
 type Result struct {
-	Command    string
-	ExitCode   int
-	OK         bool
-	TimedOut   bool
-	OutputTail string
+	Command    string `json:"command"`
+	ExitCode   int    `json:"exit_code"`
+	OK         bool   `json:"ok"`
+	TimedOut   bool   `json:"timed_out"`
+	OutputTail string `json:"output_tail"`
 }
 
 // pythonProjectMarkers are the files that mark a directory as a Python

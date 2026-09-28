@@ -31,8 +31,8 @@ type Target struct {
 
 // Refusal is one test or id apply will not touch, and why.
 type Refusal struct {
-	ID     string
-	Reason string
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
 }
 
 // Load reads <root>/.cull/last.json, the report `cull check` wrote.
