@@ -53,26 +53,43 @@ func (r TestResult) MarshalJSON() ([]byte, error) {
 
 // GroupResult is one judged near-duplicate group.
 type GroupResult struct {
-	ID             string   `json:"id"`
-	File           string   `json:"file"`
-	Members        []string `json:"members"`
-	Verdict        string   `json:"verdict,omitempty"`
-	Rule           string   `json:"rule,omitempty"`
-	Reasons        []string `json:"reasons,omitempty"`
-	ExactDuplicate bool     `json:"exact_duplicate,omitempty"`
-	Model          string   `json:"model,omitempty"`
-	Err            string   `json:"err,omitempty"`
+	ID             string     `json:"id"`
+	File           string     `json:"file"`
+	Members        []string   `json:"members"`
+	MemberHashes   []string   `json:"member_hashes"`
+	Rows           [][]string `json:"rows"`
+	Verdict        string     `json:"verdict,omitempty"`
+	Rule           string     `json:"rule,omitempty"`
+	Reasons        []string   `json:"reasons,omitempty"`
+	ExactDuplicate bool       `json:"exact_duplicate,omitempty"`
+	Model          string     `json:"model,omitempty"`
+	Err            string     `json:"err,omitempty"`
+}
+
+// FileTest is one test extracted from a file, judged or not: just enough
+// to prove later whether it is still there and unchanged.
+type FileTest struct {
+	ID   string `json:"id"`
+	Hash string `json:"hash"`
+}
+
+// FileInfo is one extracted file's inventory: its content hash (so apply
+// can tell if it changed since check) and every test check found in it.
+type FileInfo struct {
+	SHA256 string     `json:"sha256"`
+	Tests  []FileTest `json:"tests"`
 }
 
 // Report is everything one `cull check` run produced.
 type Report struct {
-	Root    string            `json:"root"`
-	Mode    string            `json:"mode"` // "suite" or "diff"
-	Base    string            `json:"base,omitempty"`
-	Tests   []TestResult      `json:"tests"`
-	Groups  []GroupResult     `json:"groups"`
-	Skipped []extract.Skipped `json:"skipped,omitempty"`
-	Summary map[string]int    `json:"summary"`
+	Root    string              `json:"root"`
+	Mode    string              `json:"mode"` // "suite" or "diff"
+	Base    string              `json:"base,omitempty"`
+	Tests   []TestResult        `json:"tests"`
+	Groups  []GroupResult       `json:"groups"`
+	Files   map[string]FileInfo `json:"files"`
+	Skipped []extract.Skipped   `json:"skipped,omitempty"`
+	Summary map[string]int      `json:"summary"`
 }
 
 // HasActions reports whether the report has any test to cut or group to

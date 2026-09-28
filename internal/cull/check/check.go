@@ -3,6 +3,8 @@ package check
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -118,6 +120,11 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
 	}
 
+	fileInv, err := fileInventory(root, allCases)
+	if err != nil {
+		return Report{}, err
+	}
+
 	keptCases := allCases
 	groups := similar.Groups(allCases)
 	if mode == "diff" {
@@ -149,7 +156,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		printDryRunStates(stdout, keptCases, groups, cfg.MaxContextBytes)
 		return Report{
 			Root: root, Mode: mode, Base: opt.Diff,
-			Skipped: skipped, Summary: summarize(nil, nil, skipped),
+			Files: fileInv, Skipped: skipped, Summary: summarize(nil, nil, skipped),
 		}, nil
 	}
 
@@ -201,10 +208,18 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	groupOut := make([]GroupResult, len(groups))
 	for i, g := range groups {
 		members := make([]string, len(g.Tests))
+		memberHashes := make([]string, len(g.Tests))
+		bodies := make([]string, len(g.Tests))
 		for j, m := range g.Tests {
 			members[j] = m.ID
+			memberHashes[j] = m.Hash
+			bodies[j] = m.Body
 		}
-		gr := GroupResult{ID: g.ID, File: g.File, Members: members, Model: groupJudged[i].Model, Err: groupJudged[i].Err}
+		rows := similar.Distinguishing(g.Lang, bodies)
+		gr := GroupResult{
+			ID: g.ID, File: g.File, Members: members, MemberHashes: memberHashes, Rows: rows,
+			Model: groupJudged[i].Model, Err: groupJudged[i].Err,
+		}
 		if groupJudged[i].Err == "" {
 			res := groupResults[i]
 			gr.Verdict, gr.Rule, gr.Reasons, gr.ExactDuplicate = string(res.Verdict), res.Rule, res.Reasons, res.ExactDuplicate
@@ -214,7 +229,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 
 	report := Report{
 		Root: root, Mode: mode, Base: opt.Diff,
-		Tests: tests, Groups: groupOut, Skipped: skipped,
+		Tests: tests, Groups: groupOut, Files: fileInv, Skipped: skipped,
 		Summary: summarize(tests, groupOut, skipped),
 	}
 	if err := writeLastJSON(root, report); err != nil {
@@ -268,6 +283,31 @@ func subPath(root, p string) (string, error) {
 		return "", nil
 	}
 	return rel, nil
+}
+
+// fileInventory builds the per-file inventory (content hash and every
+// extracted test, judged or not) that `cull apply` and `cull check
+// --group` later use to prove what changed since this check: every file
+// extracted in the run, keyed by the same relpath used in TestCase.File.
+func fileInventory(root string, allCases []cases.TestCase) (map[string]FileInfo, error) {
+	testsByFile := map[string][]FileTest{}
+	var fileOrder []string
+	for _, tc := range allCases {
+		if _, ok := testsByFile[tc.File]; !ok {
+			fileOrder = append(fileOrder, tc.File)
+		}
+		testsByFile[tc.File] = append(testsByFile[tc.File], FileTest{ID: tc.ID, Hash: tc.Hash})
+	}
+	files := make(map[string]FileInfo, len(fileOrder))
+	for _, f := range fileOrder {
+		data, err := os.ReadFile(filepath.Join(root, f))
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(data)
+		files[f] = FileInfo{SHA256: hex.EncodeToString(sum[:]), Tests: testsByFile[f]}
+	}
+	return files, nil
 }
 
 // extractAll runs each registered extractor once over the files it matches,

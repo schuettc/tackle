@@ -3,6 +3,8 @@ package check
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -492,6 +494,120 @@ func TestCheckNoTypescriptReported(t *testing.T) {
 // TestCheckMonorepoNoRootGoMod: a Go module in a subdirectory plus a Python
 // test at the root, with no root go.mod — both are extracted, and a stray
 // Go test with no go.mod is skipped, not fatal.
+// TestReportFilesInventory: on a suite check, every extracted test appears
+// under its file in Files, with its id and hash, and the file's sha256
+// matches the file's actual bytes.
+func TestReportFilesInventory(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	content := "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n"
+	writeFile(t, root, "pkg/calc_test.go", content)
+
+	f := &fakeEval{}
+	report, err := Run(context.Background(), f, Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, ok := report.Files["pkg/calc_test.go"]
+	if !ok {
+		t.Fatalf("Files = %+v, want pkg/calc_test.go present", report.Files)
+	}
+	sum := sha256.Sum256([]byte(content))
+	if fi.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("sha256 = %q, want %q", fi.SHA256, hex.EncodeToString(sum[:]))
+	}
+	names := map[string]string{} // id -> hash
+	for _, ft := range fi.Tests {
+		names[ft.ID] = ft.Hash
+	}
+	if len(names) != 2 {
+		t.Fatalf("fi.Tests = %+v, want 2 entries", fi.Tests)
+	}
+	for _, tr := range report.Tests {
+		h, ok := names[tr.ID]
+		if !ok || h != tr.Hash || h == "" {
+			t.Errorf("file inventory for %s = %q, want %q", tr.ID, h, tr.Hash)
+		}
+	}
+}
+
+// TestDiffModeInventoryHasUnjudgedTests: in diff mode, an untouched sibling
+// test in a touched file shows up in Files (inventory), even though it is
+// not in Tests (not judged).
+func TestDiffModeInventoryHasUnjudgedTests(t *testing.T) {
+	dir, cfg := newGitRepo(t)
+	goModule(t, dir)
+	withEgress(t, dir)
+	writeFile(t, dir, "pkg/calc_test.go",
+		"package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n")
+	runGit(t, dir, cfg, "add", ".")
+	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+
+	// Only TestA's body changes; TestB is untouched.
+	writeFile(t, dir, "pkg/calc_test.go",
+		"package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 99\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n")
+
+	f := &fakeEval{}
+	report, err := Run(context.Background(), f, Options{Path: dir, Diff: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Tests) != 1 || report.Tests[0].Name != "TestA" {
+		t.Fatalf("tests = %+v, want only TestA judged", report.Tests)
+	}
+	fi, ok := report.Files["pkg/calc_test.go"]
+	if !ok {
+		t.Fatalf("Files = %+v, want pkg/calc_test.go present", report.Files)
+	}
+	hasB := false
+	for _, ft := range fi.Tests {
+		if strings.HasSuffix(ft.ID, ":TestB") {
+			hasB = true
+		}
+	}
+	if !hasB {
+		t.Errorf("file tests = %+v, want TestB present though not judged", fi.Tests)
+	}
+}
+
+// TestGroupRowsRecorded: a consolidate group's MemberHashes and Rows are
+// aligned with Members, and Rows carries the literal values that tell the
+// members apart.
+func TestGroupRowsRecorded(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	src := "package pkg\n\n" +
+		"func TestA1(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tx := \"one\"\n\t_ = x\n\ty := 1\n\t_ = y\n}\n\n" +
+		"func TestA2(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tx := \"two\"\n\t_ = x\n\ty := 2\n\t_ = y\n}\n"
+	writeFile(t, root, "pkg/calc_test.go", src)
+
+	f := &fakeEval{consolidate: map[string]bool{"TestA1": true, "TestA2": true}}
+	report, err := Run(context.Background(), f, Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Groups) != 1 {
+		t.Fatalf("groups = %+v, want 1", report.Groups)
+	}
+	g := report.Groups[0]
+	if len(g.Members) != 2 || len(g.MemberHashes) != len(g.Members) || len(g.Rows) != len(g.Members) {
+		t.Fatalf("group = %+v, want MemberHashes/Rows aligned with Members", g)
+	}
+	for i, h := range g.MemberHashes {
+		if h == "" {
+			t.Errorf("MemberHashes[%d] empty", i)
+		}
+	}
+	for i, row := range g.Rows {
+		if len(row) == 0 {
+			t.Errorf("Rows[%d] = %v, want non-empty (a distinguishing literal)", i, row)
+		}
+	}
+}
+
 func TestCheckMonorepoNoRootGoMod(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")
