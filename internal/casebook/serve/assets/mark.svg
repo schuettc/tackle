@@ -11,10 +11,10 @@
   <path d="M32 18V52" stroke="#d98f66" stroke-width="4.4"/>
   <!-- one neutral rule on the left page -->
   <path d="M15 29H25" stroke="#9aa0ab" stroke-width="5" stroke-linecap="round"/>
-  <!-- tick on the right page — writes itself (stroke-dashoffset 22→0) then fades.
-       stroke-dasharray=22 ≥ path length (≈21.5 px); resting: dashoffset=0, opacity=1. -->
-  <path d="M37 33L42 38L50 26" fill="none" stroke="#d98f66" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="22" stroke-dashoffset="0">
-    <animate attributeName="stroke-dashoffset" values="22;0;0" keyTimes="0;0.16;1" dur="7s" repeatCount="indefinite"/>
+  <!-- tick on the right page — writes itself (stroke-dashoffset 23→0) then fades.
+       dasharray "22 30" (dash ≥ path length ≈21.5, gap longer than the path) and a starting offset of 23 keep the round cap off the page until the tick draws; resting: dashoffset=0, opacity=1. -->
+  <path d="M37 33L42 38L50 26" fill="none" stroke="#d98f66" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="22 30" stroke-dashoffset="0">
+    <animate attributeName="stroke-dashoffset" values="23;0;0" keyTimes="0;0.16;1" dur="7s" repeatCount="indefinite"/>
     <animate attributeName="opacity" values="1;1;1;0" keyTimes="0;0.86;0.97;1" dur="7s" repeatCount="indefinite"/>
   </path>
 </svg>
