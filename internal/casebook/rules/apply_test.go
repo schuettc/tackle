@@ -273,3 +273,57 @@ func TestEvaluateActivePerItemNote(t *testing.T) {
 		}
 	}
 }
+
+// TestEvaluateActiveReturnsErrorOnProposeFailure verifies that when
+// props.Propose returns errors (e.g. invalid disposition that passes rule
+// status check but fails Propose's own item.Decision.Validate), EvaluateActive
+// surfaces those errors rather than silently discarding them.
+// Before fix: EvaluateActive discards the []error from Propose ("ps, _") →
+// returns (0, nil); test FAILS. After fix: returns a non-nil error → PASS.
+func TestEvaluateActiveReturnsErrorOnProposeFailure(t *testing.T) {
+	ctx := context.Background()
+	d := applyDB(t)
+	s := applyStore(d)
+
+	// Build a rule whose disposition is intentionally invalid. We do NOT call
+	// r.Validate() here (EvaluateActive doesn't validate either), so the rule
+	// passes the StatusActive check and reaches props.Propose, which then
+	// fails its own item.Decision.Validate → returns []error.
+	r := Rule{
+		ID:       "bad-disp-rule",
+		Name:     "Bad Disposition",
+		Status:   StatusActive,
+		EditedAt: applyTestNow.Add(-24 * time.Hour),
+		Match:    []Condition{{Field: "kind", Op: "is", Value: "repo"}},
+		Propose:  Action{Disposition: "not-a-real-disposition"},
+	}
+	res := buildResult(repoItem("repo:schuettc/hail"))
+
+	_, err := EvaluateActive(ctx, []Rule{r}, res, applyTestNow, s)
+	if err == nil {
+		t.Fatal("EvaluateActive: expected non-nil error when Propose fails (invalid disposition), got nil — Propose errors are being silently discarded")
+	}
+}
+
+// TestProposeOnceReturnsErrorOnProposeFailure is the ProposeOnce equivalent:
+// when the disposition is invalid, ProposeOnce must return the Propose error.
+func TestProposeOnceReturnsErrorOnProposeFailure(t *testing.T) {
+	ctx := context.Background()
+	d := applyDB(t)
+	s := applyStore(d)
+
+	r := Rule{
+		ID:       "bad-disp-once",
+		Name:     "Bad Disposition Once",
+		Status:   StatusDraft,
+		EditedAt: applyTestNow.Add(-24 * time.Hour),
+		Match:    []Condition{{Field: "kind", Op: "is", Value: "repo"}},
+		Propose:  Action{Disposition: "not-a-real-disposition"},
+	}
+	res := buildResult(repoItem("repo:schuettc/hail"))
+
+	_, err := ProposeOnce(ctx, r, res, applyTestNow, s)
+	if err == nil {
+		t.Fatal("ProposeOnce: expected non-nil error when Propose fails (invalid disposition), got nil — Propose errors are being silently discarded")
+	}
+}

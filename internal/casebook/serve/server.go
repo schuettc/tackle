@@ -49,14 +49,15 @@ type Server struct {
 	Wait       time.Duration
 	WatchEvery time.Duration
 
-	mu       sync.Mutex
-	waiters  map[string]chan struct{} // session → wake
-	activity atomic.Int64             // unix ms of the last API request
-	streams  atomic.Int32             // open page event streams (connected tabs)
-	streamWG sync.WaitGroup           // Run waits for streams to end before closing the database
-	rebuilds atomic.Int32             // count of rebuild calls; exposed for tests to verify no loops
-	life     context.Context          // Run's context; done while shutting down
-	stop     context.CancelFunc
+	mu        sync.Mutex
+	rebuildMu sync.Mutex               // serializes rebuild: one at a time, including rule evaluation
+	waiters   map[string]chan struct{} // session → wake
+	activity  atomic.Int64             // unix ms of the last API request
+	streams   atomic.Int32             // open page event streams (connected tabs)
+	streamWG  sync.WaitGroup           // Run waits for streams to end before closing the database
+	rebuilds  atomic.Int32             // count of rebuild calls; exposed for tests to verify no loops
+	life      context.Context          // Run's context; done while shutting down
+	stop      context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -162,14 +163,28 @@ func (s *Server) repoHead(ctx context.Context) string {
 // serve evaluates rules on its first build. The CLI sync never opens the
 // database and never evaluates rules (spec
 // §4.2 updated: rules run in serve, not in casebook sync).
+//
+// rebuild is serialized by rebuildMu so that rule evaluation never runs twice
+// at once. Rule-error notices are set atomically with the rebuilt result under
+// one Index lock (via Index.set), so a concurrent reader never sees a new Head
+// without the accompanying notices.
 func (s *Server) rebuild(ctx context.Context) error {
+	// Bug 2 fix: serialize rebuilds so rule evaluation never overlaps.
+	s.rebuildMu.Lock()
+	defer s.rebuildMu.Unlock()
+
 	s.rebuilds.Add(1)
-	if err := s.Index.rebuild(ctx, s.build, s.repoHead(ctx), s.Now()); err != nil {
+
+	// Build the engine result first (outside any Index lock).
+	now := s.Now()
+	head := s.repoHead(ctx)
+	res, err := s.build(ctx)
+	if err != nil {
 		return err
 	}
 
-	// Load rules and evaluate active ones. Rule-load errors are surfaced as
-	// index notices so the page can show them; they never abort the rebuild.
+	// Load rules and evaluate active ones. Rule-load and validation errors are
+	// collected as notices; they never abort the rebuild.
 	allRules, ruleErrs := s.App.Repo.Rules()
 	var notices []string
 	for _, re := range ruleErrs {
@@ -185,19 +200,29 @@ func (s *Server) rebuild(ctx context.Context) error {
 			active = append(active, r)
 		}
 	}
-	s.Index.appendNotices(notices)
 
-	// Evaluate active rules against the freshly built index. Proposals are
+	// Evaluate active rules against the freshly built result. Proposals are
 	// written to SQLite only; they do not move HEAD and cannot trigger another
 	// rebuild (the watch loop only rebuilds on a HEAD change).
+	//
+	// Bug 1: EvaluateActive now returns rule-level Propose errors (joined).
+	// Surface them as index notices so the page can display them, and log
+	// to stderr for diagnostics.
 	var proposed int
 	if len(active) > 0 {
-		var err error
-		proposed, err = rules.EvaluateActive(ctx, active, s.Index.Result(), s.Now(), s.Props)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "casebook serve: rules evaluate: %v\n", err)
+		var evalErr error
+		proposed, evalErr = rules.EvaluateActive(ctx, active, res, now, s.Props)
+		if evalErr != nil {
+			fmt.Fprintf(os.Stderr, "casebook serve: rules evaluate: %v\n", evalErr)
+			notices = append(notices, "rules: "+evalErr.Error())
 		}
 	}
+
+	// Bug 3 fix: set the index result and all its notices atomically under one
+	// Index lock. Append rule notices to the engine result's own notices so
+	// that a reader who sees the new Head also sees all notices immediately.
+	res.Notices = append(res.Notices, notices...)
+	s.Index.set(res, head, now)
 
 	pending, _ := s.Props.Pending(ctx)
 	if _, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()}); err != nil {
