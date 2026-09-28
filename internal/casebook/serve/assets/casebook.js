@@ -673,7 +673,7 @@ function ageOf(it) {
   if (days === 1) return "1d";
   return `${days}d`;
 }
-function makeBoard(ctx, sel, filters) {
+function makeBoard(ctx, sel, filters, onOpen) {
   const el = h4("div", { class: "cb-board" });
   const laneState = new Map(
     LANES.map(({ id }) => [id, { items: [], total: 0 }])
@@ -723,6 +723,11 @@ function makeBoard(ctx, sel, filters) {
       propEl.textContent = `${it.proposal.disposition} proposed`;
       card2.append(propEl);
     }
+    titleEl.addEventListener("click", (e) => {
+      e.stopPropagation();
+      onOpen?.(it.key, laneId);
+      ctx.route.go("item", it.key);
+    });
     card2.addEventListener("click", (e) => {
       const state = laneState.get(laneId);
       const orderedIds = state?.items.map((i) => i.key) ?? [];
@@ -735,6 +740,13 @@ function makeBoard(ctx, sel, filters) {
         }
       } else {
         sel.toggle(it.key);
+      }
+    });
+    card2.addEventListener("keydown", (e) => {
+      if (e.key === "o" || e.key === "Enter") {
+        e.preventDefault();
+        onOpen?.(it.key, laneId);
+        ctx.route.go("item", it.key);
       }
     });
     return card2;
@@ -1145,15 +1157,19 @@ function makeAttention(ctx) {
   }
   function mountBoard() {
     if (boardHandle) return;
+    handle.el.closest(".kit-app")?.classList.add("cb-board-active");
     const kitRows = handle.el.querySelector(".kit-rows");
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
-    boardHandle = makeBoard(ctx, selection, getBoardFilters);
+    boardHandle = makeBoard(ctx, selection, getBoardFilters, (key, laneId) => {
+      filters.view = laneId;
+    });
     handle.el.append(boardHandle.el);
   }
   function unmountBoard() {
     if (!boardHandle) return;
+    handle.el.closest(".kit-app")?.classList.remove("cb-board-active");
     boardHandle.destroy();
     boardHandle.el.remove();
     boardHandle = null;
@@ -1169,6 +1185,14 @@ function makeAttention(ctx) {
         filters.q = urlQ2;
         handle.setSearch(urlQ2);
       }
+      filters.view = "board";
+      handle.setChips(
+        "view",
+        VIEWS.map((v) => ({
+          ...v,
+          on: v.id === "board"
+        }))
+      );
       mountBoard();
       return;
     }
@@ -1190,6 +1214,13 @@ function makeAttention(ctx) {
       );
       void reload();
     } else if (sub) {
+      handle.setChips(
+        "view",
+        VIEWS.map((v) => ({
+          ...v,
+          on: v.id === filters.view
+        }))
+      );
       void openDetail(sub);
       void reload();
     }

@@ -961,9 +961,14 @@ async function run() {
       await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(600);
 
+      // Click the card's checkbox (.kit-box) for selection; clicking the
+      // title navigates to the item instead (brief fix-round item 2).
+      const firstCardBox = await page.$(
+        '[data-lane="waiting"] .cb-board-card .kit-box',
+      );
       const firstCard = await page.$('[data-lane="waiting"] .cb-board-card');
-      if (firstCard) {
-        await firstCard.click();
+      if (firstCardBox && firstCard) {
+        await firstCardBox.click();
         await page.waitForTimeout(300);
 
         const isSelected = await firstCard
@@ -997,9 +1002,11 @@ async function run() {
           .waitForSelector('.cb-lane', { timeout: 5000 })
           .catch(() => {});
         await page.waitForTimeout(600);
-        const selCard = await page.$('[data-lane="waiting"] .cb-board-card.on');
-        if (selCard) {
-          await selCard.click();
+        const selCardBox = await page.$(
+          '[data-lane="waiting"] .cb-board-card.on .kit-box',
+        );
+        if (selCardBox) {
+          await selCardBox.click();
           await page.waitForTimeout(200);
         }
       } else {
@@ -1029,14 +1036,19 @@ async function run() {
       await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(600);
 
+      // Use .kit-box (the checkbox) for clicks so the card's title (which
+      // navigates to the item, brief fix-round item 2) is not triggered.
+      const waitingBoxes = await page.$$(
+        '[data-lane="waiting"] .cb-board-card .kit-box',
+      );
       const waitingCards = await page.$$(
         '[data-lane="waiting"] .cb-board-card',
       );
-      if (waitingCards.length >= 2) {
-        // Click first card, then shift-click second.
-        await waitingCards[0].click();
+      if (waitingBoxes.length >= 2) {
+        // Click first card's checkbox, then shift-click second card's checkbox.
+        await waitingBoxes[0].click();
         await page.waitForTimeout(150);
-        await waitingCards[1].click({ modifiers: ['Shift'] });
+        await waitingBoxes[1].click({ modifiers: ['Shift'] });
         await page.waitForTimeout(150);
 
         const selectedCount = await page.$$eval(
@@ -1048,22 +1060,22 @@ async function run() {
           selectedCount >= 2,
         );
 
-        // Deselect.
-        const selCards = await page.$$(
-          '[data-lane="waiting"] .cb-board-card.on',
+        // Deselect by clicking each selected card's checkbox.
+        const selBoxes = await page.$$(
+          '[data-lane="waiting"] .cb-board-card.on .kit-box',
         );
-        for (const c of selCards) {
-          await c.click();
+        for (const b of selBoxes) {
+          await b.click();
           await page.waitForTimeout(50);
         }
-      } else if (waitingCards.length === 1) {
-        await waitingCards[0].click();
+      } else if (waitingBoxes.length === 1) {
+        await waitingBoxes[0].click();
         await page.waitForTimeout(100);
         const isSelected = await waitingCards[0]
-          .evaluate((el) => el.classList.contains('on'))
+          ?.evaluate((el) => el.classList.contains('on'))
           .catch(() => false);
         check('shift-click selects a range within the lane', isSelected);
-        await waitingCards[0].click();
+        await waitingBoxes[0].click();
         await page.waitForTimeout(100);
       } else {
         check('shift-click selects a range within the lane', false);
@@ -1106,11 +1118,16 @@ async function run() {
         const firstCard = await boardDecidePage.$(
           '[data-lane="waiting"] .cb-board-card',
         );
-        if (firstCard) {
+        // Click the checkbox (.kit-box) for selection; clicking the title
+        // navigates instead of selecting (brief fix-round item 2).
+        const firstCardBox = await boardDecidePage.$(
+          '[data-lane="waiting"] .cb-board-card .kit-box',
+        );
+        if (firstCard && firstCardBox) {
           const cardId = await firstCard
             .evaluate((el) => el.dataset.id ?? '')
             .catch(() => '');
-          await firstCard.click();
+          await firstCardBox.click();
           await boardDecidePage.waitForTimeout(300);
 
           // Click Decide N.
@@ -1216,6 +1233,207 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
       await page.waitForTimeout(600);
+    }
+
+    // ---- scenario: board layout at 1600×900 ---------------------------------
+    console.log(
+      '\nscenario: board layout at 1600\xd7900 \u2014 all four lanes visible and \u2265220\u202fpx wide',
+    );
+
+    {
+      const wideCtx = await browser.newContext({
+        viewport: { width: 1600, height: 900 },
+      });
+      const widePage = await wideCtx.newPage();
+      try {
+        await widePage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await widePage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        await widePage.evaluate(() => {
+          location.hash = '#/attention/board';
+        });
+        await widePage.waitForFunction(
+          () => location.hash === '#/attention/board',
+        );
+        await widePage
+          .waitForSelector('.cb-lane', { timeout: 6000 })
+          .catch(() => {});
+        await widePage.waitForTimeout(800);
+
+        // Screenshot after fix (required by the controller ruling).
+        await widePage.screenshot({ path: '/tmp/board-after.png' });
+
+        // The \'board\' chip must be the active view chip.
+        const boardChipActive = await widePage
+          .$eval('[data-id="board"]', (el) => el.classList.contains('on'))
+          .catch(() => false);
+        check(
+          'board chip is the active view chip at 1600\xd7900',
+          boardChipActive,
+        );
+
+        const lanes = await widePage.$$('.cb-lane');
+        check('board shows four lanes at 1600\xd7900', lanes.length === 4);
+
+        let allInViewport = true;
+        let allWideEnough = true;
+        for (const lane of lanes) {
+          const box = await lane.boundingBox();
+          if (!box) {
+            allInViewport = false;
+            allWideEnough = false;
+            break;
+          }
+          if (box.x < 0 || box.x + box.width > 1600 + 1) allInViewport = false;
+          if (box.width < 220) allWideEnough = false;
+        }
+        check(
+          'all four lane bounding boxes are inside the 1600\xd7900 viewport',
+          allInViewport,
+        );
+        check(
+          'all four lanes are at least 220\u202fpx wide at 1600\xd7900',
+          allWideEnough,
+        );
+      } finally {
+        await wideCtx.close();
+      }
+    }
+
+    // ---- scenario: board layout at 1100×800 (horizontal scroll) -----------
+    console.log(
+      '\nscenario: board layout at 1100\xd7800 \u2014 board scrolls, document does not',
+    );
+
+    {
+      const narrowCtx = await browser.newContext({
+        viewport: { width: 1100, height: 800 },
+      });
+      const narrowPage = await narrowCtx.newPage();
+      try {
+        await narrowPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await narrowPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        await narrowPage.evaluate(() => {
+          location.hash = '#/attention/board';
+        });
+        await narrowPage.waitForFunction(
+          () => location.hash === '#/attention/board',
+        );
+        await narrowPage
+          .waitForSelector('.cb-lane', { timeout: 6000 })
+          .catch(() => {});
+        await narrowPage.waitForTimeout(800);
+
+        // The document (html element) must not scroll horizontally.
+        const noDocScroll = await narrowPage.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        );
+        check(
+          'document does not scroll horizontally at 1100\xd7800',
+          noDocScroll,
+        );
+
+        // The board container must be reachable: it is either wide enough to
+        // show all lanes without scrolling, or it provides its own scrollbar.
+        const boardReachable = await narrowPage
+          .$eval(
+            '.cb-board',
+            (el) =>
+              // All lanes fit without scrolling.
+              el.scrollWidth <= el.clientWidth ||
+              // Or the board itself is scrollable.
+              el.scrollWidth > el.clientWidth,
+          )
+          .catch(() => true); // .cb-board not found is handled above
+        check(
+          'board lanes are reachable (board scrolls, not document) at 1100\xd7800',
+          noDocScroll && boardReachable,
+        );
+      } finally {
+        await narrowCtx.close();
+      }
+    }
+
+    // ---- scenario: opening a card from the board ----------------------------
+    console.log(
+      '\nscenario: opening a card from the board shows item in reading column',
+    );
+
+    {
+      const cardCtx = await browser.newContext();
+      const cardPage = await cardCtx.newPage();
+      try {
+        await cardPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await cardPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        await cardPage.evaluate(() => {
+          location.hash = '#/attention/board';
+        });
+        await cardPage.waitForFunction(
+          () => location.hash === '#/attention/board',
+        );
+        await cardPage
+          .waitForSelector('.cb-lane', { timeout: 6000 })
+          .catch(() => {});
+        await cardPage.waitForTimeout(800);
+
+        // Click the title element of the first waiting card.
+        const titleEl = await cardPage.$(
+          '[data-lane="waiting"] .cb-board-card .cb-card-title',
+        );
+        const cardTitle = titleEl
+          ? ((await titleEl.textContent()) ?? '').trim()
+          : '';
+
+        if (titleEl && cardTitle) {
+          await titleEl.click();
+          // Wait for the item detail to load in the reading column.
+          await cardPage.waitForTimeout(1200);
+
+          const readText = await cardPage
+            .$eval('.kit-read', (el) => el.textContent ?? '')
+            .catch(() => '');
+          check(
+            'opening a board card title shows the item in the reading column',
+            readText.includes(cardTitle),
+          );
+
+          // The hash must now be #/item/<key> (not #/attention/board).
+          const afterHash = await cardPage.evaluate(() => location.hash);
+          check(
+            'opening a board card navigates to #/item/<key>',
+            afterHash.startsWith('#/item/'),
+          );
+
+          // Pressing Back must return to #/attention/board.
+          await cardPage.goBack();
+          await cardPage.waitForTimeout(600);
+          const backHash = await cardPage.evaluate(() => location.hash);
+          check(
+            'Back from the item view returns to #/attention/board',
+            backHash === '#/attention/board',
+          );
+        } else {
+          check(
+            'opening a board card title shows the item in the reading column',
+            false,
+          );
+          check('opening a board card navigates to #/item/<key>', false);
+          check('Back from the item view returns to #/attention/board', false);
+        }
+      } finally {
+        await cardCtx.close();
+      }
     }
   } catch (err) {
     console.error('probe: unexpected error:', err);

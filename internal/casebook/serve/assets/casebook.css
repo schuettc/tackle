@@ -1,4 +1,14 @@
 /* casebook.css */
+.kit-app.cb-board-active {
+  grid-template-columns: minmax(0, 1fr) auto;
+  overflow-x: hidden;
+}
+.kit-app.cb-board-active > .kit-list {
+  width: auto;
+}
+.kit-app.cb-board-active > .kit-read {
+  display: none;
+}
 .cb-board {
   display: flex;
   gap: 16px;
@@ -8,8 +18,8 @@
   min-height: 0;
 }
 .cb-lane {
-  width: 280px;
-  flex: none;
+  flex: 1 0 220px;
+  min-width: 220px;
   background: var(--kit-panel);
   border: 1px solid var(--kit-line);
   border-radius: 8px;

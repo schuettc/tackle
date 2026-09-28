@@ -59,6 +59,7 @@ export function makeBoard(
   ctx: Ctx,
   sel: Selection,
   filters: () => Record<string, string>,
+  onOpen?: (key: string, laneId: string) => void,
 ): { el: HTMLElement; refresh(): Promise<void>; destroy(): void } {
   // The board element fills the space left by hiding .kit-rows inside the kit
   // list panel.  `.cb-board` has `flex: 1; overflow-x: auto` from casebook.css
@@ -137,6 +138,14 @@ export function makeBoard(
       card.append(propEl);
     }
 
+    // Title click: open the item in the reading column.  Stop propagation
+    // so the card's selection toggle does not also fire.
+    titleEl.addEventListener('click', (e: MouseEvent) => {
+      e.stopPropagation();
+      onOpen?.(it.key, laneId);
+      ctx.route.go('item', it.key);
+    });
+
     // Click: toggle; shift-click: range within lane.
     card.addEventListener('click', (e: MouseEvent) => {
       const state = laneState.get(laneId);
@@ -150,6 +159,15 @@ export function makeBoard(
         }
       } else {
         sel.toggle(it.key);
+      }
+    });
+
+    // Keyboard: o or Enter on a focused card opens the item.
+    card.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'o' || e.key === 'Enter') {
+        e.preventDefault();
+        onOpen?.(it.key, laneId);
+        ctx.route.go('item', it.key);
       }
     });
 

@@ -9,6 +9,42 @@
  * is needed).
  */
 
+/* ---- board-active app layout --------------------------------------------- */
+/*
+ * While the board is shown, the .kit-app receives `.cb-board-active`.  We
+ * redefine the columns so the list area (`.kit-list`) fills the space that
+ * would normally be split between the list and the reading column.
+ *
+ * Before (normal): auto | minmax(320px,1fr) | auto
+ *                   list    reading             rail
+ * After  (board):  minmax(0,1fr) | auto
+ *                   list            rail
+ *
+ * IMPORTANT: do NOT use `.cb-board` as the app modifier class; that selector
+ * also matches the `.cb-board` flex container inside the list panel, which
+ * would change the app from grid to flex and break the layout.
+ */
+/* `.cb-board-active` is added to `.kit-app` (not to the `.cb-board` element
+ * inside the list, which keeps the `.cb-board` name). */
+.kit-app.cb-board-active {
+  /* Two columns: the board list fills all remaining space; rail stays put.
+   * (The original 3-column auto+1fr+auto becomes 1fr+auto so the list can
+   *  expand.  The reading track is collapsed via display:none on .kit-read.) */
+  grid-template-columns: minmax(0, 1fr) auto;
+  /* Prevent the page from scrolling sideways — the board container scrolls. */
+  overflow-x: hidden;
+}
+
+.kit-app.cb-board-active > .kit-list {
+  /* Let the 1fr grid track determine the width; override the kit's 400 px. */
+  width: auto;
+}
+
+.kit-app.cb-board-active > .kit-read {
+  /* Hidden while the board is shown; no box is generated. */
+  display: none;
+}
+
 /* ---- board lanes (Attention board view) ---------------------------------- */
 
 .cb-board {
@@ -21,8 +57,11 @@
 }
 
 .cb-lane {
-  width: 280px;
-  flex: none;
+  /* Share the available width equally; minimum 220 px per lane.
+   * When all four lanes are narrower than their minimum, the board
+   * container (.cb-board) scrolls horizontally — not the page. */
+  flex: 1 0 220px;
+  min-width: 220px;
   background: var(--kit-panel);
   border: 1px solid var(--kit-line);
   border-radius: 8px;

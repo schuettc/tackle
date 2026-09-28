@@ -434,19 +434,34 @@ export function makeAttention(ctx: Ctx): Section {
   // mountBoard hides the kit's rows/foot and inserts the board into the list
   // panel.  The kit's `.kit-rows` and `.kit-foot` are internal class names
   // stable in kit v0.11.0 (see localweb/page/assets/kit.css).
+  //
+  // It also adds `.cb-board` to the `.kit-app` grid element so the CSS can
+  // collapse the reading column and let the list panel span the full width.
   function mountBoard(): void {
     if (boardHandle) return;
+    // Span the list+reading columns by adding a class to the app grid element.
+    // Note: use 'cb-board-active', NOT 'cb-board' — the latter is the board
+    // container element's own class, and matching it on .kit-app would cause
+    // '.cb-board { display: flex }' to convert the grid to flexbox.
+    handle.el.closest('.kit-app')?.classList.add('cb-board-active');
     const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
     const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
-    boardHandle = makeBoard(ctx, selection, getBoardFilters);
+    boardHandle = makeBoard(ctx, selection, getBoardFilters, (key, laneId) => {
+      // Record the card's lane as the active view so that when the item is
+      // opened the list reloads with that view (brief §4, item 2).
+      filters.view = laneId;
+    });
     handle.el.append(boardHandle.el);
   }
 
-  // unmountBoard removes the board and restores the kit's rows/foot.
+  // unmountBoard removes the board, restores the kit's rows/foot, and removes
+  // the app-level `.cb-board` class so the grid returns to normal layout.
   function unmountBoard(): void {
     if (!boardHandle) return;
+    // Restore normal list+reading grid layout.
+    handle.el.closest('.kit-app')?.classList.remove('cb-board-active');
     boardHandle.destroy();
     boardHandle.el.remove();
     boardHandle = null;
@@ -466,6 +481,16 @@ export function makeAttention(ctx: Ctx): Section {
         filters.q = urlQ;
         handle.setSearch(urlQ);
       }
+      // Activate the board view chip so it is highlighted, not the last list
+      // view chip (brief fix-round item 3).
+      filters.view = 'board';
+      handle.setChips(
+        'view',
+        VIEWS.map((v) => ({
+          ...v,
+          on: v.id === 'board',
+        })),
+      );
       mountBoard();
       return;
     }
@@ -492,8 +517,17 @@ export function makeAttention(ctx: Ctx): Section {
       );
       void reload();
     } else if (sub) {
-      // Not a view id: treat as an item key from a direct #/item/<key> link.
-      // Open the item's detail and reload the list with the current view.
+      // Not a view id: treat as an item key from a direct #/item/<key> link
+      // (e.g. opened from a board card's title).  The onOpen callback in
+      // makeBoard already set filters.view to the card's lane, so reload()
+      // will use that view.  Update the chips to reflect it.
+      handle.setChips(
+        'view',
+        VIEWS.map((v) => ({
+          ...v,
+          on: v.id === filters.view,
+        })),
+      );
       void openDetail(sub);
       void reload();
     }
