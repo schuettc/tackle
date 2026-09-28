@@ -35,6 +35,7 @@ const (
 	Unanswered  = "unanswered"  // the turn ended without a reply
 	Interrupted = "interrupted" // serve restarted mid-delivery
 	AgentReply  = "reply"       // a message written by the agent
+	Worked      = "worked"      // server-generated turn-progress summary (terminal)
 )
 
 // Delivery states.
@@ -113,10 +114,10 @@ type Message struct {
 	WorkedJSON string `json:"-"`
 }
 
-// Final reports whether a message state is settled.
+// Final reports whether a message state is settled (terminal).
 func Final(state string) bool {
 	switch state {
-	case Answered, Declined, Failed, Unanswered, Interrupted:
+	case Answered, Declined, Failed, Unanswered, Interrupted, Worked:
 		return true
 	}
 	return false
@@ -332,13 +333,13 @@ func (q *Queue) Post(ctx context.Context, thread int64, body string, att Attache
 
 // PostWorked inserts a server-generated 'worked' message into a thread,
 // recording a turn's progress history. The message is immediately in the
-// 'worked' final state with no delivery or batch.
+// Worked (terminal) state with no delivery or batch.
 func (q *Queue) PostWorked(ctx context.Context, thread int64, author, body, workedJSON string) (Message, error) {
 	now := ms(q.Now())
 	res, err := q.DB.ExecContext(ctx,
 		`INSERT INTO messages(thread_id, author, body, attached, state, created_at, worked_json)
-		 VALUES (?, ?, ?, '', 'worked', ?, ?)`,
-		thread, author, body, now, workedJSON)
+		 VALUES (?, ?, ?, '', ?, ?, ?)`,
+		thread, author, body, Worked, now, workedJSON)
 	if err != nil {
 		return Message{}, err
 	}

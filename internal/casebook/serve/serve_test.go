@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -764,9 +765,10 @@ func TestSettledRecordsWorkedWithHistory(t *testing.T) {
 			Worked *struct {
 				DurationMs int64 `json:"duration_ms"`
 				Lines      []struct {
-					Text  string `json:"text"`
-					N     int    `json:"n"`
-					Total int    `json:"total"`
+					Text  string    `json:"text"`
+					N     int       `json:"n"`
+					Total int       `json:"total"`
+					At    time.Time `json:"at"`
 				} `json:"lines"`
 			} `json:"worked"`
 		} `json:"messages"`
@@ -803,6 +805,12 @@ func TestSettledRecordsWorkedWithHistory(t *testing.T) {
 	}
 	if wm.Worked.Lines[1].Text != "checking flaky log" || wm.Worked.Lines[1].N != 2 || wm.Worked.Lines[1].Total != 3 {
 		t.Errorf("lines[1] = %+v", wm.Worked.Lines[1])
+	}
+	// Each line must carry a non-zero timestamp (item 6).
+	for i, l := range wm.Worked.Lines {
+		if l.At.IsZero() {
+			t.Errorf("lines[%d].At is zero (want a real timestamp)", i)
+		}
 	}
 
 	// Reload: GET /api/messages again 									— same result (persisted).
@@ -848,5 +856,66 @@ func TestSettledRecordsWorkedWithHistory(t *testing.T) {
 	_ = r.s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 's1'").Scan(&count)
 	if count != 0 {
 		t.Errorf("progress_log has %d rows after settle, want 0", count)
+	}
+}
+
+// TestSettledConcurrentWorkedOnce verifies that when two goroutines race to
+// call POST /api/agent/settled for the same session (each claiming to have
+// been shown the same delivery), exactly one 'worked' message appears in the
+// thread.  The ClearProgress call inside agentSettled must be atomic so only
+// one caller gets the progress lines.
+func TestSettledConcurrentWorkedOnce(t *testing.T) {
+	r := newRig(t)
+	th := r.attach(t, "s1")
+
+	// Send one message and wait for the delivery.
+	r.send(t, th, "go do something", false)
+	var w waited
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w); c != http.StatusOK {
+		t.Fatalf("wait: %d", c)
+	}
+
+	// Record a progress update during the turn.
+	if c := r.do(t, "POST", "/api/agent/progress", map[string]any{
+		"session": "s1", "text": "mid-turn", "n": 1, "total": 2,
+	}, nil); c != http.StatusOK {
+		t.Fatalf("progress: %d", c)
+	}
+
+	// Two goroutines each call settled concurrently for the same session.
+	const workers = 4
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			r.do(t, "POST", "/api/agent/settled", map[string]any{
+				"session": "s1",
+				"shown":   []int64{w.Delivery.ID},
+			}, nil)
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	// Count 'worked' messages in the thread — must be exactly one.
+	var mv struct {
+		Messages []struct {
+			State string `json:"state"`
+		} `json:"messages"`
+	}
+	if c := r.do(t, "GET", fmt.Sprintf("/api/messages?thread=%d", th), nil, &mv); c != http.StatusOK {
+		t.Fatalf("get messages: %d", c)
+	}
+	worked := 0
+	for _, m := range mv.Messages {
+		if m.State == "worked" {
+			worked++
+		}
+	}
+	if worked != 1 {
+		t.Errorf("expected exactly 1 worked message; got %d", worked)
 	}
 }

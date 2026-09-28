@@ -387,6 +387,9 @@ func (s *Server) watch(ctx context.Context) {
 			}
 			if time.Since(lastTrim) > 24*time.Hour {
 				_ = s.Bus.Trim(ctx, 7*24*time.Hour)
+				if err := s.Props.TrimProgressLog(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "casebook serve: trim progress_log: %v\n", err)
+				}
 				lastTrim = time.Now()
 			}
 		}

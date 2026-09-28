@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -267,6 +268,8 @@ func (s *Server) agentProgress(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		s.Bus.Publish(ctx, "progress", p)
 	}
+	// SetProgress now surfaces progress_log insert errors; reply returns them
+	// to the agent's progress tool so the caller sees the failure.
 	reply(w, p, err)
 }
 
@@ -415,18 +418,25 @@ func workedBody(d time.Duration) string {
 }
 
 // postWorkedMessage inserts a 'worked' message into thread thID and publishes
-// the messages/thread bus events.
+// the messages/thread bus events.  Failures are logged to stderr as
+// diagnostics (they are non-fatal: the turn has already settled).
 func (s *Server) postWorkedMessage(ctx context.Context, sessionID string, thID int64, dur time.Duration, wv WorkedView) {
 	wj, err := json.Marshal(wv)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage marshal: %v\n", err)
 		return
 	}
 	msg, err := s.Queue.PostWorked(ctx, thID, sessionID, workedBody(dur), string(wj))
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage PostWorked: %v\n", err)
 		return
 	}
-	s.Bus.Publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID})
-	s.Bus.Publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID})
+	if _, err := s.Bus.Publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID}); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish messages: %v\n", err)
+	}
+	if _, err := s.Bus.Publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID}); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish thread: %v\n", err)
+	}
 }
 
 // jobForSession validates that the job exists and is owned by the given
