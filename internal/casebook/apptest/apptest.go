@@ -35,13 +35,16 @@ func (FakeGh) Gh(_ context.Context, args ...string) ([]byte, error) {
 		return []byte(`{"data":{"repositoryOwner":{"repositories":{"pageInfo":{"hasNextPage":false},"nodes":[
 		 {"nameWithOwner":"schuettc/hail","pushedAt":"2026-09-20T00:00:00Z","defaultBranchRef":{"name":"main"},
 		  "pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":3,"title":"fix nudge","state":"OPEN","createdAt":"2026-08-01T00:00:00Z",
-		   "updatedAt":"2026-08-01T00:00:00Z","author":{"login":"bob"},"comments":{"nodes":[]}}]},
+		   "updatedAt":"2026-08-01T00:00:00Z","author":{"login":"bob"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]},
 		  "issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4,"title":"crash on start","state":"OPEN","createdAt":"2026-08-02T00:00:00Z",
-		   "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice"},"comments":{"nodes":[]}}]}}]}}}}`), nil
+		   "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]}}]}}}}`), nil
 	case strings.Contains(j, "search("):
 		return []byte(`{"data":{"search":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}`), nil
 	case strings.Contains(j, "k0:"):
 		return []byte(`{"data":{}}`), nil
+	case strings.Contains(j, "pr list") && strings.Contains(j, "--state merged"):
+		// Merged PR list: no merged PRs in the test fixture.
+		return []byte(`[]`), nil
 	}
 	return nil, fmt.Errorf("apptest.FakeGh: unexpected %s", j)
 }

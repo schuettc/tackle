@@ -228,3 +228,130 @@ func TestRepoForPathAndHistory(t *testing.T) {
 		t.Errorf("history counts: repo %d branch %d pr %d worktree %d", count("repo:schuettc/hail"), count("branch:schuettc/hail@feat/client"), count("pr:schuettc/hail#3"), count("worktree:mbp:/w/hail-client"))
 	}
 }
+
+// TestItemsCarryAuthorTimesLabelsAndBody verifies that PR/issue/repo items
+// carry author, created_at, updated_at, labels, and body from the observation.
+func TestItemsCarryAuthorTimesLabelsAndBody(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	body900 := strings.Repeat("x", 900)
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", PushedAt: days(2), DefaultBranch: "main",
+			PRs: []observe.PRObs{{
+				Repo: "schuettc/hail", Number: 3, Author: "bob", State: "OPEN",
+				CreatedAt: days(10), UpdatedAt: days(5),
+				Labels: []string{"bug", "p0"},
+				Body:   body900[:600], // pre-truncated to 600
+				Title:  "fix nudge", URL: "https://github.com/schuettc/hail/pull/3",
+			}},
+			Issues: []observe.PRObs{{
+				Repo: "schuettc/hail", Number: 4, Author: "alice", State: "OPEN",
+				CreatedAt: days(8), UpdatedAt: days(3),
+				Labels: []string{"enhancement"},
+				Body:   "short body",
+			}},
+		},
+	}}
+	in := Input{
+		Now: now, GitHub: g, Snapshots: nil,
+		Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+		Seen: map[string]time.Time{},
+	}
+	r := Build(in)
+
+	pr := mustFind(t, r, "pr:schuettc/hail#3")
+	if pr.Author != "bob" {
+		t.Errorf("PR.Author = %q, want %q", pr.Author, "bob")
+	}
+	if !pr.CreatedAt.Equal(days(10)) {
+		t.Errorf("PR.CreatedAt = %v, want %v", pr.CreatedAt, days(10))
+	}
+	if !pr.UpdatedAt.Equal(days(5)) {
+		t.Errorf("PR.UpdatedAt = %v, want %v", pr.UpdatedAt, days(5))
+	}
+	if !slices.Equal(pr.Labels, []string{"bug", "p0"}) {
+		t.Errorf("PR.Labels = %v, want [bug p0]", pr.Labels)
+	}
+	if len(pr.Body) != 600 {
+		t.Errorf("PR.Body len = %d, want 600", len(pr.Body))
+	}
+
+	iss := mustFind(t, r, "issue:schuettc/hail#4")
+	if iss.Author != "alice" {
+		t.Errorf("issue.Author = %q, want %q", iss.Author, "alice")
+	}
+	if !slices.Equal(iss.Labels, []string{"enhancement"}) {
+		t.Errorf("issue.Labels = %v", iss.Labels)
+	}
+	if iss.Body != "short body" {
+		t.Errorf("issue.Body = %q", iss.Body)
+	}
+
+	// Repo gets UpdatedAt from PushedAt.
+	repo := mustFind(t, r, "repo:schuettc/hail")
+	if !repo.UpdatedAt.Equal(days(2)) {
+		t.Errorf("repo.UpdatedAt = %v, want %v", repo.UpdatedAt, days(2))
+	}
+}
+
+// TestLandedCombinedAcrossMachines verifies the cross-machine landed logic.
+func TestLandedCombinedAcrossMachines(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", DefaultBranch: "main"},
+	}}
+
+	// Helper to build a snapshot with one branch at given Landed/LandedTip/LandedHow values.
+	branchSnap := func(machine, landed, landedTip, landedHow string) observe.Snapshot {
+		return observe.Snapshot{Version: 1, Machine: machine, Clones: []observe.Clone{{
+			Path: "/c/hail", Repo: "schuettc/hail",
+			Branches: []observe.Branch{{
+				Name: "feat", Tip: "abc", LandedTip: landedTip,
+				Landed: landed, LandedHow: landedHow,
+			}},
+		}}}
+	}
+
+	check := func(t *testing.T, label, wantLanded string, snaps ...observe.Snapshot) {
+		t.Helper()
+		in := Input{
+			Now: now, GitHub: g, Snapshots: snaps,
+			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+			Seen: map[string]time.Time{},
+		}
+		r := Build(in)
+		it := mustFind(t, r, "branch:schuettc/hail@feat")
+		if it.Landed != wantLanded {
+			t.Errorf("%s: Landed = %q, want %q", label, it.Landed, wantLanded)
+		}
+	}
+
+	// both landed → "all-machines"
+	check(t, "both landed",
+		"all-machines",
+		branchSnap("mbp", "in main", "abc", "default-branch"),
+		branchSnap("imac", "in main", "abc", "default-branch"),
+	)
+
+	// A landed, B confirmed not landed → "some-machines"
+	check(t, "some-machines",
+		"some-machines",
+		branchSnap("mbp", "in main", "abc", "default-branch"),
+		branchSnap("imac", "", "abc", ""), // LandedTip set (checked), Landed="" (not landed)
+	)
+
+	// A landed, B unknown (ComputeLanded never ran) → "unknown"
+	check(t, "A landed B unknown",
+		"unknown",
+		branchSnap("mbp", "in main", "abc", "default-branch"),
+		branchSnap("imac", "", "", ""), // LandedTip="" → not checked
+	)
+
+	// none landed, all checked → "none"
+	check(t, "none",
+		"none",
+		branchSnap("mbp", "", "abc", ""),
+		branchSnap("imac", "", "abc", ""),
+	)
+}

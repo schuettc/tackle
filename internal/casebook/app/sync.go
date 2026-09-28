@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 
 	"github.com/schuettc/tackle/internal/casebook/config"
@@ -83,6 +84,28 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	for _, e := range scanErrs {
 		rep.ScanErrors = append(rep.ScanErrors, e.Error())
 	}
+
+	g, err := observe.LoadGitHub(config.CachePath())
+	if err != nil {
+		return rep, err
+	}
+	if !o.NoGitHub {
+		decisions, _ := a.Repo.Decisions()
+		var gr observe.RefreshReport
+		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
+		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
+		// Fetch merged PRs for repos with non-default local branches, then
+		// compute landed status for this machine's branches.
+		allRepos := observe.AllRepos(g)
+		reposToCheck := reposWithNonDefaultBranches(snap, allRepos)
+		g.MergedPRs = observe.FetchMergedPRs(ctx, a.Gh, reposToCheck, g.MergedPRs, a.Now())
+		observe.ComputeLanded(ctx, &snap, allRepos, g.MergedPRs)
+		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
+			return rep, err
+		}
+	}
+	// Encode the snapshot after landed computation so branch landed fields are
+	// persisted to machines/<machine>.json for other machines to read.
 	sb, err := observe.EncodeSnapshot(snap)
 	if err != nil {
 		return rep, err
@@ -96,20 +119,6 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	}
 	if err := a.journal(batch.Events, snaps); err != nil {
 		return rep, err
-	}
-
-	g, err := observe.LoadGitHub(config.CachePath())
-	if err != nil {
-		return rep, err
-	}
-	if !o.NoGitHub {
-		decisions, _ := a.Repo.Decisions()
-		var gr observe.RefreshReport
-		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
-		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
-		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
-			return rep, err
-		}
 	}
 	if err := a.render(g, snaps, &rep); err != nil {
 		return rep, err
@@ -141,6 +150,35 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	}
 	_, err = a.pushSync(ctx, &rep)
 	return rep, err
+}
+
+// reposWithNonDefaultBranches returns the unique set of repos (as owner/name
+// strings) that have at least one local branch that is not "main", "master",
+// or the repo's own default branch. These are the repos that need a merged-PR
+// list to determine landed status.
+func reposWithNonDefaultBranches(snap observe.Snapshot, repos map[string]observe.RepoObs) []string {
+	seen := map[string]bool{}
+	for _, c := range snap.Clones {
+		if c.Repo == "" {
+			continue
+		}
+		def := "main"
+		if r, ok := repos[strings.ToLower(c.Repo)]; ok && r.DefaultBranch != "" {
+			def = r.DefaultBranch
+		}
+		for _, b := range c.Branches {
+			if b.Name != def && b.Name != "main" && b.Name != "master" {
+				seen[c.Repo] = true
+				break
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (a *App) remoteSync(ctx context.Context, rep *SyncReport) error {

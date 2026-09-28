@@ -40,6 +40,8 @@ type PRObs struct {
 	LastCommentAuthor string    `json:"last_comment_author,omitempty"`
 	LastCommentAt     time.Time `json:"last_comment_at,omitzero"`
 	URL               string    `json:"url,omitempty"`
+	Labels            []string  `json:"labels,omitempty"`
+	Body              string    `json:"body,omitempty"` // first 600 chars of GitHub bodyText
 }
 
 // Owner is one account's or org's observation. A failed or blocked fetch
@@ -63,15 +65,31 @@ type Ref struct {
 	UpdatedAt     time.Time `json:"updated_at,omitzero"`
 }
 
+// MergedPR is one merged pull request as reported by gh pr list.
+type MergedPR struct {
+	Number      int    `json:"number"`
+	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
+}
+
+// MergedPRList is the cached list of merged PRs for one repo.
+// Fetched=false means the list was not (or could not be) fetched.
+type MergedPRList struct {
+	Fetched bool       `json:"fetched"`
+	At      time.Time  `json:"at,omitzero"`
+	PRs     []MergedPR `json:"prs,omitempty"`
+}
+
 // GitHub is the machine-local cache of everything fetched from GitHub.
 type GitHub struct {
-	Version    int               `json:"version"`
-	User       string            `json:"user,omitempty"`
-	Owners     map[string]*Owner `json:"owners"` // key: lower-case login
-	Authored   []PRObs           `json:"authored,omitempty"`
-	AuthoredAt time.Time         `json:"authored_at,omitzero"`
-	Refs       map[string]Ref    `json:"refs"` // key: item key text
-	RefsAt     time.Time         `json:"refs_at,omitzero"`
+	Version    int                     `json:"version"`
+	User       string                  `json:"user,omitempty"`
+	Owners     map[string]*Owner       `json:"owners"` // key: lower-case login
+	Authored   []PRObs                 `json:"authored,omitempty"`
+	AuthoredAt time.Time               `json:"authored_at,omitzero"`
+	Refs       map[string]Ref          `json:"refs"` // key: item key text
+	RefsAt     time.Time               `json:"refs_at,omitzero"`
+	MergedPRs  map[string]MergedPRList `json:"merged_prs,omitempty"` // key: lower-case owner/name
 }
 
 // Snapshot is one machine's local git state (machines/<machine>.json in the
@@ -107,6 +125,10 @@ type Branch struct {
 	Unpushed       int       `json:"unpushed,omitempty"` // commits on no remote
 	OldestUnpushed time.Time `json:"oldest_unpushed,omitzero"`
 	Tip            string    `json:"tip"`
+	TipAt          time.Time `json:"tip_at,omitzero"`      // committer date of the tip commit
+	Landed         string    `json:"landed,omitempty"`     // "" = unknown/no; "in <default>" or "merged #<n>"
+	LandedTip      string    `json:"landed_tip,omitempty"` // tip SHA checked by ComputeLanded (set whenever we check, landed or not)
+	LandedHow      string    `json:"landed_how,omitempty"` // "default-branch" or "merged-pr" (empty when not landed)
 }
 
 // Worktree is one linked worktree of a clone.

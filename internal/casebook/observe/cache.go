@@ -11,7 +11,7 @@ import (
 
 // NewGitHub returns an empty cache.
 func NewGitHub() *GitHub {
-	return &GitHub{Version: CacheVersion, Owners: map[string]*Owner{}, Refs: map[string]Ref{}}
+	return &GitHub{Version: CacheVersion, Owners: map[string]*Owner{}, Refs: map[string]Ref{}, MergedPRs: map[string]MergedPRList{}}
 }
 
 // LoadGitHub reads the cache. A missing file, or one written by a newer
@@ -33,6 +33,9 @@ func LoadGitHub(path string) (*GitHub, error) {
 	}
 	if g.Refs == nil {
 		g.Refs = map[string]Ref{}
+	}
+	if g.MergedPRs == nil {
+		g.MergedPRs = map[string]MergedPRList{}
 	}
 	return g, nil
 }

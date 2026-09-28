@@ -125,6 +125,14 @@ export interface ItemView {
   stale?: boolean;
   locations?: string[];
   evidence?: string[];
+  author?: string;
+  created_at?: string;
+  updated_at?: string;
+  labels?: string[];
+  body?: string;
+  landed?: string;
+  landed_how?: string;
+  landed_tips?: Record<string, string>;
   proposal?: Proposal;
 }
 

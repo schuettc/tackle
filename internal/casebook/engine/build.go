@@ -24,20 +24,28 @@ type Input struct {
 
 // Item is one tracked thing with its computed status.
 type Item struct {
-	Key       item.Key       `json:"-"`
-	ID        string         `json:"key"`
-	Kind      item.Kind      `json:"kind"`
-	Repo      string         `json:"repo,omitempty"`
-	Title     string         `json:"title,omitempty"`
-	URL       string         `json:"url,omitempty"`
-	Relation  string         `json:"relation,omitempty"`
-	Status    item.Status    `json:"status"`
-	Decision  *item.Decision `json:"decision,omitempty"`
-	Hits      []item.Hit     `json:"hits,omitempty"`
-	Observed  item.Observed  `json:"observed"`
-	Stale     bool           `json:"stale,omitempty"`
-	Locations []string       `json:"locations,omitempty"`
-	Evidence  []string       `json:"evidence,omitempty"`
+	Key        item.Key          `json:"-"`
+	ID         string            `json:"key"`
+	Kind       item.Kind         `json:"kind"`
+	Repo       string            `json:"repo,omitempty"`
+	Title      string            `json:"title,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Relation   string            `json:"relation,omitempty"`
+	Status     item.Status       `json:"status"`
+	Decision   *item.Decision    `json:"decision,omitempty"`
+	Hits       []item.Hit        `json:"hits,omitempty"`
+	Observed   item.Observed     `json:"observed"`
+	Stale      bool              `json:"stale,omitempty"`
+	Locations  []string          `json:"locations,omitempty"`
+	Evidence   []string          `json:"evidence,omitempty"`
+	Author     string            `json:"author,omitempty"`
+	CreatedAt  time.Time         `json:"created_at,omitzero"`
+	UpdatedAt  time.Time         `json:"updated_at,omitzero"`
+	Labels     []string          `json:"labels,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Landed     string            `json:"landed,omitempty"`      // combined across machines: "all-machines", "some-machines", "none", "unknown"
+	LandedHow  string            `json:"landed_how,omitempty"`  // reasons seen, e.g. "in main", "merged #7"
+	LandedTips map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
 	fresh   bool // observed from a fresh owner listing
 	signals item.Signals
@@ -70,15 +78,24 @@ func (r Result) Attention() []Item {
 	return out
 }
 
+// machineLanded records the per-machine landed verdict for one branch item.
+type machineLanded struct {
+	Machine string
+	Landed  string // "" = not landed (or not checked); "in main"; "merged #N"
+	Checked bool   // LandedTip was set = ComputeLanded ran
+	Tip     string // the tip that was checked
+}
+
 type builder struct {
-	in    Input
-	user  string
-	items map[string]*Item
-	f     facts
-	local map[string]bool // branch keys present in some snapshot
-	fresh map[string]bool // lower-case owners with a fresh, complete listing
-	stale map[string]bool // lower-case owners whose listing is stale
-	snaps map[string]bool // machines with a snapshot
+	in           Input
+	user         string
+	items        map[string]*Item
+	f            facts
+	local        map[string]bool            // branch keys present in some snapshot
+	fresh        map[string]bool            // lower-case owners with a fresh, complete listing
+	stale        map[string]bool            // lower-case owners whose listing is stale
+	snaps        map[string]bool            // machines with a snapshot
+	branchLanded map[string][]machineLanded // branch item ID → per-machine verdicts
 }
 
 func (b *builder) get(k item.Key) *Item {
@@ -106,10 +123,11 @@ func Build(in Input) Result {
 			prs:   map[string]observe.PRObs{},
 			refs:  in.GitHub.Refs,
 		},
-		local: map[string]bool{},
-		fresh: map[string]bool{},
-		stale: map[string]bool{},
-		snaps: map[string]bool{},
+		local:        map[string]bool{},
+		fresh:        map[string]bool{},
+		stale:        map[string]bool{},
+		snaps:        map[string]bool{},
+		branchLanded: map[string][]machineLanded{},
 	}
 	b.f.items = b.items
 	var res Result
@@ -159,6 +177,7 @@ func (b *builder) owners(res *Result) {
 				it.Relation = "owned"
 			}
 			it.signals.UpdatedAt, it.signals.Archived = r.PushedAt, r.Archived
+			it.UpdatedAt = r.PushedAt
 			if !r.PushedAt.IsZero() {
 				it.Evidence = append(it.Evidence, "pushed "+r.PushedAt.Format("2006-01-02"))
 			}
@@ -205,6 +224,7 @@ func (b *builder) pr(k item.Key, p observe.PRObs, dir string, fresh bool) {
 	it.Observed = item.Observed{Known: true, Exists: true, State: p.State}
 	it.fresh, it.Stale = fresh, !fresh
 	it.Title, it.URL, it.Relation = p.Title, p.URL, dir
+	it.Author, it.CreatedAt, it.UpdatedAt, it.Labels, it.Body = p.Author, p.CreatedAt, p.UpdatedAt, p.Labels, p.Body
 	last := p.CreatedAt
 	if p.LastCommentAt.After(last) {
 		last = p.LastCommentAt
@@ -235,8 +255,13 @@ func (b *builder) snapshots() {
 				if w.Dirty {
 					it.Evidence = append(it.Evidence, "uncommitted changes")
 				}
-				if br, ok := branches[w.Branch]; ok && br.Unpushed > 0 && !br.Gone {
-					it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, snap.Machine+":"+w.Path
+				if br, ok := branches[w.Branch]; ok {
+					if br.Unpushed > 0 && !br.Gone {
+						it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, snap.Machine+":"+w.Path
+					}
+					if !br.TipAt.IsZero() {
+						it.UpdatedAt = br.TipAt
+					}
 				}
 			}
 			if c.Repo == "" {
@@ -256,6 +281,17 @@ func (b *builder) snapshots() {
 				it.Observed = item.Observed{Known: true, Exists: true}
 				it.fresh = true
 				it.Locations = append(it.Locations, where)
+				// Carry tip time.
+				if !br.TipAt.IsZero() && (it.UpdatedAt.IsZero() || br.TipAt.After(it.UpdatedAt)) {
+					it.UpdatedAt = br.TipAt
+				}
+				// Record per-machine landed status for cross-machine combination.
+				b.branchLanded[k.String()] = append(b.branchLanded[k.String()], machineLanded{
+					Machine: snap.Machine,
+					Landed:  br.Landed,
+					Checked: br.LandedTip != "",
+					Tip:     br.LandedTip,
+				})
 				if br.Gone {
 					// Upstream deleted on the remote: usually a squash-merged PR
 					// branch. Its local-only commits are not work at risk.
@@ -270,6 +306,69 @@ func (b *builder) snapshots() {
 				}
 			}
 		}
+	}
+}
+
+// finishLanded computes it.Landed, it.LandedHow, and it.LandedTips from
+// the per-machine verdicts collected in b.branchLanded during snapshots().
+// Combined semantics (spec §4.1):
+//
+//   - "all-machines": landed everywhere it exists
+//   - "some-machines": landed on some, confirmed NOT landed on others
+//   - "none": confirmed not landed on every machine that checked
+//   - "unknown": at least one machine hasn't checked (LandedTip=="")
+//     and none say "not landed"
+func (b *builder) finishLanded(it *Item) {
+	if it.Kind != item.KindBranch {
+		return
+	}
+	verdicts := b.branchLanded[it.ID]
+	if len(verdicts) == 0 {
+		return
+	}
+	var (
+		landedCount    int
+		notLandedCount int
+		unknownCount   int
+		reasons        []string
+		tips           = map[string]string{}
+	)
+	seen := map[string]bool{}
+	for _, ml := range verdicts {
+		if ml.Tip != "" {
+			tips[ml.Machine] = ml.Tip
+		}
+		if ml.Landed != "" {
+			landedCount++
+			if !seen[ml.Landed] {
+				seen[ml.Landed] = true
+				reasons = append(reasons, ml.Landed)
+			}
+		} else if ml.Checked {
+			notLandedCount++ // checked and confirmed not landed
+		} else {
+			unknownCount++ // ComputeLanded not run
+		}
+	}
+	if len(tips) > 0 {
+		it.LandedTips = tips
+	}
+	if len(reasons) > 0 {
+		it.LandedHow = strings.Join(reasons, "; ")
+	}
+	total := len(verdicts)
+	switch {
+	case landedCount == total:
+		it.Landed = "all-machines"
+	case landedCount > 0 && notLandedCount > 0 && unknownCount == 0:
+		it.Landed = "some-machines"
+	case landedCount > 0 && unknownCount > 0:
+		it.Landed = "unknown"
+	case landedCount == 0 && unknownCount == 0:
+		it.Landed = "none"
+	default:
+		// Mix of unknown and not-landed, none confirmed landed.
+		it.Landed = "unknown"
 	}
 }
 
@@ -312,6 +411,7 @@ func (b *builder) finish(it *Item) {
 		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)
 	}
 	sort.Strings(it.Locations)
+	b.finishLanded(it)
 }
 
 // NextSeen records decisions observed done, for drift detection. An entry
