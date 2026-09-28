@@ -18,7 +18,9 @@ import (
 )
 
 // FakeGh serves a tiny GitHub: user schuettc, no orgs, one repo schuettc/hail
-// with one open incoming PR (#3 by bob) and one open issue (#4 by alice).
+// with open incoming PR (#3 by bob) and open issues (#4 by alice, #5 by carol,
+// #6 by frank, #7 by grace). The extra issues give the probe's T5 scenarios
+// enough dedicated items so no two scenarios share an item.
 type FakeGh struct{}
 
 // Gh answers the queries casebook makes.
@@ -36,10 +38,15 @@ func (FakeGh) Gh(_ context.Context, args ...string) ([]byte, error) {
 		 {"nameWithOwner":"schuettc/hail","pushedAt":"2026-09-20T00:00:00Z","defaultBranchRef":{"name":"main"},
 		  "pullRequests":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":3,"title":"fix nudge","state":"OPEN","createdAt":"2026-08-01T00:00:00Z",
 		   "updatedAt":"2026-08-01T00:00:00Z","author":{"login":"bob","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]},
-		  "issues":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":4,"title":"crash on start","state":"OPEN","createdAt":"2026-08-02T00:00:00Z",
-		   "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}},
+		  "issues":{"pageInfo":{"hasNextPage":false},"nodes":[
+		   {"number":4,"title":"crash on start","state":"OPEN","createdAt":"2026-08-02T00:00:00Z",
+		    "updatedAt":"2026-08-02T00:00:00Z","author":{"login":"alice","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}},
 		   {"number":5,"title":"docs missing","state":"OPEN","createdAt":"2026-08-03T00:00:00Z",
-		    "updatedAt":"2026-08-03T00:00:00Z","author":{"login":"carol","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]}}]}}}}`), nil
+		    "updatedAt":"2026-08-03T00:00:00Z","author":{"login":"carol","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}},
+		   {"number":6,"title":"perf regression","state":"OPEN","createdAt":"2026-08-05T00:00:00Z",
+		    "updatedAt":"2026-08-05T00:00:00Z","author":{"login":"frank","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}},
+		   {"number":7,"title":"memory leak","state":"OPEN","createdAt":"2026-08-06T00:00:00Z",
+		    "updatedAt":"2026-08-06T00:00:00Z","author":{"login":"grace","__typename":"User"},"bodyText":"","labels":{"nodes":[]},"comments":{"nodes":[]}}]}}]}}}}`), nil
 	case strings.Contains(j, "search("):
 		return []byte(`{"data":{"search":{"pageInfo":{"hasNextPage":false},"nodes":[]}}}`), nil
 	case strings.Contains(j, "k0:"):
@@ -80,8 +87,8 @@ type Rig struct {
 }
 
 // New initializes a casebook, syncs it once (so the index has items:
-// repo:schuettc/hail, pr:schuettc/hail#3, issue:schuettc/hail#4 and the
-// branch/worktree items from the scanned clone), and opens it.
+// repo:schuettc/hail, pr:schuettc/hail#3, issue:schuettc/hail#4 through #7,
+// and the branch/worktree items from the scanned clone), and opens it.
 func New(t testing.TB) *Rig {
 	t.Helper()
 	ctx := context.Background()

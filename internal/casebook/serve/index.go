@@ -47,6 +47,21 @@ func (x *Index) Item(key string) (engine.Item, bool) {
 	return it, ok
 }
 
+// InAttention reports whether key is currently in the engine's attention set.
+// Items whose earlier decision has expired and returned to attention (e.g.
+// a wait that lapsed) are included. This uses the engine's own Attention()
+// criteria: status new, due, drift, or conflict, or any policy hit.
+func (x *Index) InAttention(key string) bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	for _, it := range x.res.Attention() {
+		if it.ID == key {
+			return true
+		}
+	}
+	return false
+}
+
 // Views of the attention list (casebook workbench spec §3.2).
 const (
 	ViewWaiting  = "waiting"  // policy: incoming, no reply from you

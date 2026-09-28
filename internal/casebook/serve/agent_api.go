@@ -15,6 +15,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/propose"
 )
 
 func jsonString(v any) (string, error) {
@@ -208,10 +209,39 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	ps, errs := s.Props.Propose(ctx, source(sess), in.Keys, in.Disposition, in.Until, in.Note)
+
+	// Proposals are only for items that are currently in attention (awaiting
+	// Court's decision). A decided item whose earlier wait has expired and
+	// returned to attention is still accepted; the engine's own Attention()
+	// set is the authoritative source.
+	//
+	// Items not yet known to the index (not yet synced from GitHub) pass
+	// through: the agent may propose on items it discovered before the next
+	// sync ran. Only items that ARE in the index but NOT in attention are
+	// refused
+	var attentionKeys []string
 	var msgs []string
-	for _, e := range errs {
-		msgs = append(msgs, e.Error())
+	for _, raw := range in.Keys {
+		k, err := item.ParseKey(raw)
+		if err != nil {
+			msgs = append(msgs, err.Error())
+			continue
+		}
+		it, known := s.Index.Item(k.String())
+		if known && !s.Index.InAttention(k.String()) {
+			msgs = append(msgs, fmt.Sprintf("%s is not in attention: current status is %s", k, it.Status))
+			continue
+		}
+		attentionKeys = append(attentionKeys, raw)
+	}
+
+	var ps []propose.Proposal
+	if len(attentionKeys) > 0 {
+		var propErrs []error
+		ps, propErrs = s.Props.Propose(ctx, source(sess), attentionKeys, in.Disposition, in.Until, in.Note)
+		for _, e := range propErrs {
+			msgs = append(msgs, e.Error())
+		}
 	}
 	if len(ps) > 0 {
 		var ids []int64

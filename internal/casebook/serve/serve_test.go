@@ -353,6 +353,63 @@ func TestProposeAcceptWritesDecision(t *testing.T) {
 	}
 }
 
+// TestAgentProposeRefusesDecidedItem verifies that agentPropose refuses a
+// proposal for a key that is not in the engine's attention set (e.g. an item
+// that has already been decided).
+func TestAgentProposeRefusesDecidedItem(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// Decide pr:schuettc/hail#3 so it leaves attention.
+	var dec map[string]any
+	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"pr:schuettc/hail#3"}, "disposition": "keep"}, &dec); c != 200 || dec["decided"].(float64) != 1 {
+		t.Fatalf("decide %d %v", c, dec)
+	}
+
+	// The item is now decided (status: to-apply → then done after apply; here
+	// 'keep' is instantly satisfied so status is 'done'). Try to propose on it.
+	var res struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "close",
+	}, &res); c != 200 {
+		t.Fatalf("propose status %d", c)
+	}
+	if res.Proposed != 0 {
+		t.Fatalf("expected 0 proposed for decided item, got %d", res.Proposed)
+	}
+	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0], "not in attention") {
+		t.Fatalf("expected 'not in attention' error, got %v", res.Errors)
+	}
+}
+
+// TestAgentProposeAcceptsAttentionItem verifies that agentPropose accepts a
+// proposal for an item that is in the engine's attention set.
+func TestAgentProposeAcceptsAttentionItem(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// issue:schuettc/hail#4 is undecided and in attention.
+	var res struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"issue:schuettc/hail#4"},
+		"disposition": "close",
+	}, &res); c != 200 {
+		t.Fatalf("propose status %d", c)
+	}
+	if res.Proposed != 1 {
+		t.Fatalf("expected 1 proposed for attention item, got %d; errors: %v", res.Proposed, res.Errors)
+	}
+}
+
 func TestDecideDirectSupersedesProposal(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
@@ -673,10 +730,11 @@ func TestSinceListsOverruledWithReasons(t *testing.T) {
 		t.Fatalf("status %+v (page requests alone don't make the page open; a stream does)", st)
 	}
 	// The change is listed when it's among the newest ten.
-	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"pr:schuettc/hail#3"}, "disposition": "close"}, &res)
+	// Use issue:schuettc/hail#5 (still undecided and in attention) for the second proposal.
+	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"issue:schuettc/hail#5"}, "disposition": "close"}, &res)
 	r.do(t, "POST", "/api/proposals/change", map[string]any{"id": res.Proposals[0].ID, "disposition": "wait", "until": "date(2026-12-01)", "note": "after the demo"}, nil)
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &st)
-	if !strings.Contains(st.Since, "pr:schuettc/hail#3: you proposed close; Court changed it: decided wait until date(2026-12-01): after the demo") {
+	if !strings.Contains(st.Since, "issue:schuettc/hail#5: you proposed close; Court changed it: decided wait until date(2026-12-01): after the demo") {
 		t.Fatalf("since %q", st.Since)
 	}
 }
