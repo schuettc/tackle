@@ -73,3 +73,66 @@ func TestRemoveSpansNoSpans(t *testing.T) {
 		t.Fatalf("RemoveSpans with no spans = %q, want unchanged %q", got, src)
 	}
 }
+
+// TestRemoveSpansCRLFMiddle removes a span in the middle of a CRLF file
+// and checks the result keeps CRLF endings and collapses the blank run
+// to exactly one blank line ("\r\n\r\n"), never mixing in bare "\n".
+func TestRemoveSpansCRLFMiddle(t *testing.T) {
+	prefix := "package a\r\n\r\nfunc before() {}\r\n\r\n"
+	target := "func TestA() {\r\n\tt.Fail()\r\n}"
+	suffix := "\r\n\r\nfunc after() {}\r\n"
+	src := prefix + target + suffix
+	start := len(prefix)
+	end := start + len(target)
+
+	got := string(RemoveSpans([]byte(src), []cases.Span{{Start: start, End: end}}))
+	want := "package a\r\n\r\nfunc before() {}\r\n\r\nfunc after() {}\r\n"
+	if got != want {
+		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRemoveSpansCRLFEndOfFileNoTrailingNewline removes a span that is
+// the last bytes of a CRLF file with no trailing newline at all.
+func TestRemoveSpansCRLFEndOfFileNoTrailingNewline(t *testing.T) {
+	prefix := "package a\r\n\r\nfunc before() {}\r\n\r\n"
+	target := "func TestA() {\r\n\tt.Fail()\r\n}"
+	src := prefix + target
+	start := len(prefix)
+	end := start + len(target)
+
+	got := string(RemoveSpans([]byte(src), []cases.Span{{Start: start, End: end}}))
+	want := "package a\r\n\r\nfunc before() {}\r\n\r\n"
+	if got != want {
+		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestRemoveSpansCRLFTwoSpans removes two spans from a CRLF file and
+// checks every byte outside them is untouched and CRLF is preserved
+// throughout, including in the collapsed blank run.
+func TestRemoveSpansCRLFTwoSpans(t *testing.T) {
+	prefix := "package a\r\n\r\n"
+	testOne := "func TestOne(t *testing.T) {\r\n\tif 1 != 1 {\r\n\t\tt.Fail()\r\n\t}\r\n}"
+	middle := "\r\n\r\nfunc keep() {}\r\n\r\n"
+	testTwo := "func TestTwo(t *testing.T) {\r\n\tif 2 != 2 {\r\n\t\tt.Fail()\r\n\t}\r\n}"
+	suffix := "\r\n"
+
+	src := prefix + testOne + middle + testTwo + suffix
+
+	oneStart := len(prefix)
+	oneEnd := oneStart + len(testOne)
+	twoStart := len(prefix) + len(testOne) + len(middle)
+	twoEnd := twoStart + len(testTwo)
+
+	spans := []cases.Span{
+		{Start: oneStart, End: oneEnd},
+		{Start: twoStart, End: twoEnd},
+	}
+
+	got := string(RemoveSpans([]byte(src), spans))
+	want := "package a\r\n\r\nfunc keep() {}\r\n\r\n"
+	if got != want {
+		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
+	}
+}
