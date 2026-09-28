@@ -423,6 +423,16 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fix 4: Only approved, running, or paused jobs can accept step reports.
+	switch job.State {
+	case apply.JobApproved, apply.JobRunning, apply.JobPaused:
+		// ok
+	default:
+		reply(w, nil, httpError{code: http.StatusConflict,
+			msg: fmt.Sprintf("job %d is %s: cannot accept step updates", job.ID, job.State)})
+		return
+	}
+
 	// Find the step in the job.
 	var step apply.JobStep
 	var found bool
@@ -441,7 +451,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 
 	switch in.State {
 	case "started":
-		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepRunning, ""); err != nil {
+		// Fix 4: atomically start the step and move an approved job to running.
+		if err := s.Apply.StartStepWithJob(ctx, job.ID, step.ID); err != nil {
 			reply(w, nil, bad("%v", err))
 			return
 		}
@@ -467,11 +478,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case "paused":
-		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepPaused, in.Detail); err != nil {
-			reply(w, nil, bad("%v", err))
-			return
-		}
-		ny, err := s.Apply.OpenNeedsYou(ctx, in.Job, step.ID, "paused", in.Detail, "")
+		// Fix 2: atomic step state + card.
+		ny, err := s.Apply.PauseStepWithCard(ctx, step.ID, apply.StepPaused, "paused", in.Detail)
 		if err != nil {
 			reply(w, nil, bad("%v", err))
 			return
@@ -480,11 +488,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 		s.Bus.Publish(ctx, "needs_you", ny)
 
 	case "failed":
-		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepFailed, in.Detail); err != nil {
-			reply(w, nil, bad("%v", err))
-			return
-		}
-		ny, err := s.Apply.OpenNeedsYou(ctx, in.Job, step.ID, "failed", in.Detail, "")
+		// Fix 2: atomic step state + card.
+		ny, err := s.Apply.PauseStepWithCard(ctx, step.ID, apply.StepFailed, "failed", in.Detail)
 		if err != nil {
 			reply(w, nil, bad("%v", err))
 			return
@@ -517,8 +522,19 @@ func (s *Server) agentJobAsk(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	if _, err := s.jobForSession(ctx, in.Job, in.Session); err != nil {
+	jobForAsk, err := s.jobForSession(ctx, in.Job, in.Session)
+	if err != nil {
 		reply(w, nil, err)
+		return
+	}
+
+	// Fix 4: Only approved, running, or paused jobs can accept job-ask.
+	switch jobForAsk.State {
+	case apply.JobApproved, apply.JobRunning, apply.JobPaused:
+		// ok
+	default:
+		reply(w, nil, httpError{code: http.StatusConflict,
+			msg: fmt.Sprintf("job %d is %s: cannot accept job-ask", jobForAsk.ID, jobForAsk.State)})
 		return
 	}
 

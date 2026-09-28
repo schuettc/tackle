@@ -86,13 +86,29 @@ func TestObserveGhRepoNotYetArchived(t *testing.T) {
 
 func TestObserveGhRepoDeleteGone(t *testing.T) {
 	step := JobStep{Key: "repo:schuettc/hail", Action: "repo-delete"}
-	gh := staticGh{err: errors.New("not found")}
+	// gh returns the canonical "not found" error for a missing repo.
+	gh := staticGh{err: errors.New("Could not resolve to a Repository with the name 'schuettc/hail'")}
 	obs := ObserveGh(context.Background(), step, gh)
 	if !obs.Known || obs.Exists {
 		t.Fatalf("ObserveGh delete gone: %+v", obs)
 	}
 	if s := Verify(step, obs); s != StepVerified {
 		t.Fatalf("Verify delete: %q", s)
+	}
+}
+
+// TestObserveGhRepoDeleteOtherError verifies that a non-not-found gh error
+// leaves the observation inconclusive (fix 3: only the not-found text counts).
+func TestObserveGhRepoDeleteOtherError(t *testing.T) {
+	step := JobStep{Key: "repo:schuettc/hail", Action: "repo-delete"}
+	gh := staticGh{err: errors.New("connection refused")}
+	obs := ObserveGh(context.Background(), step, gh)
+	if obs.Known {
+		t.Fatalf("network error should give inconclusive observation, got %+v", obs)
+	}
+	// Verify returns StepReported (inconclusive) — step stays reported.
+	if s := Verify(step, obs); s != StepReported {
+		t.Fatalf("Verify: %q, want reported", s)
 	}
 }
 

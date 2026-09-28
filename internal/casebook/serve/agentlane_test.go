@@ -172,12 +172,18 @@ func TestJobStepReportsState(t *testing.T) {
 		t.Fatalf("reported: %d %v", code, reportedOut)
 	}
 
-	// Step should be verified (the fake Gh returns CLOSED for pr views).
+	// Step must be verified — the fake Gh returns CLOSED for pr views and
+	// Verify(pr-close, CLOSED) → StepVerified.
 	refreshed2, _ := r.s.Apply.Get(ctx, job.ID)
+	var finalStep apply.JobStep
 	for _, s := range refreshed2.Steps {
-		if s.ID == step.ID && (s.State == apply.StepVerified || s.State == apply.StepReported) {
-			return // OK: verified or inconclusive (fake Gh may not handle this query)
+		if s.ID == step.ID {
+			finalStep = s
 		}
+	}
+	if finalStep.State != apply.StepVerified {
+		t.Fatalf("step state = %q after reported, want %q (FakeGh returns CLOSED)",
+			finalStep.State, apply.StepVerified)
 	}
 }
 
@@ -362,5 +368,103 @@ func TestJobAskWrongSession(t *testing.T) {
 		"text":     "text",
 	}, &out); code != http.StatusForbidden {
 		t.Fatalf("wrong session: got %d, want 403", code)
+	}
+}
+
+// TestStartedMovesApprovedJobToRunning verifies that the first "started" call
+// atomically moves an approved job to running (fix 4).
+func TestStartedMovesApprovedJobToRunning(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	job, err := r.s.Apply.Create(ctx, agentTestPlan(), "mbp")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job, err = r.s.Apply.Approve(ctx, job.ID, "s1")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if job.State != apply.JobApproved {
+		t.Fatalf("job state after approve = %q, want approved", job.State)
+	}
+
+	var out map[string]any
+	if code := r.do(t, "POST", "/api/agent/job-step", map[string]any{
+		"session": "s1",
+		"job":     job.ID,
+		"step":    job.Steps[0].ID,
+		"state":   "started",
+	}, &out); code != http.StatusOK {
+		t.Fatalf("started: %d %v", code, out)
+	}
+
+	refreshed, err := r.s.Apply.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.State != apply.JobRunning {
+		t.Fatalf("job state = %q after first started, want running", refreshed.State)
+	}
+}
+
+// TestJobStepRefuses409ForInvalidJobState verifies that job-step returns 409
+// when the job is in a terminal state (fix 4).
+func TestJobStepRefuses409ForInvalidJobState(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	job, err := r.s.Apply.Create(ctx, agentTestPlan(), "mbp")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job, err = r.s.Apply.Approve(ctx, job.ID, "s1")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if err := r.s.Apply.Finish(ctx, job.ID, apply.JobFailed); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	var out map[string]any
+	code := r.do(t, "POST", "/api/agent/job-step", map[string]any{
+		"session": "s1",
+		"job":     job.ID,
+		"step":    job.Steps[0].ID,
+		"state":   "started",
+	}, &out)
+	if code != http.StatusConflict {
+		t.Fatalf("job-step on failed job: got %d %v, want 409", code, out)
+	}
+}
+
+// TestJobAskRefuses409ForInvalidJobState verifies that job-ask returns 409
+// when the job is in a terminal state (fix 4).
+func TestJobAskRefuses409ForInvalidJobState(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	job, err := r.s.Apply.Create(ctx, agentTestPlan(), "mbp")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	job, err = r.s.Apply.Approve(ctx, job.ID, "s1")
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if err := r.s.Apply.Finish(ctx, job.ID, apply.JobDone); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+
+	var out map[string]any
+	code := r.do(t, "POST", "/api/agent/job-ask", map[string]any{
+		"session":  "s1",
+		"job":      job.ID,
+		"step":     job.Steps[0].ID,
+		"question": "ok?",
+		"text":     "text",
+	}, &out)
+	if code != http.StatusConflict {
+		t.Fatalf("job-ask on done job: got %d %v, want 409", code, out)
 	}
 }

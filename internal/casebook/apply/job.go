@@ -568,6 +568,108 @@ func (s *Store) SetStepRestore(ctx context.Context, stepID int64, restore string
 	return nil
 }
 
+// PauseStepWithCard atomically transitions a step to the given state
+// (StepPaused or StepFailed) and opens a needs-you card for it in one
+// transaction. If the card insert fails the step state change is also
+// rolled back, so a retry never leaves a step stuck without a card.
+func (s *Store) PauseStepWithCard(ctx context.Context, stepID int64, state StepState, kind, question string) (NeedsYou, error) {
+	now := s.Now()
+	var ny NeedsYou
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		var current StepState
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM steps WHERE id = ?`, stepID).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("step %d not found", stepID)
+			}
+			return err
+		}
+		if !validStepTransitions[current][state] {
+			return &ErrInvalidTransition{Kind: "step", ID: stepID, From: current, To: state}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE steps SET state = ?, detail = ?, updated_at = ? WHERE id = ?`,
+			state, question, ms(now), stepID,
+		); err != nil {
+			return err
+		}
+		// Look up job_id for the step.
+		var jobID int64
+		if err := tx.QueryRowContext(ctx, `SELECT job_id FROM steps WHERE id = ?`, stepID).Scan(&jobID); err != nil {
+			return err
+		}
+		var stepVal interface{} = stepID
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO needs_you(job_id, step_id, kind, question, text, state, created_at)
+			 VALUES (?, ?, ?, ?, '', 'open', ?)`,
+			jobID, stepVal, kind, question, ms(now))
+		if err != nil {
+			return err
+		}
+		id, err := res.LastInsertId()
+		if err != nil {
+			return err
+		}
+		ny = NeedsYou{
+			ID:        id,
+			JobID:     jobID,
+			StepID:    stepID,
+			Kind:      kind,
+			Question:  question,
+			State:     "open",
+			CreatedAt: now,
+		}
+		return nil
+	})
+	if err != nil {
+		return NeedsYou{}, err
+	}
+	return ny, nil
+}
+
+// StartStepWithJob atomically transitions a step from pending to running and,
+// if the job is currently approved, also moves the job to running. This
+// ensures the first "started" call moves an approved job to running in one
+// transaction (fix 4).
+func (s *Store) StartStepWithJob(ctx context.Context, jobID, stepID int64) error {
+	now := s.Now()
+	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Validate step transition.
+		var current StepState
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM steps WHERE id = ?`, stepID).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("step %d not found", stepID)
+			}
+			return err
+		}
+		if !validStepTransitions[current][StepRunning] {
+			return &ErrInvalidTransition{Kind: "step", ID: stepID, From: current, To: StepRunning}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE steps SET state = ?, updated_at = ? WHERE id = ?`,
+			StepRunning, ms(now), stepID,
+		); err != nil {
+			return err
+		}
+		// If the job is approved, move it to running.
+		var jobState JobState
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, jobID).Scan(&jobState); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("job %d not found", jobID)
+			}
+			return err
+		}
+		if jobState == JobApproved {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE jobs SET state = ? WHERE id = ?`,
+				JobRunning, jobID,
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // OpenNeedsYou creates a new open needs-you card for the given job.
 // stepID may be 0 if the card is not associated with a specific step.
 func (s *Store) OpenNeedsYou(ctx context.Context, jobID, stepID int64, kind, question, text string) (NeedsYou, error) {

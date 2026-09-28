@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/observe"
@@ -68,8 +69,16 @@ func ObserveGh(ctx context.Context, step JobStep, gh observe.Runner) item.Observ
 
 	case "repo-delete":
 		_, err := gh.Gh(ctx, "repo", "view", k.Repo())
-		// err != nil means the repo doesn't exist (was deleted).
-		return item.Observed{Known: true, Exists: err == nil}
+		if err == nil {
+			// No error: repo still exists.
+			return item.Observed{Known: true, Exists: true}
+		}
+		// Only the canonical gh "not found" message counts as deleted.
+		// Any other error (network, auth, etc.) is inconclusive.
+		if strings.Contains(err.Error(), "Could not resolve to a Repository") {
+			return item.Observed{Known: true, Exists: false}
+		}
+		return item.Observed{} // inconclusive
 	}
 	return item.Observed{}
 }

@@ -1126,3 +1126,75 @@ func TestSetJobStatePlannedToApprovedFails(t *testing.T) {
 		t.Error("SetJobState planned→approved should fail; use Approve() instead")
 	}
 }
+
+// ── Fix round 1: Fix 2 – PauseStepWithCard atomicity ────────────────────────
+
+// TestPauseStepWithCardIsAtomic verifies that PauseStepWithCard sets the step
+// state and inserts the needs-you card in a single transaction: if the
+// operation fails (simulated by dropping needs_you), the step state is
+// unchanged.
+func TestPauseStepWithCardIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "atomic.db")
+
+	d, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewStore(d)
+
+	// Create an agent-lane job and move the first step to running.
+	agentPlan := Plan{
+		Steps: []Step{
+			{Key: "pr:schuettc/hail#3", Action: "pr-close", Lane: LaneAgent,
+				Command: "gh pr close 3 -R schuettc/hail"},
+		},
+	}
+	job, err := s.Create(ctx, agentPlan, "mbp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err = s.Approve(ctx, job.ID, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := job.Steps[0]
+
+	if err := s.SetStepState(ctx, step.ID, StepRunning, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Drop the needs_you table so the INSERT in PauseStepWithCard fails.
+	if _, err := d.ExecContext(ctx, "DROP TABLE needs_you"); err != nil {
+		t.Fatalf("drop needs_you: %v", err)
+	}
+
+	// PauseStepWithCard must fail.
+	_, err = s.PauseStepWithCard(ctx, step.ID, StepPaused, "paused", "forced failure")
+	if err == nil {
+		t.Fatal("expected error from PauseStepWithCard when needs_you is gone")
+	}
+
+	// Reopen the DB and verify the step state is still running (rollback).
+	d.Close()
+	d2, err := db.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d2.Close()
+	s2 := NewStore(d2)
+	steps, err := s2.Steps(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range steps {
+		if st.ID == step.ID {
+			if st.State != StepRunning {
+				t.Errorf("step state = %q after failed PauseStepWithCard, want running (rollback)", st.State)
+			}
+			return
+		}
+	}
+	t.Fatal("step not found after reopen")
+}
