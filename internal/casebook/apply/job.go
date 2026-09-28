@@ -530,36 +530,6 @@ func (s *Store) ClaimNext(ctx context.Context, jobID int64, lane Lane) (JobStep,
 	return claimed, found, nil
 }
 
-// NextRunnable is deprecated: use ClaimNext. It returns the first pending step
-// in the given lane without claiming it; preserved for callers not yet migrated.
-func (s *Store) NextRunnable(ctx context.Context, jobID int64, lane Lane) (JobStep, bool, error) {
-	// Check if the job is paused.
-	var paused int
-	if err := s.DB.QueryRowContext(ctx, `SELECT paused FROM jobs WHERE id = ?`, jobID).Scan(&paused); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return JobStep{}, false, fmt.Errorf("job %d not found", jobID)
-		}
-		return JobStep{}, false, err
-	}
-	if paused != 0 {
-		return JobStep{}, false, nil
-	}
-
-	row := s.DB.QueryRowContext(ctx,
-		`SELECT id, job_id, key, action, lane, command, precondition, posts, expected_tip, text, restore,
-		        state, detail, verified_at
-		 FROM steps WHERE job_id = ? AND lane = ? AND state = ? ORDER BY pos LIMIT 1`,
-		jobID, string(lane), StepPending)
-	st, err := scanStep(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return JobStep{}, false, nil
-		}
-		return JobStep{}, false, err
-	}
-	return st, true, nil
-}
-
 // SetStepText sets the approved public text for a step and updates updated_at.
 // It returns an error if no step with the given ID exists.
 func (s *Store) SetStepText(ctx context.Context, stepID int64, text string) error {
