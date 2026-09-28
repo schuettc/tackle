@@ -62,12 +62,6 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 	if strings.ContainsAny(step.Command, "\t\n") || strings.ContainsAny(step.Key, "\t\n") {
 		return StepResult{State: StepFailed, Detail: "unsafe path: contains a tab or newline"}, nil
 	}
-	// A branch delete without an expected tip would be unconditional
-	// (`update-ref -d <ref>` with no old value deletes whatever is there), so it
-	// never runs: the compare-and-delete guard depends on the tip.
-	if (step.Action == "branch-delete-local" || step.Action == "branch-delete-remote") && step.ExpectedTip == "" {
-		return StepResult{State: StepFailed, Detail: "no expected tip: refusing an unconditional delete"}, nil
-	}
 	chk, err := Check(ctx, step, env)
 	if err != nil {
 		return StepResult{State: StepFailed, Detail: err.Error()}, nil
@@ -78,6 +72,12 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 
 	var restoreCmd string
 	if !chk.Done {
+		// A branch delete without an expected tip would be unconditional
+		// (`update-ref -d <ref>` with no old value deletes whatever is there), so it
+		// never runs: the compare-and-delete guard depends on the tip.
+		if (step.Action == "branch-delete-local" || step.Action == "branch-delete-remote") && step.ExpectedTip == "" {
+			return StepResult{State: StepFailed, Detail: "no expected tip: refusing an unconditional delete"}, nil
+		}
 		// Restore record BEFORE the destructive command (Review Focus 5).
 		if rec, has := RestoreFor(step, chk); has {
 			committed, err := r.Repo.AppendRestore(ctx, r.now().UTC().Format("2006-01-02"), rec)

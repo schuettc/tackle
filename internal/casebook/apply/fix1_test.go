@@ -334,11 +334,13 @@ func TestBranchDeleteWithoutExpectedTipNeverRuns(t *testing.T) {
 			Precondition: "branch-tip-unchanged-and-landed",
 		}
 		res, _ := r.RunStep(ctx, step, Env{RunGit: spy.run})
-		if res.State != StepFailed || !strings.Contains(res.Detail, "no expected tip") {
-			t.Fatalf("%s: %+v, want failed with no expected tip", action, res)
+		if res.State == StepReported || res.State == StepVerified {
+			t.Fatalf("%s: %+v, a delete without an expected tip must never succeed", action, res)
 		}
 	}
-	if len(spy.calls) != 0 {
-		t.Errorf("no git should have run; ran %v", spy.calls)
+	for _, c := range spy.calls {
+		if j := strings.Join(c, " "); strings.Contains(j, "update-ref") || strings.Contains(j, "push") {
+			t.Errorf("a delete command ran without an expected tip: %s", c)
+		}
 	}
 }
