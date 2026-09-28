@@ -11,8 +11,8 @@ func writeConfig(t *testing.T, body string) {
 	t.Helper()
 	home := t.TempDir()
 	cfg := filepath.Join(home, ".config", "proj")
-	os.MkdirAll(cfg, 0o755)
-	os.WriteFile(filepath.Join(cfg, "config.toml"), []byte(body), 0o644)
+	_ = os.MkdirAll(cfg, 0o755)
+	_ = os.WriteFile(filepath.Join(cfg, "config.toml"), []byte(body), 0o644)
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 }

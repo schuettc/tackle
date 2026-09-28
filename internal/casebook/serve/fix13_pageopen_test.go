@@ -24,7 +24,7 @@ func TestPageOpenFlagAtomic(t *testing.T) {
 
 	flag := func() string {
 		var v string
-		r.s.DB.QueryRow("SELECT value FROM meta WHERE key = 'page_open'").Scan(&v)
+		_ = r.s.DB.QueryRow("SELECT value FROM meta WHERE key = 'page_open'").Scan(&v)
 		return v
 	}
 

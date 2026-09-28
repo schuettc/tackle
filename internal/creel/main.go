@@ -105,7 +105,7 @@ func run(cwd string, argv []string, stdout, stderr io.Writer) int {
 
 	a, err := parseArgs(argv)
 	if err != nil {
-		fmt.Fprintf(stderr, "creel: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "creel: %v\n", err)
 		return 2
 	}
 	if a.name != "" && !ValidName(a.name) {
@@ -130,13 +130,13 @@ func finish(stderr io.Writer, statusFile, eventFile string, res Result) int {
 
 	switch {
 	case res.Err != nil:
-		fmt.Fprintf(stderr, "creel: %v\n", res.Err)
+		_, _ = fmt.Fprintf(stderr, "creel: %v\n", res.Err)
 		return 1
 	case res.Action == Cancelled:
-		fmt.Fprintln(stderr, "creel: cancelled")
+		_, _ = fmt.Fprintln(stderr, "creel: cancelled")
 		return 1
 	default:
-		fmt.Fprintf(stderr, "✓ %s %s in %s\n", res.Action, res.Name, res.Dest)
+		_, _ = fmt.Fprintf(stderr, "✓ %s %s in %s\n", res.Action, res.Name, res.Dest)
 		return 0
 	}
 }
@@ -146,7 +146,7 @@ func finish(stderr io.Writer, statusFile, eventFile string, res Result) int {
 func Dispatch(args []string, out, errw io.Writer) int {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(errw, err)
+		_, _ = fmt.Fprintln(errw, err)
 		return 1
 	}
 	return run(cwd, args, out, errw)

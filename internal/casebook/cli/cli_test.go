@@ -57,7 +57,7 @@ func setup(t *testing.T) *env {
 	e := &env{t: t, remote: testgit.NewBare(t)}
 	e.root, _ = filepath.EvalSymlinks(t.TempDir())
 	e.clone = filepath.Join(e.root, "hail")
-	os.MkdirAll(e.clone, 0o755)
+	_ = os.MkdirAll(e.clone, 0o755)
 	testgit.Git(t, e.clone, "init", "-q", "-b", "main")
 	c := testgit.Commit(t, e.clone, "a", "1")
 	testgit.Git(t, e.clone, "remote", "add", "origin", "https://github.com/schuettc/hail.git")
@@ -155,7 +155,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	sheet = sheet[:i] + strings.Replace(sheet[i:], `disposition = ""`, `disposition = "keep"`, 1)
 	f := filepath.Join(t.TempDir(), "t.toml")
-	os.WriteFile(f, []byte(sheet), 0o644)
+	_ = os.WriteFile(f, []byte(sheet), 0o644)
 	if out := e.ok("decide", "--from", f); !strings.Contains(out, "1 decision") {
 		t.Errorf("decide --from: %q", out)
 	}
@@ -167,7 +167,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	e.ok("hooks", "install")
 	var hs map[string]any
-	json.Unmarshal([]byte(e.ok("hooks", "status", "--json")), &hs)
+	_ = json.Unmarshal([]byte(e.ok("hooks", "status", "--json")), &hs)
 	if hs["installed"] != true {
 		t.Errorf("hooks status %v", hs)
 	}
@@ -176,7 +176,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	// A clone with a local core.hooksPath bypasses the global shims until adopted.
 	husky := filepath.Join(e.root, "husky")
-	os.MkdirAll(husky, 0o755)
+	_ = os.MkdirAll(husky, 0o755)
 	testgit.Git(t, husky, "init", "-q", "-b", "main")
 	testgit.Commit(t, husky, "a", "1")
 	testgit.Git(t, husky, "config", "core.hooksPath", ".githooks")
@@ -187,7 +187,7 @@ func TestEndToEnd(t *testing.T) {
 	var hs2 struct {
 		Adopted []string `json:"adopted"`
 	}
-	json.Unmarshal([]byte(e.ok("hooks", "status", "--json")), &hs2)
+	_ = json.Unmarshal([]byte(e.ok("hooks", "status", "--json")), &hs2)
 	if len(hs2.Adopted) != 1 {
 		t.Errorf("adopted entries = %v, want one", hs2.Adopted)
 	}

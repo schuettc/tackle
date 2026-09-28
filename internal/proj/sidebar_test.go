@@ -47,7 +47,7 @@ func TestAppCommand(t *testing.T) {
 func TestBuildSidebarTagsPanes(t *testing.T) {
 	requireTmux(t) // from Phase 1
 	sock := "proj-p3-test"
-	defer Run(sock, "kill-server")
+	defer func() { _, _ = Run(sock, "kill-server") }()
 	dir := t.TempDir()
 	if _, err := EnsureSession(sock, "proj-p3-test/w", dir, "none", "", nil); err != nil {
 		t.Fatal(err)

@@ -140,7 +140,7 @@ func (r *Repo) AppendFile(rel string, b []byte) error {
 		return err
 	}
 	if _, err := f.Write(b); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()

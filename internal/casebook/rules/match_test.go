@@ -321,7 +321,7 @@ func TestRuleRecordCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 
 	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
 	s := propose.New(d)

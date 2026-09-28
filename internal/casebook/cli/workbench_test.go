@@ -108,12 +108,12 @@ func TestSettledFromClaudeStopHook(t *testing.T) {
 	defer run("serve", "--stop")
 	c := channel.NewClient()
 	ctx := context.Background()
-	c.Do(ctx, http.MethodPost, "/api/agent/presence", map[string]any{"id": "cc-9", "harness": "claude"}, nil)
+	_, _ = c.Do(ctx, http.MethodPost, "/api/agent/presence", map[string]any{"id": "cc-9", "harness": "claude"}, nil)
 	var th struct {
 		ID int64 `json:"id"`
 	}
-	c.Do(ctx, http.MethodPost, "/api/threads", map[string]any{"session": "cc-9", "name": "t"}, &th)
-	c.Do(ctx, http.MethodPost, "/api/messages", map[string]any{"thread": th.ID, "body": "hi"}, nil)
+	_, _ = c.Do(ctx, http.MethodPost, "/api/threads", map[string]any{"session": "cc-9", "name": "t"}, &th)
+	_, _ = c.Do(ctx, http.MethodPost, "/api/messages", map[string]any{"thread": th.ID, "body": "hi"}, nil)
 	// Wait to get the delivery id (updated from old unconditional settled: now must pass delivery in shown).
 	var waited struct {
 		Delivery struct {
@@ -142,7 +142,7 @@ func TestSettledFromClaudeStopHook(t *testing.T) {
 			State string `json:"state"`
 		} `json:"messages"`
 	}
-	c.Do(ctx, http.MethodGet, "/api/messages?thread="+itoa(th.ID), nil, &msgs)
+	_, _ = c.Do(ctx, http.MethodGet, "/api/messages?thread="+itoa(th.ID), nil, &msgs)
 	if len(msgs.Messages) != 1 || msgs.Messages[0].State != "unanswered" {
 		t.Fatalf("messages %+v", msgs)
 	}
@@ -279,10 +279,10 @@ func TestShownInTranscriptLongLine(t *testing.T) {
 	}
 	// Write a line longer than 300 KiB (> the old 256 KiB scanner limit).
 	longContent := strings.Repeat("x", 300*1024)
-	fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"%s"}}`+"\n", longContent)
+	_, _ = fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"%s"}}`+"\n", longContent)
 	// Follow with a casebook delivery entry.
-	fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"<channel source=\"casebook\" delivery=\"42\"><\/channel>"}}`+"\n")
-	f.Close()
+	_, _ = fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"<channel source=\"casebook\" delivery=\"42\"><\/channel>"}}`+"\n")
+	_ = f.Close()
 
 	ids := shownInTranscript(context.Background(), path)
 	if len(ids) != 1 || ids[0] != 42 {
@@ -339,7 +339,7 @@ func TestSettledWithoutServeIsSilent(t *testing.T) {
 func TestSettledClaudeHungStdinReturns(t *testing.T) {
 	wbSetup(t)
 	pr, _ := io.Pipe() // writer is never closed – simulates a hung stdin
-	defer pr.Close()
+	defer func() { _ = pr.Close() }()
 
 	type result struct {
 		code int

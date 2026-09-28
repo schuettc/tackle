@@ -61,7 +61,7 @@ func TestRunAdvertStopAndInterrupt(t *testing.T) {
 
 func TestStaleAdvertIsNotRunning(t *testing.T) {
 	apptest.New(t)
-	writeAdvert(Advert{PID: 999999, Base: "http://127.0.0.1:1"})
+	_ = writeAdvert(Advert{PID: 999999, Base: "http://127.0.0.1:1"})
 	if _, err := Running(); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("got %v", err)
 	}
@@ -108,7 +108,7 @@ func call(t *testing.T, adv Advert, method, path string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
@@ -171,7 +171,7 @@ func callBody(t *testing.T, adv Advert, path, body string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 

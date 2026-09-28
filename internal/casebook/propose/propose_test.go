@@ -18,11 +18,11 @@ func newStore(t *testing.T) (*Store, *time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
 	s := New(d)
 	s.Now = func() time.Time { return now }
-	d.Exec("INSERT INTO sessions(id, first_seen, last_seen) VALUES ('s1', 1, 1)")
+	_, _ = d.Exec("INSERT INTO sessions(id, first_seen, last_seen) VALUES ('s1', 1, 1)")
 	return s, &now
 }
 
@@ -50,10 +50,10 @@ func TestSettleAndTally(t *testing.T) {
 	ps, _ := s.Propose(ctx, "pi:s1", []string{"pr:a/b#1", "pr:a/b#2", "pr:a/b#3", "pr:a/b#4"}, "close", "", "")
 	since := *now
 	*now = now.Add(time.Minute)
-	s.Settle(ctx, ps[0].ID, Accepted, "")
-	s.Settle(ctx, ps[1].ID, Changed, "decided keep")
+	_ = s.Settle(ctx, ps[0].ID, Accepted, "")
+	_ = s.Settle(ctx, ps[1].ID, Changed, "decided keep")
 	*now = now.Add(time.Minute)
-	s.Settle(ctx, ps[2].ID, Rejected, "still in use")
+	_ = s.Settle(ctx, ps[2].ID, Rejected, "still in use")
 	if err := s.Settle(ctx, ps[0].ID, Rejected, ""); err != ErrNotFound {
 		t.Fatalf("settling twice: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSettleAndTally(t *testing.T) {
 	if over, total, _ := s.Overruled(ctx, "pi:s1", *now, 10); total != 1 || over[0].Reason != "still in use" {
 		t.Fatalf("overruled since the rejection %+v %d", over, total)
 	}
-	s.SupersedeKey(ctx, "pr:a/b#4", 0)
+	_ = s.SupersedeKey(ctx, "pr:a/b#4", 0)
 	if p, _ := s.Pending(ctx); len(p) != 0 {
 		t.Fatalf("pending after supersede %+v", p)
 	}
@@ -86,7 +86,7 @@ func TestEvidenceAndProgress(t *testing.T) {
 	if len(ev) != 1 || ev[0].Author != "pi:s1" {
 		t.Fatalf("evidence %+v", ev)
 	}
-	s.SetProgress(ctx, "s1", "checking CI on #671", 2, 4)
+	_, _ = s.SetProgress(ctx, "s1", "checking CI on #671", 2, 4)
 	*now = now.Add(3 * time.Minute)
 	p, _ := s.SetProgress(ctx, "s1", "checking CI on #672", 3, 4)
 	if p.N != 3 || p.UpdatedAt.Sub(p.StartedAt) != 3*time.Minute {
@@ -212,9 +212,9 @@ func TestTrimProgressLog(t *testing.T) {
 	}
 	// Insert an orphaned progress_log row for a session that doesn't exist.
 	// Temporarily disable FK enforcement so we can insert without a sessions row.
-	s.DB.Exec("PRAGMA foreign_keys = OFF")
-	s.DB.Exec("INSERT INTO progress_log(session_id, text, n, total, at) VALUES ('gone', 'old', 0, 0, 1)")
-	s.DB.Exec("PRAGMA foreign_keys = ON")
+	_, _ = s.DB.Exec("PRAGMA foreign_keys = OFF")
+	_, _ = s.DB.Exec("INSERT INTO progress_log(session_id, text, n, total, at) VALUES ('gone', 'old', 0, 0, 1)")
+	_, _ = s.DB.Exec("PRAGMA foreign_keys = ON")
 
 	// Trim must remove orphaned rows but leave s1's row intact.
 	if err := s.TrimProgressLog(ctx); err != nil {
@@ -222,8 +222,8 @@ func TestTrimProgressLog(t *testing.T) {
 	}
 
 	var goneCount, s1Count int
-	s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 'gone'").Scan(&goneCount)
-	s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 's1'").Scan(&s1Count)
+	_ = s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 'gone'").Scan(&goneCount)
+	_ = s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 's1'").Scan(&s1Count)
 	if goneCount != 0 {
 		t.Errorf("progress_log rows for vanished session 'gone': got %d, want 0", goneCount)
 	}

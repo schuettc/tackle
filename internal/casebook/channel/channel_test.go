@@ -38,7 +38,7 @@ func start(t *testing.T, ch *Channel) *mcp {
 	serverOut, clientIn := io.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = ch.Run(ctx, clientOut, clientIn) }()
-	t.Cleanup(func() { cancel(); serverIn.Close() })
+	t.Cleanup(func() { cancel(); _ = serverIn.Close() })
 	sc := bufio.NewScanner(serverOut)
 	sc.Buffer(make([]byte, 1<<20), 1<<24)
 	m := &mcp{t: t, w: serverIn, sc: sc, resps: make(chan map[string]any, 256), notifs: make(chan map[string]any, 256)}
@@ -102,7 +102,7 @@ func (m *mcp) call(method string, params any) map[string]any {
 	m.t.Helper()
 	m.id++
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": m.id, "method": method, "params": params})
-	io.WriteString(m.w, string(b)+"\n")
+	_, _ = io.WriteString(m.w, string(b)+"\n")
 	select {
 	case v, ok := <-m.resps:
 		if !ok {
@@ -158,7 +158,7 @@ func TestChannelEndToEnd(t *testing.T) {
 		var ss struct {
 			Sessions []struct{ ID string } `json:"sessions"`
 		}
-		c.Do(ctx, http.MethodGet, "/api/sessions", nil, &ss)
+		_, _ = c.Do(ctx, http.MethodGet, "/api/sessions", nil, &ss)
 		if len(ss.Sessions) == 1 && ss.Sessions[0].ID == "s1" {
 			break
 		}
@@ -170,11 +170,11 @@ func TestChannelEndToEnd(t *testing.T) {
 	var th struct {
 		ID int64 `json:"id"`
 	}
-	c.Do(ctx, http.MethodPost, "/api/threads", map[string]any{"session": "s1", "name": "triage"}, &th)
+	_, _ = c.Do(ctx, http.MethodPost, "/api/threads", map[string]any{"session": "s1", "name": "triage"}, &th)
 	var msg struct {
 		ID int64 `json:"id"`
 	}
-	c.Do(ctx, http.MethodPost, "/api/messages", map[string]any{"thread": th.ID, "body": "please look at pr:schuettc/hail#3"}, &msg)
+	_, _ = c.Do(ctx, http.MethodPost, "/api/messages", map[string]any{"thread": th.ID, "body": "please look at pr:schuettc/hail#3"}, &msg)
 
 	ev := m.next(10 * time.Second)
 	if ev["method"] != "notifications/claude/channel" {
@@ -354,7 +354,7 @@ func TestToolCallCancelledWhenRunEnds(t *testing.T) {
 	// ctx is the context passed to Run; ch.runCtx is derived from it.
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = ch.Run(ctx, clientOut, clientIn) }()
-	t.Cleanup(func() { cancel(); serverIn.Close(); clientIn.Close() })
+	t.Cleanup(func() { cancel(); _ = serverIn.Close(); _ = clientIn.Close() })
 
 	scanner := bufio.NewScanner(serverOut)
 	scanner.Buffer(make([]byte, 1<<20), 1<<24)
@@ -412,7 +412,7 @@ func TestToolCallCancelledWhenRunEnds(t *testing.T) {
 	// in-flight HTTP request (which holds ch.runCtx as its context) is
 	// immediately cancelled. Also close serverIn so Run can exit cleanly.
 	cancel()
-	serverIn.Close()
+	_ = serverIn.Close()
 
 	select {
 	case <-cancelled:
@@ -643,23 +643,23 @@ func TestUnknownSessionRetries(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/agent/presence":
 			presenceCalls.Add(1)
-			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		case "/api/agent/wait":
 			w.WriteHeader(http.StatusNoContent)
 		case "/api/agent/status":
 			if statusCalls.Add(1) == 1 {
 				// First call: 404 with unknown_session code.
 				w.WriteHeader(http.StatusNotFound)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error": `unknown session "s1" (register with presence first)`,
 					"code":  "unknown_session",
 				})
 				return
 			}
 			// Subsequent calls succeed.
-			json.NewEncoder(w).Encode(map[string]any{"counts": map[string]int{}, "since": "", "page_open": false})
+			_ = json.NewEncoder(w).Encode(map[string]any{"counts": map[string]int{}, "since": "", "page_open": false})
 		default:
-			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		}
 	}))
 	t.Cleanup(ts.Close)
@@ -716,17 +716,17 @@ func TestReplyNotFoundNoPresence(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/agent/presence":
 			presenceCalls.Add(1)
-			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		case "/api/agent/wait":
 			w.WriteHeader(http.StatusNoContent)
 		case "/api/agent/reply":
 			// Message-not-found 404: no "code" field.
 			w.WriteHeader(http.StatusNotFound)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error": "message 99999: not found (not delivered to s1)",
 			})
 		default:
-			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		}
 	}))
 	t.Cleanup(ts.Close)
@@ -831,7 +831,7 @@ func TestChannelJobStepAndAskTools(t *testing.T) {
 		var ss struct {
 			Sessions []struct{ ID string } `json:"sessions"`
 		}
-		c.Do(ctx, http.MethodGet, "/api/sessions", nil, &ss)
+		_, _ = c.Do(ctx, http.MethodGet, "/api/sessions", nil, &ss)
 		if len(ss.Sessions) == 1 && ss.Sessions[0].ID == "s1" {
 			break
 		}

@@ -77,12 +77,12 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				ctx := context.Background()
 				if boolFlag(fs, "stop") {
 					if err := serve.Stop(ctx); errors.Is(err, serve.ErrNotRunning) {
-						fmt.Fprintln(out, "casebook serve is not running")
+						_, _ = fmt.Fprintln(out, "casebook serve is not running")
 						return nil
 					} else if err != nil {
 						return err
 					}
-					fmt.Fprintln(out, "casebook serve stopped")
+					_, _ = fmt.Fprintln(out, "casebook serve stopped")
 					return nil
 				}
 				port := intFlag(fs, "port")
@@ -111,11 +111,11 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 					if adv, err = startDetached(port); err != nil {
 						return err
 					}
-					fmt.Fprintf(out, "casebook serve started: %s\n", adv.Base)
+					_, _ = fmt.Fprintf(out, "casebook serve started: %s\n", adv.Base)
 				} else if err != nil {
 					return err
 				} else {
-					fmt.Fprintf(out, "casebook serve is running: %s\n", adv.Base)
+					_, _ = fmt.Fprintf(out, "casebook serve is running: %s\n", adv.Base)
 				}
 				if !boolFlag(fs, "no-open") {
 					_ = openBrowser(adv.URL)
@@ -204,7 +204,7 @@ func shownInTranscript(ctx context.Context, transcriptPath string) []int64 {
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read at most the last 8 MiB.
 	const maxBytes = 8 << 20
@@ -337,7 +337,7 @@ func channelMain(stdin io.Reader, out, errw io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := ch.Run(ctx, stdin, out); err != nil {
-		fmt.Fprintf(errw, "casebook channel: %v\n", err)
+		_, _ = fmt.Fprintf(errw, "casebook channel: %v\n", err)
 		return 1
 	}
 	return 0

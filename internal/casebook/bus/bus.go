@@ -74,7 +74,7 @@ func (b *Bus) Since(ctx context.Context, cursor int64, limit int) ([]Event, int6
 	if err != nil {
 		return nil, cursor, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Event
 	last := cursor
 	for rows.Next() {

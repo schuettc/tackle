@@ -14,7 +14,7 @@ import (
 func run(cwd string, args []string, stdout io.Writer) int {
 	path, err := notes.Path(cwd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -76,7 +76,7 @@ func cmdPath(cwd string) func([]string, io.Writer, io.Writer) error {
 		if err != nil {
 			return tools.Exitf(1, "%v", err)
 		}
-		fmt.Fprintln(out, path)
+		_, _ = fmt.Fprintln(out, path)
 		return nil
 	}
 }
@@ -92,7 +92,7 @@ func cmdPrint(cwd string) func([]string, io.Writer, io.Writer) error {
 		if err != nil {
 			return tools.Exitf(1, "%v", err)
 		}
-		fmt.Fprint(out, content)
+		_, _ = fmt.Fprint(out, content)
 		return nil
 	}
 }
@@ -117,7 +117,7 @@ func cmdAppend(cwd string) func([]string, io.Writer, io.Writer) error {
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	os.Exit(run(cwd, os.Args[1:], os.Stdout))

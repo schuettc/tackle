@@ -35,7 +35,7 @@ func newRig(t *testing.T) *rig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	s, err := New(ctx, ar.App, d)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func (r *rig) do(t *testing.T, method, path string, body any, out any) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(resp.Body)
 	if out != nil && len(b) > 0 {
 		if err := json.Unmarshal(b, out); err != nil {
@@ -621,14 +621,14 @@ func TestUnknownSessionErrorHasCode(t *testing.T) {
 		Code  string `json:"code"`
 	}
 	var rd bytes.Buffer
-	json.NewEncoder(&rd).Encode(map[string]any{"session": "ghost", "shown": []int64{}})
+	_ = json.NewEncoder(&rd).Encode(map[string]any{"session": "ghost", "shown": []int64{}})
 	req, _ := http.NewRequest("POST", r.url+"/api/agent/settled", &rd)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 404 {
 		t.Fatalf("want 404, got %d", resp.StatusCode)
 	}
@@ -754,7 +754,7 @@ func stream(t *testing.T, base, token string) func() {
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream: %v %v", resp, err)
 	}
-	return func() { cancel(); resp.Body.Close() }
+	return func() { cancel(); _ = resp.Body.Close() }
 }
 
 // eventually polls cond for up to 5 s.
@@ -857,7 +857,7 @@ func TestPageOpenFollowsTheStream(t *testing.T) {
 	}
 	flag := func() string {
 		var v string
-		r.s.DB.QueryRow("SELECT value FROM meta WHERE key = 'page_open'").Scan(&v)
+		_ = r.s.DB.QueryRow("SELECT value FROM meta WHERE key = 'page_open'").Scan(&v)
 		return v
 	}
 	r.do(t, "GET", "/api/summary", nil, nil)

@@ -59,9 +59,9 @@ func commands(stdin io.Reader) []tools.Command {
 					return err
 				}
 				if res.Created != "" {
-					fmt.Fprintf(out, "created private GitHub repo %s\n", res.Created)
+					_, _ = fmt.Fprintf(out, "created private GitHub repo %s\n", res.Created)
 				}
-				fmt.Fprintf(out, "casebook initialized: machine %s, user %s, repo %s\nnext: casebook hooks install && casebook sync\n", res.Config.Machine, res.Config.User, res.Config.CasebookRepo)
+				_, _ = fmt.Fprintf(out, "casebook initialized: machine %s, user %s, repo %s\nnext: casebook hooks install && casebook sync\n", res.Config.Machine, res.Config.User, res.Config.CasebookRepo)
 				return nil
 			},
 		},
@@ -79,7 +79,7 @@ func commands(stdin io.Reader) []tools.Command {
 				}
 				rep, err := a.Sync(ctx, app.SyncOptions{NoGitHub: boolFlag(fs, "no-github"), NoPush: boolFlag(fs, "no-push")})
 				if errors.Is(err, app.ErrSyncBusy) {
-					fmt.Fprintln(out, "another casebook sync is running; skipped")
+					_, _ = fmt.Fprintln(out, "another casebook sync is running; skipped")
 					return nil
 				}
 				if err != nil {
@@ -172,10 +172,10 @@ func commands(stdin io.Reader) []tools.Command {
 					return tools.PrintJSON(out, map[string]any{"decisions": log, "events": hist})
 				}
 				for i := len(log) - 1; i >= 0; i-- {
-					fmt.Fprintf(out, "%s  decision  %s\n", log[i].Time.UTC().Format(time.RFC3339), log[i].Subject)
+					_, _ = fmt.Fprintf(out, "%s  decision  %s\n", log[i].Time.UTC().Format(time.RFC3339), log[i].Subject)
 				}
 				for _, ev := range hist {
-					fmt.Fprintf(out, "%s  %s\n", ev.TS.UTC().Format(time.RFC3339), eventLine(ev))
+					_, _ = fmt.Fprintf(out, "%s  %s\n", ev.TS.UTC().Format(time.RFC3339), eventLine(ev))
 				}
 				return nil
 			},
@@ -211,9 +211,9 @@ func commands(stdin io.Reader) []tools.Command {
 						return tools.UsageError{Msg: fmt.Sprintf("%s: %v", from, err)}
 					}
 					n, errs, pushed := a.DecideBatch(ctx, entries, o)
-					fmt.Fprintf(out, "recorded %d decision(s)%s\n", n, pushedText(pushed, n > 0 && !o.NoPush))
+					_, _ = fmt.Fprintf(out, "recorded %d decision(s)%s\n", n, pushedText(pushed, n > 0 && !o.NoPush))
 					for _, e := range errs {
-						fmt.Fprintf(errw, "  %v\n", e)
+						_, _ = fmt.Fprintf(errw, "  %v\n", e)
 					}
 					if len(errs) > 0 {
 						return tools.Exitf(1, "%d entr(ies) not recorded", len(errs))
@@ -228,7 +228,7 @@ func commands(stdin io.Reader) []tools.Command {
 					return tools.Exitf(1, "%v", err).WithHint("casebook decide --help")
 				}
 				k, _ := item.ParseKey(pos[0])
-				fmt.Fprintf(out, "decided %s → %s by %s%s\n", k, d.Disposition, d.DecidedBy, pushedText(pushed, !o.NoPush))
+				_, _ = fmt.Fprintf(out, "decided %s → %s by %s%s\n", k, d.Disposition, d.DecidedBy, pushedText(pushed, !o.NoPush))
 				return nil
 			},
 		},
@@ -258,7 +258,7 @@ func commands(stdin io.Reader) []tools.Command {
 				if err := os.WriteFile(dest, sheet, 0o644); err != nil {
 					return err
 				}
-				fmt.Fprintf(out, "wrote %d item(s) to %s; fill it in, then: casebook decide --from %s\n", len(items), dest, dest)
+				_, _ = fmt.Fprintf(out, "wrote %d item(s) to %s; fill it in, then: casebook decide --from %s\n", len(items), dest, dest)
 				return nil
 			},
 		},
@@ -271,13 +271,13 @@ func commands(stdin io.Reader) []tools.Command {
 				}
 				errs := a.Repo.Validate()
 				for _, e := range errs {
-					fmt.Fprintf(errw, "  %v\n", e)
+					_, _ = fmt.Fprintf(errw, "  %v\n", e)
 				}
 				if len(errs) > 0 {
 					return tools.Exitf(1, "%d problem(s)", len(errs))
 				}
 				ds, _ := a.Repo.Decisions()
-				fmt.Fprintf(out, "ok: %d decision(s), policy valid\n", len(ds))
+				_, _ = fmt.Fprintf(out, "ok: %d decision(s), policy valid\n", len(ds))
 				return nil
 			},
 		},
@@ -300,7 +300,7 @@ func commands(stdin io.Reader) []tools.Command {
 					}
 				} else {
 					for _, c := range checks {
-						fmt.Fprintf(out, "[%-4s] %s: %s\n", c.Status, c.Name, c.Detail)
+						_, _ = fmt.Fprintf(out, "[%-4s] %s: %s\n", c.Status, c.Name, c.Detail)
 					}
 				}
 				for _, c := range checks {
@@ -332,12 +332,12 @@ func commands(stdin io.Reader) []tools.Command {
 						return err
 					}
 					st, _ := hooks.GetStatus(ctx, o)
-					fmt.Fprintf(out, "global core.hooksPath → %s (chains to %s)\n", o.Dir, orText(st.Prev, "each repo's own hooks"))
+					_, _ = fmt.Fprintf(out, "global core.hooksPath → %s (chains to %s)\n", o.Dir, orText(st.Prev, "each repo's own hooks"))
 				case "uninstall":
 					if err := hooks.Uninstall(ctx, o); err != nil {
 						return err
 					}
-					fmt.Fprintln(out, "hooks removed; global core.hooksPath restored")
+					_, _ = fmt.Fprintln(out, "hooks removed; global core.hooksPath restored")
 				case "status":
 					st, err := hooks.GetStatus(ctx, o)
 					if err != nil {
@@ -347,7 +347,7 @@ func commands(stdin io.Reader) []tools.Command {
 						return tools.PrintJSON(out, map[string]any{"installed": st.Installed, "global_hooks_path": st.GlobalHooksPath,
 							"prev": st.Prev, "binary": st.Binary, "binary_ok": st.BinaryOK, "missing": nonNil(st.Missing), "adopted": nonNil(st.Adopted)})
 					}
-					fmt.Fprintf(out, "installed: %v\nglobal core.hooksPath: %s\nchains to: %s\nbinary: %s (ok: %v)\nadopted: %s\n", st.Installed,
+					_, _ = fmt.Fprintf(out, "installed: %v\nglobal core.hooksPath: %s\nchains to: %s\nbinary: %s (ok: %v)\nadopted: %s\n", st.Installed,
 						orText(st.GlobalHooksPath, "(unset)"), orText(st.Prev, "each repo's own hooks"), st.Binary, st.BinaryOK, orText(strings.Join(st.Adopted, ", "), "none"))
 				case "adopt":
 					if all {
@@ -362,9 +362,9 @@ func commands(stdin io.Reader) []tools.Command {
 						return err
 					}
 					if res.Already {
-						fmt.Fprintf(out, "%s already adopted\n", res.Repo)
+						_, _ = fmt.Fprintf(out, "%s already adopted\n", res.Repo)
 					} else {
-						fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
+						_, _ = fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
 					}
 				case "release":
 					if all {
@@ -376,9 +376,9 @@ func commands(stdin io.Reader) []tools.Command {
 						for _, repo := range st.Adopted {
 							if err := hooks.Release(ctx, o, repo); err != nil {
 								errs = append(errs, err)
-								fmt.Fprintf(out, "failed %s: %v\n", repo, err)
+								_, _ = fmt.Fprintf(out, "failed %s: %v\n", repo, err)
 							} else {
-								fmt.Fprintf(out, "released %s\n", repo)
+								_, _ = fmt.Fprintf(out, "released %s\n", repo)
 							}
 						}
 						return errors.Join(errs...)
@@ -390,7 +390,7 @@ func commands(stdin io.Reader) []tools.Command {
 					if err := hooks.Release(ctx, o, repo); err != nil {
 						return err
 					}
-					fmt.Fprintf(out, "released %s\n", repo)
+					_, _ = fmt.Fprintf(out, "released %s\n", repo)
 				default:
 					return tools.UsageError{Msg: "hooks needs install, uninstall, status, adopt or release"}
 				}
@@ -530,18 +530,18 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 		res, err := hooks.Adopt(ctx, o, c.Path)
 		if err != nil {
 			failed++
-			fmt.Fprintf(out, "failed %s: %v\n", c.Path, err)
+			_, _ = fmt.Fprintf(out, "failed %s: %v\n", c.Path, err)
 			continue
 		}
 		if res.Already {
 			already++
-			fmt.Fprintf(out, "%s already adopted\n", res.Repo)
+			_, _ = fmt.Fprintf(out, "%s already adopted\n", res.Repo)
 		} else {
 			adopted++
-			fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
+			_, _ = fmt.Fprintf(out, "adopted %s (chains to %s)\n", res.Repo, res.Prev)
 		}
 	}
-	fmt.Fprintf(out, "adopted %d, already %d, failed %d\n", adopted, already, failed)
+	_, _ = fmt.Fprintf(out, "adopted %d, already %d, failed %d\n", adopted, already, failed)
 	if failed > 0 {
 		return tools.Exitf(1, "%d repo(s) failed to adopt", failed)
 	}

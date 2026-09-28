@@ -88,7 +88,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) (in
 	if err != nil {
 		return 0, fmt.Errorf("%w (%v)", ErrNoServe, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode >= 300 {
 		var e struct {

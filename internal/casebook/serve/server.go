@@ -558,14 +558,14 @@ func reply(w http.ResponseWriter, v any, err error) {
 		if errors.As(err, &he) && he.errCode != "" {
 			body["code"] = he.errCode
 		}
-		json.NewEncoder(w).Encode(body)
+		_ = json.NewEncoder(w).Encode(body)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if v == nil {
 		v = map[string]bool{"ok": true}
 	}
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // Options configures Run.
@@ -599,7 +599,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if err != nil {
 		return err
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s, err := New(ctx, a, d)
@@ -632,7 +632,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 		return err
 	}
 	defer removeAdvert(adv.PID)
-	fmt.Fprintf(o.Log, "casebook serve: %s (pid %d)\n", adv.Base, adv.PID)
+	_, _ = fmt.Fprintf(o.Log, "casebook serve: %s (pid %d)\n", adv.Base, adv.PID)
 	go s.watch(ctx)
 	if o.Idle > 0 {
 		go s.idle(ctx, o.Idle)
@@ -677,7 +677,7 @@ func Stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	for i := 0; i < 50; i++ {
 		if _, err := Running(); errors.Is(err, ErrNotRunning) {
 			return nil
@@ -709,7 +709,7 @@ func Start(exe string, port int) (Advert, error) {
 	if err != nil {
 		return Advert{}, err
 	}
-	defer logf.Close()
+	defer func() { _ = logf.Close() }()
 	args := []string{"serve", "--foreground", "--no-open"}
 	if port > 0 {
 		args = append(args, "--port", strconv.Itoa(port))

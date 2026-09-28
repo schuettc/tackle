@@ -20,7 +20,7 @@ func newBus(t *testing.T) *Bus {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	return New(d)
 }
 
@@ -45,7 +45,7 @@ func TestPublishSinceHead(t *testing.T) {
 
 func TestPollContract(t *testing.T) {
 	b := newBus(t)
-	b.Publish(ctx, "index", map[string]int{"new": 3})
+	_, _ = b.Publish(ctx, "index", map[string]int{"new": 3})
 	rec := httptest.NewRecorder()
 	b.ServePoll(rec, httptest.NewRequest("GET", "/api/state?since=0", nil))
 	var got struct {
@@ -67,7 +67,7 @@ func TestPollContract(t *testing.T) {
 
 func TestSSEBacklogThenLive(t *testing.T) {
 	b := newBus(t)
-	b.Publish(ctx, "a", 1)
+	_, _ = b.Publish(ctx, "a", 1)
 	srv := httptest.NewServer(http.HandlerFunc(b.ServeSSE))
 	defer srv.Close()
 	req, _ := http.NewRequest("GET", srv.URL, nil)
@@ -76,7 +76,7 @@ func TestSSEBacklogThenLive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	rd := bufio.NewReader(resp.Body)
 	readEvent := func() (string, string) {
 		var id, data string
@@ -99,7 +99,7 @@ func TestSSEBacklogThenLive(t *testing.T) {
 	if id, data := readEvent(); id != "1" || data != `{"type":"a","data":1}` {
 		t.Fatalf("backlog %s %s", id, data)
 	}
-	go func() { time.Sleep(50 * time.Millisecond); b.Publish(ctx, "b", 2) }()
+	go func() { time.Sleep(50 * time.Millisecond); _, _ = b.Publish(ctx, "b", 2) }()
 	if id, data := readEvent(); id != "2" || data != `{"type":"b","data":2}` {
 		t.Fatalf("live %s %s", id, data)
 	}
@@ -107,10 +107,10 @@ func TestSSEBacklogThenLive(t *testing.T) {
 
 func TestTrim(t *testing.T) {
 	b := newBus(t)
-	b.Publish(ctx, "old", 1)
-	b.db.Exec("UPDATE events SET created_at = 0")
-	b.Publish(ctx, "new", 2)
-	b.Trim(ctx, time.Hour)
+	_, _ = b.Publish(ctx, "old", 1)
+	_, _ = b.db.Exec("UPDATE events SET created_at = 0")
+	_, _ = b.Publish(ctx, "new", 2)
+	_ = b.Trim(ctx, time.Hour)
 	evs, _, _ := b.Since(ctx, 0, 10)
 	if len(evs) != 1 || evs[0].Type != "new" {
 		t.Fatalf("after trim %+v", evs)

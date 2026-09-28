@@ -66,7 +66,7 @@ func TestShimChainsBlockingRepoHook(t *testing.T) {
 	r := setup(t)
 	r.install(t)
 	repoHook(t, r.repo, "pre-commit", "exit 1")
-	os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
 	testgit.Git(t, r.repo, "add", "f")
 	if gitErr(r.repo, "commit", "-q", "-m", "blocked") == nil {
 		t.Fatal("repo pre-commit exit 1 did not block the commit")
@@ -101,18 +101,18 @@ func TestAdoptChainsLocalHooksPath(t *testing.T) {
 	r := setup(t)
 	marker := filepath.Join(t.TempDir(), "post-commit-ran")
 	hooksDir := huskyRepo(t, r.repo, "exit 1")
-	os.WriteFile(filepath.Join(hooksDir, "post-commit"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755)
+	_ = os.WriteFile(filepath.Join(hooksDir, "post-commit"), []byte("#!/bin/sh\ntouch '"+marker+"'\n"), 0o755)
 	r.install(t)
 	res, err := Adopt(ctx, r.opts, r.repo)
 	if err != nil || res.Already {
 		t.Fatalf("Adopt = %+v %v", res, err)
 	}
-	os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
 	testgit.Git(t, r.repo, "add", "f")
 	if gitErr(r.repo, "commit", "-q", "-m", "blocked") == nil {
 		t.Fatal("adopted repo's pre-commit (exit 1) did not block the commit")
 	}
-	os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	_ = os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	testgit.Git(t, r.repo, "commit", "-q", "-m", "ok")
 	if _, err := os.Stat(marker); err != nil {
 		t.Error("repo post-commit did not run after adopt")
@@ -240,7 +240,7 @@ func TestShimPassthroughPreservesExit(t *testing.T) {
 		t.Fatalf("shim exit = %v, want 7", err)
 	}
 	// No repo hook at all: exit 0.
-	os.Remove(filepath.Join(r.repo, ".git", "hooks", "pre-push"))
+	_ = os.Remove(filepath.Join(r.repo, ".git", "hooks", "pre-push"))
 	cmd = exec.Command("sh", filepath.Join(r.opts.Dir, "pre-push"), "origin", "/nowhere")
 	cmd.Dir = r.repo
 	cmd.Stdin = strings.NewReader("x\n")
@@ -280,7 +280,7 @@ func TestCasebookDisableSkipsRecordingOnly(t *testing.T) {
 func TestShimChainsPreviousHooksPath(t *testing.T) {
 	r := setup(t)
 	prev := t.TempDir()
-	os.WriteFile(filepath.Join(prev, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	_ = os.WriteFile(filepath.Join(prev, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
 	testgit.Git(t, r.repo, "config", "--global", "core.hooksPath", prev)
 	r.install(t)
 	r.install(t) // idempotent: must not record itself as the previous path
@@ -288,7 +288,7 @@ func TestShimChainsPreviousHooksPath(t *testing.T) {
 	if err != nil || !st.Installed || st.Prev != prev || len(st.Missing) != 0 || !st.BinaryOK {
 		t.Fatalf("status %+v %v", st, err)
 	}
-	os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(r.repo, "f"), []byte("x"), 0o644)
 	testgit.Git(t, r.repo, "add", "f")
 	if gitErr(r.repo, "commit", "-q", "-m", "blocked") == nil {
 		t.Fatal("previous global pre-commit no longer runs")
@@ -371,8 +371,8 @@ func TestMainNeverFails(t *testing.T) {
 		t.Error("uninitialized machine got a spool")
 	}
 	// Initialized: records.
-	os.MkdirAll(filepath.Dir(config.Path()), 0o700)
-	os.WriteFile(config.Path(), []byte("machine = \"m\"\n"), 0o600)
+	_ = os.MkdirAll(filepath.Dir(config.Path()), 0o700)
+	_ = os.WriteFile(config.Path(), []byte("machine = \"m\"\n"), 0o600)
 	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
 		t.Fatal("Main returned non-zero")
 	}

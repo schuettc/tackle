@@ -38,7 +38,7 @@ func Append(dir string, ev journal.Event) error {
 		return err
 	}
 	if _, err := f.Write(append(line, '\n')); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	return f.Close()
@@ -103,7 +103,7 @@ func Drain(dir string) (*Batch, error) {
 			}
 			b.Events = append(b.Events, ev)
 		}
-		f.Close()
+		_ = f.Close()
 	}
 	return b, nil
 }
@@ -147,7 +147,7 @@ func lockFile(dir, name string, how int, wait time.Duration) (func(), error) {
 			return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil //nolint:errcheck
 		}
 		if time.Now().After(deadline) {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("spool lock busy: %w", err)
 		}
 		time.Sleep(5 * time.Millisecond)

@@ -98,7 +98,7 @@ func LoadRoots() (Roots, error) {
 		}
 		return Roots{}, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	var r Roots
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {

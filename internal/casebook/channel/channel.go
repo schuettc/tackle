@@ -130,7 +130,7 @@ func logLoopErrOnce(w io.Writer, last *string, err error) {
 	if msg == *last {
 		return
 	}
-	fmt.Fprintf(w, "casebook channel: %v\n", err)
+	_, _ = fmt.Fprintf(w, "casebook channel: %v\n", err)
 	*last = msg
 }
 
@@ -148,7 +148,7 @@ func (ch *Channel) loop(ctx context.Context) {
 		if adv, err := c.Find(); err == nil && !adv.StartedAt.Equal(seen) {
 			if !seen.IsZero() {
 				if err := ch.Server.Notify(restarted(adv), map[string]string{"source": "casebook", "event": "restarted"}); err != nil {
-					fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
+					_, _ = fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
 				}
 			}
 			seen, lastPresence = adv.StartedAt, time.Time{}
@@ -183,7 +183,7 @@ func (ch *Channel) loop(ctx context.Context) {
 			}
 			meta := map[string]string{"source": "casebook", "delivery": strconv.FormatInt(got.Delivery.ID, 10), "messages": strings.Join(ids, ",")}
 			if err := ch.Server.Notify(got.Text, meta); err != nil {
-				fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
+				_, _ = fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
 			}
 		default:
 			lastLoopErr = ""

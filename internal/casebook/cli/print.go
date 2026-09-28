@@ -19,28 +19,28 @@ func printSync(out io.Writer, machine string, r app.SyncReport) {
 	if r.Pushed {
 		state += ", pushed"
 	}
-	fmt.Fprintf(out, "synced %s: %d event(s), %d clone(s), %s\n", machine, r.Events, r.Clones, state)
+	_, _ = fmt.Fprintf(out, "synced %s: %d event(s), %d clone(s), %s\n", machine, r.Events, r.Clones, state)
 	if r.Offline {
-		fmt.Fprintln(out, "offline: the casebook remote is unreachable; changes are queued locally")
+		_, _ = fmt.Fprintln(out, "offline: the casebook remote is unreachable; changes are queued locally")
 	}
 	for _, f := range r.Resolved {
-		fmt.Fprintf(out, "resolved a decision race in %s (later decision kept; see `casebook attention`)\n", f)
+		_, _ = fmt.Fprintf(out, "resolved a decision race in %s (later decision kept; see `casebook attention`)\n", f)
 	}
 	for _, e := range r.GitHubErrors {
-		fmt.Fprintf(out, "github: %s\n", e)
+		_, _ = fmt.Fprintf(out, "github: %s\n", e)
 	}
 	for _, e := range r.ScanErrors {
-		fmt.Fprintf(out, "scan: %s\n", e)
+		_, _ = fmt.Fprintf(out, "scan: %s\n", e)
 	}
-	fmt.Fprintf(out, "attention: %d item(s) (casebook attention)\n", r.Attention)
+	_, _ = fmt.Fprintf(out, "attention: %d item(s) (casebook attention)\n", r.Attention)
 }
 
 func printItems(out io.Writer, items []engine.Item, notices []string) {
 	for _, n := range notices {
-		fmt.Fprintf(out, "note: %s\n", n)
+		_, _ = fmt.Fprintf(out, "note: %s\n", n)
 	}
 	tw := tabwriter.NewWriter(out, 2, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "STATUS\tITEM\tWHY")
+	_, _ = fmt.Fprintln(tw, "STATUS\tITEM\tWHY")
 	for _, it := range items {
 		why := ""
 		switch {
@@ -52,30 +52,30 @@ func printItems(out io.Writer, items []engine.Item, notices []string) {
 		if it.Stale {
 			why += " (stale)"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", it.Status, it.ID, why)
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", it.Status, it.ID, why)
 	}
-	tw.Flush()
-	fmt.Fprintf(out, "%d item(s)\n", len(items))
+	_ = tw.Flush()
+	_, _ = fmt.Fprintf(out, "%d item(s)\n", len(items))
 }
 
 func printItem(out io.Writer, it engine.Item, hist []journal.Event) {
-	fmt.Fprintf(out, "%s\n  status: %s\n", it.ID, it.Status)
+	_, _ = fmt.Fprintf(out, "%s\n  status: %s\n", it.ID, it.Status)
 	for _, kv := range [][2]string{{"relation", it.Relation}, {"title", it.Title}, {"url", it.URL}} {
 		if kv[1] != "" {
-			fmt.Fprintf(out, "  %s: %s\n", kv[0], kv[1])
+			_, _ = fmt.Fprintf(out, "  %s: %s\n", kv[0], kv[1])
 		}
 	}
 	if d := it.Decision; d != nil {
-		fmt.Fprintf(out, "  decision: %s", d.Disposition)
+		_, _ = fmt.Fprintf(out, "  decision: %s", d.Disposition)
 		if d.Until != "" {
-			fmt.Fprintf(out, " until %s", d.Until)
+			_, _ = fmt.Fprintf(out, " until %s", d.Until)
 		}
-		fmt.Fprintf(out, " by %s at %s\n", d.DecidedBy, d.DecidedAt.UTC().Format("2006-01-02 15:04"))
+		_, _ = fmt.Fprintf(out, " by %s at %s\n", d.DecidedBy, d.DecidedAt.UTC().Format("2006-01-02 15:04"))
 		if d.Note != "" {
-			fmt.Fprintf(out, "  note: %s\n", d.Note)
+			_, _ = fmt.Fprintf(out, "  note: %s\n", d.Note)
 		}
 		if c := d.Conflict; c != nil {
-			fmt.Fprintf(out, "  CONFLICT: %s by %s at %s lost the race; decide again to confirm\n", c.Disposition, c.DecidedBy, c.DecidedAt.UTC().Format("2006-01-02 15:04"))
+			_, _ = fmt.Fprintf(out, "  CONFLICT: %s by %s at %s lost the race; decide again to confirm\n", c.Disposition, c.DecidedBy, c.DecidedAt.UTC().Format("2006-01-02 15:04"))
 		}
 	}
 	obs := "unknown"
@@ -94,18 +94,18 @@ func printItem(out io.Writer, it engine.Item, hist []journal.Event) {
 	if it.Stale {
 		obs += " (stale)"
 	}
-	fmt.Fprintf(out, "  observed: %s\n", obs)
+	_, _ = fmt.Fprintf(out, "  observed: %s\n", obs)
 	for _, h := range it.Hits {
-		fmt.Fprintf(out, "  flag: %s: %s\n", h.Rule, h.Detail)
+		_, _ = fmt.Fprintf(out, "  flag: %s: %s\n", h.Rule, h.Detail)
 	}
 	for _, e := range it.Evidence {
-		fmt.Fprintf(out, "  evidence: %s\n", e)
+		_, _ = fmt.Fprintf(out, "  evidence: %s\n", e)
 	}
 	for _, l := range it.Locations {
-		fmt.Fprintf(out, "  location: %s\n", l)
+		_, _ = fmt.Fprintf(out, "  location: %s\n", l)
 	}
 	for _, ev := range hist {
-		fmt.Fprintf(out, "  %s  %s\n", ev.TS.UTC().Format("2006-01-02 15:04"), eventLine(ev))
+		_, _ = fmt.Fprintf(out, "  %s  %s\n", ev.TS.UTC().Format("2006-01-02 15:04"), eventLine(ev))
 	}
 }
 

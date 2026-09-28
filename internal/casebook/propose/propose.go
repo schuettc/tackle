@@ -101,7 +101,7 @@ func (s *Store) list(ctx context.Context, where string, args ...any) ([]Proposal
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Proposal
 	for rows.Next() {
 		p, err := scan(rows)
@@ -223,7 +223,7 @@ func (s *Store) Tally(ctx context.Context, source string, since time.Time) (Tall
 	if err != nil {
 		return t, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var st string
 		var n int
@@ -254,7 +254,7 @@ func (s *Store) RejectedFor(ctx context.Context, source string, since time.Time)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := map[string]bool{}
 	for rows.Next() {
 		var key string
@@ -302,7 +302,7 @@ func (s *Store) Evidence(ctx context.Context, key string) ([]Evidence, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Evidence
 	for rows.Next() {
 		var e Evidence
@@ -385,7 +385,7 @@ func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duratio
 			var l ProgressLine
 			var at int64
 			if err := rows.Scan(&l.Text, &l.N, &l.Total, &at); err != nil {
-				rows.Close()
+				_ = rows.Close()
 				return err
 			}
 			l.At = tm(at)

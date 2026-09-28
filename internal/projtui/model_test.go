@@ -417,11 +417,11 @@ func TestPreviewShowsGit(t *testing.T) {
 		t.Skip("no git")
 	}
 	dir := t.TempDir()
-	run := func(a ...string) { exec.Command("git", append([]string{"-C", dir}, a...)...).Run() }
+	run := func(a ...string) { _ = exec.Command("git", append([]string{"-C", dir}, a...)...).Run() }
 	run("init", "-b", "main")
 	run("config", "user.email", "t@t")
 	run("config", "user.name", "t")
-	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
 	run("add", ".")
 	run("commit", "-m", "one")
 
