@@ -120,10 +120,14 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
 	}
 
-	fileInv, err := fileInventory(root, allCases)
+	fileInv, allCases, changedSkipped, err := fileInventory(root, allCases)
 	if err != nil {
 		return Report{}, err
 	}
+	for _, sk := range changedSkipped {
+		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
+	}
+	skipped = append(skipped, changedSkipped...)
 
 	keptCases := allCases
 	groups := similar.Groups(allCases)
@@ -285,29 +289,70 @@ func subPath(root, p string) (string, error) {
 	return rel, nil
 }
 
+// testHookBeforeHash, when set by a test, runs just before fileInventory
+// reads a file's bytes to hash it. It lets a test simulate the file
+// changing between extraction and this read. Nil in production.
+var testHookBeforeHash func(relpath string)
+
 // fileInventory builds the per-file inventory (content hash and every
 // extracted test, judged or not) that `cull apply` and `cull check
 // --group` later use to prove what changed since this check: every file
 // extracted in the run, keyed by the same relpath used in TestCase.File.
-func fileInventory(root string, allCases []cases.TestCase) (map[string]FileInfo, error) {
-	testsByFile := map[string][]FileTest{}
+//
+// It re-reads each file to hash it, after extraction already read it once
+// to produce Body/Span; if the file changed in between, the bytes it just
+// read no longer match what the spans were taken from, so it confirms
+// every extracted test's Body against those bytes before trusting the
+// hash. A file that fails that check is dropped from the run entirely
+// (absent from the returned cases and from files) and reported skipped,
+// rather than recording a hash that doesn't describe what was judged.
+func fileInventory(root string, allCases []cases.TestCase) (map[string]FileInfo, []cases.TestCase, []extract.Skipped, error) {
+	casesByFile := map[string][]cases.TestCase{}
 	var fileOrder []string
 	for _, tc := range allCases {
-		if _, ok := testsByFile[tc.File]; !ok {
+		if _, ok := casesByFile[tc.File]; !ok {
 			fileOrder = append(fileOrder, tc.File)
 		}
-		testsByFile[tc.File] = append(testsByFile[tc.File], FileTest{ID: tc.ID, Hash: tc.Hash})
+		casesByFile[tc.File] = append(casesByFile[tc.File], tc)
 	}
 	files := make(map[string]FileInfo, len(fileOrder))
+	changed := map[string]bool{}
+	var skipped []extract.Skipped
 	for _, f := range fileOrder {
+		if testHookBeforeHash != nil {
+			testHookBeforeHash(f)
+		}
 		data, err := os.ReadFile(filepath.Join(root, f))
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
+		}
+		stale := false
+		for _, tc := range casesByFile[f] {
+			if tc.Span.Start < 0 || tc.Span.End > len(data) || tc.Span.Start > tc.Span.End ||
+				tc.Body != string(data[tc.Span.Start:tc.Span.End]) {
+				stale = true
+				break
+			}
+		}
+		if stale {
+			changed[f] = true
+			skipped = append(skipped, extract.Skipped{File: f, Reason: "changed during check; run cull check again"})
+			continue
+		}
+		var tests []FileTest
+		for _, tc := range casesByFile[f] {
+			tests = append(tests, FileTest{ID: tc.ID, Hash: tc.Hash})
 		}
 		sum := sha256.Sum256(data)
-		files[f] = FileInfo{SHA256: hex.EncodeToString(sum[:]), Tests: testsByFile[f]}
+		files[f] = FileInfo{SHA256: hex.EncodeToString(sum[:]), Tests: tests}
 	}
-	return files, nil
+	var kept []cases.TestCase
+	for _, tc := range allCases {
+		if !changed[tc.File] {
+			kept = append(kept, tc)
+		}
+	}
+	return files, kept, skipped, nil
 }
 
 // extractAll runs each registered extractor once over the files it matches,

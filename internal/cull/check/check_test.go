@@ -532,6 +532,71 @@ func TestReportFilesInventory(t *testing.T) {
 	}
 }
 
+// TestFileChangedDuringCheckIsSkipped: if a file's bytes change between
+// extraction and fileInventory's hashing (racing with an editor, e.g.), the
+// hash check catches it: the file is dropped entirely (not in Files or
+// Tests) and reported as Skipped, while an unrelated file is unaffected.
+func TestFileChangedDuringCheckIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	writeFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
+	writeFile(t, root, "pkg/other_test.go", "package pkg\n\nfunc TestOther(t *testing.T) {\n\t_ = 2\n}\n")
+
+	testHookBeforeHash = func(relpath string) {
+		if relpath == "pkg/calc_test.go" {
+			writeFile(t, root, relpath, "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 999\n}\n")
+		}
+	}
+	t.Cleanup(func() { testHookBeforeHash = nil })
+
+	f := &fakeEval{}
+	var stderr bytes.Buffer
+	report, err := Run(context.Background(), f, Options{Path: root, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := report.Files["pkg/calc_test.go"]; ok {
+		t.Errorf("Files = %+v, want pkg/calc_test.go absent", report.Files)
+	}
+	for _, tr := range report.Tests {
+		if tr.File == "pkg/calc_test.go" {
+			t.Errorf("Tests = %+v, want no test from pkg/calc_test.go", report.Tests)
+		}
+	}
+	for _, g := range report.Groups {
+		if g.File == "pkg/calc_test.go" {
+			t.Errorf("Groups = %+v, want no group from pkg/calc_test.go", report.Groups)
+		}
+	}
+	found := false
+	for _, s := range report.Skipped {
+		if s.File == "pkg/calc_test.go" {
+			found = true
+			if s.Reason != "changed during check; run cull check again" {
+				t.Errorf("reason = %q, want %q", s.Reason, "changed during check; run cull check again")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %+v, want pkg/calc_test.go", report.Skipped)
+	}
+
+	if _, ok := report.Files["pkg/other_test.go"]; !ok {
+		t.Errorf("Files = %+v, want pkg/other_test.go present", report.Files)
+	}
+	otherFound := false
+	for _, tr := range report.Tests {
+		if tr.Name == "TestOther" {
+			otherFound = true
+		}
+	}
+	if !otherFound {
+		t.Errorf("tests = %+v, want TestOther judged", report.Tests)
+	}
+}
+
 // TestDiffModeInventoryHasUnjudgedTests: in diff mode, an untouched sibling
 // test in a touched file shows up in Files (inventory), even though it is
 // not in Tests (not judged).
