@@ -141,11 +141,14 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				return nil
 			},
 		},
-		{Name: "channel", Group: "plumbing", Summary: "the MCP channel an agent session runs (stdio; self-routed)"},
+		{Name: "channel", Group: "plumbing", Summary: "the MCP channel an agent session runs: tools + wake events (stdio; self-routed)"},
+		{Name: "mcp", Group: "plumbing", Summary: "casebook's tools over MCP without wake events (for pi-mcp-adapter; stdio; self-routed)"},
 	}
 }
 
 // channelMain is `casebook channel`: MCP on stdin/stdout, diagnostics on stderr.
+// It exposes the nine casebook tools AND runs the wake loop (presence +
+// long-poll). Claude Code uses one such process per session for both.
 func channelMain(stdin io.Reader, out, errw io.Writer) int {
 	c := channel.NewClient()
 	c.Start = func() (serve.Advert, error) { return startDetached(0) } // any tool call starts serve
@@ -155,6 +158,26 @@ func channelMain(stdin io.Reader, out, errw io.Writer) int {
 	defer stop()
 	if err := ch.Run(ctx, stdin, out); err != nil {
 		fmt.Fprintf(errw, "casebook channel: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// mcpMain is `casebook mcp`: the same nine tools over MCP on stdin/stdout, but
+// with NO wake loop (no presence, no long-poll). Intended for pi-mcp-adapter
+// (configured in ~/.config/mcp/mcp.json), which needs the tools but must not
+// compete with the channels.tools casebook channel for deliveries.
+// Session-bound tool calls still work via callSessionBound's register-on-404.
+func mcpMain(stdin io.Reader, out, errw io.Writer) int {
+	c := channel.NewClient()
+	c.Start = func() (serve.Advert, error) { return startDetached(0) } // any tool call starts serve
+	ch := channel.New(channel.FromEnv(), c, version.Number())
+	ch.NoWake = true
+	ch.Log = errw
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := ch.Run(ctx, stdin, out); err != nil {
+		fmt.Fprintf(errw, "casebook mcp: %v\n", err)
 		return 1
 	}
 	return 0

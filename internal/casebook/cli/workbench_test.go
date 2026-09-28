@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -130,6 +132,76 @@ func TestSettledFromClaudeStopHook(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// TestMcpSelfRoutedInitialize verifies that "casebook mcp" is self-routed by
+// Main (bypasses the tools.App dispatcher) and returns a valid MCP initialize
+// response on stdout. No wake loop means no presence or wait requests.
+func TestMcpSelfRoutedInitialize(t *testing.T) {
+	wbSetup(t)
+	// mcp should never auto-start serve; swap startDetached to be sure.
+	origStart := startDetached
+	startDetached = func(port int) (serve.Advert, error) {
+		return serve.Advert{}, serve.ErrNotRunning
+	}
+	t.Cleanup(func() { startDetached = origStart })
+
+	// Use pipes for both stdin and stdout to avoid data races on bytes.Buffer.
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	done := make(chan int, 1)
+	go func() {
+		done <- Main([]string{"mcp"}, stdinR, stdoutW, io.Discard)
+	}()
+	t.Cleanup(func() { stdinW.Close(); stdoutR.Close() })
+
+	// Send MCP initialize.
+	req, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-06-18",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "t", "version": "1"},
+		},
+	})
+	stdinW.Write(append(req, '\n'))
+
+	// Read from stdout until we see the initialize result.
+	sc := bufio.NewScanner(stdoutR)
+	sc.Buffer(make([]byte, 1<<20), 1<<24)
+	resultCh := make(chan string, 1)
+	go func() {
+		for sc.Scan() {
+			line := sc.Text()
+			if strings.Contains(line, `"result"`) {
+				resultCh <- line
+				return
+			}
+		}
+		close(resultCh)
+	}()
+
+	var resultLine string
+	select {
+	case line, ok := <-resultCh:
+		if !ok {
+			t.Fatal("stdout closed before initialize result")
+		}
+		resultLine = line
+	case <-time.After(5 * time.Second):
+		t.Fatal("no MCP initialize result within 5s")
+	}
+
+	// Close stdin so the MCP server exits cleanly.
+	stdinW.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("mcp did not exit after stdin close")
+	}
+	if !strings.Contains(resultLine, "casebook") {
+		t.Fatalf("missing casebook in MCP result: %q", resultLine)
+	}
+}
 
 func TestSettledWithoutServeIsSilent(t *testing.T) {
 	wbSetup(t)

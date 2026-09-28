@@ -533,3 +533,65 @@ func TestFromEnvHarness(t *testing.T) {
 		t.Fatalf("bridge child %+v", id)
 	}
 }
+
+// TestNoWakeNoRequests verifies that a Channel with NoWake=true makes zero
+// requests to /api/agent/wait and /api/agent/presence even when the session
+// is set and the server is reachable.
+func TestNoWakeNoRequests(t *testing.T) {
+	var waitReqs, presenceReqs atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/wait":
+			waitReqs.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/agent/presence":
+			presenceReqs.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(func() { ts.CloseClientConnections(); ts.Close() })
+
+	c := &Client{
+		HTTP: &http.Client{Timeout: 30 * time.Second},
+		Find: func() (serve.Advert, error) {
+			return serve.Advert{Base: ts.URL, Token: "tok"}, nil
+		},
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.NoWake = true
+	ch.Retry, ch.Poll = 50*time.Millisecond, 200*time.Millisecond
+	_ = start(t, ch)
+	time.Sleep(300 * time.Millisecond)
+	if n := waitReqs.Load(); n != 0 {
+		t.Errorf("got %d requests to /api/agent/wait, want 0", n)
+	}
+	if n := presenceReqs.Load(); n != 0 {
+		t.Errorf("got %d requests to /api/agent/presence, want 0", n)
+	}
+}
+
+// TestNoWakeSessionBoundToolCall verifies that a session-bound tool call on a
+// NoWake channel still succeeds: callSessionBound's register-on-404 fills in
+// for the absent wake loop.
+func TestNoWakeSessionBoundToolCall(t *testing.T) {
+	r := apptest.New(t)
+	c := NewClient()
+	c.Start = func() (serve.Advert, error) {
+		startServe(t, r)
+		return serve.Running()
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi", Label: "pi·w", CWD: "/w"}, c, "test")
+	ch.NoWake = true
+	ch.Retry = time.Hour
+	ch.Poll = 2 * time.Second
+	m := start(t, ch)
+	out, isErr := m.tool("casebook_status", map[string]any{})
+	if isErr {
+		t.Fatalf("casebook_status failed: %s", out)
+	}
+	if !strings.Contains(out, "counts") {
+		t.Fatalf("casebook_status: want \"counts\", got: %s", out)
+	}
+}

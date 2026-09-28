@@ -68,6 +68,11 @@ type Channel struct {
 	Retry    time.Duration
 	Presence time.Duration
 	Poll     time.Duration
+	// NoWake disables the presence-and-long-poll wake loop. The MCP server and
+	// all nine tools still work; session-bound calls use callSessionBound's
+	// register-on-404 retry instead. Set this when a second process must expose
+	// the tools without competing for deliveries (e.g. pi-mcp-adapter).
+	NoWake bool
 	// runCtx is Run's context, set before Server.Run begins; the Call closure
 	// uses it so tool calls end with the channel. Nil before Run has started
 	// (not expected in practice): fall back to Background.
@@ -98,7 +103,7 @@ func (ch *Channel) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	// cancels it on SIGINT/SIGTERM, which is how a harness stops the channel.
 	// Set before Server.Run starts reading, so the Call closure never races it.
 	ch.runCtx = ctx
-	if ch.ID.Session != "" {
+	if ch.ID.Session != "" && !ch.NoWake {
 		go ch.loop(ctx)
 	}
 	return ch.Server.Run(r, w)
