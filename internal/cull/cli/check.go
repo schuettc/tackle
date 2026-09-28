@@ -130,6 +130,9 @@ func runCheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string
 		writeGroupCheck(out, gc)
 	}
 
+	if len(gc.Unjudged) > 0 {
+		return tools.Exitf(2, "%d item(s) could not be judged (incomplete run)", len(gc.Unjudged))
+	}
 	if !gc.OK {
 		return tools.Exitf(1, "group %s: not verified (originals_gone=%v, new=%d, missing_rows=%d, flagged=%d)",
 			groupID, gc.OriginalsGone, len(gc.NewTests), len(gc.MissingRows), len(gc.Flagged))
@@ -144,12 +147,17 @@ func writeGroupCheck(w io.Writer, gc check.GroupCheck) {
 	if len(gc.StillPresent) > 0 {
 		fmt.Fprintf(w, "    still present: %s\n", strings.Join(gc.StillPresent, ", "))
 	}
-	fmt.Fprintf(w, "  new tests: %s\n", strings.Join(gc.NewTests, ", "))
+	if len(gc.NewTests) > 0 {
+		fmt.Fprintf(w, "  new tests: %s\n", strings.Join(gc.NewTests, ", "))
+	}
 	if len(gc.MissingRows) > 0 {
 		fmt.Fprintf(w, "  missing rows: %s\n", strings.Join(gc.MissingRows, ", "))
 	}
 	if len(gc.Flagged) > 0 {
 		fmt.Fprintf(w, "  flagged: %s\n", strings.Join(gc.Flagged, ", "))
+	}
+	if len(gc.Unjudged) > 0 {
+		fmt.Fprintf(w, "  unjudged: %s\n", strings.Join(gc.Unjudged, ", "))
 	}
 	for _, r := range gc.Verify {
 		status := "ok"

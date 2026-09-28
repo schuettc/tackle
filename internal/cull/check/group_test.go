@@ -189,6 +189,50 @@ func TestGroupCheckFlagsCutNewTest(t *testing.T) {
 	}
 }
 
+// TestGroupCheckUnjudgedNewTest: a Jev error on the new test's judge call
+// must not leave it counted as "not flagged". It must show up in
+// Unjudged and force OK false.
+func TestGroupCheckUnjudgedNewTest(t *testing.T) {
+	root, groupID := groupFixture(t)
+	writeFile(t, root, "pkg/calc_test.go", tableSrc("TestFooTable", "a", "b", "c"))
+
+	f2 := &fakeEval{errOnTest: map[string]bool{"TestFooTable": true}}
+	gc, err := CheckGroup(context.Background(), f2, root, groupID, Options{Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gc.Unjudged) != 1 || !strings.HasSuffix(gc.Unjudged[0], "TestFooTable") {
+		t.Fatalf("Unjudged = %v, want TestFooTable", gc.Unjudged)
+	}
+	if gc.OK {
+		t.Errorf("OK = true, want false (unjudged new test)")
+	}
+}
+
+// TestGroupCheckUnjudgedGroup: a Jev error on the re-formed group's judge
+// call (containing new tests) must also land in Unjudged and force OK
+// false, not silently pass as keep_separate.
+func TestGroupCheckUnjudgedGroup(t *testing.T) {
+	root, groupID := groupFixture(t)
+	// Two new near-duplicate tests that re-group together.
+	src := "package pkg\n\n" +
+		"func TestBarX(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tval := \"a\"\n\t_ = val\n\ty := 1\n\t_ = y\n}\n\n" +
+		"func TestBarY(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tval := \"b\"\n\t_ = val\n\ty := 1\n\t_ = y\n}\n"
+	writeFile(t, root, "pkg/calc_test.go", src)
+
+	f2 := &fakeEval{errOnGroup: map[string]bool{"TestBarX": true}}
+	gc, err := CheckGroup(context.Background(), f2, root, groupID, Options{Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gc.Unjudged) == 0 {
+		t.Fatalf("Unjudged = %v, want the group's new tests present", gc.Unjudged)
+	}
+	if gc.OK {
+		t.Errorf("OK = true, want false (unjudged group)")
+	}
+}
+
 func TestGroupCheckUnknownGroup(t *testing.T) {
 	root, _ := groupFixture(t)
 	f2 := &fakeEval{}

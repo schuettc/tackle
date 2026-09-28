@@ -32,6 +32,7 @@ type GroupCheck struct {
 	NewTests      []string        `json:"new_tests,omitempty"`
 	MissingRows   []string        `json:"missing_rows,omitempty"`
 	Flagged       []string        `json:"flagged,omitempty"`
+	Unjudged      []string        `json:"unjudged,omitempty"`
 	Verify        []verify.Result `json:"verify,omitempty"`
 	OK            bool            `json:"ok"`
 }
@@ -219,7 +220,7 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 		testStates[i] = judge.StateFor(tc)
 		testTruncated[i] = tc.Truncated
 	}
-	_, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testRubric, jopt)
+	testJudged, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testRubric, jopt)
 	if err != nil {
 		return gc, err
 	}
@@ -232,22 +233,39 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 		groupStates[i] = s
 		groupTruncated[i] = s.Truncated
 	}
-	_, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, groupRubric, jopt)
+	groupJudged, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, groupRubric, jopt)
 	if err != nil {
 		return gc, err
 	}
 
-	flagged := map[string]bool{}
-	for i, tc := range newCases {
-		if testResults[i].Verdict == "cut" {
-			flagged[tc.ID] = true
-		}
-	}
 	newSet := map[string]bool{}
 	for _, id := range gc.NewTests {
 		newSet[id] = true
 	}
+
+	// A per-item judge error must never be treated as "not flagged": an
+	// unjudged new test (or a re-formed group containing one) is reported
+	// separately and forces the run incomplete, not passed.
+	unjudged := map[string]bool{}
+	flagged := map[string]bool{}
+	for i, tc := range newCases {
+		if testJudged[i].Err != "" {
+			unjudged[tc.ID] = true
+			continue
+		}
+		if testResults[i].Verdict == "cut" {
+			flagged[tc.ID] = true
+		}
+	}
 	for i, g := range regrouped {
+		if groupJudged[i].Err != "" {
+			for _, m := range g.Tests {
+				if newSet[m.ID] {
+					unjudged[m.ID] = true
+				}
+			}
+			continue
+		}
 		if groupResults[i].Verdict != "consolidate" {
 			continue
 		}
@@ -258,6 +276,10 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 		}
 	}
 	for _, id := range gc.NewTests {
+		if unjudged[id] {
+			gc.Unjudged = append(gc.Unjudged, id)
+			continue
+		}
 		if flagged[id] {
 			gc.Flagged = append(gc.Flagged, id)
 		}
@@ -278,6 +300,6 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 		}
 	}
 	gc.OK = gc.OriginalsGone && len(gc.NewTests) > 0 && len(gc.MissingRows) == 0 &&
-		len(gc.Flagged) == 0 && verifyOK
+		len(gc.Flagged) == 0 && len(gc.Unjudged) == 0 && verifyOK
 	return gc, nil
 }

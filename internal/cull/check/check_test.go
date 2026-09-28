@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +30,8 @@ type fakeEval struct {
 	calls       atomic.Int32
 	cut         map[string]bool
 	consolidate map[string]bool
+	errOnTest   map[string]bool // per-test judge.State call for this test name errors
+	errOnGroup  map[string]bool // group judge.GroupState call errors if any member matches
 }
 
 func f64(v float64) *float64 { return &v }
@@ -38,10 +41,18 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 	act := "keep"
 	switch s := state.(type) {
 	case judge.State:
+		if f.errOnTest != nil && f.errOnTest[s.TestName] {
+			return jev.Response{}, fmt.Errorf("fake error for %s", s.TestName)
+		}
 		if f.cut != nil && f.cut[s.TestName] {
 			act = "cut"
 		}
 	case judge.GroupState:
+		for _, t := range s.Tests {
+			if f.errOnGroup != nil && f.errOnGroup[t.Name] {
+				return jev.Response{}, fmt.Errorf("fake error for group with %s", t.Name)
+			}
+		}
 		act = "keep_separate"
 		for _, t := range s.Tests {
 			if f.consolidate != nil && f.consolidate[t.Name] {
