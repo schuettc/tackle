@@ -4,6 +4,13 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.4] — 2026-09-28
+
+### Changed
+- tools-common v0.8.2: `scratch help <cmd>` and `scratch <cmd> -h` print the
+  command's one-line summary under the usage line, and `scratch man` escapes
+  double quotes and a leading `.` correctly.
+
 ## [0.5.3] — 2026-09-28
 
 ### Changed
