@@ -258,6 +258,79 @@ func TestBrokenFileSkipped(t *testing.T) {
 	}
 }
 
+func TestPyTidyDropsUnusedKeepsFixtureImport(t *testing.T) {
+	requirePython3(t)
+	src := "import os\nfrom mymod import my_fixture\n\n\ndef test_x(my_fixture):\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "from mymod import my_fixture\n\n\ndef test_x(my_fixture):\n    assert True\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+	if len(removed) != 1 || removed[0] != "os" {
+		t.Errorf("removed = %v, want [os]", removed)
+	}
+}
+
+func TestPyTidyRewritesPartialFromImport(t *testing.T) {
+	requirePython3(t)
+	src := "from itertools import chain, count\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "from itertools import chain\n\n\ndef test_x():\n    assert list(chain([1], [2])) == [1, 2]\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+	if len(removed) != 1 || removed[0] != "itertools.count" {
+		t.Errorf("removed = %v, want [itertools.count]", removed)
+	}
+}
+
+func TestPyTidyKeepsStarAndFuture(t *testing.T) {
+	requirePython3(t)
+	src := "from __future__ import annotations\nfrom os import *\n\n\ndef test_x():\n    assert True\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestTidyEnvHasNoKey(t *testing.T) {
+	requirePython3(t)
+	t.Setenv("TYPESAFE_API_KEY", "sk-secret")
+
+	orig := helperEnvFunc
+	var got []string
+	helperEnvFunc = func(maxContext int) []string {
+		got = orig(maxContext)
+		return got
+	}
+	defer func() { helperEnvFunc = orig }()
+
+	src := "import os\n\n\ndef test_x():\n    assert True\n"
+	if _, _, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src)); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("helperEnvFunc was never called")
+	}
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "TYPESAFE_API_KEY=") {
+			t.Fatalf("helper env leaked TYPESAFE_API_KEY: %v", got)
+		}
+	}
+}
+
 func TestNoPython3Skips(t *testing.T) {
 	emptyBin := t.TempDir()
 	t.Setenv("PATH", emptyBin)

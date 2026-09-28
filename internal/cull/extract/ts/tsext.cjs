@@ -23,11 +23,14 @@
 // unparsable files.
 "use strict";
 
-const [tsDir, root, ...relpaths] = process.argv.slice(2);
-const ts = require(tsDir);
 const fs = require("fs");
 const path = require("path");
 const MAX_CTX = parseInt(process.env.CULL_MAX_CONTEXT_BYTES || "24000", 10);
+
+// ts is the required typescript package; both extractMain and tidyMain set
+// it (from their own tsDir argument) before using any of the helpers
+// below that reference it.
+let ts;
 
 // bytePos[i] is the UTF-8 byte offset corresponding to the i-th UTF-16 code
 // unit of text; bytePos[text.length] is the file's total byte length. A
@@ -133,7 +136,11 @@ function frameworkFor(rel) {
   return /\.spec\.tsx?$/.test(rel) ? "playwright" : "node:test";
 }
 
-for (const rel of relpaths) {
+function extractMain(args) {
+  const [tsDir, root, ...relpaths] = args;
+  ts = require(tsDir);
+
+  for (const rel of relpaths) {
   const file = path.join(root, rel);
   let src;
   try {
@@ -251,4 +258,180 @@ for (const rel of relpaths) {
     }
     ts.forEachChild(node, (c) => walk(c, describes));
   })(sf, []);
+  }
+}
+
+// splitLinesKeepEnds splits text into lines, each retaining its own
+// original line ending ("\n", "\r\n", or none for a final line lacking
+// one) -- the JS analogue of Python's str.splitlines(keepends=True), used
+// so tidy's line-level rewrites don't disturb any other line's ending.
+function splitLinesKeepEnds(text) {
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") {
+      lines.push(text.slice(start, i + 1));
+      start = i + 1;
+    }
+  }
+  if (start < text.length) lines.push(text.slice(start));
+  return lines;
+}
+
+// collectUsedIdentifiers walks sf for every Identifier node outside of
+// import declarations (which live only at the top level, so skipping
+// ts.isImportDeclaration statements suffices): type positions are walked
+// like anything else, so a name used only in a type annotation still
+// counts as used.
+function collectUsedIdentifiers(sf) {
+  const used = new Set();
+  (function walk(node) {
+    if (ts.isImportDeclaration(node)) return;
+    if (ts.isIdentifier(node)) used.add(node.text);
+    ts.forEachChild(node, walk);
+  })(sf);
+  return used;
+}
+
+// tidySource rewrites src (one file's full text) dropping import
+// specifiers whose bound identifier is never used elsewhere in the file.
+// A side-effect import (`import "x"`, no importClause) is always kept.
+// An import declaration left with nothing used is deleted whole; one
+// with some specifiers unused is rewritten keeping only the used ones
+// (and the original module specifier text, quotes included, and whether
+// the statement originally ended in a semicolon). Every other byte of
+// src is returned unchanged, including each line's own line ending. If
+// src fails to parse, it is returned unchanged.
+function tidySource(src, relpath) {
+  let sf;
+  try {
+    sf = ts.createSourceFile(relpath || "input.ts", src, ts.ScriptTarget.Latest, true, scriptKindFor(relpath || ""));
+  } catch (e) {
+    return { source: src, removed: [] };
+  }
+  if (sf.parseDiagnostics && sf.parseDiagnostics.length > 0) {
+    return { source: src, removed: [] };
+  }
+
+  const used = collectUsedIdentifiers(sf);
+  const lines = splitLinesKeepEnds(src);
+  const actions = new Map(); // startLine (0-indexed) -> {endLine, kind, text}
+  const removed = [];
+
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st)) continue;
+    if (!st.importClause) continue; // side-effect import: always kept
+
+    const clause = st.importClause;
+    const moduleText = st.moduleSpecifier.getText(sf);
+
+    const hadDefault = !!clause.name;
+    let keepDefault = null;
+    if (hadDefault) {
+      if (used.has(clause.name.text)) keepDefault = clause.name.text;
+      else removed.push(`${moduleText}.default`);
+    }
+
+    const hadNamespace = !!(clause.namedBindings && ts.isNamespaceImport(clause.namedBindings));
+    let keepNamespace = null;
+    if (hadNamespace) {
+      if (used.has(clause.namedBindings.name.text)) keepNamespace = clause.namedBindings.name.text;
+      else removed.push(`${moduleText}.*`);
+    }
+
+    const hadNamed = !!(clause.namedBindings && ts.isNamedImports(clause.namedBindings));
+    let keepNamed = null;
+    if (hadNamed) {
+      keepNamed = [];
+      for (const el of clause.namedBindings.elements) {
+        if (used.has(el.name.text)) {
+          keepNamed.push(el);
+        } else {
+          const orig = (el.propertyName ?? el.name).text;
+          removed.push(`${moduleText}.${orig}`);
+        }
+      }
+    }
+
+    const nothingDropped =
+      (!hadDefault || keepDefault) &&
+      (!hadNamespace || keepNamespace) &&
+      (!hadNamed || keepNamed.length === clause.namedBindings.elements.length);
+    if (nothingDropped) continue;
+
+    const startLine = sf.getLineAndCharacterOfPosition(st.getStart(sf, false)).line;
+    const endLine = sf.getLineAndCharacterOfPosition(st.getEnd()).line;
+
+    const keepAnything = keepDefault || keepNamespace || (keepNamed && keepNamed.length > 0);
+    if (!keepAnything) {
+      actions.set(startLine, { endLine, kind: "delete" });
+      continue;
+    }
+
+    const hadSemi = src[st.getEnd() - 1] === ";";
+    const typePrefix = clause.isTypeOnly ? "type " : "";
+    const parts = [];
+    if (keepDefault) parts.push(keepDefault);
+    if (keepNamespace) {
+      parts.push(`* as ${keepNamespace}`);
+    } else if (keepNamed && keepNamed.length > 0) {
+      const specs = keepNamed.map((el) => {
+        const tp = el.isTypeOnly ? "type " : "";
+        return el.propertyName ? `${tp}${el.propertyName.text} as ${el.name.text}` : `${tp}${el.name.text}`;
+      });
+      parts.push(`{ ${specs.join(", ")} }`);
+    }
+    const text = `import ${typePrefix}${parts.join(", ")} from ${moduleText}${hadSemi ? ";" : ""}`;
+
+    const indentMatch = lines[startLine].match(/^[ \t]*/);
+    const indent = indentMatch ? indentMatch[0] : "";
+    const lastLine = lines[endLine];
+    let nl = "";
+    if (lastLine.endsWith("\r\n")) nl = "\r\n";
+    else if (lastLine.endsWith("\n")) nl = "\n";
+
+    actions.set(startLine, { endLine, kind: "replace", text: indent + text + nl });
+  }
+
+  if (actions.size === 0) return { source: src, removed: [] };
+
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const action = actions.get(i);
+    if (action) {
+      if (action.kind !== "delete") out.push(action.text);
+      i = action.endLine + 1;
+      continue;
+    }
+    out.push(lines[i]);
+    i++;
+  }
+
+  return { source: out.join(""), removed };
+}
+
+function tidyMain(args) {
+  const [tsDir, relpath] = args;
+  ts = require(tsDir);
+
+  const chunks = [];
+  process.stdin.on("data", (c) => chunks.push(c));
+  process.stdin.on("end", () => {
+    const src = Buffer.concat(chunks).toString("utf8");
+    const { source, removed } = tidySource(src, relpath);
+    console.log(JSON.stringify({ source, removed }));
+  });
+}
+
+// Dispatch last, once every helper above is defined: extractMain and
+// tidyMain both call functions/read consts defined later in this file
+// (in source order) than this call site would otherwise be if it ran at
+// the top -- const/let bindings are not initialized until their own
+// statement runs, so calling into them too early is a ReferenceError.
+const cliArgs = process.argv.slice(2);
+if (cliArgs[0] === "--tidy") {
+  tidyMain(cliArgs.slice(1));
+} else {
+  extractMain(cliArgs);
 }

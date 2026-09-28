@@ -247,6 +247,52 @@ func TestBrokenFileSkipped(t *testing.T) {
 	}
 }
 
+func TestTsTidyDropsUnusedSpecifier(t *testing.T) {
+	requireTS(t)
+	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "import { add } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+	if len(removed) != 1 || removed[0] != `"./calc".sub` {
+		t.Errorf("removed = %v, want [\"./calc\".sub]", removed)
+	}
+}
+
+func TestTsTidyKeepsTypeOnlyUse(t *testing.T) {
+	requireTS(t)
+	src := "import { Calc } from \"./calc\";\n\nfunction make(): Calc {\n  return {} as Calc;\n}\n\ntest(\"x\", () => {\n  make();\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestTsTidyKeepsSideEffectImport(t *testing.T) {
+	requireTS(t)
+	src := "import \"./setup\";\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
 func TestNoTypescriptSkips(t *testing.T) {
 	t.Setenv("CULL_TS", "")
 	root := t.TempDir()

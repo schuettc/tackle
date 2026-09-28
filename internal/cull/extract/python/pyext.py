@@ -21,9 +21,146 @@ itself is never emitted), and the skip protocol for unparsable files.
 import ast
 import json
 import os
+import re
 import sys
 
 MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 24000)
+
+
+def _alias_str(a):
+    """Rewritten text for one kept `import`/`from ... import` alias,
+    preserving its `as` if any."""
+    return a.name if not a.asname else f"{a.name} as {a.asname}"
+
+
+def _import_bound_name(a):
+    """The identifier a plain `import` alias binds in the namespace: its
+    asname, or (for a dotted `import a.b.c` with no asname) the first
+    component -- that's the name that shows up as a Name node when the
+    code does `a.b.something()`."""
+    return a.asname if a.asname else a.name.split(".")[0]
+
+
+def _collect_used_names(tree):
+    """Every name that counts as "used" for tidy purposes: real Name
+    references anywhere (import statements never introduce Name nodes for
+    the names they bind, so no filtering is needed there), function/lambda
+    parameter names (pytest fixtures are matched by parameter name), and
+    anything listed in a module-level `__all__`."""
+    used = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Name):
+            used.add(n.id)
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            args = n.args
+            for a in list(getattr(args, "posonlyargs", []) or []) + list(args.args) + list(args.kwonlyargs):
+                used.add(a.arg)
+            if args.vararg:
+                used.add(args.vararg.arg)
+            if args.kwarg:
+                used.add(args.kwarg.arg)
+        elif isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id == "__all__" and isinstance(n.value, (ast.List, ast.Tuple, ast.Set)):
+                    for elt in n.value.elts:
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                            used.add(elt.value)
+    return used
+
+
+def tidy_source(data):
+    """Rewrite an unused-import-free version of a Python source file.
+    Returns (new_source, removed) where removed is a list of
+    "module.name" (or bare "name" for plain `import name`) strings for
+    every alias dropped. Every byte outside the changed import statements
+    is left exactly as it was, including each line's own line ending.
+    `from x import *` and `from __future__ import ...` are never touched;
+    a statement left with no used aliases is deleted whole; a statement
+    with some unused aliases is rewritten keeping only the used ones. If
+    the source fails to parse, it is returned unchanged.
+    """
+    try:
+        src = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("utf-8", errors="replace"), []
+    try:
+        tree = ast.parse(src)
+    except Exception:
+        return src, []
+
+    used = _collect_used_names(tree)
+    lines = src.splitlines(keepends=True)
+
+    # lineno (1-indexed) -> (end_lineno, "delete"|"replace", text_or_None)
+    actions = {}
+    removed = []
+
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom):
+            if n.module == "__future__" or any(a.name == "*" for a in n.names):
+                continue
+            keep = [a for a in n.names if (a.asname or a.name) in used]
+            if len(keep) == len(n.names):
+                continue
+            dots = "." * n.level
+            module = dots + (n.module or "")
+            for a in n.names:
+                if a not in keep:
+                    removed.append(f"{module}.{a.name}" if module else a.name)
+            if not keep:
+                actions[n.lineno] = (n.end_lineno, "delete", None)
+            else:
+                text = "from " + module + " import " + ", ".join(_alias_str(a) for a in keep)
+                actions[n.lineno] = (n.end_lineno, "replace", text)
+        elif isinstance(n, ast.Import):
+            keep = [a for a in n.names if _import_bound_name(a) in used]
+            if len(keep) == len(n.names):
+                continue
+            for a in n.names:
+                if a not in keep:
+                    removed.append(a.name)
+            if not keep:
+                actions[n.lineno] = (n.end_lineno, "delete", None)
+            else:
+                text = "import " + ", ".join(_alias_str(a) for a in keep)
+                actions[n.lineno] = (n.end_lineno, "replace", text)
+
+    if not actions:
+        return src, []
+
+    out_lines = []
+    i = 1
+    n_lines = len(lines)
+    while i <= n_lines:
+        action = actions.get(i)
+        if action is not None:
+            end, kind, text = action
+            if kind == "delete":
+                i = end + 1
+                continue
+            indent_match = re.match(r"[ \t]*", lines[i - 1])
+            indent = indent_match.group() if indent_match else ""
+            last_line = lines[end - 1]
+            if last_line.endswith("\r\n"):
+                nl = "\r\n"
+            elif last_line.endswith("\n"):
+                nl = "\n"
+            else:
+                nl = ""
+            out_lines.append(indent + text + nl)
+            i = end + 1
+            continue
+        out_lines.append(lines[i - 1])
+        i += 1
+
+    return "".join(out_lines), removed
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--tidy":
+    data = sys.stdin.buffer.read()
+    new_source, removed = tidy_source(data)
+    print(json.dumps({"source": new_source, "removed": removed}))
+    sys.exit(0)
 
 root = sys.argv[1]
 relpaths = sys.argv[2:]
