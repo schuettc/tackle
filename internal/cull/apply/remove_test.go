@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/cull/cases"
@@ -9,8 +10,8 @@ import (
 // TestRemoveSpansBottomUpExact removes two spans (styled the way the Go
 // extractor reports them: End is the offset right after the closing
 // brace, not including its trailing newline) from one file and checks
-// that every byte outside them is untouched, and that no more than one
-// blank line remains where each span used to be.
+// that every byte outside them is untouched, and that the file keeps its
+// separator (and ends with one newline) where each span used to be.
 func TestRemoveSpansBottomUpExact(t *testing.T) {
 	prefix := "package a\n\n"
 	testOne := "func TestOne(t *testing.T) {\n\tif 1 != 1 {\n\t\tt.Fail()\n\t}\n}"
@@ -39,11 +40,9 @@ func TestRemoveSpansBottomUpExact(t *testing.T) {
 
 	got := string(RemoveSpans([]byte(src), spans))
 
-	// The blank line that used to separate func keep from TestTwo is
-	// now trailing whitespace at EOF: one blank line, which the "no
-	// more than one" rule permits (RemoveSpans doesn't otherwise trim
-	// EOF whitespace; that's gofmt's job, done later by TidyGo).
-	want := "package a\n\nfunc keep() {}\n\n"
+	// Removing the last decl also drops the blank line before it: the
+	// file ends with exactly one newline (I-1).
+	want := "package a\n\nfunc keep() {}\n"
 	if got != want {
 		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
 	}
@@ -102,7 +101,7 @@ func TestRemoveSpansCRLFEndOfFileNoTrailingNewline(t *testing.T) {
 	end := start + len(target)
 
 	got := string(RemoveSpans([]byte(src), []cases.Span{{Start: start, End: end}}))
-	want := "package a\r\n\r\nfunc before() {}\r\n\r\n"
+	want := "package a\r\n\r\nfunc before() {}\r\n"
 	if got != want {
 		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
 	}
@@ -131,8 +130,84 @@ func TestRemoveSpansCRLFTwoSpans(t *testing.T) {
 	}
 
 	got := string(RemoveSpans([]byte(src), spans))
-	want := "package a\r\n\r\nfunc keep() {}\r\n\r\n"
+	want := "package a\r\n\r\nfunc keep() {}\r\n"
 	if got != want {
 		t.Fatalf("RemoveSpans =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// span returns the Span of the first occurrence of part in src.
+func span(t *testing.T, src, part string) cases.Span {
+	t.Helper()
+	i := strings.Index(src, part)
+	if i < 0 {
+		t.Fatalf("%q not in src", part)
+	}
+	return cases.Span{Start: i, End: i + len(part)}
+}
+
+// TestRemoveSpansKeepsFileSeparator (I-1): each file keeps its own
+// separator between top-level decls (2 blank lines in Python, 1 in TS),
+// removing the last decl leaves exactly one newline at EOF, and removing
+// the first test after the imports leaves no stray blank lines. Python
+// spans are whole lines (End after the "\n"); TS spans end at ")".
+func TestRemoveSpansKeepsFileSeparator(t *testing.T) {
+	py := "import os\n\n\ndef test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n\n\ndef test_c():\n    assert 3\n"
+	pyA := "def test_a():\n    assert 1\n"
+	pyB := "def test_b():\n    assert 2\n"
+	pyC := "def test_c():\n    assert 3\n"
+	ts := "import { f } from \"./f\";\n\ntest(\"a\", () => {\n  f(1);\n})\n\ntest(\"b\", () => {\n  f(2);\n})\n\ntest(\"c\", () => {\n  f(3);\n})\n"
+	tsB := "test(\"b\", () => {\n  f(2);\n})"
+	tsC := "test(\"c\", () => {\n  f(3);\n})"
+	tsA := "test(\"a\", () => {\n  f(1);\n})"
+	for _, c := range []struct {
+		name, src string
+		parts     []string
+		want      string
+	}{
+		{"python middle", py, []string{pyB},
+			"import os\n\n\ndef test_a():\n    assert 1\n\n\ndef test_c():\n    assert 3\n"},
+		{"python last", py, []string{pyC},
+			"import os\n\n\ndef test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n"},
+		{"python first after imports", py, []string{pyA},
+			"import os\n\n\ndef test_b():\n    assert 2\n\n\ndef test_c():\n    assert 3\n"},
+		{"python last two", py, []string{pyB, pyC},
+			"import os\n\n\ndef test_a():\n    assert 1\n"},
+		{"ts middle", ts, []string{tsB},
+			"import { f } from \"./f\";\n\ntest(\"a\", () => {\n  f(1);\n})\n\ntest(\"c\", () => {\n  f(3);\n})\n"},
+		{"ts last", ts, []string{tsC},
+			"import { f } from \"./f\";\n\ntest(\"a\", () => {\n  f(1);\n})\n\ntest(\"b\", () => {\n  f(2);\n})\n"},
+		{"ts first after imports", ts, []string{tsA},
+			"import { f } from \"./f\";\n\ntest(\"b\", () => {\n  f(2);\n})\n\ntest(\"c\", () => {\n  f(3);\n})\n"},
+		{"python crlf last", strings.ReplaceAll(py, "\n", "\r\n"), []string{strings.ReplaceAll(pyC, "\n", "\r\n")},
+			strings.ReplaceAll("import os\n\n\ndef test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n", "\n", "\r\n")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var spans []cases.Span
+			for _, p := range c.parts {
+				spans = append(spans, span(t, c.src, p))
+			}
+			if got := string(RemoveSpans([]byte(c.src), spans)); got != c.want {
+				t.Errorf("RemoveSpans =\n%q\nwant\n%q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestTSSemicolonSpans (I-1): a TS removal also takes a directly
+// following ";", so no line holding only ";" is left.
+func TestTSSemicolonSpans(t *testing.T) {
+	src := "import { f } from \"./f\";\n\ntest(\"a\", () => {\n  f(1);\n});\n\ntest(\"b\", () => {\n  f(2);\n}) ;\n"
+	a := span(t, src, "test(\"a\", () => {\n  f(1);\n})")
+	b := span(t, src, "test(\"b\", () => {\n  f(2);\n})")
+	got := string(RemoveSpans([]byte(src), withTSSemicolons([]byte(src), []cases.Span{a})))
+	want := "import { f } from \"./f\";\n\ntest(\"b\", () => {\n  f(2);\n}) ;\n"
+	if got != want {
+		t.Errorf("remove a =\n%q\nwant\n%q", got, want)
+	}
+	got = string(RemoveSpans([]byte(src), withTSSemicolons([]byte(src), []cases.Span{b})))
+	want = "import { f } from \"./f\";\n\ntest(\"a\", () => {\n  f(1);\n});\n"
+	if got != want {
+		t.Errorf("remove b =\n%q\nwant\n%q", got, want)
 	}
 }
