@@ -76,7 +76,7 @@ func cmdPath(cwd string) func([]string, io.Writer, io.Writer) error {
 		if err != nil {
 			return tools.Exitf(1, "%v", err)
 		}
-		fmt.Fprintln(out, path)
+		_, _ = fmt.Fprintln(out, path)
 		return nil
 	}
 }
@@ -92,7 +92,7 @@ func cmdPrint(cwd string) func([]string, io.Writer, io.Writer) error {
 		if err != nil {
 			return tools.Exitf(1, "%v", err)
 		}
-		fmt.Fprint(out, content)
+		_, _ = fmt.Fprint(out, content)
 		return nil
 	}
 }

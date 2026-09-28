@@ -109,7 +109,7 @@ func newModel(cwd, name, destRaw string, nameFixed, destFixed bool) model {
 	// Tab. This sidesteps filepicker's select-and-descend ambiguity for dirs.
 	fp.DirAllowed = false
 	fp.FileAllowed = false
-	fp.Height = 8
+	fp.SetHeight(8)
 	m.picker = fp
 
 	m.stage = m.firstStage()
