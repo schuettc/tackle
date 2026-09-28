@@ -1198,3 +1198,98 @@ func TestPauseStepWithCardIsAtomic(t *testing.T) {
 	}
 	t.Fatal("step not found after reopen")
 }
+
+// ── Task 13: MarkUndone and ReleaseUndoClaim set updated_at ──────────────────
+
+// undoPlan returns a casebook-lane-only plan suitable for undo tests
+// (Approve accepts an empty session for plans with no agent-lane steps).
+func undoPlan() Plan {
+	return Plan{
+		BuiltAt: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC),
+		Head:    "abc-undo",
+		Steps: []Step{
+			{
+				Key:     "branch:schuettc/hail@feat/undo-x",
+				Action:  "branch-delete-local",
+				Lane:    LaneCasebook,
+				Command: "git -C '/tmp/clone' branch -D feat/undo-x",
+			},
+		},
+	}
+}
+
+// TestMarkUndoneUpdatesUpdatedAt verifies that MarkUndone sets updated_at.
+func TestMarkUndoneUpdatesUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+
+	t0 := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
+
+	s := &Store{DB: d, Now: func() time.Time { return t0 }}
+
+	job, err := s.Create(ctx, undoPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	stepID := job.Steps[0].ID
+
+	// Advance Now so updated_at changes.
+	s.Now = func() time.Time { return t1 }
+
+	if err := s.MarkUndone(ctx, stepID); err != nil {
+		t.Fatalf("MarkUndone: %v", err)
+	}
+
+	var updatedAt int64
+	if err := d.QueryRowContext(ctx, `SELECT updated_at FROM steps WHERE id = ?`, stepID).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != ms(t1) {
+		t.Errorf("MarkUndone: updated_at = %d; want %d (t1)", updatedAt, ms(t1))
+	}
+}
+
+// TestReleaseUndoClaimUpdatesUpdatedAt verifies that ReleaseUndoClaim sets
+// updated_at (regression: confirm the SQL already carries it).
+func TestReleaseUndoClaimUpdatesUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+
+	t0 := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
+
+	s := &Store{DB: d, Now: func() time.Time { return t0 }}
+
+	job, err := s.Create(ctx, undoPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	stepID := job.Steps[0].ID
+
+	// Claim the undo at t0.
+	if err := s.MarkUndone(ctx, stepID); err != nil {
+		t.Fatalf("MarkUndone: %v", err)
+	}
+
+	// Advance Now and release at t1.
+	s.Now = func() time.Time { return t1 }
+
+	if err := s.ReleaseUndoClaim(ctx, stepID, "test release"); err != nil {
+		t.Fatalf("ReleaseUndoClaim: %v", err)
+	}
+
+	var updatedAt int64
+	if err := d.QueryRowContext(ctx, `SELECT updated_at FROM steps WHERE id = ?`, stepID).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != ms(t1) {
+		t.Errorf("ReleaseUndoClaim: updated_at = %d; want %d (t1)", updatedAt, ms(t1))
+	}
+}

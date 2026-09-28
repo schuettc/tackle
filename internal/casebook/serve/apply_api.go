@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -460,6 +461,17 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 	// Claim the undo BEFORE executing the restore. MarkUndone is a one-time
 	// compare-and-swap (WHERE undone_at = 0): only one concurrent caller wins;
 	// the other gets a conflict so the restore command never runs twice.
+	//
+	// releaseUndo is a convenience closure that handles ReleaseUndoClaim
+	// errors: it logs them and attempts a best-effort detail update so Court
+	// can see the claim is still held.
+	releaseUndo := func(detail string) {
+		if err := s.Apply.ReleaseUndoClaim(ctx, step.ID, detail); err != nil {
+			claimMsg := detail + "; undo-claim release also failed: " + err.Error() + " — undo claim still held, retry will be refused"
+			fmt.Fprintf(os.Stderr, "casebook serve: ReleaseUndoClaim step %d: %v (undo claim still held)\n", step.ID, err)
+			_ = s.Apply.SetStepDetail(ctx, step.ID, claimMsg)
+		}
+	}
 	if err := s.Apply.MarkUndone(ctx, step.ID); err != nil {
 		reply(w, nil, httpError{
 			code: http.StatusConflict,
@@ -473,7 +485,7 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		// Agent-lane: unarchive/reopen goes to the agent as a message.
 		if job.Session == "" {
 			// Release the claim so Court can retry after fixing the session.
-			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "no session for agent-lane undo")
+			releaseUndo("no session for agent-lane undo")
 			reply(w, nil, httpError{
 				code: http.StatusConflict,
 				msg:  fmt.Sprintf("job %d has no session; cannot send undo to agent", job.ID),
@@ -483,12 +495,12 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		body := fmt.Sprintf("casebook undo for job %d, step %d [%s]:\nRun: %s", job.ID, step.ID, step.Key, step.Restore)
 		thread, err := s.Queue.NewThread(ctx, job.Session, fmt.Sprintf("undo:job:%d:step:%d", job.ID, step.ID))
 		if err != nil {
-			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "create thread for undo failed: "+err.Error())
+			releaseUndo("create thread for undo failed: " + err.Error())
 			reply(w, nil, bad("create thread for undo: %v", err))
 			return
 		}
 		if _, err := s.Queue.Post(ctx, thread.ID, body, deliver.Attached{Job: strconv.FormatInt(job.ID, 10)}, false); err != nil {
-			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "post undo message failed: "+err.Error())
+			releaseUndo("post undo message failed: " + err.Error())
 			reply(w, nil, bad("post undo message: %v", err))
 			return
 		}
@@ -498,7 +510,7 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		// Casebook-lane git restore: run locally via the runner's RunGit.
 		// If the restore fails, release the claim so Court can retry.
 		if err := runRestoreCommand(ctx, step.Restore, runGit); err != nil {
-			_ = s.Apply.ReleaseUndoClaim(ctx, step.ID, "restore failed: "+err.Error())
+			releaseUndo("restore failed: " + err.Error())
 			reply(w, nil, bad("restore command failed: %v", err))
 			return
 		}

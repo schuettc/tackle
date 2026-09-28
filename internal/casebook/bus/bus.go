@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -136,7 +137,9 @@ func (b *Bus) ServePoll(w http.ResponseWriter, r *http.Request) {
 		evs = []Event{}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"cursor": cur, "events": evs})
+	if err := json.NewEncoder(w).Encode(map[string]any{"cursor": cur, "events": evs}); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook bus: ServePoll encode: %v\n", err)
+	}
 }
 
 // ServeSSE streams events after Last-Event-ID (or ?since) until the client
@@ -163,7 +166,10 @@ func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, e := range evs {
 			line, _ := json.Marshal(e)
-			fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, line)
+			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, line); err != nil {
+				fmt.Fprintf(os.Stderr, "casebook bus: ServeSSE write: %v\n", err)
+				return
+			}
 		}
 		if len(evs) > 0 {
 			fl.Flush()
@@ -175,7 +181,10 @@ func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-sig:
 		case <-tick.C:
-			fmt.Fprint(w, ": keepalive\n\n")
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				fmt.Fprintf(os.Stderr, "casebook bus: ServeSSE keepalive: %v\n", err)
+				return
+			}
 			fl.Flush()
 		}
 	}

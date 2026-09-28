@@ -856,13 +856,15 @@ func (s *Store) MarkDispatched(ctx context.Context, jobID int64) (bool, error) {
 	return n > 0, nil
 }
 
-// MarkUndone records that a step has been undone (sets undone_at).
-// It returns an error if the step does not exist or is already undone.
+// MarkUndone records that a step has been undone (sets undone_at and
+// updated_at). It returns an error if the step does not exist or is already
+// undone (the compare-and-swap on undone_at = 0 ensures only one concurrent
+// caller wins).
 func (s *Store) MarkUndone(ctx context.Context, stepID int64) error {
 	now := s.Now()
 	res, err := s.DB.ExecContext(ctx,
-		`UPDATE steps SET undone_at = ? WHERE id = ? AND undone_at = 0`,
-		ms(now), stepID)
+		`UPDATE steps SET undone_at = ?, updated_at = ? WHERE id = ? AND undone_at = 0`,
+		ms(now), ms(now), stepID)
 	if err != nil {
 		return err
 	}
@@ -883,6 +885,17 @@ func (s *Store) ReleaseUndoClaim(ctx context.Context, stepID int64, detail strin
 	now := s.Now()
 	_, err := s.DB.ExecContext(ctx,
 		`UPDATE steps SET undone_at = 0, detail = ?, updated_at = ? WHERE id = ?`,
+		detail, ms(now), stepID)
+	return err
+}
+
+// SetStepDetail writes an informational detail string to a step without
+// changing its state. It is called on a best-effort basis when an undo-claim
+// release fails, so Court can see the claim is still held.
+func (s *Store) SetStepDetail(ctx context.Context, stepID int64, detail string) error {
+	now := s.Now()
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET detail = ?, updated_at = ? WHERE id = ?`,
 		detail, ms(now), stepID)
 	return err
 }

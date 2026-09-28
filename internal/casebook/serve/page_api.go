@@ -215,13 +215,14 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, fmt.Sprintf("proposal %d is not pending", id))
 			continue
 		}
-		if _, err := s.decideOneKey(ctx, p.Key, p.Disposition, proposalOpts(p), p.ID); err != nil {
+		normed, err := s.decideOneKey(ctx, p.Key, p.Disposition, proposalOpts(p), p.ID)
+		if err != nil {
 			errs = append(errs, err.Error())
 			continue
 		}
 		_ = s.Props.Settle(ctx, id, propose.Accepted, "")
 		s.Bus.Publish(ctx, "decided", map[string]any{
-			"keys":        []string{p.Key},
+			"keys":        []string{normed},
 			"disposition": p.Disposition,
 			"by":          by,
 			"proposed_by": p.Source,

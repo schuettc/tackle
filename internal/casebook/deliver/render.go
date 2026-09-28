@@ -30,7 +30,11 @@ func Render(d Delivery, workingOn, summary string, loc *time.Location) string {
 	if workingOn != "" {
 		b.WriteString(" They were written before your last turn's results. If one is already answered by what you did, say so rather than redoing it.")
 	}
-	b.WriteString(" Settle each with casebook_reply.\n")
+	settle := "Settle each"
+	if n == 1 {
+		settle = "Settle it"
+	}
+	b.WriteString(" " + settle + " with casebook_reply.\n")
 	sizes := map[int64]int{}
 	for _, m := range d.Messages {
 		if m.BatchID != 0 {

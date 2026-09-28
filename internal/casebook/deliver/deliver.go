@@ -765,14 +765,17 @@ func (q *Queue) Thread(ctx context.Context, id int64) (Thread, error) {
 
 // Session reads one session.
 func (q *Queue) Session(ctx context.Context, id string) (Session, error) {
-	all, err := q.Sessions(ctx)
+	var s Session
+	var fs, ls, la int64
+	err := q.DB.QueryRowContext(ctx, `SELECT s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at,
+		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight') FROM sessions s WHERE s.id = ?`, id).
+		Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Session{}, ErrNotFound
+		}
 		return Session{}, err
 	}
-	for _, s := range all {
-		if s.ID == id {
-			return s, nil
-		}
-	}
-	return Session{}, ErrNotFound
+	s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
+	return s, nil
 }

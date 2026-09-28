@@ -194,9 +194,10 @@ func (s *Store) Settle(ctx context.Context, id int64, state, reason string) erro
 	return nil
 }
 
-// SupersedeKey retires every pending proposal for a key except one (0 for
-// none): when Court decides the key directly, or accepts one proposal among
-// several.
+// SupersedeKey retires every pending proposal for a key except one. Pass
+// except=0 to supersede all pending proposals for the key (e.g. when Court
+// decides directly); pass a non-zero proposal ID to spare that one (e.g.
+// when accepting one proposal among several from different sources).
 func (s *Store) SupersedeKey(ctx context.Context, key string, except int64) error {
 	_, err := s.DB.ExecContext(ctx, "UPDATE proposals SET state = 'superseded', settled_at = ? WHERE key = ? AND state = 'pending' AND id != ?",
 		ms(s.Now()), key, except)
@@ -218,7 +219,9 @@ func (s *Store) Tally(ctx context.Context, source string, since time.Time) (Tall
 	for rows.Next() {
 		var st string
 		var n int
-		rows.Scan(&st, &n)
+		if err := rows.Scan(&st, &n); err != nil {
+			return t, err
+		}
 		switch st {
 		case Accepted:
 			t.Accepted = n
@@ -296,7 +299,9 @@ func (s *Store) Evidence(ctx context.Context, key string) ([]Evidence, error) {
 	for rows.Next() {
 		var e Evidence
 		var c int64
-		rows.Scan(&e.ID, &e.Key, &e.Text, &e.Author, &c)
+		if err := rows.Scan(&e.ID, &e.Key, &e.Text, &e.Author, &c); err != nil {
+			return nil, err
+		}
 		e.CreatedAt = tm(c)
 		out = append(out, e)
 	}

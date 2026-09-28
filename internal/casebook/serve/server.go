@@ -578,7 +578,11 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC(),
 		Reopened: wasOpen}
 	if o.Open != nil {
+		// Guard the write: agentOpen reads openPage concurrently once the
+		// handler is registered (localweb.Start already began serving above).
+		s.mu.Lock()
 		s.openPage = func(fragment string) error { return o.Open(srv.URL + fragment) }
+		s.mu.Unlock()
 	}
 	if err := writeAdvert(adv); err != nil {
 		cancel()

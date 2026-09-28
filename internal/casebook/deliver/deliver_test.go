@@ -6,6 +6,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -507,4 +508,26 @@ func TestRenderGolden(t *testing.T) {
 		t.Fatalf("render mismatch:\n--- got\n%s\n--- want\n%s", got, want)
 	}
 	_ = m1
+}
+
+// TestRenderSingleMessageSettleIt verifies that a one-message delivery says
+// "Settle it" (not "Settle each") in the rendered text.
+func TestRenderSingleMessageSettleIt(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	post(t, q, th, "please do the thing", false)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next: %v, %v", d, err)
+	}
+	if len(d.Messages) != 1 {
+		t.Fatalf("want 1 message, got %d", len(d.Messages))
+	}
+	got := Render(*d, "", "", time.UTC)
+	if !strings.Contains(got, "Settle it with casebook_reply") {
+		t.Errorf("single-message render should say \"Settle it\"; got:\n%s", got)
+	}
+	if strings.Contains(got, "Settle each") {
+		t.Errorf("single-message render must not say \"Settle each\"; got:\n%s", got)
+	}
 }

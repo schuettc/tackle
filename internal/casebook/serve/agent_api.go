@@ -323,11 +323,14 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		}
 		fragment = "#/attention/" + in.View
 	}
-	if s.openPage == nil {
+	s.mu.Lock()
+	openFn := s.openPage
+	s.mu.Unlock()
+	if openFn == nil {
 		reply(w, nil, httpError{code: http.StatusConflict, msg: "this casebook serve can't open a browser"})
 		return
 	}
-	if err := s.openPage(fragment); err != nil {
+	if err := openFn(fragment); err != nil {
 		reply(w, nil, err)
 		return
 	}
@@ -365,6 +368,11 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Bus.Publish(ctx, "settled", ev)
 	s.wake(in.Session)
+	// Prune the waiter: the turn is over. The next agentWait creates a fresh
+	// channel, so the map stays bounded to sessions that are actively waiting.
+	s.mu.Lock()
+	delete(s.waiters, in.Session)
+	s.mu.Unlock()
 	reply(w, result, nil)
 }
 
