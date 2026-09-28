@@ -21,7 +21,7 @@ func newRuleRig(t *testing.T) (*rig, rules.Rule) {
 		CreatedAt: r.s.Now(),
 		EditedAt:  r.s.Now(),
 		Match:     []rules.Condition{{Field: "kind", Op: "is", Value: "repo"}},
-		Propose:   rules.Action{Disposition: "archive"},
+		Propose:   rules.RuleAction{Disposition: "archive"},
 	}
 	if err := r.App.Repo.WriteRule(ctx, ru, "rule kind-repo created by court"); err != nil {
 		t.Fatal(err)
@@ -38,8 +38,8 @@ func TestPreviewCountsMatchesByReason(t *testing.T) {
 	// Preview a rule that matches all repos (there's one: repo:schuettc/hail).
 	var preview MatchPreview
 	code := r.do(t, "POST", "/api/rules/preview", map[string]any{
-		"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "repo"}},
-		"Propose": map[string]any{"Disposition": "archive"},
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}},
+		"propose": map[string]any{"disposition": "archive"},
 	}, &preview)
 	if code != 200 {
 		t.Fatalf("preview status %d", code)
@@ -57,16 +57,18 @@ func TestDraftThenActivateProposes(t *testing.T) {
 
 	// Activate the rule.
 	var detail RuleDetailView
-	code := r.do(t, "POST", "/api/rules/activate", map[string]any{"ID": "kind-repo"}, &detail)
+	code := r.do(t, "POST", "/api/rules/activate", map[string]any{"id": "kind-repo"}, &detail)
 	if code != 200 {
 		t.Fatalf("activate status %d", code)
 	}
 	if detail.Rule.Status != rules.StatusActive {
 		t.Fatalf("rule status %q, want active", detail.Rule.Status)
 	}
-	// Activation runs EvaluateActive immediately, so proposals should now exist.
+	// Activation runs EvaluateActive immediately, so proposals must exist.
+	// The rule matches "kind is repo" and the test index always has
+	// repo:schuettc/hail, so there must be at least one pending proposal.
 	if detail.Record.Pending < 1 && detail.Matches.Total < 1 {
-		t.Log("no pending proposals yet (may be ok if no matches)")
+		t.Fatalf("activation produced no pending proposals or matches; the fixture rule must match something (record=%+v matches=%+v)", detail.Record, detail.Matches)
 	}
 
 	// The rule file on disk is now active.
@@ -85,9 +87,9 @@ func TestUntickAddsExclusionAndPreviewDrops(t *testing.T) {
 	// Get a match from preview.
 	var preview MatchPreview
 	code := r.do(t, "POST", "/api/rules/preview", map[string]any{
-		"ID":      ru.ID,
-		"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "repo"}},
-		"Propose": map[string]any{"Disposition": "archive"},
+		"id":      ru.ID,
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}},
+		"propose": map[string]any{"disposition": "archive"},
 	}, &preview)
 	if code != 200 {
 		t.Fatalf("preview %d", code)
@@ -100,9 +102,9 @@ func TestUntickAddsExclusionAndPreviewDrops(t *testing.T) {
 	// Untick: add exclusion.
 	var detail RuleDetailView
 	code = r.do(t, "POST", "/api/rules/exclude", map[string]any{
-		"ID":     ru.ID,
-		"Key":    key,
-		"Reason": "keep for reference",
+		"id":     ru.ID,
+		"key":    key,
+		"reason": "keep for reference",
 	}, &detail)
 	if code != 200 {
 		t.Fatalf("exclude status %d", code)
@@ -114,10 +116,10 @@ func TestUntickAddsExclusionAndPreviewDrops(t *testing.T) {
 	// Preview now drops the excluded key.
 	var preview2 MatchPreview
 	r.do(t, "POST", "/api/rules/preview", map[string]any{
-		"ID":      ru.ID,
-		"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "repo"}},
-		"Propose": map[string]any{"Disposition": "archive"},
-		"Exclude": detail.Rule.Exclude,
+		"id":      ru.ID,
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}},
+		"propose": map[string]any{"disposition": "archive"},
+		"exclude": detail.Rule.Exclude,
 	}, &preview2)
 	for _, row := range preview2.Page {
 		if row.Key == key {
@@ -132,8 +134,8 @@ func TestPreviewRejectsInvalidRegex(t *testing.T) {
 	// field=title op=matches value="(" is an invalid regex.
 	var out map[string]any
 	code := r.do(t, "POST", "/api/rules/preview", map[string]any{
-		"Match":   []map[string]any{{"Field": "title", "Op": "matches", "Value": "("}},
-		"Propose": map[string]any{"Disposition": "archive"},
+		"match":   []map[string]any{{"field": "title", "op": "matches", "value": "("}},
+		"propose": map[string]any{"disposition": "archive"},
 	}, &out)
 	if code != 400 {
 		t.Fatalf("invalid regex: want 400, got %d", code)
@@ -201,12 +203,12 @@ func TestDraftEndpointCreatesAndEdits(t *testing.T) {
 	// Create a draft.
 	var detail RuleDetailView
 	code := r.do(t, "POST", "/api/rules/draft", map[string]any{
-		"ID":        "my-rule",
-		"Name":      "My Rule",
-		"Status":    "draft",
-		"CreatedBy": "court",
-		"Match":     []map[string]any{{"Field": "kind", "Op": "is", "Value": "pr"}},
-		"Propose":   map[string]any{"Disposition": "close"},
+		"id":         "my-rule",
+		"name":       "My Rule",
+		"status":     "draft",
+		"created_by": "court",
+		"match":      []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+		"propose":    map[string]any{"disposition": "close"},
 	}, &detail)
 	if code != 200 {
 		t.Fatalf("draft create %d", code)
@@ -218,12 +220,12 @@ func TestDraftEndpointCreatesAndEdits(t *testing.T) {
 	// Edit the draft.
 	var detail2 RuleDetailView
 	code = r.do(t, "POST", "/api/rules/draft", map[string]any{
-		"ID":        "my-rule",
-		"Name":      "My Rule v2",
-		"Status":    "draft",
-		"CreatedBy": "court",
-		"Match":     []map[string]any{{"Field": "kind", "Op": "is", "Value": "issue"}},
-		"Propose":   map[string]any{"Disposition": "close"},
+		"id":         "my-rule",
+		"name":       "My Rule v2",
+		"status":     "draft",
+		"created_by": "court",
+		"match":      []map[string]any{{"field": "kind", "op": "is", "value": "issue"}},
+		"propose":    map[string]any{"disposition": "close"},
 	}, &detail2)
 	if code != 200 {
 		t.Fatalf("draft edit %d", code)
@@ -240,13 +242,13 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	// Agent tries to set status=active → 400.
 	var out map[string]any
 	code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
-		"Session": "s1",
-		"Rule": map[string]any{
-			"ID":      "agent-rule",
-			"Name":    "Agent rule",
-			"Status":  "active", // not allowed
-			"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "pr"}},
-			"Propose": map[string]any{"Disposition": "close"},
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "agent-rule",
+			"name":    "Agent rule",
+			"status":  "active", // not allowed
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
 		},
 	}, &out)
 	if code != 400 {
@@ -259,13 +261,13 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	// Writing a draft works and records created_by = "pi:s1".
 	var detail RuleDetailView
 	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
-		"Session": "s1",
-		"Rule": map[string]any{
-			"ID":      "agent-rule",
-			"Name":    "Agent rule",
-			"Status":  "draft",
-			"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "pr"}},
-			"Propose": map[string]any{"Disposition": "close"},
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "agent-rule",
+			"name":    "Agent rule",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
 		},
 	}, &detail)
 	if code != 200 {
@@ -287,13 +289,13 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	}
 	var out2 map[string]any
 	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
-		"Session": "s1",
-		"Rule": map[string]any{
-			"ID":      "agent-rule",
-			"Name":    "Agent rule edited",
-			"Status":  "draft",
-			"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "pr"}},
-			"Propose": map[string]any{"Disposition": "close"},
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "agent-rule",
+			"name":    "Agent rule edited",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
 		},
 	}, &out2)
 	if code != 400 {
@@ -305,7 +307,7 @@ func TestProposeOnceEndpoint(t *testing.T) {
 	r, _ := newRuleRig(t)
 
 	var result ProposeResult
-	code := r.do(t, "POST", "/api/rules/propose-once", map[string]any{"ID": "kind-repo"}, &result)
+	code := r.do(t, "POST", "/api/rules/propose-once", map[string]any{"id": "kind-repo"}, &result)
 	if code != 200 {
 		t.Fatalf("propose-once %d", code)
 	}
@@ -320,14 +322,14 @@ func TestDeactivateRule(t *testing.T) {
 
 	// Activate first.
 	var detail RuleDetailView
-	r.do(t, "POST", "/api/rules/activate", map[string]any{"ID": "kind-repo"}, &detail)
+	r.do(t, "POST", "/api/rules/activate", map[string]any{"id": "kind-repo"}, &detail)
 	if detail.Rule.Status != rules.StatusActive {
 		t.Fatalf("activate %q", detail.Rule.Status)
 	}
 
 	// Deactivate.
 	var detail2 RuleDetailView
-	code := r.do(t, "POST", "/api/rules/deactivate", map[string]any{"ID": "kind-repo"}, &detail2)
+	code := r.do(t, "POST", "/api/rules/deactivate", map[string]any{"id": "kind-repo"}, &detail2)
 	if code != 200 {
 		t.Fatalf("deactivate %d", code)
 	}
@@ -342,8 +344,8 @@ func TestIncludeRemovesExclusion(t *testing.T) {
 	// Add exclusion first.
 	var preview MatchPreview
 	r.do(t, "POST", "/api/rules/preview", map[string]any{
-		"Match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "repo"}},
-		"Propose": map[string]any{"Disposition": "archive"},
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}},
+		"propose": map[string]any{"disposition": "archive"},
 	}, &preview)
 	if len(preview.Page) == 0 {
 		t.Skip("no matches")
@@ -351,14 +353,14 @@ func TestIncludeRemovesExclusion(t *testing.T) {
 	key := preview.Page[0].Key
 
 	var detail RuleDetailView
-	r.do(t, "POST", "/api/rules/exclude", map[string]any{"ID": ru.ID, "Key": key, "Reason": "test"}, &detail)
+	r.do(t, "POST", "/api/rules/exclude", map[string]any{"id": ru.ID, "key": key, "reason": "test"}, &detail)
 	if len(detail.Rule.Exclude) == 0 {
 		t.Fatal("exclusion not added")
 	}
 
 	// Remove exclusion.
 	var detail2 RuleDetailView
-	code := r.do(t, "POST", "/api/rules/include", map[string]any{"ID": ru.ID, "Key": key}, &detail2)
+	code := r.do(t, "POST", "/api/rules/include", map[string]any{"id": ru.ID, "key": key}, &detail2)
 	if code != 200 {
 		t.Fatalf("include %d", code)
 	}
@@ -366,5 +368,199 @@ func TestIncludeRemovesExclusion(t *testing.T) {
 		if ex.Key == key {
 			t.Fatalf("exclusion for %q still present", key)
 		}
+	}
+}
+
+// TestAgentCannotEditOtherAgentsDraft checks Fix 3: an agent session may only
+// edit drafts it created itself; editing another author's draft is 400 naming
+// the author. The page (Court) may edit any draft.
+func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+	r.attach(t, "s2")
+
+	// Court creates a draft.
+	var detail RuleDetailView
+	code := r.do(t, "POST", "/api/rules/draft", map[string]any{
+		"id":      "court-rule",
+		"name":    "Court rule",
+		"status":  "draft",
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+		"propose": map[string]any{"disposition": "close"},
+	}, &detail)
+	if code != 200 {
+		t.Fatalf("court draft create %d", code)
+	}
+
+	// Session s1 tries to edit court's draft → 400 naming "court".
+	var out map[string]any
+	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "court-rule",
+			"name":    "Court rule hacked",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
+		},
+	}, &out)
+	if code != 400 {
+		t.Fatalf("s1 edit court draft: want 400, got %d", code)
+	}
+	// Error message must name the author ("court").
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "court") {
+		t.Fatalf("error %q must name the author (court)", msg)
+	}
+
+	// Session s1 creates its own draft.
+	var detail2 RuleDetailView
+	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "s1-rule",
+			"name":    "s1 rule",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
+		},
+	}, &detail2)
+	if code != 200 {
+		t.Fatalf("s1 create draft %d", code)
+	}
+
+	// Session s2 tries to edit s1's draft → 400 naming "pi:s1".
+	var out2 map[string]any
+	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		"session": "s2",
+		"rule": map[string]any{
+			"id":      "s1-rule",
+			"name":    "s1 rule stolen",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
+		},
+	}, &out2)
+	if code != 400 {
+		t.Fatalf("s2 edit s1 draft: want 400, got %d", code)
+	}
+	if msg, _ := out2["error"].(string); !strings.Contains(msg, "pi:s1") {
+		t.Fatalf("error %q must name the author (pi:s1)", msg)
+	}
+
+	// Session s1 edits its own draft → 200.
+	var detail3 RuleDetailView
+	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "s1-rule",
+			"name":    "s1 rule updated",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
+		},
+	}, &detail3)
+	if code != 200 {
+		t.Fatalf("s1 edit own draft %d", code)
+	}
+	if detail3.Rule.Name != "s1 rule updated" {
+		t.Fatalf("rule name %q", detail3.Rule.Name)
+	}
+
+	// Court may edit any draft (including s1's).
+	var detail4 RuleDetailView
+	code = r.do(t, "POST", "/api/rules/draft", map[string]any{
+		"id":      "s1-rule",
+		"name":    "s1 rule fixed by court",
+		"status":  "draft",
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+		"propose": map[string]any{"disposition": "close"},
+	}, &detail4)
+	if code != 200 {
+		t.Fatalf("court edit s1 draft %d", code)
+	}
+	if detail4.Rule.Name != "s1 rule fixed by court" {
+		t.Fatalf("court edit: rule name %q", detail4.Rule.Name)
+	}
+}
+
+// TestProposeOnceReturnsProposals checks Fix 5: ProposeOnce returns the actual
+// proposal objects, not just a count, so ProposeResult.Proposals is populated.
+func TestProposeOnceReturnsProposals(t *testing.T) {
+	r, _ := newRuleRig(t)
+
+	var result ProposeResult
+	code := r.do(t, "POST", "/api/rules/propose-once", map[string]any{"id": "kind-repo"}, &result)
+	if code != 200 {
+		t.Fatalf("propose-once %d", code)
+	}
+	if result.Proposed < 1 {
+		t.Fatalf("propose-once proposed %d, want >=1", result.Proposed)
+	}
+	// Fix 5: Proposals must be populated, not an empty slice.
+	if len(result.Proposals) < 1 {
+		t.Fatalf("propose-once returned %d proposals, want >=1; ProposeOnce must return the proposal objects", len(result.Proposals))
+	}
+}
+
+// TestDraftEndpointRejectsInvalidID checks Fix 6: POST /api/rules/draft
+// returns 400 "invalid rule id" for an id that fails ValidID.
+func TestDraftEndpointRejectsInvalidID(t *testing.T) {
+	r := newRig(t)
+
+	// Empty id.
+	var out map[string]any
+	code := r.do(t, "POST", "/api/rules/draft", map[string]any{
+		"id":      "",
+		"name":    "Bad Rule",
+		"status":  "draft",
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+		"propose": map[string]any{"disposition": "close"},
+	}, &out)
+	if code != 400 {
+		t.Fatalf("empty id: want 400, got %d", code)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "invalid rule id") {
+		t.Fatalf("error %q does not say 'invalid rule id'", msg)
+	}
+
+	// Id with uppercase letters (not allowed).
+	var out2 map[string]any
+	code = r.do(t, "POST", "/api/rules/draft", map[string]any{
+		"id":      "Bad-ID",
+		"name":    "Bad Rule",
+		"status":  "draft",
+		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+		"propose": map[string]any{"disposition": "close"},
+	}, &out2)
+	if code != 400 {
+		t.Fatalf("bad id: want 400, got %d", code)
+	}
+	if msg, _ := out2["error"].(string); !strings.Contains(msg, "invalid rule id") {
+		t.Fatalf("error %q does not say 'invalid rule id'", msg)
+	}
+}
+
+// TestAgentDraftRejectsInvalidID checks Fix 6: POST /api/agent/rule-draft
+// returns 400 "invalid rule id" for an id that fails ValidID.
+func TestAgentDraftRejectsInvalidID(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	var out map[string]any
+	code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		"session": "s1",
+		"rule": map[string]any{
+			"id":      "Bad-ID",
+			"name":    "Bad Rule",
+			"status":  "draft",
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
+			"propose": map[string]any{"disposition": "close"},
+		},
+	}, &out)
+	if code != 400 {
+		t.Fatalf("bad id via agent: want 400, got %d", code)
+	}
+	if msg, _ := out["error"].(string); !strings.Contains(msg, "invalid rule id") {
+		t.Fatalf("error %q does not say 'invalid rule id'", msg)
 	}
 }

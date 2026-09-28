@@ -808,7 +808,7 @@ func TestChannelRuleDraftTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("no rule in detail: %v", detail)
 	}
-	if rule["CreatedBy"] != "pi:s1" {
-		t.Fatalf("created_by %q, want pi:s1", rule["CreatedBy"])
+	if rule["created_by"] != "pi:s1" {
+		t.Fatalf("created_by %q, want pi:s1", rule["created_by"])
 	}
 }

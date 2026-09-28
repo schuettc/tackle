@@ -283,28 +283,28 @@ export interface SkippedMessage {
 }
 
 export interface Rule {
-  ID: string;
-  Name: string;
-  Status: string;
-  CreatedBy: string;
-  CreatedAt: string;
-  EditedAt: string;
-  Match: Condition[] | null;
-  Propose: Action;
-  Exclude: Exclusion[] | null;
+  id: string;
+  name: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+  edited_at: string;
+  match: Condition[] | null;
+  propose: RuleAction;
+  exclude?: Exclusion[];
 }
 
 export interface TrackRecord {
-  Accepted: number;
-  Rejected: number;
-  Pending: number;
+  accepted: number;
+  rejected: number;
+  pending: number;
 }
 
 export interface Field {
-  Name: string;
-  Type: number;
-  Ops: string[] | null;
-  Values: string[] | null;
+  name: string;
+  type: number;
+  ops: string[] | null;
+  values: string[] | null;
 }
 
 export interface Decision {
@@ -348,22 +348,22 @@ export interface Attached {
 }
 
 export interface Condition {
-  Field: string;
-  Op: string;
-  Value: string;
+  field: string;
+  op: string;
+  value: string;
 }
 
-export interface Action {
-  Disposition: string;
-  Until: string;
-  Note: string;
+export interface RuleAction {
+  disposition: string;
+  until?: string;
+  note?: string;
 }
 
 export interface Exclusion {
-  Key: string;
-  Reason: string;
-  By: string;
-  At: string;
+  key: string;
+  reason?: string;
+  by: string;
+  at: string;
 }
 
 export interface Conflict {

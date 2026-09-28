@@ -171,7 +171,7 @@ func TestWriteReadRuleCommits(t *testing.T) {
 			{Field: "kind", Op: "is", Value: "branch"},
 			{Field: "landed", Op: "is", Value: "all-machines"},
 		},
-		Propose: rules.Action{
+		Propose: rules.RuleAction{
 			Disposition: "delete",
 			Note:        "landed ({how}); restore tip {tip}",
 		},

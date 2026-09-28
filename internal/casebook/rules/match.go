@@ -22,9 +22,9 @@ type Match struct {
 
 // TrackRecord summarises how a rule's past proposals fared.
 type TrackRecord struct {
-	Accepted int
-	Rejected int
-	Pending  int
+	Accepted int `json:"accepted"`
+	Rejected int `json:"rejected"`
+	Pending  int `json:"pending"`
 }
 
 // RuleRecord returns the track record for rule id by counting proposals whose

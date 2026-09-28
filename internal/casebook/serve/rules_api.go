@@ -55,6 +55,11 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
+	// Fix 6: validate the rule id up front before any disk access.
+	if !rules.ValidID(in.ID) {
+		reply(w, nil, bad("invalid rule id %q", in.ID))
+		return
+	}
 	ctx := r.Context()
 	by := s.App.Cfg.User
 	if by == "" {
@@ -144,9 +149,9 @@ func (s *Server) postRulesPreview(w http.ResponseWriter, r *http.Request) {
 // for them").
 func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID     string `json:"ID"`
-		Key    string `json:"Key"`
-		Reason string `json:"Reason"`
+		ID     string `json:"id"`
+		Key    string `json:"key"`
+		Reason string `json:"reason"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -212,8 +217,8 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 // Removes an exclusion from a rule (re-tick a match). Does not bump edited_at.
 func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID  string `json:"ID"`
-		Key string `json:"Key"`
+		ID  string `json:"id"`
+		Key string `json:"key"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -280,7 +285,7 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 // Runs ProposeOnce for the rule (draft or active) and returns ProposeResult.
 func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID string `json:"ID"`
+		ID string `json:"id"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -297,7 +302,7 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := rules.ProposeOnce(ctx, *ru, s.Index.Result(), s.Now(), s.Props)
+	proposals, n, err := rules.ProposeOnce(ctx, *ru, s.Index.Result(), s.Now(), s.Props)
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return
@@ -305,14 +310,17 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 	if n > 0 {
 		s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
 	}
-	reply(w, ProposeResult{Proposed: n, Proposals: []propose.Proposal{}, Errors: []string{}}, nil)
+	if proposals == nil {
+		proposals = []propose.Proposal{}
+	}
+	reply(w, ProposeResult{Proposed: n, Proposals: proposals, Errors: []string{}}, nil)
 }
 
 // postRulesActivate handles POST /api/rules/activate.
 // Activates the rule and immediately runs EvaluateActive through the rebuild path.
 func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID string `json:"ID"`
+		ID string `json:"id"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -358,7 +366,7 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 // Sets the rule back to draft status.
 func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		ID string `json:"ID"`
+		ID string `json:"id"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -402,13 +410,20 @@ func (s *Server) getRulesVocabulary(w http.ResponseWriter, r *http.Request) {
 // agentRuleDraft handles POST /api/agent/rule-draft.
 // Creates or updates a DRAFT rule from an agent session. Refuses status="active".
 // Sets created_by = "<harness>:<session>".
+// An agent may only edit drafts it created itself (created_by == source(sess));
+// editing another author's draft is refused with 400 naming the author.
 func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Session string     `json:"Session"`
-		Rule    rules.Rule `json:"Rule"`
+		Session string     `json:"session"`
+		Rule    rules.Rule `json:"rule"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
+		return
+	}
+	// Fix 6: validate the rule id up front before any disk access.
+	if !rules.ValidID(in.Rule.ID) {
+		reply(w, nil, bad("invalid rule id %q", in.Rule.ID))
 		return
 	}
 	ctx := r.Context()
@@ -453,6 +468,11 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		// Refuse to edit an active rule.
 		if existing.Status == rules.StatusActive {
 			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only Court can edit active rules"))
+			return
+		}
+		// Fix 3: an agent may only edit drafts it created itself.
+		if existing.CreatedBy != by {
+			reply(w, nil, bad("casebook_rule_draft cannot edit rule %q: it was created by %s", in.Rule.ID, existing.CreatedBy))
 			return
 		}
 		in.Rule.CreatedBy = existing.CreatedBy

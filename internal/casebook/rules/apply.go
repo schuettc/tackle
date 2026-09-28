@@ -73,17 +73,20 @@ func EvaluateActive(ctx context.Context, active []Rule, res engine.Result, now t
 //
 // Unlike EvaluateActive, ProposeOnce operates on a single rule and is the
 // entry-point for Task 7's "propose once" endpoint.
-func ProposeOnce(ctx context.Context, r Rule, res engine.Result, now time.Time, props *propose.Store) (int, error) {
+//
+// It returns the created proposal objects (so callers can include them in API
+// responses), the total count, and a joined error for any Propose failures.
+func ProposeOnce(ctx context.Context, r Rule, res engine.Result, now time.Time, props *propose.Store) ([]propose.Proposal, int, error) {
 	pending, err := props.Pending(ctx)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	rejected, err := props.RejectedFor(ctx, "rule:"+r.ID, r.EditedAt)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	matches := r.Proposable(res, now, pending, rejected)
-	created := 0
+	var created []propose.Proposal
 	var propErrs []error
 	for _, m := range matches {
 		it, ok := res.Find(m.Key)
@@ -96,7 +99,7 @@ func ProposeOnce(ctx context.Context, r Rule, res engine.Result, now time.Time, 
 		for _, pe := range errs {
 			propErrs = append(propErrs, fmt.Errorf("rule %s: %w", r.ID, pe))
 		}
-		created += len(ps)
+		created = append(created, ps...)
 	}
-	return created, errors.Join(propErrs...)
+	return created, len(created), errors.Join(propErrs...)
 }

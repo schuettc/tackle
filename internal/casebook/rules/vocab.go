@@ -23,10 +23,10 @@ const (
 
 // Field describes one field in the vocabulary.
 type Field struct {
-	Name   string
-	Type   FieldType
-	Ops    []string // allowed operators
-	Values []string // allowed values for FieldTypeEnum; nil means unconstrained
+	Name   string    `json:"name"`
+	Type   FieldType `json:"type"`
+	Ops    []string  `json:"ops"`
+	Values []string  `json:"values"`
 }
 
 // Operator sets.

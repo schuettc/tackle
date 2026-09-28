@@ -33,37 +33,39 @@ func ValidID(id string) bool { return idRe.MatchString(id) }
 // Rule is a standing rule stored at casebook-data/rules/<id>.toml.
 // Its format is documented in internal/casebook/FORMAT.md §Rules.
 type Rule struct {
-	ID        string      `toml:"id"`
-	Name      string      `toml:"name"`
-	Status    string      `toml:"status"`
-	CreatedBy string      `toml:"created_by"`
-	CreatedAt time.Time   `toml:"created_at"`
-	EditedAt  time.Time   `toml:"edited_at"`
-	Match     []Condition `toml:"match"`
-	Propose   Action      `toml:"propose"`
-	Exclude   []Exclusion `toml:"exclude,omitempty"`
+	ID        string      `toml:"id" json:"id"`
+	Name      string      `toml:"name" json:"name"`
+	Status    string      `toml:"status" json:"status"`
+	CreatedBy string      `toml:"created_by" json:"created_by"`
+	CreatedAt time.Time   `toml:"created_at" json:"created_at"`
+	EditedAt  time.Time   `toml:"edited_at" json:"edited_at"`
+	Match     []Condition `toml:"match" json:"match"`
+	Propose   RuleAction  `toml:"propose" json:"propose"`
+	Exclude   []Exclusion `toml:"exclude,omitempty" json:"exclude,omitempty"`
 }
 
 // Condition is one clause in a rule's [[match]] list. All conditions must hold.
 type Condition struct {
-	Field string `toml:"field"`
-	Op    string `toml:"op"`
-	Value string `toml:"value"`
+	Field string `toml:"field" json:"field"`
+	Op    string `toml:"op" json:"op"`
+	Value string `toml:"value" json:"value"`
 }
 
-// Action is the [propose] block: what disposition to propose when the rule matches.
-type Action struct {
-	Disposition string `toml:"disposition"`
-	Until       string `toml:"until,omitempty"`
-	Note        string `toml:"note,omitempty"`
+// RuleAction is the [propose] block: what disposition to propose when the rule matches.
+// The TOML table key stays [propose]; only the Go type name changed (to avoid
+// clashing with journal.Action in the wire.d.ts TypeScript declarations).
+type RuleAction struct {
+	Disposition string `toml:"disposition" json:"disposition"`
+	Until       string `toml:"until,omitempty" json:"until,omitempty"`
+	Note        string `toml:"note,omitempty" json:"note,omitempty"`
 }
 
 // Exclusion is one [[exclude]] entry: an item explicitly skipped by this rule.
 type Exclusion struct {
-	Key    string    `toml:"key"`
-	Reason string    `toml:"reason,omitempty"`
-	By     string    `toml:"by"`
-	At     time.Time `toml:"at"`
+	Key    string    `toml:"key" json:"key"`
+	Reason string    `toml:"reason,omitempty" json:"reason,omitempty"`
+	By     string    `toml:"by" json:"by"`
+	At     time.Time `toml:"at" json:"at"`
 }
 
 // Decode parses a rule from TOML bytes. It rejects unknown keys.
@@ -109,7 +111,7 @@ var allDispositions = func() []string {
 //   - id non-empty and matches ^[a-z0-9-]+$
 //   - status is "draft" or "active"
 //   - every Condition passes ValidateCondition
-//   - Action.Disposition is a valid item.Disposition
+//   - RuleAction.Disposition is a valid item.Disposition
 //   - wait/watch dispositions require a non-empty Until
 func (r Rule) Validate() error {
 	if r.ID == "" {

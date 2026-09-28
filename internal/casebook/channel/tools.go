@@ -160,11 +160,13 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 					return "", fmt.Errorf("bad rule_draft arguments: %v", err)
 				}
 			}
-			// Build match conditions using Go field names.
+			// Build match conditions using snake_case json keys (Fix 2: rules structs
+			// now have json tags matching the TOML names). Accept both casings from
+			// the tool caller so the MCP schema stays backward-compatible.
 			match := make([]map[string]any, 0, len(rd.Match))
 			for _, m := range rd.Match {
 				cond := map[string]any{}
-				condKeyMap := [][2]string{{"Field", "Field"}, {"field", "Field"}, {"Op", "Op"}, {"op", "Op"}, {"Value", "Value"}, {"value", "Value"}}
+				condKeyMap := [][2]string{{"Field", "field"}, {"field", "field"}, {"Op", "op"}, {"op", "op"}, {"Value", "value"}, {"value", "value"}}
 				for _, kk := range condKeyMap {
 					if v, ok := m[kk[0]]; ok {
 						var s string
@@ -175,9 +177,9 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 				}
 				match = append(match, cond)
 			}
-			// Build propose using Go field names.
+			// Build propose using snake_case keys.
 			propose := map[string]any{}
-			propKeyMap := [][2]string{{"Disposition", "Disposition"}, {"disposition", "Disposition"}, {"Until", "Until"}, {"until", "Until"}, {"Note", "Note"}, {"note", "Note"}}
+			propKeyMap := [][2]string{{"Disposition", "disposition"}, {"disposition", "disposition"}, {"Until", "until"}, {"until", "until"}, {"Note", "note"}, {"note", "note"}}
 			for _, kk := range propKeyMap {
 				if v, ok := rd.Propose[kk[0]]; ok {
 					var s string
@@ -187,13 +189,13 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 				}
 			}
 			body := map[string]any{
-				"Session": ch.ID.Session,
-				"Rule": map[string]any{
-					"ID":      rd.ID,
-					"Name":    rd.Name,
-					"Status":  "draft",
-					"Match":   match,
-					"Propose": propose,
+				"session": ch.ID.Session,
+				"rule": map[string]any{
+					"id":      rd.ID,
+					"name":    rd.Name,
+					"status":  "draft",
+					"match":   match,
+					"propose": propose,
 				},
 			}
 			var out map[string]any
@@ -205,7 +207,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 				return "", fmt.Errorf("%s", errMsg)
 			}
 			if rule, ok := out["rule"].(map[string]any); ok {
-				return fmt.Sprintf("draft rule %q written (created_by %q)", rule["ID"], rule["CreatedBy"]), nil
+				return fmt.Sprintf("draft rule %q written (created_by %q)", rule["id"], rule["created_by"]), nil
 			}
 			return pretty(out), nil
 		})

@@ -44,7 +44,7 @@ func activeRepoRule(id string) Rule {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: Action{Disposition: "archive"},
+		Propose: RuleAction{Disposition: "archive"},
 	}
 }
 
@@ -160,7 +160,7 @@ func TestDraftRuleProposesNothingUntilProposeOnce(t *testing.T) {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: Action{Disposition: "archive"},
+		Propose: RuleAction{Disposition: "archive"},
 	}
 	res := buildResult(repoItem("repo:schuettc/hail"))
 
@@ -180,12 +180,15 @@ func TestDraftRuleProposesNothingUntilProposeOnce(t *testing.T) {
 	}
 
 	// ProposeOnce works on a draft rule.
-	created, err = ProposeOnce(ctx, draft, res, applyTestNow, s)
-	if err != nil {
-		t.Fatalf("ProposeOnce: %v", err)
+	proposals, n, propErr := ProposeOnce(ctx, draft, res, applyTestNow, s)
+	if propErr != nil {
+		t.Fatalf("ProposeOnce: %v", propErr)
 	}
-	if created != 1 {
-		t.Fatalf("ProposeOnce: created = %d, want 1", created)
+	if n != 1 {
+		t.Fatalf("ProposeOnce: created = %d, want 1", n)
+	}
+	if len(proposals) != 1 {
+		t.Fatalf("ProposeOnce: returned %d proposals, want 1", len(proposals))
 	}
 
 	pending, _ = s.Pending(ctx)
@@ -245,7 +248,7 @@ func TestEvaluateActivePerItemNote(t *testing.T) {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: Action{Disposition: "archive", Note: "archiving {repo}"},
+		Propose: RuleAction{Disposition: "archive", Note: "archiving {repo}"},
 	}
 	items := []engine.Item{
 		{ID: "repo:schuettc/alpha", Kind: item.KindRepo, Repo: "schuettc/alpha"},
@@ -295,7 +298,7 @@ func TestEvaluateActiveReturnsErrorOnProposeFailure(t *testing.T) {
 		Status:   StatusActive,
 		EditedAt: applyTestNow.Add(-24 * time.Hour),
 		Match:    []Condition{{Field: "kind", Op: "is", Value: "repo"}},
-		Propose:  Action{Disposition: "not-a-real-disposition"},
+		Propose:  RuleAction{Disposition: "not-a-real-disposition"},
 	}
 	res := buildResult(repoItem("repo:schuettc/hail"))
 
@@ -318,11 +321,11 @@ func TestProposeOnceReturnsErrorOnProposeFailure(t *testing.T) {
 		Status:   StatusDraft,
 		EditedAt: applyTestNow.Add(-24 * time.Hour),
 		Match:    []Condition{{Field: "kind", Op: "is", Value: "repo"}},
-		Propose:  Action{Disposition: "not-a-real-disposition"},
+		Propose:  RuleAction{Disposition: "not-a-real-disposition"},
 	}
 	res := buildResult(repoItem("repo:schuettc/hail"))
 
-	_, err := ProposeOnce(ctx, r, res, applyTestNow, s)
+	_, _, err := ProposeOnce(ctx, r, res, applyTestNow, s)
 	if err == nil {
 		t.Fatal("ProposeOnce: expected non-nil error when Propose fails (invalid disposition), got nil — Propose errors are being silently discarded")
 	}

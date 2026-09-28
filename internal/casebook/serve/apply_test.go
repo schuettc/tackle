@@ -22,7 +22,7 @@ func activeRepoRule(id string, now time.Time) rules.Rule {
 		Match: []rules.Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: rules.Action{Disposition: "archive"},
+		Propose: rules.RuleAction{Disposition: "archive"},
 	}
 }
 

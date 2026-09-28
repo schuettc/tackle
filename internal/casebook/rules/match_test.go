@@ -151,7 +151,7 @@ func TestLandedBranchesRuleMatchesByReason(t *testing.T) {
 			{Field: "landed", Op: "is", Value: "all-machines"},
 			{Field: "worktree", Op: "is-not", Value: "dirty"},
 		},
-		Propose: Action{Disposition: "delete"},
+		Propose: RuleAction{Disposition: "delete"},
 	}
 
 	// Two branch items with different how types (codes in LandedVia).
@@ -203,7 +203,7 @@ func TestExclusionRemovesAMatch(t *testing.T) {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "branch"},
 		},
-		Propose: Action{Disposition: "delete"},
+		Propose: RuleAction{Disposition: "delete"},
 		Exclude: []Exclusion{
 			{Key: "branch:schuettc/galley@feat/keep", By: "court", At: testNow},
 		},
@@ -237,7 +237,7 @@ func TestRuleSkipsDecidedPendingAndRejected(t *testing.T) {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: Action{Disposition: "archive"},
+		Propose: RuleAction{Disposition: "archive"},
 	}
 
 	dec := item.Decision{Disposition: item.Archive, DecidedBy: "court", DecidedAt: testNow}
@@ -299,7 +299,7 @@ func TestNeverOverridesADecision(t *testing.T) {
 		Match: []Condition{
 			{Field: "kind", Op: "is", Value: "repo"},
 		},
-		Propose: Action{Disposition: "archive"},
+		Propose: RuleAction{Disposition: "archive"},
 	}
 
 	dec := item.Decision{Disposition: item.Archive, DecidedBy: "court", DecidedAt: testNow}
@@ -375,7 +375,7 @@ func TestCompiledRegexUsesCorrectField(t *testing.T) {
 		Match: []Condition{
 			{Field: "repo", Op: "matches", Value: `schuettc/.*`},
 		},
-		Propose: Action{Disposition: "archive"},
+		Propose: RuleAction{Disposition: "archive"},
 	}
 
 	// Item with matching Repo but non-matching Title.
