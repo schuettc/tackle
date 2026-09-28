@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -68,7 +69,10 @@ func Plan(root, testCommand string, files map[string]string) ([]Command, error) 
 		dirRel := path.Dir(rel)
 		switch lang {
 		case "go":
-			modDir := nearestMarkerDir(root, dirRel, hasGoMod)
+			modDir, ok := nearestMarkerDirStrict(root, dirRel, hasGoMod)
+			if !ok {
+				return nil, cannotRunErr(rel)
+			}
 			if goPkgs[modDir] == nil {
 				goPkgs[modDir] = map[string]bool{}
 			}
@@ -165,6 +169,22 @@ func nearestMarkerDir(root, startRel string, hasMarker func(absDir string) bool)
 	}
 }
 
+// nearestMarkerDirStrict walks from startRel upward (bounded by root)
+// looking for a directory hasMarker accepts; unlike nearestMarkerDir it
+// reports ok=false (no silent fallback to root) if none is found.
+func nearestMarkerDirStrict(root, startRel string, hasMarker func(absDir string) bool) (dir string, ok bool) {
+	d := startRel
+	for {
+		if hasMarker(osPath(root, d)) {
+			return d, true
+		}
+		if d == "." {
+			return "", false
+		}
+		d = path.Dir(d)
+	}
+}
+
 func hasGoMod(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "go.mod"))
 	return err == nil
@@ -251,6 +271,34 @@ func sortedStrings(m map[string]bool) []string {
 // tailLines is the outermost n lines of s.
 const tailLines = 60
 
+// syncBuffer is a bytes.Buffer safe for concurrent Write (from the
+// command's stdout/stderr copy goroutines) and String (from runOne reading
+// the tail after a bounded post-kill wait, which may race those
+// goroutines if a detached grandchild keeps a pipe open).
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// killGrace bounds how long runOne waits for cmd.Wait() to return after
+// killing the process group on timeout. A detached grandchild that keeps
+// holding the stdout/stderr pipe (e.g. one started with setsid) can
+// otherwise block Wait() indefinitely even though the timed-out command's
+// own process group is dead. Tests shorten this.
+var killGrace = 5 * time.Second
+
 // Run executes cmds in order, stopping at the first failing command
 // (including a timeout). Each command gets its own timeout, and runs with
 // the current environment minus TYPESAFE_API_KEY (test commands may run
@@ -283,9 +331,9 @@ func runOne(ctx context.Context, c Command, timeout time.Duration, env []string)
 	cmd.Dir = c.Dir
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
+	buf := &syncBuffer{}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
 
 	if err := cmd.Start(); err != nil {
 		return Result{Command: label, ExitCode: -1, OK: false, OutputTail: err.Error()}
@@ -301,7 +349,16 @@ func runOne(ctx context.Context, c Command, timeout time.Duration, env []string)
 		} else {
 			_ = cmd.Process.Kill()
 		}
-		<-done
+		// cmd.Wait() can still block past the kill if a detached
+		// grandchild (e.g. started via setsid) holds the stdout/stderr
+		// pipe open in its own session. Wait at most killGrace for it,
+		// then report the timeout anyway; the goroutine reading <-done
+		// is leaked in that rare case but exits once the pipe eventually
+		// closes.
+		select {
+		case <-done:
+		case <-time.After(killGrace):
+		}
 		return Result{
 			Command:    label,
 			ExitCode:   -1,

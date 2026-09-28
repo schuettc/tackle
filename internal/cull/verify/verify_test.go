@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,6 +84,20 @@ func TestPlanGoPerModule(t *testing.T) {
 	wantArgv1 := []string{"go", "test", "./", "./sub"}
 	if strings.Join(api.Argv, " ") != strings.Join(wantArgv1, " ") {
 		t.Errorf("cmds[1].Argv = %v, want %v", api.Argv, wantArgv1)
+	}
+}
+
+func TestPlanGoNoModIsPlanError(t *testing.T) {
+	root := t.TempDir()
+	// No go.mod anywhere under root.
+	files := map[string]string{"pkg/foo_test.go": "go"}
+	_, err := Plan(root, "", files)
+	if err == nil {
+		t.Fatal("Plan: want error when no go.mod is found at or above the file")
+	}
+	want := "cannot determine how to run pkg/foo_test.go's tests; set test_command in .cull.toml or pass --no-verify"
+	if err.Error() != want {
+		t.Errorf("err = %q, want %q", err.Error(), want)
 	}
 }
 
@@ -236,6 +251,38 @@ func TestRunTimeout(t *testing.T) {
 	}
 	if elapsed > 3*time.Second {
 		t.Errorf("elapsed = %v, want well under 5s (child should be killed)", elapsed)
+	}
+}
+
+func TestRunTimeoutBoundedWaitAfterKill(t *testing.T) {
+	old := killGrace
+	killGrace = 500 * time.Millisecond
+	defer func() { killGrace = old }()
+
+	cmds := []Command{
+		// Spawns a detached grandchild in its own session, holding the
+		// stdout/stderr pipe open well past the parent's death, then the
+		// parent itself sleeps past the timeout.
+		{Dir: ".", Argv: []string{"sh", "-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & sleep 30"}},
+	}
+	start := time.Now()
+	results := Run(context.Background(), cmds, 200*time.Millisecond)
+	elapsed := time.Since(start)
+	// Clean up any stray detached sleep from this test.
+	_ = exec.Command("pkill", "-f", "setsid sleep 30").Run()
+
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	r := results[0]
+	if !r.TimedOut {
+		t.Errorf("TimedOut = false, want true")
+	}
+	if r.OK {
+		t.Errorf("OK = true, want false")
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("elapsed = %v, want well under 2s (bounded wait after kill)", elapsed)
 	}
 }
 
