@@ -30,11 +30,31 @@ only = { os = "darwin" }
   file = "~/.claude/settings.json"
   merge = { hooks = { SessionStart = [ { matcher = "startup|resume", hooks = [ { type = "command", command = "~/.local/bin/casebook brief" } ] } ] } }
 
+  # Claude Code: the casebook channel (page messages arrive as channel events;
+  # casebook's tools) and the Stop hook that tells casebook serve the turn ended,
+  # so queued page messages go out. Launch Claude with the channel enabled to
+  # receive events (like galley's `server:galley`).
+  [[packages.casebook.json-merge]]
+  file = "~/.claude.json"
+  merge = { mcpServers = { casebook = { type = "stdio", command = "casebook", args = ["channel"], env = {} } } }
+
+  [[packages.casebook.json-merge]]
+  file = "~/.claude/settings.json"
+  merge = { hooks = { Stop = [ { hooks = [ { type = "command", command = "~/.local/bin/casebook settled --harness claude" } ] } ] } }
+
+  # pi: the same channel through channels.tools (which stamps the pi session id
+  # and delivers only while the agent is settled).
+  [[packages.casebook.json-merge]]
+  file = "~/.pi/agent/channels.json"
+  merge = { channelServers = { casebook = { command = "casebook", args = ["channel"] } } }
+
   # pi: pi-casebook (journal git/gh bash calls with the pi session id, brief the
-  # first turn, background `casebook sync --no-github`) is installed by the
+  # first turn, background `casebook sync --no-github`, and — from 0.2.0 —
+  # report settled turns to casebook serve) is installed by the
   # DOTFILES manifest, not here: dotfiles owns pi's settings.json `packages`
   # list (arrays = "replace"), so a package added from any other manifest is
-  # dropped on the next `kempt update`. Add `npm:pi-casebook@<ver>` there.
+  # dropped on the next `kempt update`. It is listed there unpinned, so kempt
+  # rolls it: publish the casebook binary before a pi-casebook that needs it.
 
   # Full sync (including the GitHub refresh) every 30 minutes.
   [[packages.casebook.service]]

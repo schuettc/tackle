@@ -1,4 +1,4 @@
-# casebook repository format, version 1
+# casebook repository format, version 2
 
 A casebook data repository is a private git repository written only by the
 `casebook` binary. History is linear: no merge commits, no branches.
@@ -7,7 +7,7 @@ A casebook data repository is a private git repository written only by the
 
 | Path | Content |
 |---|---|
-| `casebook.toml` | `format_version = 1`. A casebook binary refuses a repo with a newer version. |
+| `casebook.toml` | `format_version = 2`. A casebook binary refuses a repo with a newer version, and upgrades an older one in place with one commit (`upgrade casebook repo to format 2`). |
 | `policy.toml` | Attention thresholds in days: `outgoing_pr_stale_days` (14), `incoming_no_reply_days` (7), `unpushed_days` (3), `repo_dormant_days` (365). Unknown keys are errors. |
 | `README.md`, `CONTRIBUTIONS.md`, `MACHINES.md` | Rendered views. On a sync conflict the upstream copy wins and the next sync re-renders. |
 
@@ -31,6 +31,8 @@ note        = "retire the fork when this lands"        # optional
 until       = "merged(pr:elidickinson/pi-claude-bridge#97)"  # optional; required for wait and watch
 decided_by  = "court"                                  # user login, claude:<session>, pi:<session>
 decided_at  = 2026-09-24T10:12:00Z                     # UTC, second precision
+proposed_by = "pi:<session>"                           # format 2, optional: who proposed it (agent session or rule:<id>)
+rule        = "<rule id>"                              # format 2, optional: the standing rule that proposed it
 
 [conflict]                                             # only after a decision race
 disposition = "archive"
@@ -79,3 +81,10 @@ The file is deterministic and holds no timestamps of its own, so an unchanged ma
 ## Not in the repository
 
 The GitHub observation cache (`~/.local/state/casebook/github.json`), the drift record (`seen.json`), the event spool and the hook shims are machine-local.
+
+So is `casebook serve`'s working state, `~/.local/state/casebook/casebook.db` (SQLite, `0600`): agent sessions, threads, messages and their deliveries, pending and settled proposals, evidence, progress and the live event log. It records collaboration, never intent: a proposal becomes intent only when Court accepts it, as a decision file with `proposed_by`.
+
+## Version history
+
+- **1** (casebook 0.1.x): decisions, journal, snapshots, views.
+- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Nothing else changes; the upgrade rewrites only `casebook.toml`.

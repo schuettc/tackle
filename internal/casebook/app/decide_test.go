@@ -75,3 +75,15 @@ func TestTriageRoundTrip(t *testing.T) {
 		t.Error("typo accepted")
 	}
 }
+
+func TestDecideRecordsProposal(t *testing.T) {
+	r := newRig(t)
+	d, _, err := r.app.Decide(ctx, "repo:schuettc/hail", "keep", DecideOptions{By: "court", ProposedBy: "pi:s-1", Rule: "active-repos"})
+	if err != nil || d.ProposedBy != "pi:s-1" || d.Rule != "active-repos" {
+		t.Fatalf("got %+v %v", d, err)
+	}
+	got, _ := r.app.Repo.ReadDecision(item.RepoKey("schuettc/hail"))
+	if got == nil || got.ProposedBy != "pi:s-1" || got.Rule != "active-repos" {
+		t.Fatalf("stored %+v", got)
+	}
+}
