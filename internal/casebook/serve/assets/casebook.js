@@ -62,24 +62,38 @@ function boot() {
   const mark = h(
     "svg",
     {
-      viewBox: "0 0 18 18",
+      viewBox: "0 0 64 64",
       fill: "none",
       xmlns: "http://www.w3.org/2000/svg",
       "aria-hidden": "true"
     },
-    h("rect", {
-      x: "2",
-      y: "2",
-      width: "14",
-      height: "14",
-      rx: "3",
-      fill: "var(--kit-signal)"
-    }),
+    // ink tile
+    h("rect", { width: "64", height: "64", rx: "14", fill: "#14161d" }),
+    // open book outline
     h("path", {
-      d: "M5.5 9h7M5.5 6h5M5.5 12h4",
-      stroke: "var(--kit-signal-ink)",
-      "stroke-width": "1.5",
+      d: "M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z",
+      fill: "none",
+      stroke: "#d98f66",
+      "stroke-width": "5",
+      "stroke-linejoin": "round"
+    }),
+    // spine
+    h("path", { d: "M32 18V52", stroke: "#d98f66", "stroke-width": "4.4" }),
+    // one neutral rule on the left page
+    h("path", {
+      d: "M15 29H25",
+      stroke: "#9aa0ab",
+      "stroke-width": "5",
       "stroke-linecap": "round"
+    }),
+    // tick on the right page (fully drawn — resting frame)
+    h("path", {
+      d: "M37 33L42 38L50 26",
+      fill: "none",
+      stroke: "#d98f66",
+      "stroke-width": "6",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round"
     })
   );
   const handle = bar({

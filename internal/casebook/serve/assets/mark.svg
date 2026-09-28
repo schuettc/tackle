@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- casebook mark — the same small glyph as favicon.svg with SMIL animation.
+       Resting frame (animation at rest) equals the static favicon.
+       dur=7s: tick writes itself in the first ~16%, holds, fades at ~86–97%.
+       SMIL only (no JS, no CSS animation). -->
+  <!-- ink tile -->
+  <rect width="64" height="64" rx="14" fill="#14161d"/>
+  <!-- open book outline; signal rust -->
+  <path d="M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z" fill="none" stroke="#d98f66" stroke-width="5" stroke-linejoin="round"/>
+  <!-- spine -->
+  <path d="M32 18V52" stroke="#d98f66" stroke-width="4.4"/>
+  <!-- one neutral rule on the left page -->
+  <path d="M15 29H25" stroke="#9aa0ab" stroke-width="5" stroke-linecap="round"/>
+  <!-- tick on the right page — writes itself (stroke-dashoffset 22→0) then fades.
+       stroke-dasharray=22 ≥ path length (≈21.5 px); resting: dashoffset=0, opacity=1. -->
+  <path d="M37 33L42 38L50 26" fill="none" stroke="#d98f66" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="22" stroke-dashoffset="0">
+    <animate attributeName="stroke-dashoffset" values="22;0;0" keyTimes="0;0.16;1" dur="7s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="1;1;1;0" keyTimes="0;0.86;0.97;1" dur="7s" repeatCount="indefinite"/>
+  </path>
+</svg>

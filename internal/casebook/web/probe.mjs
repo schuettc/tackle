@@ -192,7 +192,15 @@ async function run() {
       );
     }
 
-    // 4. Live pill reads live.
+    // 4. Brand mark is an <svg> inside .kit-brand.
+    {
+      const hasSVG = await page
+        .$eval('.kit-brand svg', () => true)
+        .catch(() => false);
+      check('brand mark is an <svg> in .kit-brand', hasSVG);
+    }
+
+    // 5. Live pill reads live.
     {
       try {
         await page.waitForSelector('.kit-live:not([hidden])', {
