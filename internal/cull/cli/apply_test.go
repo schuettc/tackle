@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schuettc/tackle/internal/cull/apply"
 	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/extract"
 )
@@ -173,6 +174,29 @@ func TestApplyExitCodes(t *testing.T) {
 			t.Errorf("code %d, errw %q", code, errw)
 		}
 	})
+}
+
+func TestWriteOutcomeRollbackFailed(t *testing.T) {
+	var b strings.Builder
+	writeOutcome(&b, apply.Outcome{
+		Applied:        []string{"go:a_test.go:TestA"},
+		Files:          []string{"a_test.go", "b_test.go"},
+		RollbackFailed: true,
+		Snapshot:       "/p/.cull/rollback/20260927T000000Z",
+	})
+	out := b.String()
+	if strings.Contains(out, "every file restored") {
+		t.Errorf("claims a restore that failed:\n%s", out)
+	}
+	for _, want := range []string{"NOT", "a_test.go", "b_test.go", "/p/.cull/rollback/20260927T000000Z"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+	js, err := json.Marshal(apply.Outcome{RollbackFailed: true})
+	if err != nil || !strings.Contains(string(js), `"rollback_failed":true`) || !strings.Contains(string(js), `"rolled_back":false`) {
+		t.Errorf("json = %s, %v", js, err)
+	}
 }
 
 func TestApplyRequiresIDsOrVerdict(t *testing.T) {

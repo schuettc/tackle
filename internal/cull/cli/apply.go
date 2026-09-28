@@ -124,8 +124,11 @@ func writeOutcome(w io.Writer, o apply.Outcome) {
 	writeResults(w, "baseline tests", o.Baseline)
 	if len(o.Applied) > 0 {
 		label := "applied"
-		if o.RolledBack {
+		switch {
+		case o.RolledBack:
 			label = "attempted (rolled back)"
+		case o.RollbackFailed:
+			label = "attempted (ROLLBACK FAILED)"
 		}
 		fmt.Fprintf(w, "%s (%d):\n", label, len(o.Applied))
 		for _, id := range o.Applied {
@@ -141,6 +144,13 @@ func writeOutcome(w io.Writer, o apply.Outcome) {
 	writeResults(w, "tests after removal", o.After)
 	if o.RolledBack {
 		fmt.Fprintln(w, "rolled back: every file restored to its pre-edit bytes")
+	}
+	if o.RollbackFailed {
+		fmt.Fprintf(w, "ROLLBACK FAILED: files were NOT fully restored; these may still be edited (%d):\n", len(o.Files))
+		for _, f := range o.Files {
+			fmt.Fprintf(w, "  %s\n", f)
+		}
+		fmt.Fprintf(w, "copy the pre-edit files back by hand from %s\n", o.Snapshot)
 	}
 	if o.Snapshot != "" {
 		fmt.Fprintf(w, "snapshot: %s\n", o.Snapshot)

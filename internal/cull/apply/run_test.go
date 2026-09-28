@@ -292,8 +292,15 @@ func TestApplyRestoresOnStartFailure(t *testing.T) {
 	afterOnly(t, []verify.Command{{Dir: root, Argv: []string{filepath.Join(root, "no-such-test-binary")}}})
 
 	out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "go test ./..."})
-	if code := exitCode(err); code != 1 {
-		t.Fatalf("exit %d, want 1: %v", code, err)
+	// A command that cannot start is not a test failure: exit 2.
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if len(out.After) == 1 && !strings.Contains(err.Error(), out.After[0].OutputTail) {
+		t.Errorf("err %q should carry the start error %q", err, out.After[0].OutputTail)
+	}
+	if !strings.Contains(err.Error(), "could not start") || !strings.Contains(err.Error(), out.Snapshot) {
+		t.Errorf("err = %v", err)
 	}
 	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
 		t.Errorf("not restored:\n%s", got)
@@ -303,6 +310,32 @@ func TestApplyRestoresOnStartFailure(t *testing.T) {
 	}
 	if len(out.Baseline) != 1 || out.Baseline[0].Command != "go test ./..." {
 		t.Errorf("Baseline = %+v, want the test_command", out.Baseline)
+	}
+}
+
+func TestApplyAfterTimeoutIsTestFailure(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	orig := runVerify
+	calls := 0
+	runVerify = func(ctx context.Context, cmds []verify.Command, timeout time.Duration) []verify.Result {
+		calls++
+		if calls == 1 {
+			return orig(ctx, cmds, timeout)
+		}
+		return []verify.Result{{Command: "go test ./...", ExitCode: -1, TimedOut: true}}
+	}
+	t.Cleanup(func() { runVerify = orig })
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 1 {
+		t.Fatalf("exit %d, want 1: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo || !out.RolledBack {
+		t.Errorf("RolledBack = %v; file:\n%s", out.RolledBack, got)
 	}
 }
 
@@ -368,6 +401,9 @@ func TestApplyRestoreMismatchIsHardError(t *testing.T) {
 	}
 	if out.Snapshot == "" || !strings.Contains(err.Error(), out.Snapshot) {
 		t.Errorf("err %q should name the snapshot dir %q", err, out.Snapshot)
+	}
+	if out.RolledBack || !out.RollbackFailed {
+		t.Errorf("RolledBack = %v RollbackFailed = %v; want false, true", out.RolledBack, out.RollbackFailed)
 	}
 	snap, rerr := os.ReadFile(filepath.Join(out.Snapshot, "a_test.go"))
 	if rerr != nil || string(snap) != calcTestGo {

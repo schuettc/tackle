@@ -33,7 +33,9 @@ type Options struct {
 // Outcome is what one apply run did (or would have done, when RolledBack).
 // Applied, Files, ImportsRemoved and OrphanedHelpers describe the edit that
 // was written; when RolledBack is true that edit has since been undone and
-// every file is byte-for-byte as it was.
+// every file is byte-for-byte as it was. RollbackFailed means a restore was
+// attempted and did not fully succeed: the files may still be edited, and
+// the pre-edit copies are in Snapshot.
 type Outcome struct {
 	Applied         []string            `json:"applied"`
 	Refused         []Refusal           `json:"refused"`
@@ -44,12 +46,15 @@ type Outcome struct {
 	Baseline        []verify.Result     `json:"baseline"`
 	After           []verify.Result     `json:"after"`
 	RolledBack      bool                `json:"rolled_back"`
+	RollbackFailed  bool                `json:"rollback_failed"`
 	Snapshot        string              `json:"snapshot,omitempty"`
 }
 
 // ExitError is a Run failure with the process exit code it maps to:
-// 1 = the after-run failed and every file was restored; 2 = refused or
-// error (nothing changed, or -- if a write had happened -- restored).
+// 1 = the after-run failed (or timed out) and every file was restored;
+// 2 = refused or error (nothing changed, or -- if a write had happened --
+// restored, or the restore failed), including a test command that could
+// not start after the edit.
 type ExitError struct {
 	Code int
 	Msg  string
@@ -212,10 +217,11 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 	for _, e := range edits {
 		wrote = true
 		if werr := writeFile(e.abs, e.updated, e.mode); werr != nil {
-			out.RolledBack = true
 			if rerr := restore(edits); rerr != nil {
+				out.RollbackFailed = true
 				return out, restoreFailed(snap, rerr)
 			}
+			out.RolledBack = true
 			return out, exitf(2, "writing %s: %v; rolled back (snapshot: %s)", e.rel, werr, snap)
 		}
 	}
@@ -228,12 +234,17 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 	if allOK(out.After, cmds) {
 		return out, nil
 	}
-	out.RolledBack = true
 	if rerr := restore(edits); rerr != nil {
+		out.RollbackFailed = true
 		return out, restoreFailed(snap, rerr)
 	}
+	out.RolledBack = true
 	if ctx.Err() != nil {
 		return out, exitf(2, "interrupted during the test run; rolled back (snapshot: %s)", snap)
+	}
+	if r, ok := startFailure(out.After); ok {
+		return out, exitf(2, "test command could not start after removal (%s: %s); rolled back (snapshot: %s)",
+			r.Command, strings.TrimSpace(r.OutputTail), snap)
 	}
 	return out, exitf(1, "tests failed after removal (%s); rolled back (snapshot: %s)", failedCommand(out.After), snap)
 }
@@ -474,6 +485,17 @@ func allOK(rs []verify.Result, cmds []verify.Command) bool {
 		}
 	}
 	return true
+}
+
+// startFailure returns the first result whose command failed to start
+// (exit -1 without a timeout): an environment problem, not a test failure.
+func startFailure(rs []verify.Result) (verify.Result, bool) {
+	for _, r := range rs {
+		if !r.OK && r.ExitCode == -1 && !r.TimedOut {
+			return r, true
+		}
+	}
+	return verify.Result{}, false
 }
 
 func failedCommand(rs []verify.Result) string {
