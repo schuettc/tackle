@@ -35,7 +35,7 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string"},"text":{"type":"string"}},"required":["key","text"]}`)},
 		{Name: "casebook_progress", Description: "Set your live progress line on the page while you work (replaces the previous one).",
 			InputSchema: schema(`{"type":"object","properties":{"text":{"type":"string"},"n":{"type":"integer"},"total":{"type":"integer"}},"required":["text"]}`)},
-		{Name: "casebook_reply", Description: "Settle Court's messages by id (the number in [m-N]). state: received, working, answered, declined or failed. text is your reply, shown in the thread. Every delivered message must end answered, declined or failed.",
+		{Name: "casebook_reply", Description: "Settle Court's messages by id (the number in [m-N]). state: received, working, answered, declined or failed. text is your reply, shown in the thread. Every delivered message must end answered, declined or failed. You may also settle a message from a previous turn that was left unanswered; use answered, declined or failed.",
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"state":{"type":"string","enum":["received","working","answered","declined","failed"]},"text":{"type":"string"}},"required":["ids","state"]}`)},
 	}
 }

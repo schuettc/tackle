@@ -199,6 +199,56 @@ func TestSettledEndsTurn(t *testing.T) {
 	}
 }
 
+func TestLateReplyHTTPShape(t *testing.T) {
+	r := newRig(t)
+	th := r.attach(t, "s1")
+	m1 := r.send(t, th, "one", false)
+	m2 := r.send(t, th, "two", false)
+	r.do(t, "GET", "/api/agent/wait?session=s1", nil, nil) // deliver both
+	// End the turn: both messages become unanswered.
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1"}, nil); c != 200 {
+		t.Fatalf("settled %d", c)
+	}
+
+	// Late reply with final state to m1: settled=[m1.ID], skipped=[].
+	var out1 struct {
+		Settled []int64 `json:"settled"`
+		Skipped []struct {
+			ID     int64  `json:"id"`
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if c := r.do(t, "POST", "/api/agent/reply", map[string]any{"session": "s1", "ids": []int64{m1.ID}, "state": "answered", "text": "late reply"}, &out1); c != 200 {
+		t.Fatalf("late answered reply %d", c)
+	}
+	if len(out1.Settled) != 1 || out1.Settled[0] != m1.ID {
+		t.Fatalf("settled %v, want [%d]", out1.Settled, m1.ID)
+	}
+	if len(out1.Skipped) != 0 {
+		t.Fatalf("skipped %v, want []", out1.Skipped)
+	}
+
+	// Non-final state on unanswered m2: settled=[], skipped=[m2].
+	var out2 struct {
+		Settled []int64 `json:"settled"`
+		Skipped []struct {
+			ID     int64  `json:"id"`
+			State  string `json:"state"`
+			Reason string `json:"reason"`
+		} `json:"skipped"`
+	}
+	if c := r.do(t, "POST", "/api/agent/reply", map[string]any{"session": "s1", "ids": []int64{m2.ID}, "state": "working"}, &out2); c != 200 {
+		t.Fatalf("working on unanswered reply %d", c)
+	}
+	if len(out2.Settled) != 0 {
+		t.Fatalf("settled %v, want []", out2.Settled)
+	}
+	if len(out2.Skipped) != 1 || out2.Skipped[0].ID != m2.ID || out2.Skipped[0].State != "unanswered" {
+		t.Fatalf("skipped %+v", out2.Skipped)
+	}
+}
+
 func TestProposeAcceptWritesDecision(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")

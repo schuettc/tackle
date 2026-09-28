@@ -83,7 +83,7 @@ func TestOneInFlightAndMidTurnMessagesWait(t *testing.T) {
 		t.Fatalf("m2 state %s", got.State)
 	}
 	// The agent settles m1; the turn's delivery ends; the queue drains in order.
-	if _, err := q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "38 close, 2 keep"); err != nil {
+	if _, _, err := q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "38 close, 2 keep"); err != nil {
 		t.Fatal(err)
 	}
 	if d, _ := q.Delivery(ctx, d1.ID); d.State != Done {
@@ -174,15 +174,102 @@ func TestReplyRejectsOtherSessionsAndBadStates(t *testing.T) {
 	q.Touch(ctx, Session{ID: "s2"})
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "hi", false)
-	if _, err := q.Reply(ctx, "s1", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
+	if _, _, err := q.Reply(ctx, "s1", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("reply to undelivered: %v", err)
 	}
 	q.Next(ctx, "s1")
-	if _, err := q.Reply(ctx, "s2", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
+	if _, _, err := q.Reply(ctx, "s2", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other session: %v", err)
 	}
-	if _, err := q.Reply(ctx, "s1", []int64{m.ID}, "done", ""); err == nil {
+	if _, _, err := q.Reply(ctx, "s1", []int64{m.ID}, "done", ""); err == nil {
 		t.Fatal("bad state accepted")
+	}
+}
+
+func TestLateReplyToUnanswered(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	m1 := post(t, q, th, "one", false)
+	m2 := post(t, q, th, "two", false)
+	d, _ := q.Next(ctx, "s1")
+
+	// End the turn: both messages become unanswered.
+	if _, err := q.Settled(ctx, "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := q.Message(ctx, m1.ID); got.State != Unanswered {
+		t.Fatalf("m1 pre-state %s", got.State)
+	}
+
+	// Late reply with final state to m1: should be accepted.
+	touched, skipped, err := q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "late text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(touched) != 1 || touched[0] != m1.ID {
+		t.Fatalf("touched %v, want [%d]", touched, m1.ID)
+	}
+	if len(skipped) != 0 {
+		t.Fatalf("skipped %v, want none", skipped)
+	}
+	if got, _ := q.Message(ctx, m1.ID); got.State != Answered {
+		t.Fatalf("m1 state after late reply: %s", got.State)
+	}
+
+	// Reply text must be recorded in the thread.
+	all, _ := q.Messages(ctx, th.ID)
+	var replyMsg *Message
+	for i := range all {
+		if all[i].State == AgentReply {
+			replyMsg = &all[i]
+		}
+	}
+	if replyMsg == nil || replyMsg.Body != "late text" || replyMsg.ReplyTo != m1.ID {
+		t.Fatalf("reply message %+v in %+v", replyMsg, all)
+	}
+
+	// Delivery must still be done; a late reply must not reopen it.
+	del, _ := q.Delivery(ctx, d.ID)
+	if del.State != Done {
+		t.Fatalf("delivery state after late reply: %s", del.State)
+	}
+
+	// Non-final state on an unanswered message: skipped.
+	touched2, skipped2, err := q.Reply(ctx, "s1", []int64{m2.ID}, Working, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(touched2) != 0 {
+		t.Fatalf("touched2 %v, want none", touched2)
+	}
+	if len(skipped2) != 1 || skipped2[0].ID != m2.ID || skipped2[0].State != Unanswered {
+		t.Fatalf("skipped2 %+v", skipped2)
+	}
+	if got, _ := q.Message(ctx, m2.ID); got.State != Unanswered {
+		t.Fatalf("m2 state changed unexpectedly: %s", got.State)
+	}
+
+	// Reply to already-answered m1: skipped, but text still recorded.
+	touched3, skipped3, err := q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "second late text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(touched3) != 0 {
+		t.Fatalf("touched3 %v, want none", touched3)
+	}
+	if len(skipped3) != 1 || skipped3[0].ID != m1.ID || skipped3[0].State != Answered {
+		t.Fatalf("skipped3 %+v", skipped3)
+	}
+	// Text should still be recorded (first valid id's thread).
+	all2, _ := q.Messages(ctx, th.ID)
+	var replies []Message
+	for _, msg := range all2 {
+		if msg.State == AgentReply {
+			replies = append(replies, msg)
+		}
+	}
+	if len(replies) != 2 || replies[1].Body != "second late text" {
+		t.Fatalf("replies %+v", replies)
 	}
 }
 

@@ -166,7 +166,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	touched, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text)
+	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text)
 	if err != nil {
 		if errors.Is(err, deliver.ErrNotFound) {
 			reply(w, nil, httpError{http.StatusNotFound, err.Error()})
@@ -177,7 +177,14 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Bus.Publish(ctx, "messages", map[string]any{"ids": touched, "state": in.State, "session": in.Session, "reply": in.Text != ""})
 	s.wake(in.Session)
-	reply(w, map[string]any{"settled": touched}, nil)
+	settled := touched
+	if settled == nil {
+		settled = []int64{}
+	}
+	if skipped == nil {
+		skipped = []deliver.SkippedMessage{}
+	}
+	reply(w, map[string]any{"settled": settled, "skipped": skipped}, nil)
 }
 
 func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {

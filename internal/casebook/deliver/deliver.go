@@ -482,21 +482,32 @@ func (q *Queue) Next(ctx context.Context, session string) (*Delivery, error) {
 	return &d, err
 }
 
+// SkippedMessage reports why one id was not changed by Reply.
+type SkippedMessage struct {
+	ID     int64  `json:"id"`
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
 // Reply is the agent settling (or updating) messages from its deliveries.
 // state is received, working, answered, declined or failed. When text is set
 // it is added to the thread as the agent's reply to the first id. A delivery
 // ends once every message in it is settled.
-func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string) ([]int64, error) {
+//
+// Late replies (to unanswered or interrupted messages from this session) are
+// accepted when state is a final state (answered, declined, failed).
+func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string) ([]int64, []SkippedMessage, error) {
 	switch state {
 	case Received, Working, Answered, Declined, Failed:
 	default:
-		return nil, fmt.Errorf("state %q: want received, working, answered, declined or failed", state)
+		return nil, nil, fmt.Errorf("state %q: want received, working, answered, declined or failed", state)
 	}
 	if len(ids) == 0 {
-		return nil, fmt.Errorf("no message ids")
+		return nil, nil, fmt.Errorf("no message ids")
 	}
 	now := ms(q.Now())
 	var touched []int64
+	var skipped []SkippedMessage
 	err := q.DB.Tx(ctx, func(tx *sql.Tx) error {
 		var thread int64
 		deliveries := map[int64]bool{}
@@ -511,20 +522,36 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 			if err != nil {
 				return err
 			}
-			if Final(st) {
-				continue
-			}
-			settled := int64(0)
-			if Final(state) {
-				settled = now
-			}
-			if _, err := tx.ExecContext(ctx, "UPDATE messages SET state = ?, settled_at = ? WHERE id = ?", state, settled, id); err != nil {
-				return err
-			}
-			touched = append(touched, id)
-			deliveries[did] = true
+			// Set thread from the first id that belongs to this session.
 			if thread == 0 {
 				thread = tid
+			}
+			switch st {
+			case Answered, Declined, Failed:
+				// Already settled; skip.
+				skipped = append(skipped, SkippedMessage{ID: id, State: st, Reason: "already " + st})
+			case Unanswered, Interrupted:
+				// Late reply: only final states are accepted; non-final states are not meaningful.
+				if !Final(state) {
+					skipped = append(skipped, SkippedMessage{ID: id, State: st, Reason: "not settleable with state " + state})
+					continue
+				}
+				// Update message state and settled_at; don't touch the delivery (it has already ended).
+				if _, err := tx.ExecContext(ctx, "UPDATE messages SET state = ?, settled_at = ? WHERE id = ?", state, now, id); err != nil {
+					return err
+				}
+				touched = append(touched, id)
+			default:
+				// In-flight message: update normally and track delivery.
+				settled := int64(0)
+				if Final(state) {
+					settled = now
+				}
+				if _, err := tx.ExecContext(ctx, "UPDATE messages SET state = ?, settled_at = ? WHERE id = ?", state, settled, id); err != nil {
+					return err
+				}
+				touched = append(touched, id)
+				deliveries[did] = true
 			}
 		}
 		if text != "" && thread != 0 {
@@ -550,7 +577,7 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 		}
 		return nil
 	})
-	return touched, err
+	return touched, skipped, err
 }
 
 // end finishes a delivery: unsettled messages take msgState, the delivery
