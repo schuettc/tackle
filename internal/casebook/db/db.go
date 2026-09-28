@@ -1,35 +1,29 @@
 // Package db is casebook serve's working-state database: SQLite at
 // StateDir/casebook.db, written only by casebook serve. It holds sessions,
-// threads, messages, deliveries, batches, proposals, evidence, progress and
-// the live event log. Durable intent (decisions, rules) lives in the casebook
-// repo, never here.
+// threads, messages, deliveries, batches, proposals, evidence, progress,
+// the live event log, and (from schema v2) jobs and steps. Durable intent
+// (decisions, rules) lives in the casebook repo, never here.
 //
-// Family convention: modernc.org/sqlite, WAL, a 5 s busy timeout, foreign
-// keys, one connection, files 0600, and schema changes as numbered
-// PRAGMA user_version steps, one transaction each. A newer database than this
-// binary knows is refused.
+// This package is a thin wrapper over github.com/schuettc/tools-common/sqlitedb,
+// which implements the family conventions: modernc.org/sqlite, WAL, 5 s busy
+// timeout, foreign keys, one connection, files 0600, append-only migrations.
 package db
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
-	"os"
+	"errors"
 
-	_ "modernc.org/sqlite" // registers the "sqlite" driver
+	"github.com/schuettc/tools-common/sqlitedb"
 )
 
 // DB is an open working-state database.
-type DB struct {
-	*sql.DB
-	Path string
-}
+type DB = sqlitedb.DB
 
-// migrations[i] moves the schema from user_version i to i+1.
-var migrations = []string{
-	// 1: sessions, threads, messages, deliveries, batches, proposals,
-	// evidence, progress, serve's own notes (meta) and the event log.
-	`
+// SchemaVersion is the schema version this binary targets.
+const SchemaVersion = 2
+
+// schemaV1 is P1a's migration-1 SQL verbatim.
+const schemaV1 = `
 CREATE TABLE sessions (
   id         TEXT PRIMARY KEY,
   harness    TEXT NOT NULL DEFAULT '',
@@ -116,70 +110,79 @@ CREATE TABLE events (
   payload    TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
-`,
+`
+
+// schemaV2 adds jobs, steps, and needs_you tables, plus the unique index
+// that enforces one delivery in flight per session at the database level.
+const schemaV2 = `
+CREATE TABLE jobs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_json   TEXT NOT NULL,
+  machine     TEXT NOT NULL,
+  session     TEXT NOT NULL DEFAULT '',
+  state       TEXT NOT NULL,
+  paused      INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL,
+  approved_at INTEGER NOT NULL DEFAULT 0,
+  finished_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE steps (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id       INTEGER NOT NULL REFERENCES jobs(id),
+  pos          INTEGER NOT NULL,
+  key          TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  lane         TEXT NOT NULL,
+  command      TEXT NOT NULL,
+  precondition TEXT NOT NULL DEFAULT '',
+  posts        INTEGER NOT NULL DEFAULT 0,
+  text         TEXT NOT NULL DEFAULT '',
+  restore      TEXT NOT NULL DEFAULT '',
+  state        TEXT NOT NULL,
+  detail       TEXT NOT NULL DEFAULT '',
+  updated_at   INTEGER NOT NULL,
+  verified_at  INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX steps_job ON steps(job_id, pos);
+CREATE TABLE needs_you (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id     INTEGER NOT NULL REFERENCES jobs(id),
+  step_id    INTEGER REFERENCES steps(id),
+  kind       TEXT NOT NULL,
+  question   TEXT NOT NULL DEFAULT '',
+  text       TEXT NOT NULL DEFAULT '',
+  state      TEXT NOT NULL DEFAULT 'open',
+  answer     TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  answered_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX deliveries_one_inflight ON deliveries(session_id) WHERE state = 'inflight';
+`
+
+// Migrations is the ordered list of schema steps for this binary.
+// Migrations[i] moves the database from user_version i to i+1.
+var Migrations = []sqlitedb.Step{
+	sqlitedb.SQL(schemaV1),
+	sqlitedb.SQL(schemaV2),
 }
 
-// Version is the schema version this binary writes.
-func Version() int { return len(migrations) }
-
-// Open opens (creating if needed) the database at path and migrates it.
-func Open(path string) (*DB, error) {
-	dsn := "file:" + path + "?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)"
-	sdb, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-	sdb.SetMaxOpenConns(1)
-	d := &DB{DB: sdb, Path: path}
-	if err := d.migrate(context.Background()); err != nil {
-		sdb.Close()
-		return nil, err
-	}
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
-		if _, err := os.Stat(p); err == nil {
-			_ = os.Chmod(p, 0o600)
-		}
-	}
-	return d, nil
+// Open opens (creating if needed) the database at path and migrates it to
+// SchemaVersion. A database at user_version 0 with tables is refused
+// (AdoptUnversioned is not set: schemaV1 is not idempotent). A database
+// newer than this binary knows is refused.
+func Open(ctx context.Context, path string) (*DB, error) {
+	return sqlitedb.Open(ctx, path, sqlitedb.Options{
+		Migrations: Migrations,
+	})
 }
 
-func (d *DB) migrate(ctx context.Context) error {
-	var v int
-	if err := d.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
-		return err
+// Newer reports whether err wraps a *sqlitedb.NewerError. It is a convenience
+// helper so serve can detect and report a database that is newer than this
+// binary without importing the sqlitedb package directly.
+func Newer(err error) (*sqlitedb.NewerError, bool) {
+	var ne *sqlitedb.NewerError
+	if errors.As(err, &ne) {
+		return ne, true
 	}
-	if v > len(migrations) {
-		return fmt.Errorf("%s: schema version %d is newer than this casebook (%d); update casebook", d.Path, v, len(migrations))
-	}
-	for ; v < len(migrations); v++ {
-		tx, err := d.BeginTx(ctx, nil)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, migrations[v]); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("migration %d: %w", v+1, err)
-		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", v+1)); err != nil {
-			tx.Rollback()
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// Tx runs fn in one transaction, committing on nil and rolling back on error.
-func (d *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	return nil, false
 }

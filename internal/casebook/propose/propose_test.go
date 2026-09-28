@@ -13,7 +13,7 @@ var ctx = context.Background()
 
 func newStore(t *testing.T) (*Store, *time.Time) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "casebook.db"))
+	d, err := db.Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

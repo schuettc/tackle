@@ -334,7 +334,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if err := os.MkdirAll(config.StateDir(), 0o700); err != nil {
 		return err
 	}
-	d, err := db.Open(config.StateDir() + "/casebook.db")
+	d, err := db.Open(ctx, config.StateDir()+"/casebook.db")
 	if err != nil {
 		return err
 	}
