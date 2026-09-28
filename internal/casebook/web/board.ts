@@ -27,6 +27,7 @@
 import { h, type Selection } from '/_kit/kit.js';
 import type { ItemsView, ItemView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
+import { keyWithoutKind } from './decide-math.ts';
 
 // PAGE_SIZE matches the list view's limit.
 const PAGE_SIZE = 200;
@@ -114,7 +115,9 @@ export function makeBoard(
 
     // Kind + key in monospace (untrusted, set via textContent).
     const kk = h('div', { class: 'cb-card-kk' });
-    kk.textContent = `${it.kind} · ${it.key}`;
+    // Show kind once; strip the kind prefix from the key for display.
+    const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
+    kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
 
     // Title (untrusted, set via textContent).
     const titleEl = h('div', { class: 'cb-card-title' });

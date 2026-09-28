@@ -274,6 +274,41 @@
   outline: 1px solid var(--kit-signal);
   outline-offset: 0;
 }
+.cb-history-item {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 3px 0;
+  line-height: 1.5;
+}
+.cb-history-time {
+  font: 11px var(--kit-mono);
+  color: var(--kit-muted);
+  white-space: nowrap;
+  flex: none;
+  min-width: 2.8em;
+}
+.cb-history-msg {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-evidence-item {
+  margin-bottom: 10px;
+}
+.cb-evidence-meta {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 2px 0 0;
+  line-height: 1.5;
+}
+.cb-evidence-author {
+  color: var(--kit-agent);
+  font-weight: 600;
+}
 .cb-read-empty {
   display: flex;
   flex-direction: column;

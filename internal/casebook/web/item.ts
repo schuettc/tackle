@@ -25,6 +25,7 @@ import {
   getVocab,
   allowedForKind,
 } from './decide.ts';
+import { keyWithoutKind } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
@@ -41,15 +42,15 @@ function fmtDate(s: string | undefined): string {
   });
 }
 
-function fmtTime(s: string): string {
+// Short mono date for history entries: MM-DD (year omitted for brevity).
+function fmtShortDate(s: string | undefined): string {
+  if (!s)
+    return '\
+def';
   const d = new Date(s);
-  return d.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${mm}-${dd}`;
 }
 
 // ---- evidence ---------------------------------------------------------------
@@ -62,19 +63,25 @@ function renderEvidence(evs: Evidence[]): HTMLElement {
     return section;
   }
   for (const ev of evs) {
-    const by = ev.author
-      ? h('span', { class: 'cb-muted' }, ` by ${ev.author}`)
+    // Author is shown in agent colour at the start of the meta line.
+    const authorEl = ev.author
+      ? h('span', { class: 'cb-evidence-author' }, ev.author + ' ')
       : null;
     const time = h(
       'span',
       { class: 'cb-muted' },
-      ` · ${fmtDate(ev.created_at)}`,
+      ` · ${fmtShortDate(ev.created_at)}`,
     );
     const item = h(
       'div',
       { class: 'cb-evidence-item' },
-      h('p', { class: 'cb-evidence-text' }, ev.text),
-      h('p', { class: 'cb-evidence-meta' }, ...(by ? [by] : []), time),
+      h(
+        'p',
+        { class: 'cb-evidence-meta' },
+        ...(authorEl ? [authorEl] : []),
+        ev.text,
+        time,
+      ),
     );
     section.append(item);
   }
@@ -98,7 +105,7 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
       h(
         'div',
         { class: 'cb-history-item cb-history-decision' },
-        h('span', { class: 'cb-history-time' }, fmtDate(entry.Time)),
+        h('span', { class: 'cb-history-time' }, fmtShortDate(entry.Time)),
         h('span', { class: 'cb-history-msg' }, entry.Subject),
       ),
     );
@@ -117,7 +124,7 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
       h(
         'div',
         { class: 'cb-history-item' },
-        h('span', { class: 'cb-history-time' }, fmtTime(ev.ts)),
+        h('span', { class: 'cb-history-time' }, fmtShortDate(ev.ts)),
         h('span', { class: 'cb-history-msg' }, label),
       ),
     );
@@ -224,7 +231,9 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
   const el = h('article', { class: 'cb-item' });
 
   // ---- kicker ---------------------------------------------------------------
-  const kickerParts = [it.kind, it.key, it.relation]
+  // Show the kind prefix once, then the key without its kind prefix.
+  const displayKey = keyWithoutKind(it.key);
+  const kickerParts = [it.kind, displayKey, it.relation]
     .filter(Boolean)
     .join(' · ');
   el.append(h('p', { class: 'cb-kicker kit-kick' }, kickerParts));

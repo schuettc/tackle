@@ -24,6 +24,7 @@ import type {
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
 import { wireSelection } from './decide.ts';
+import { keyWithoutKind } from './decide-math.ts';
 import { makeBoard } from './board.ts';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
@@ -116,6 +117,7 @@ export function makeAttention(ctx: Ctx): Section {
   let footEl: HTMLElement | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let totalItemsForView = 0; // updated after every load; used by select-all
+  const viewCounts: Record<string, number> = {}; // last known counts per view chip id
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
   // ---- empty reading-column state ------------------------------------------
@@ -237,7 +239,9 @@ export function makeAttention(ctx: Ctx): Section {
       },
     },
     row(it: ItemView) {
-      const kindKey = `${it.kind} · ${it.key}`;
+      // Display the key without its kind prefix — the kind is already shown in the kicker.
+      const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
+      const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf(it);
       const proposal = it.proposal
         ? `${it.proposal.disposition} proposed`
@@ -403,17 +407,22 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- section wiring -------------------------------------------------------
 
-  // Update view chip counts from SummaryView.
+  // Helper to build the view chip array with the latest counts.
+  function viewChips(activeId: string): Chip[] {
+    return VIEWS.map((v) => ({
+      ...v,
+      on: v.id === activeId,
+      count: viewCounts[v.id],
+    }));
+  }
+
+  // Update view chip counts from SummaryView (or from the index live event).
+  // Stores counts so every subsequent setChips call can include them.
   function applyCounts(counts: Record<string, number> | null): void {
     if (!counts) return;
-    handle.setChips(
-      'view',
-      VIEWS.map((v) => ({
-        ...v,
-        on: v.id === filters.view,
-        count: counts[v.id] ?? undefined,
-      })),
-    );
+    // Merge into local store; only update keys that are present in the payload.
+    Object.assign(viewCounts, counts);
+    handle.setChips('view', viewChips(filters.view));
   }
 
   // Initial load: restore search text from URL if present.
@@ -539,13 +548,7 @@ export function makeAttention(ctx: Ctx): Section {
       // Activate the board view chip so it is highlighted, not the last list
       // view chip (brief fix-round item 3).
       filters.view = 'board';
-      handle.setChips(
-        'view',
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === 'board',
-        })),
-      );
+      handle.setChips('view', viewChips('board'));
       mountBoard();
       return;
     }
@@ -563,13 +566,7 @@ export function makeAttention(ctx: Ctx): Section {
     if (VIEWS.some((v) => v.id === view) && view !== 'board') {
       // Known view chip: switch to it.
       filters.view = view;
-      handle.setChips(
-        'view',
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === filters.view,
-        })),
-      );
+      handle.setChips('view', viewChips(filters.view));
       showReadEmpty();
       void reload();
     } else if (sub) {
@@ -577,13 +574,7 @@ export function makeAttention(ctx: Ctx): Section {
       // (e.g. opened from a board card's title).  The onOpen callback in
       // makeBoard already set filters.view to the card's lane, so reload()
       // will use that view.  Update the chips to reflect it.
-      handle.setChips(
-        'view',
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === filters.view,
-        })),
-      );
+      handle.setChips('view', viewChips(filters.view));
       void openDetail(sub);
       void reload();
     }

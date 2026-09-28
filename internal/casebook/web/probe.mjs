@@ -1754,13 +1754,43 @@ async function run() {
           check('brand mark is visible', markSize.visible);
         }
 
-        // ---- after-screenshots (light) ------------------------------------
+        // ---- screenshots: detect actual theme, force correct theme, name correctly --
+        // Helper: detect actual theme from computed background luminance.
+        async function detectTheme(pg) {
+          const bg = await pg
+            .$eval('html', (el) => getComputedStyle(el).backgroundColor)
+            .catch(() => 'rgb(255,255,255)');
+          const m = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (m) {
+            const lum =
+              0.299 * parseInt(m[1]) +
+              0.587 * parseInt(m[2]) +
+              0.114 * parseInt(m[3]);
+            return lum < 128 ? 'dark' : 'light';
+          }
+          return 'light';
+        }
+        // Force a specific theme by clicking the toggle until the computed
+        // background matches the target (up to 4 clicks, covering all cycle states).
+        async function forceTheme(pg, target) {
+          for (let i = 0; i < 4; i++) {
+            const cur = await detectTheme(pg);
+            if (cur === target) return;
+            await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
+            await pg.waitForTimeout(250);
+          }
+        }
+
+        // --- light screenshots ---
+        await forceTheme(fidPage, 'light');
+
+        // Item detail (still on #/item/issue:schuettc%2Fhail%234 from above).
         await fidPage.screenshot({
           path: '/tmp/fid-light-item.png',
           fullPage: false,
         });
 
-        // Navigate to list view for second screenshot.
+        // Navigate to #/attention/new.
         await fidPage.evaluate(() => {
           location.hash = '#/attention/new';
         });
@@ -1777,27 +1807,16 @@ async function run() {
           fullPage: false,
         });
 
-        // ---- after-screenshots (dark) ------------------------------------
-        // Toggle to dark mode.
-        await fidPage.click('button.kit-ctl:has-text("theme")');
-        await fidPage.waitForTimeout(200);
-        // If we're not in dark yet, click once more (system → light → dark).
-        const theme = await fidPage.$eval(
-          'html',
-          (el) => el.dataset.theme ?? '',
-        );
-        if (theme !== 'dark') {
-          await fidPage.click('button.kit-ctl:has-text("theme")');
-          await fidPage.waitForTimeout(200);
-        }
+        // --- dark screenshots ---
+        await forceTheme(fidPage, 'dark');
 
-        // Dark screenshot of the list view.
+        // List view in dark.
         await fidPage.screenshot({
           path: '/tmp/fid-dark-new.png',
           fullPage: false,
         });
 
-        // Navigate to item detail for dark screenshot.
+        // Item detail in dark.
         await fidPage.evaluate(() => {
           location.hash = '#/item/issue:schuettc%2Fhail%234';
         });
@@ -1811,13 +1830,113 @@ async function run() {
         });
 
         console.log(
-          '  screenshots: /tmp/fid-light-item.png  /tmp/fid-light-new.png',
+          '  fid screenshots: /tmp/fid-light-item.png  /tmp/fid-light-new.png',
         );
         console.log(
-          '               /tmp/fid-dark-item.png   /tmp/fid-dark-new.png',
+          '                   /tmp/fid-dark-item.png   /tmp/fid-dark-new.png',
         );
       } finally {
         await fidPage.close();
+      }
+    }
+
+    // ---- scenario: round-2 fidelity screenshots ----------------------------
+    console.log('\nscenario: round-2 fidelity screenshots at 1600\xd7900');
+
+    {
+      const fid2Page = await context.newPage();
+      try {
+        await fid2Page.setViewportSize({ width: 1600, height: 900 });
+        await fid2Page.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await fid2Page.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        // Helper: detect actual theme from computed background.
+        async function detectTheme2(pg) {
+          const bg = await pg
+            .$eval('html', (el) => getComputedStyle(el).backgroundColor)
+            .catch(() => 'rgb(255,255,255)');
+          const m = bg.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+          if (m) {
+            const lum =
+              0.299 * parseInt(m[1]) +
+              0.587 * parseInt(m[2]) +
+              0.114 * parseInt(m[3]);
+            return lum < 128 ? 'dark' : 'light';
+          }
+          return 'light';
+        }
+        async function forceTheme2(pg, target) {
+          for (let i = 0; i < 4; i++) {
+            const cur = await detectTheme2(pg);
+            if (cur === target) return;
+            await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
+            await pg.waitForTimeout(250);
+          }
+        }
+
+        // --- light screenshots (fid2) ---
+        await forceTheme2(fid2Page, 'light');
+
+        await fid2Page.evaluate(() => {
+          location.hash = '#/item/issue:schuettc%2Fhail%234';
+        });
+        await fid2Page
+          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
+          .catch(() => {});
+        await fid2Page.waitForTimeout(600);
+        await fid2Page.screenshot({
+          path: '/tmp/fid2-light-item.png',
+          fullPage: false,
+        });
+
+        await fid2Page.evaluate(() => {
+          location.hash = '#/attention/new';
+        });
+        await fid2Page.waitForFunction(
+          () => location.hash === '#/attention/new',
+        );
+        await fid2Page.waitForTimeout(600);
+        await fid2Page
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+        await fid2Page.waitForTimeout(300);
+        await fid2Page.screenshot({
+          path: '/tmp/fid2-light-new.png',
+          fullPage: false,
+        });
+
+        // --- dark screenshots (fid2) ---
+        await forceTheme2(fid2Page, 'dark');
+        await fid2Page.waitForTimeout(200);
+
+        await fid2Page.screenshot({
+          path: '/tmp/fid2-dark-new.png',
+          fullPage: false,
+        });
+
+        await fid2Page.evaluate(() => {
+          location.hash = '#/item/issue:schuettc%2Fhail%234';
+        });
+        await fid2Page
+          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
+          .catch(() => {});
+        await fid2Page.waitForTimeout(600);
+        await fid2Page.screenshot({
+          path: '/tmp/fid2-dark-item.png',
+          fullPage: false,
+        });
+
+        console.log(
+          '  fid2 screenshots: /tmp/fid2-light-item.png  /tmp/fid2-light-new.png',
+        );
+        console.log(
+          '                    /tmp/fid2-dark-item.png   /tmp/fid2-dark-new.png',
+        );
+      } finally {
+        await fid2Page.close();
       }
     }
   } catch (err) {

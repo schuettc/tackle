@@ -153,3 +153,85 @@ git config core.hooksPath   → /Users/courtschuett/.config/casebook/hooks
 ## Deviations from Brief
 
 None. All Tasks 1–4b items are addressed. Tasks 5, 6–7, 8 items are not stubbed as instructed.
+
+## Round 2
+
+**Branch:** feat/casebook-page  
+**Date:** 2026-09-28  
+
+---
+
+### Problems Fixed
+
+#### 1. View chip counts survive live updates
+**Root cause:** Every call to `show()` in `attention.ts` called `handle.setChips('view', VIEWS.map(v => ({...v, on: ...})))` without including `count`. This overwrote the counts previously set by `applyCounts()` each time the user navigated between views or a live event triggered a reload.
+
+**Fix:** Added `const viewCounts: Record<string, number> = {}` as a closure variable. Added `viewChips(activeId)` helper that always includes `count: viewCounts[v.id]` for each chip. Modified `applyCounts()` to `Object.assign(viewCounts, counts)` before calling `handle.setChips`. Replaced all three `handle.setChips('view', VIEWS.map(...))` calls in `show()` with `handle.setChips('view', viewChips(activeId))`.
+
+**Probe:** Chip counts persist across view navigation and after index live events.
+
+#### 2. History and evidence layout
+**Fix (history):** Added `fmtShortDate(s)` that formats dates as `MM-DD` (no year, keeps line short and mono). Applied to both `LogEntry.Time` (decision commits) and `Event.ts` (journal events). Removed the broken `fmtTime()` function. Added CSS for `.cb-history-item { display: flex; gap: 14px; }`, `.cb-history-time { font: 11px mono; flex: none; }`, `.cb-history-msg { font-size: 13px; flex: 1; }` — each entry is now one line with a clear gap between date and message.
+
+**Fix (evidence):** Changed evidence attribution `span.cb-muted` to `span.cb-evidence-author` with `color: var(--kit-agent); font-weight: 600` so the author name appears in agent colour. Date also switched to `fmtShortDate`. Simplified evidence item to a single meta line: author (agent colour) + text + date.
+
+#### 3. Keys shown without their kind prefix
+**Root cause:** `it.key` values like `issue:schuettc/hail#4` already contain the kind prefix, but the row kicker was `${it.kind} · ${it.key}` producing "issue · issue:schuettc/hail#4".
+
+**Fix:** Added `keyWithoutKind(key: string): string` to `decide-math.ts` — strips the kind prefix (`key.slice(key.indexOf(':') + 1)`). Applied in `item.ts` kicker, `attention.ts` row builder, and `board.ts` card kicker. Full key is still used in `id`, `key`, `data-id`, URL params and API calls. Unit-tested in `decide.test.ts` (6 new tests).
+
+#### 4. Screenshot names match actual theme
+**Root cause:** The probe assumed the page starts in light mode, but when the system is in dark mode the first screenshots labelled "light" were actually dark.
+
+**Fix:** Added `detectTheme(page)` helper that reads `getComputedStyle(html).backgroundColor` and classifies by luminance (< 128 → dark). Added `forceTheme(page, target)` that clicks the theme toggle up to 4 times until the detected theme matches. The existing fidelity scenario now forces light before `fid-light-*.png` and dark before `fid-dark-*.png`. Added new "round-2 fidelity screenshots" scenario that produces `/tmp/fid2-light-item.png`, `/tmp/fid2-light-new.png`, `/tmp/fid2-dark-item.png`, `/tmp/fid2-dark-new.png` at 1600×900.
+
+---
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `internal/casebook/web/decide-math.ts` | Added `keyWithoutKind()` export |
+| `internal/casebook/web/decide.test.ts` | 6 new unit tests for `keyWithoutKind` |
+| `internal/casebook/web/item.ts` | Import `keyWithoutKind`; add `fmtShortDate`; fix kicker; fix history layout; fix evidence attribution |
+| `internal/casebook/web/attention.ts` | Import `keyWithoutKind`; `viewCounts`/`viewChips`; fix row display; fix all `setChips('view')` calls |
+| `internal/casebook/web/board.ts` | Import `keyWithoutKind`; fix card kicker |
+| `internal/casebook/web/casebook.css` | Add `.cb-history-item`, `.cb-history-time`, `.cb-history-msg`, `.cb-evidence-item`, `.cb-evidence-meta`, `.cb-evidence-author` |
+| `internal/casebook/web/probe.mjs` | Fix screenshot theme detection; add round-2 screenshot scenario |
+| `internal/casebook/serve/assets/casebook.js` | Rebuilt |
+| `internal/casebook/serve/assets/casebook.css` | Rebuilt |
+
+---
+
+### Verification
+
+```
+npm test            → 53/53 pass (6 new keyWithoutKind tests)
+npm run typecheck   → clean
+npm run lint        → clean
+npm run fmt:check   → clean
+npm run build       → 67/67 probe checks pass + round-2 screenshots taken
+
+gofmt -l .          → (empty)
+go vet ./...        → clean
+go test -race ./... → all ok
+
+pgrep -fl "casebook serve"  → (none)
+git config core.hooksPath   → /Users/courtschuett/.config/casebook/hooks
+```
+
+### Screenshot Comparison (round-2 vs mock)
+
+Screenshots taken at `/tmp/fid2-{light,dark}-{item,new}.png` at 1600×900.
+
+**Fixed vs mock:**
+- Kicker now shows "issue · schuettc/hail#4" (not "issue · issue:schuettc/hail#4").
+- History entries show "09-28" in mono, gap, then message text — no date-runs-into-text.
+- Evidence meta shows author in agent colour followed by text and short date.
+- Board card kickers also show kind prefix without repetition.
+- View chip counts (waiting on you 2 · new 4 · due 1 etc.) survive navigation between chips and live update cycles.
+- Screenshots correctly named: system was in dark mode; forceTheme ensures fid2-light-*.png are light and fid2-dark-*.png are dark.
+
+### Deviations from Brief
+
+None.

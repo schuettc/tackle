@@ -29,6 +29,17 @@ export function allowedForKind(
 }
 
 /**
+ * keyWithoutKind strips the kind prefix from a casebook key, leaving only the
+ * identifier part suitable for display beside a kind label.
+ * "issue:schuettc/hail#4" → "schuettc/hail#4".
+ * Returns the full key unchanged when there is no colon.
+ */
+export function keyWithoutKind(key: string): string {
+  const i = key.indexOf(':');
+  return i > 0 ? key.slice(i + 1) : key;
+}
+
+/**
  * allowedForKeys returns the intersection of allowed dispositions for every
  * key in the slice, derived from each key's kind prefix.  This is the correct
  * way to compute allowed for a selection: it works for keys on unrendered

@@ -247,6 +247,10 @@ function kindFromKey(key) {
 function allowedForKind(vocab, kind) {
   return (vocab.kinds ?? []).find((k) => k.kind === kind)?.allowed ?? [];
 }
+function keyWithoutKind(key) {
+  const i = key.indexOf(":");
+  return i > 0 ? key.slice(i + 1) : key;
+}
 function allowedForKeys(vocab, keys) {
   if (keys.length === 0) return [];
   const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
@@ -502,15 +506,13 @@ function fmtDate(s) {
     day: "numeric"
   });
 }
-function fmtTime(s) {
+function fmtShortDate(s) {
+  if (!s)
+    return "def";
   const d = new Date(s);
-  return d.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${mm}-${dd}`;
 }
 function renderEvidence(evs) {
   const section = h3("section", { class: "cb-evidence" });
@@ -520,17 +522,22 @@ function renderEvidence(evs) {
     return section;
   }
   for (const ev of evs) {
-    const by = ev.author ? h3("span", { class: "cb-muted" }, ` by ${ev.author}`) : null;
+    const authorEl = ev.author ? h3("span", { class: "cb-evidence-author" }, ev.author + " ") : null;
     const time = h3(
       "span",
       { class: "cb-muted" },
-      ` · ${fmtDate(ev.created_at)}`
+      ` · ${fmtShortDate(ev.created_at)}`
     );
     const item = h3(
       "div",
       { class: "cb-evidence-item" },
-      h3("p", { class: "cb-evidence-text" }, ev.text),
-      h3("p", { class: "cb-evidence-meta" }, ...by ? [by] : [], time)
+      h3(
+        "p",
+        { class: "cb-evidence-meta" },
+        ...authorEl ? [authorEl] : [],
+        ev.text,
+        time
+      )
     );
     section.append(item);
   }
@@ -548,7 +555,7 @@ function renderHistory(events, decisions) {
       h3(
         "div",
         { class: "cb-history-item cb-history-decision" },
-        h3("span", { class: "cb-history-time" }, fmtDate(entry.Time)),
+        h3("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
         h3("span", { class: "cb-history-msg" }, entry.Subject)
       )
     );
@@ -559,7 +566,7 @@ function renderHistory(events, decisions) {
       h3(
         "div",
         { class: "cb-history-item" },
-        h3("span", { class: "cb-history-time" }, fmtTime(ev.ts)),
+        h3("span", { class: "cb-history-time" }, fmtShortDate(ev.ts)),
         h3("span", { class: "cb-history-msg" }, label)
       )
     );
@@ -643,7 +650,8 @@ function renderDecideSection(ctx, key, kind) {
 function renderItem(ctx, detail) {
   const it = detail.item;
   const el = h3("article", { class: "cb-item" });
-  const kickerParts = [it.kind, it.key, it.relation].filter(Boolean).join(" · ");
+  const displayKey = keyWithoutKind(it.key);
+  const kickerParts = [it.kind, displayKey, it.relation].filter(Boolean).join(" · ");
   el.append(h3("p", { class: "cb-kicker kit-kick" }, kickerParts));
   el.append(h3("h1", { class: "cb-title kit-h1" }, it.title ?? it.key));
   const factPairs = [];
@@ -719,7 +727,8 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     const selected = sel.has(it.key);
     const box = h4("span", { class: "kit-box" + (selected ? " on" : "") });
     const kk = h4("div", { class: "cb-card-kk" });
-    kk.textContent = `${it.kind} · ${it.key}`;
+    const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
+    kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
     const titleEl = h4("div", { class: "cb-card-title" });
     titleEl.textContent = it.title ?? it.key;
     const card2 = h4(
@@ -940,6 +949,7 @@ function makeAttention(ctx) {
   let footEl = null;
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
+  const viewCounts = {};
   let boardHandle = null;
   function renderReadEmpty() {
     const nameEl = h5("p", { class: "cb-read-empty-section" }, "attention");
@@ -1038,7 +1048,8 @@ function makeAttention(ctx) {
       }
     },
     row(it) {
-      const kindKey = `${it.kind} · ${it.key}`;
+      const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
+      const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf2(it);
       const proposal = it.proposal ? `${it.proposal.disposition} proposed` : void 0;
       return {
@@ -1171,16 +1182,17 @@ function makeAttention(ctx) {
     } catch {
     }
   }
+  function viewChips(activeId) {
+    return VIEWS.map((v) => ({
+      ...v,
+      on: v.id === activeId,
+      count: viewCounts[v.id]
+    }));
+  }
   function applyCounts(counts) {
     if (!counts) return;
-    handle.setChips(
-      "view",
-      VIEWS.map((v) => ({
-        ...v,
-        on: v.id === filters.view,
-        count: counts[v.id] ?? void 0
-      }))
-    );
+    Object.assign(viewCounts, counts);
+    handle.setChips("view", viewChips(filters.view));
   }
   {
     const urlQ = getUrlQ();
@@ -1263,13 +1275,7 @@ function makeAttention(ctx) {
         handle.setSearch(urlQ2);
       }
       filters.view = "board";
-      handle.setChips(
-        "view",
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === "board"
-        }))
-      );
+      handle.setChips("view", viewChips("board"));
       mountBoard();
       return;
     }
@@ -1282,23 +1288,11 @@ function makeAttention(ctx) {
     const view = sub || "waiting";
     if (VIEWS.some((v) => v.id === view) && view !== "board") {
       filters.view = view;
-      handle.setChips(
-        "view",
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === filters.view
-        }))
-      );
+      handle.setChips("view", viewChips(filters.view));
       showReadEmpty();
       void reload();
     } else if (sub) {
-      handle.setChips(
-        "view",
-        VIEWS.map((v) => ({
-          ...v,
-          on: v.id === filters.view
-        }))
-      );
+      handle.setChips("view", viewChips(filters.view));
       void openDetail(sub);
       void reload();
     }

@@ -9,7 +9,12 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { kindFromKey, allowedForKind, allowedForKeys } from './decide-math.ts';
+import {
+  kindFromKey,
+  allowedForKind,
+  allowedForKeys,
+  keyWithoutKind,
+} from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 
 // ---- fixture vocab (mirrors item.Allowed for all five kinds) ----------------
@@ -75,6 +80,32 @@ const fixtureVocab: DecisionVocabView = {
     },
   ],
 };
+
+// ---- keyWithoutKind ---------------------------------------------------------
+
+describe('keyWithoutKind', () => {
+  test('strips kind prefix from issue key', () => {
+    assert.equal(keyWithoutKind('issue:schuettc/hail#4'), 'schuettc/hail#4');
+  });
+  test('strips kind prefix from pr key', () => {
+    assert.equal(keyWithoutKind('pr:schuettc/hail#3'), 'schuettc/hail#3');
+  });
+  test('strips kind prefix from repo key', () => {
+    assert.equal(keyWithoutKind('repo:schuettc/hail'), 'schuettc/hail');
+  });
+  test('strips kind prefix from branch key', () => {
+    assert.equal(
+      keyWithoutKind('branch:schuettc/hail@main'),
+      'schuettc/hail@main',
+    );
+  });
+  test('returns key unchanged when no colon', () => {
+    assert.equal(keyWithoutKind('nokindhere'), 'nokindhere');
+  });
+  test('returns empty string for empty input', () => {
+    assert.equal(keyWithoutKind(''), '');
+  });
+});
 
 // ---- kindFromKey -------------------------------------------------------------
 

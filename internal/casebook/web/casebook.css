@@ -378,6 +378,52 @@
   outline-offset: 0;
 }
 
+/* ---- history entries ----------------------------------------------------- */
+
+.cb-history-item {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  padding: 3px 0;
+  line-height: 1.5;
+}
+
+.cb-history-time {
+  font: 11px var(--kit-mono);
+  color: var(--kit-muted);
+  white-space: nowrap;
+  flex: none;
+  min-width: 2.8em; /* aligns MM-DD across all entries */
+}
+
+.cb-history-msg {
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- evidence entries ---------------------------------------------------- */
+
+.cb-evidence-item {
+  margin-bottom: 10px;
+}
+
+.cb-evidence-meta {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 2px 0 0;
+  line-height: 1.5;
+}
+
+/* Author shown in agent colour at start of evidence meta line. */
+.cb-evidence-author {
+  color: var(--kit-agent);
+  font-weight: 600;
+}
+
 /* ---- reading-column empty state ------------------------------------------ */
 
 .cb-read-empty {
