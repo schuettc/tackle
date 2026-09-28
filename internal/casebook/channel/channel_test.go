@@ -421,6 +421,89 @@ func TestToolCallCancelledWhenRunEnds(t *testing.T) {
 	}
 }
 
+// TestPresenceRetryOnFirstStatusCall verifies that a session-bound tool call that
+// receives 404 from serve (unknown session — serve just started and the wake loop
+// hasn't registered presence yet) automatically registers presence with
+// ch.Client (which may start serve) and retries the call once.
+//
+// Scenario: serve is not running when the channel starts; ch.Retry is very long
+// so the wake loop can't have registered presence; the FIRST tool call is
+// casebook_status. With the fix it must succeed and contain "counts".
+func TestPresenceRetryOnFirstStatusCall(t *testing.T) {
+	r := apptest.New(t)
+	var started atomic.Bool
+	c := NewClient()
+	c.Start = func() (serve.Advert, error) {
+		started.Store(true)
+		startServe(t, r)
+		return serve.Running()
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi", Label: "pi·w", CWD: "/w"}, c, "test")
+	ch.Retry = time.Hour // loop tries Find→fails→tries presence→fails→sleeps 1h
+	ch.Poll = 2 * time.Second
+	m := start(t, ch)
+
+	// Without the fix: Client.Start starts serve, but the loop hasn't registered
+	// presence yet → serve answers 404 "unknown session" → tool call fails.
+	// With the fix: on 404 the call registers presence and retries → "counts".
+	out, isErr := m.tool("casebook_status", map[string]any{})
+	if isErr {
+		t.Fatalf("casebook_status failed: %s", out)
+	}
+	if !strings.Contains(out, "counts") {
+		t.Fatalf("casebook_status: want \"counts\", got: %s", out)
+	}
+	if !started.Load() {
+		t.Fatal("serve was not started by the tool call")
+	}
+}
+
+// TestPresenceRetryAfterServeRestart verifies that a session-bound tool call
+// retries after registering presence when serve restarted and forgot the session.
+//
+// Scenario: Find returns ErrNotRunning initially so the wake loop fails and
+// sleeps for an hour. Serve is then started externally (simulating a restart after
+// which the loop has not yet had a chance to re-register). casebook_propose must
+// succeed from the agent's view (one call, no visible error).
+func TestPresenceRetryAfterServeRestart(t *testing.T) {
+	r := apptest.New(t)
+
+	// serveUp gates what Find returns. Initially false so the loop fails and
+	// sleeps for the full Retry (1 hour), simulating the window after a restart
+	// where the session is unknown.
+	var serveUp atomic.Bool
+	findFn := func() (serve.Advert, error) {
+		if !serveUp.Load() {
+			return serve.Advert{}, serve.ErrNotRunning
+		}
+		return serve.Running()
+	}
+	c := &Client{HTTP: &http.Client{Timeout: 30 * time.Second}, Find: findFn}
+	ch := New(Identity{Session: "s1", Harness: "pi", Label: "pi·w", CWD: "/w"}, c, "test")
+	ch.Retry = time.Hour // loop: Find→not-running, presence→fails, sleep 1h
+	ch.Poll = 2 * time.Second
+	m := start(t, ch)
+
+	time.Sleep(50 * time.Millisecond) // let the loop attempt, fail, start sleeping
+
+	// Start serve (new instance — simulates restart). The loop is sleeping for
+	// an hour and can't re-register. The session is unknown to this fresh serve.
+	startServe(t, r)
+	serveUp.Store(true)
+
+	// Without the fix: propose hits fresh serve → 404 "unknown session" → error.
+	// With the fix: 404 triggers presence registration + one retry → succeeds.
+	out, isErr := m.tool("casebook_propose", map[string]any{
+		"keys": []string{"repo:schuettc/hail"}, "disposition": "watch",
+	})
+	if isErr {
+		t.Fatalf("casebook_propose failed: %s", out)
+	}
+	if !strings.Contains(out, "proposed") {
+		t.Fatalf("casebook_propose: want \"proposed\", got: %s", out)
+	}
+}
+
 func TestNoSessionIsReadOnly(t *testing.T) {
 	apptest.New(t) // hermetic CASEBOOK_HOME
 	ch := New(Identity{}, NewClient(), "test")

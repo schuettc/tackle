@@ -81,9 +81,11 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		if err := needSession(); err != nil {
 			return "", err
 		}
-		var out map[string]any
-		_, err := ch.Client.Do(ctx, http.MethodGet, "/api/agent/status?"+q("session", ch.ID.Session), nil, &out)
-		return pretty(out), err
+		return ch.callSessionBound(ctx, func() (string, error) {
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodGet, "/api/agent/status?"+q("session", ch.ID.Session), nil, &out)
+			return pretty(out), err
+		})
 	case "casebook_open":
 		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", map[string]any{"key": a.Key, "view": a.View}, nil)
 		if err != nil {
@@ -106,30 +108,38 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		if err := needSession(); err != nil {
 			return "", err
 		}
-		var out map[string]any
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/propose", map[string]any{"session": ch.ID.Session, "keys": a.Keys,
-			"disposition": a.Disposition, "until": a.Until, "note": a.Note}, &out)
-		return pretty(out), err
+		return ch.callSessionBound(ctx, func() (string, error) {
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/propose", map[string]any{"session": ch.ID.Session, "keys": a.Keys,
+				"disposition": a.Disposition, "until": a.Until, "note": a.Note}, &out)
+			return pretty(out), err
+		})
 	case "casebook_evidence":
 		if err := needSession(); err != nil {
 			return "", err
 		}
-		var out map[string]any
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/evidence", map[string]any{"session": ch.ID.Session, "key": a.Key, "text": a.Text}, &out)
-		return pretty(out), err
+		return ch.callSessionBound(ctx, func() (string, error) {
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/evidence", map[string]any{"session": ch.ID.Session, "key": a.Key, "text": a.Text}, &out)
+			return pretty(out), err
+		})
 	case "casebook_progress":
 		if err := needSession(); err != nil {
 			return "", err
 		}
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/progress", map[string]any{"session": ch.ID.Session, "text": a.Text, "n": a.N, "total": a.Total}, nil)
-		return "ok", err
+		return ch.callSessionBound(ctx, func() (string, error) {
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/progress", map[string]any{"session": ch.ID.Session, "text": a.Text, "n": a.N, "total": a.Total}, nil)
+			return "ok", err
+		})
 	case "casebook_reply":
 		if err := needSession(); err != nil {
 			return "", err
 		}
-		var out map[string]any
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/reply", map[string]any{"session": ch.ID.Session, "ids": a.IDs, "state": a.State, "text": a.Text}, &out)
-		return pretty(out), err
+		return ch.callSessionBound(ctx, func() (string, error) {
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/reply", map[string]any{"session": ch.ID.Session, "ids": a.IDs, "state": a.State, "text": a.Text}, &out)
+			return pretty(out), err
+		})
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
