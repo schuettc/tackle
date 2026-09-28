@@ -44,9 +44,6 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 	if len(args) > 0 && args[0] == "channel" {
 		return channelMain(stdin, out, errw)
 	}
-	if len(args) > 0 && args[0] == "mcp" {
-		return mcpMain(stdin, out, errw)
-	}
 	a := tools.New(tools.Config{
 		Name:    "casebook",
 		Domain:  "tackle.tools",

@@ -42,20 +42,11 @@ only = { os = "darwin" }
   file = "~/.claude/settings.json"
   merge = { hooks = { Stop = [ { hooks = [ { type = "command", command = "~/.local/bin/casebook settled --harness claude" } ] } ] } }
 
-  # pi: two entries are needed because pi splits responsibilities:
-  #   channels.tools (channels.json) runs `casebook channel` for wake events
-  #     (presence + long-poll), delivering page messages as channel events.
-  #   pi-mcp-adapter (mcp.json) runs `casebook mcp` to expose the tools.
-  #     `casebook mcp` is identical to `casebook channel` but has NO wake loop,
-  #     so it cannot compete with channels.tools for deliveries.
-  # Claude Code uses a single `casebook channel` process for both roles.
+  # pi: the same channel through channels.tools (which stamps the pi session id
+  # and delivers only while the agent is settled).
   [[packages.casebook.json-merge]]
   file = "~/.pi/agent/channels.json"
   merge = { channelServers = { casebook = { command = "casebook", args = ["channel"] } } }
-
-  [[packages.casebook.json-merge]]
-  file = "~/.config/mcp/mcp.json"
-  merge = { mcpServers = { casebook = { command = "casebook", args = ["mcp"] } } }
 
   # pi: pi-casebook (journal git/gh bash calls with the pi session id, brief the
   # first turn, background `casebook sync --no-github`, and — from 0.2.0 —
