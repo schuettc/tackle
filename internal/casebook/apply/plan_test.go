@@ -2,11 +2,13 @@ package apply
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/observe"
 )
 
 // epoch is a fixed clock used by all tests.
@@ -58,7 +60,13 @@ func TestPlanGroupsByActionAndLane(t *testing.T) {
 		Decision: decided(item.Archive, ""),
 	}
 
-	plan, err := Build([]engine.Item{br, rp}, "mymachine", epoch, builtAt, 30*time.Minute)
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path:     "/Users/me/repos/myrepo",
+		Repo:     "schuettc/myrepo",
+		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
+		Branches: []observe.Branch{{Name: "feat/thing", Tip: "aaa"}},
+	}})
+	plan, err := Build([]engine.Item{br, rp}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -101,7 +109,13 @@ func TestBranchDeleteIsCasebookLaneWithExactCommand(t *testing.T) {
 		Locations: []string{"mymachine:/Users/me/repos/myrepo"},
 	}
 
-	plan, err := Build([]engine.Item{it}, "mymachine", epoch, builtAt, 30*time.Minute)
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path:     "/Users/me/repos/myrepo",
+		Repo:     "schuettc/myrepo",
+		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
+		Branches: []observe.Branch{{Name: "feat/my-branch", Tip: "tip123"}},
+	}})
+	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -167,7 +181,7 @@ func TestArchiveAndCloseAreAgentLane(t *testing.T) {
 		Decision: decided(item.Close, "no activity"),
 	}
 
-	plan, err := Build([]engine.Item{archive, prClose}, "mymachine", epoch, builtAt, 30*time.Minute)
+	plan, err := Build([]engine.Item{archive, prClose}, snapWith("mymachine", nil), epoch, builtAt, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -206,14 +220,15 @@ func TestPlanRefusesStaleObservation(t *testing.T) {
 	// builtAt 31 minutes ago, syncInterval 30m → ErrStale.
 	builtAt := epoch.Add(-31 * time.Minute)
 
-	_, err := Build(nil, "mymachine", epoch, builtAt, 30*time.Minute)
+	emptySnap := snapWith("mymachine", nil)
+	_, err := Build(nil, emptySnap, epoch, builtAt, 30*time.Minute)
 	if !errors.Is(err, ErrStale) {
 		t.Fatalf("Build with stale observation: got %v, want ErrStale", err)
 	}
 
 	// Exactly at boundary: 30m → not stale.
 	builtAt30 := epoch.Add(-30 * time.Minute)
-	_, err = Build(nil, "mymachine", epoch, builtAt30, 30*time.Minute)
+	_, err = Build(nil, emptySnap, epoch, builtAt30, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Build at exactly syncInterval: got %v, want nil", err)
 	}
@@ -233,7 +248,7 @@ func TestKeepProducesNoStep(t *testing.T) {
 			Decision: decided(disp, ""),
 		}
 
-		plan, err := Build([]engine.Item{it}, "mymachine", epoch, builtAt, 30*time.Minute)
+		plan, err := Build([]engine.Item{it}, snapWith("mymachine", nil), epoch, builtAt, 30*time.Minute)
 		if err != nil {
 			t.Fatalf("Build(%s): %v", disp, err)
 		}
@@ -272,7 +287,13 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 		Locations: []string{"machineB:/Users/B/repos/myrepo"},
 	}
 
-	plan, err := Build([]engine.Item{branch, worktree}, "machineA", epoch, builtAt, 30*time.Minute)
+	snapA := snapWith("machineA", []observe.Clone{{
+		Path:     "/Users/A/repos/myrepo",
+		Repo:     "schuettc/myrepo",
+		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
+		Branches: []observe.Branch{{Name: "feat/shared", Tip: "tipA"}},
+	}})
+	plan, err := Build([]engine.Item{branch, worktree}, snapA, epoch, builtAt, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -303,20 +324,194 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 
 	// Verify no step uses machineB's clone path.
 	for _, s := range plan.Steps {
-		if contains(s.Command, "/Users/B/") {
+		if strings.Contains(s.Command, "/Users/B/") {
 			t.Errorf("step for machineB found in machineA plan: %v", s)
 		}
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
+// --- Fix round 1 tests ---
+
+// snapWith builds a minimal observe.Snapshot for tests.
+func snapWith(machine string, clones []observe.Clone) observe.Snapshot {
+	return observe.Snapshot{
+		Version: 1,
+		Machine: machine,
+		Clones:  clones,
+	}
+}
+
+// TestRemoteNameFromSnapshotUpstream checks fix 1: when the clone's Remotes
+// map names the GitHub remote "upstream" (not "origin"), the push command
+// uses "upstream".
+func TestRemoteNameFromSnapshotUpstream(t *testing.T) {
+	builtAt := epoch.Add(-5 * time.Minute)
+
+	k := item.BranchKey("schuettc/myrepo", "feat/my-branch")
+	it := engine.Item{
+		Key:       k,
+		ID:        k.String(),
+		Kind:      item.KindBranch,
+		Status:    item.StatusToApply,
+		Decision:  decided(item.Delete, ""),
+		Landed:    "all-machines",
+		Locations: []string{"mymachine:/Users/me/repos/myrepo"},
+	}
+
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path: "/Users/me/repos/myrepo",
+		Repo: "schuettc/myrepo",
+		Remotes: map[string]string{
+			"upstream": "schuettc/myrepo",
+		},
+		Branches: []observe.Branch{{
+			Name: "feat/my-branch",
+			Tip:  "abc1234deadbeef",
+		}},
+	}})
+
+	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(plan.Steps) != 2 {
+		t.Fatalf("want 2 steps (local+remote), got %d: %v", len(plan.Steps), plan.Steps)
+	}
+
+	remote := plan.Steps[1]
+	if remote.Action != "branch-delete-remote" {
+		t.Fatalf("Steps[1].Action = %q, want branch-delete-remote", remote.Action)
+	}
+	wantCmd := "git -C '/Users/me/repos/myrepo' push 'upstream' --delete 'feat/my-branch'"
+	if remote.Command != wantCmd {
+		t.Errorf("remote Command =\n  %q\nwant\n  %q", remote.Command, wantCmd)
+	}
+}
+
+// TestNoRemoteStepWhenNoMatchingRemote checks fix 1: if no clone has a remote
+// whose value equals the item's repo, no remote-delete step is planned.
+func TestNoRemoteStepWhenNoMatchingRemote(t *testing.T) {
+	builtAt := epoch.Add(-5 * time.Minute)
+
+	k := item.BranchKey("schuettc/myrepo", "feat/my-branch")
+	it := engine.Item{
+		Key:       k,
+		ID:        k.String(),
+		Kind:      item.KindBranch,
+		Status:    item.StatusToApply,
+		Decision:  decided(item.Delete, ""),
+		Landed:    "all-machines",
+		Locations: []string{"mymachine:/Users/me/repos/myrepo"},
+	}
+
+	// Clone has no remote matching the item's repo.
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path: "/Users/me/repos/myrepo",
+		Repo: "schuettc/myrepo",
+		Remotes: map[string]string{
+			"origin": "schuettc/DIFFERENT",
+		},
+		Branches: []observe.Branch{{
+			Name: "feat/my-branch",
+			Tip:  "abc1234",
+		}},
+	}})
+
+	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// Only 1 local-delete step; no remote step.
+	if len(plan.Steps) != 1 {
+		t.Fatalf("want 1 step (local only), got %d: %v", len(plan.Steps), plan.Steps)
+	}
+	if plan.Steps[0].Action != "branch-delete-local" {
+		t.Errorf("Steps[0].Action = %q, want branch-delete-local", plan.Steps[0].Action)
+	}
+}
+
+// TestBranchStepsHaveExpectedTips checks fix 2: local-delete steps carry the
+// snapshot branch tip; remote-delete step carries that same tip.
+func TestBranchStepsHaveExpectedTips(t *testing.T) {
+	builtAt := epoch.Add(-5 * time.Minute)
+
+	k := item.BranchKey("schuettc/myrepo", "feat/tips")
+	it := engine.Item{
+		Key:       k,
+		ID:        k.String(),
+		Kind:      item.KindBranch,
+		Status:    item.StatusToApply,
+		Decision:  decided(item.Delete, ""),
+		Landed:    "all-machines",
+		Locations: []string{"mymachine:/Users/me/repos/myrepo"},
+	}
+
+	const wantTip = "cafebabe00000000"
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path: "/Users/me/repos/myrepo",
+		Repo: "schuettc/myrepo",
+		Remotes: map[string]string{
+			"origin": "schuettc/myrepo",
+		},
+		Branches: []observe.Branch{{
+			Name: "feat/tips",
+			Tip:  wantTip,
+		}},
+	}})
+
+	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(plan.Steps) != 2 {
+		t.Fatalf("want 2 steps, got %d: %v", len(plan.Steps), plan.Steps)
+	}
+
+	if got := plan.Steps[0].ExpectedTip; got != wantTip {
+		t.Errorf("local step ExpectedTip = %q, want %q", got, wantTip)
+	}
+	if got := plan.Steps[1].ExpectedTip; got != wantTip {
+		t.Errorf("remote step ExpectedTip = %q, want %q", got, wantTip)
+	}
+}
+
+// TestWorktreeStepUsesSnapshotClone checks fix 3: the worktree remove command
+// uses the clone path from the snapshot (matched by the worktree path), not
+// the item's Locations entry which may be for a different machine.
+func TestWorktreeStepUsesSnapshotClone(t *testing.T) {
+	builtAt := epoch.Add(-5 * time.Minute)
+
+	wk := item.WorktreeKey("mymachine", "/Users/me/worktrees/feat")
+	it := engine.Item{
+		Key:      wk,
+		ID:       wk.String(),
+		Kind:     item.KindWorktree,
+		Status:   item.StatusToApply,
+		Decision: decided(item.Delete, ""),
+		// Locations comes from the engine; the clone is "/Users/me/repos/myrepo".
+		Locations: []string{"mymachine:/Users/me/repos/myrepo"},
+	}
+
+	snap := snapWith("mymachine", []observe.Clone{{
+		Path: "/Users/me/repos/myrepo",
+		Repo: "schuettc/myrepo",
+		Worktrees: []observe.Worktree{{
+			Path:   "/Users/me/worktrees/feat",
+			Branch: "feat/my-branch",
+		}},
+	}})
+
+	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(plan.Steps) != 1 {
+		t.Fatalf("want 1 step, got %d: %v", len(plan.Steps), plan.Steps)
+	}
+
+	step := plan.Steps[0]
+	wantCmd := "git -C '/Users/me/repos/myrepo' worktree remove '/Users/me/worktrees/feat'"
+	if step.Command != wantCmd {
+		t.Errorf("worktree step Command =\n  %q\nwant\n  %q", step.Command, wantCmd)
+	}
 }

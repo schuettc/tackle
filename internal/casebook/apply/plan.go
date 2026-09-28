@@ -10,11 +10,13 @@ package apply
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/observe"
 )
 
 // Lane identifies which execution lane a step belongs to.
@@ -42,6 +44,12 @@ type Step struct {
 	// Posts is true when executing this step publishes public text and requires
 	// a per-item confirmation before the text is sent (§5.4).
 	Posts bool `json:"posts,omitempty"`
+	// ExpectedTip is the branch tip SHA we expect to see at execution time.
+	// For local-delete steps it is the snapshot's local branch tip for that
+	// clone; for remote-delete steps it is the snapshot tip from the first
+	// clone used for the push. Task 10 compares this against the live tip
+	// before executing, and treats an already-absent remote branch as done.
+	ExpectedTip string `json:"expected_tip,omitempty"`
 }
 
 // Plan is the ordered set of steps for one apply session.
@@ -91,7 +99,8 @@ func (p Plan) Groups() []Group {
 	return result
 }
 
-// Build constructs a Plan from decided to-apply items for the given machine.
+// Build constructs a Plan from decided to-apply items for the machine described
+// by snap.
 //
 // Staleness: ErrStale is returned when now.Sub(builtAt) > syncInterval.
 // The stale check uses builtAt (the snapshot/cache time the index was built
@@ -99,35 +108,105 @@ func (p Plan) Groups() []Group {
 //
 // Machine scope:
 //   - local steps (branch delete, worktree remove) are generated only for
-//     locations on machine;
+//     locations on snap.Machine;
 //   - remote and GitHub steps run once, from whichever machine applies them;
-//   - for remote branch delete, the first local clone is used as the git
-//     working directory; if no local clone exists, no remote delete step is
-//     generated (the branch stays to-apply on the other machine).
-func Build(items []engine.Item, machine string, now time.Time, builtAt time.Time, syncInterval time.Duration) (Plan, error) {
+//   - for remote branch delete, the remote name is the entry in Clone.Remotes
+//     whose value equals the item's repo (case-insensitive); the first clone
+//     (stable sort order) that has such a remote provides the working directory;
+//     if no clone on this machine has a matching remote, no remote delete step
+//     is generated.
+func Build(items []engine.Item, snap observe.Snapshot, now, builtAt time.Time, syncInterval time.Duration) (Plan, error) {
 	if now.Sub(builtAt) > syncInterval {
 		return Plan{}, ErrStale
 	}
 
+	sl := newSnapLookup(snap)
 	plan := Plan{BuiltAt: now}
 
 	for _, it := range items {
 		if it.Status != item.StatusToApply || it.Decision == nil {
 			continue
 		}
-		plan.Steps = append(plan.Steps, stepsForItem(it, machine, now)...)
+		plan.Steps = append(plan.Steps, stepsForItem(it, snap.Machine, now, sl)...)
 	}
 
 	return plan, nil
 }
 
+// snapLookup is a precomputed index into an observe.Snapshot for fast lookups.
+type snapLookup struct {
+	// cloneByPath maps clone path → Clone.
+	cloneByPath map[string]observe.Clone
+	// cloneForWorktree maps worktree path → Clone that owns it.
+	cloneForWorktree map[string]observe.Clone
+}
+
+func newSnapLookup(snap observe.Snapshot) snapLookup {
+	sl := snapLookup{
+		cloneByPath:      make(map[string]observe.Clone, len(snap.Clones)),
+		cloneForWorktree: make(map[string]observe.Clone),
+	}
+	for _, c := range snap.Clones {
+		sl.cloneByPath[c.Path] = c
+		for _, w := range c.Worktrees {
+			sl.cloneForWorktree[w.Path] = c
+		}
+	}
+	return sl
+}
+
+// branchTip returns the Tip SHA for branchName in the clone at clonePath, or
+// "" if not found.
+func (sl snapLookup) branchTip(clonePath, branchName string) string {
+	c, ok := sl.cloneByPath[clonePath]
+	if !ok {
+		return ""
+	}
+	for _, b := range c.Branches {
+		if b.Name == branchName {
+			return b.Tip
+		}
+	}
+	return ""
+}
+
+// identityRemote returns the remote name and clone for the first clone (by
+// stable sorted order) on this machine that has a remote pointing to repo
+// (case-insensitive). Returns "", observe.Clone{} if none found.
+func (sl snapLookup) identityRemote(clonePaths []string, repo string) (remoteName string, clone observe.Clone) {
+	repoLower := strings.ToLower(repo)
+	// clonePaths come from machineClones which preserves item.Locations order;
+	// sort for stable deterministic selection.
+	sorted := make([]string, len(clonePaths))
+	copy(sorted, clonePaths)
+	sort.Strings(sorted)
+	for _, p := range sorted {
+		c, ok := sl.cloneByPath[p]
+		if !ok {
+			continue
+		}
+		// Sort remote names for determinism within one clone.
+		names := make([]string, 0, len(c.Remotes))
+		for n := range c.Remotes {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			if strings.ToLower(c.Remotes[n]) == repoLower {
+				return n, c
+			}
+		}
+	}
+	return "", observe.Clone{}
+}
+
 // stepsForItem dispatches to the kind-specific builder.
-func stepsForItem(it engine.Item, machine string, now time.Time) []Step {
+func stepsForItem(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
 	switch it.Kind {
 	case item.KindBranch:
-		return branchSteps(it, machine, now)
+		return branchSteps(it, machine, now, sl)
 	case item.KindWorktree:
-		return worktreeSteps(it, machine)
+		return worktreeSteps(it, machine, sl)
 	case item.KindRepo:
 		return repoSteps(it)
 	case item.KindPR:
@@ -153,21 +232,21 @@ func machineClones(it engine.Item, machine string) []string {
 
 // branchSteps generates steps for a branch item with disposition delete.
 //
-// Local delete: one step per clone on machine (precondition:
+// Local delete: one step per clone on machine, with ExpectedTip set from the
+// snapshot's branch tip for that clone (precondition:
 // branch-tip-unchanged-and-landed).
 //
-// Remote delete: one step from the first local clone, using "origin" as the
-// conventional remote name (precondition: remote-tip-unchanged-and-landed).
+// Remote delete: one step from the first clone (stable order) that has a
+// remote whose Remotes value equals the item's repo (case-insensitive). The
+// remote name comes from that Remotes entry; ExpectedTip is the same branch
+// tip from that clone (precondition: remote-tip-unchanged-and-landed).
 // Omitted when the remote tracking branch is already gone (Fields.GoneUpstream).
-// Omitted when this machine has no local clone for the branch (the other
-// machine's plan will cover it).
+// Omitted when no clone on this machine has a matching remote.
 //
 // How we decide whether a remote copy exists: we call it.Fields(now) and read
 // GoneUpstream, which reflects observe.Branch.Gone (upstream set but deleted
-// on the remote, typically squash-merged). When GoneUpstream is true the
-// remote branch was already deleted; no push is needed and we skip the step
-// rather than producing a command that would fail.
-func branchSteps(it engine.Item, machine string, now time.Time) []Step {
+// on the remote, typically squash-merged).
+func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
 	if it.Decision.Disposition != item.Delete {
 		return nil
 	}
@@ -185,19 +264,25 @@ func branchSteps(it engine.Item, machine string, now time.Time) []Step {
 			Lane:         LaneCasebook,
 			Command:      branchDeleteLocalCmd(clonePath, branch),
 			Precondition: "branch-tip-unchanged-and-landed",
+			ExpectedTip:  sl.branchTip(clonePath, branch),
 		})
 	}
 
-	// Remote delete: once, from the first local clone.
+	// Remote delete: once, from the first clone that has a matching remote.
 	// Skip if the remote tracking branch is already gone.
-	if len(localClones) > 0 && !it.Fields(now).GoneUpstream {
-		steps = append(steps, Step{
-			Key:          it.ID,
-			Action:       "branch-delete-remote",
-			Lane:         LaneCasebook,
-			Command:      branchDeleteRemoteCmd(localClones[0], "origin", branch),
-			Precondition: "remote-tip-unchanged-and-landed",
-		})
+	if !it.Fields(now).GoneUpstream {
+		remoteName, remoteClone := sl.identityRemote(localClones, it.Key.Repo())
+		if remoteName != "" {
+			tip := sl.branchTip(remoteClone.Path, branch)
+			steps = append(steps, Step{
+				Key:          it.ID,
+				Action:       "branch-delete-remote",
+				Lane:         LaneCasebook,
+				Command:      branchDeleteRemoteCmd(remoteClone.Path, remoteName, branch),
+				Precondition: "remote-tip-unchanged-and-landed",
+				ExpectedTip:  tip,
+			})
+		}
 	}
 
 	return steps
@@ -205,25 +290,45 @@ func branchSteps(it engine.Item, machine string, now time.Time) []Step {
 
 // worktreeSteps generates a step to remove a worktree with disposition delete.
 // Only generated when the worktree's machine matches the plan machine.
-func worktreeSteps(it engine.Item, machine string) []Step {
+// The clone path is looked up from the snapshot (the clone that owns the
+// worktree), not from the item's Locations list.
+func worktreeSteps(it engine.Item, machine string, sl snapLookup) []Step {
 	if it.Decision.Disposition != item.Delete {
 		return nil
 	}
 	if it.Key.Machine != machine {
 		return nil
 	}
-	// The clone path is the first location entry (Locations holds "machine:clonepath").
-	clonePath := firstLocation(it)
-	if clonePath == "" {
-		return nil
+	worktreePath := it.Key.Path
+	clone, ok := sl.cloneForWorktree[worktreePath]
+	if !ok {
+		// Worktree not found in snapshot; fall back to Locations.
+		clonePath := machineCloneForWorktree(it, machine)
+		if clonePath == "" {
+			return nil
+		}
+		clone.Path = clonePath
 	}
 	return []Step{{
 		Key:          it.ID,
 		Action:       "worktree-remove",
 		Lane:         LaneCasebook,
-		Command:      worktreeRemoveCmd(clonePath, it.Key.Path),
+		Command:      worktreeRemoveCmd(clone.Path, worktreePath),
 		Precondition: "worktree-clean",
 	}}
+}
+
+// machineCloneForWorktree returns the clone path from the first Locations
+// entry on the given machine. Used as fallback when the worktree is not found
+// in the snapshot's cloneForWorktree index.
+func machineCloneForWorktree(it engine.Item, machine string) string {
+	for _, loc := range it.Locations {
+		m, p, ok := strings.Cut(loc, ":")
+		if ok && m == machine {
+			return p
+		}
+	}
+	return ""
 }
 
 // repoSteps generates steps for a repo item with disposition archive or delete.
@@ -297,16 +402,4 @@ func issueSteps(it engine.Item) []Step {
 		Command: issueCloseCmd(n, repo, comment),
 		Posts:   true,
 	}}
-}
-
-// firstLocation returns the clone path from the first Locations entry (any
-// machine). Returns "" if Locations is empty.
-func firstLocation(it engine.Item) string {
-	for _, loc := range it.Locations {
-		_, p, ok := strings.Cut(loc, ":")
-		if ok {
-			return p
-		}
-	}
-	return ""
 }
