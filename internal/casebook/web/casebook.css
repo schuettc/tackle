@@ -47,6 +47,90 @@
   padding: 6px 8px;
 }
 
+.cb-lane-more {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 8px 14px;
+  width: 100%;
+  text-align: left;
+}
+
+.cb-lane-more:hover {
+  color: var(--kit-fg);
+}
+
+/* ---- board cards ---------------------------------------------------------- */
+
+.cb-board-card {
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.cb-board-card:hover {
+  border-color: var(--kit-muted);
+}
+
+.cb-board-card.on {
+  border-color: var(--kit-signal);
+  box-shadow: inset 3px 0 0 var(--kit-signal);
+}
+
+.cb-board-card .kit-box {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 1px;
+}
+
+.cb-board-card .kit-box.on {
+  background: var(--kit-signal);
+  border-color: var(--kit-signal);
+}
+
+.cb-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.cb-card-kk {
+  font: 11px var(--kit-mono);
+  color: var(--kit-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.cb-card-title {
+  font-size: 13.5px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-card-age {
+  font: 11px var(--kit-mono);
+  color: var(--kit-muted);
+  margin-top: 4px;
+}
+
+.cb-card-prop {
+  font: 11.5px var(--kit-mono);
+  color: var(--kit-agent);
+  margin-top: 4px;
+}
+
 /* ---- decide sheet -------------------------------------------------------- */
 
 .cb-sheet {

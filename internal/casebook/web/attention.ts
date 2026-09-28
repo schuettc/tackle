@@ -24,6 +24,7 @@ import type {
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
 import { wireSelection } from './decide.ts';
+import { makeBoard } from './board.ts';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
@@ -115,6 +116,7 @@ export function makeAttention(ctx: Ctx): Section {
   let footEl: HTMLElement | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let totalItemsForView = 0; // updated after every load; used by select-all
+  let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
   // ---- foot: show-more + selection count + select all in view ---------------
 
@@ -413,13 +415,64 @@ export function makeAttention(ctx: Ctx): Section {
     })
     .catch(() => {});
 
+  // ---- board helpers -------------------------------------------------------
+
+  // getBoardFilters returns the active filters (excluding `view`) for the board.
+  // The board overrides `view` per lane; all other filters still apply.
+  function getBoardFilters(): Record<string, string> {
+    const p: Record<string, string> = {};
+    if (filters.kind) p['kind'] = filters.kind;
+    if (filters.repo) p['repo'] = filters.repo;
+    if (filters.relation) p['relation'] = filters.relation;
+    if (filters.bot) p['bot'] = filters.bot;
+    if (filters.age) p['age'] = filters.age;
+    if (filters.rule) p['rule'] = filters.rule;
+    if (filters.q) p['q'] = filters.q;
+    return p;
+  }
+
+  // mountBoard hides the kit's rows/foot and inserts the board into the list
+  // panel.  The kit's `.kit-rows` and `.kit-foot` are internal class names
+  // stable in kit v0.11.0 (see localweb/page/assets/kit.css).
+  function mountBoard(): void {
+    if (boardHandle) return;
+    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
+    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
+    if (kitRows) kitRows.hidden = true;
+    if (kitFoot) kitFoot.hidden = true;
+    boardHandle = makeBoard(ctx, selection, getBoardFilters);
+    handle.el.append(boardHandle.el);
+  }
+
+  // unmountBoard removes the board and restores the kit's rows/foot.
+  function unmountBoard(): void {
+    if (!boardHandle) return;
+    boardHandle.destroy();
+    boardHandle.el.remove();
+    boardHandle = null;
+    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
+    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
+    if (kitRows) kitRows.hidden = false;
+    if (kitFoot) kitFoot.hidden = false;
+  }
+
   // ---- show(sub) -- router hook --------------------------------------------
 
   function show(sub: string): void {
     if (sub === 'board') {
-      // Board is Task 4.
+      // Restore search text from URL so getBoardFilters() picks it up.
+      const urlQ = getUrlQ();
+      if (urlQ !== filters.q) {
+        filters.q = urlQ;
+        handle.setSearch(urlQ);
+      }
+      mountBoard();
       return;
     }
+
+    // Leaving board view: unmount board and restore the kit list.
+    unmountBoard();
+
     // Restore search text from URL (?q=...) on every navigation into this section.
     const urlQ = getUrlQ();
     if (urlQ !== filters.q) {
@@ -454,13 +507,20 @@ export function makeAttention(ctx: Ctx): Section {
     onLive(type: string, data: unknown) {
       if (type === 'index') {
         // One reload per index event: apply counts from the event payload and
-        // refresh the list.  Previously ctx.on('index') + onLive both called
-        // reload(); folding them here means a single index event ⇒ one reload.
+        // refresh the list (or the board when it is active).
         const s = data as { counts?: Record<string, number> };
         applyCounts(s?.counts ?? null);
-        void reload();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
       } else if (type === 'decided' || type === 'proposals') {
-        void reload();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
       }
     },
     primary() {

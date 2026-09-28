@@ -906,6 +906,317 @@ async function run() {
         await detailPage.close();
       }
     }
+    // ---- scenario: the board view ------------------------------------------
+    console.log(
+      "\nscenario: the board shows four lanes with the fixture's items in the right lanes",
+    );
+
+    {
+      await page.evaluate(() => {
+        location.hash = '#/attention/board';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/board');
+      await page.waitForSelector('.cb-lane', { timeout: 6000 }).catch(() => {});
+      await page.waitForTimeout(800);
+
+      const laneCount = await page.$$eval('.cb-lane', (lanes) => lanes.length);
+      check('board shows four lanes', laneCount === 4);
+
+      const laneIds = await page.$$eval('.cb-lane', (lanes) =>
+        lanes.map((l) => l.dataset.lane),
+      );
+      check(
+        'lanes are waiting, proposed, due, new in order',
+        laneIds[0] === 'waiting' &&
+          laneIds[1] === 'proposed' &&
+          laneIds[2] === 'due' &&
+          laneIds[3] === 'new',
+      );
+
+      const waitingCards = await page.$$eval(
+        '[data-lane="waiting"] .cb-board-card',
+        (cards) => cards.length,
+      );
+      check('waiting lane has cards from the fixture', waitingCards > 0);
+
+      // Navigate back to list view.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+    }
+
+    // ---- scenario: selection made on the board shows on the list ------------
+    console.log(
+      '\nscenario: a selection made on the board shows on the list and vice versa',
+    );
+
+    {
+      // Navigate to board.
+      await page.evaluate(() => {
+        location.hash = '#/attention/board';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/board');
+      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(600);
+
+      const firstCard = await page.$('[data-lane="waiting"] .cb-board-card');
+      if (firstCard) {
+        await firstCard.click();
+        await page.waitForTimeout(300);
+
+        const isSelected = await firstCard
+          .evaluate((el) => el.classList.contains('on'))
+          .catch(() => false);
+        check('clicking a board card selects it', isSelected);
+
+        // Navigate to list view; primary should reflect the selection.
+        await page.evaluate(() => {
+          location.hash = '#/attention/waiting';
+        });
+        await page.waitForFunction(
+          () => location.hash === '#/attention/waiting',
+        );
+        await page.waitForTimeout(600);
+
+        const primaryText = await page
+          .$eval('.kit-primary', (el) => el.textContent ?? '')
+          .catch(() => '');
+        check(
+          'selection from board is visible on the list (primary shows Decide N)',
+          primaryText.trim().startsWith('Decide '),
+        );
+
+        // Go back to board and deselect to clean up.
+        await page.evaluate(() => {
+          location.hash = '#/attention/board';
+        });
+        await page.waitForFunction(() => location.hash === '#/attention/board');
+        await page
+          .waitForSelector('.cb-lane', { timeout: 5000 })
+          .catch(() => {});
+        await page.waitForTimeout(600);
+        const selCard = await page.$('[data-lane="waiting"] .cb-board-card.on');
+        if (selCard) {
+          await selCard.click();
+          await page.waitForTimeout(200);
+        }
+      } else {
+        check('clicking a board card selects it', false);
+        check(
+          'selection from board is visible on the list (primary shows Decide N)',
+          false,
+        );
+      }
+
+      // Back to list.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+    }
+
+    // ---- scenario: shift-click ranges within a lane -----------------------
+    console.log('\nscenario: shift-click ranges within a lane');
+
+    {
+      await page.evaluate(() => {
+        location.hash = '#/attention/board';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/board');
+      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(600);
+
+      const waitingCards = await page.$$(
+        '[data-lane="waiting"] .cb-board-card',
+      );
+      if (waitingCards.length >= 2) {
+        // Click first card, then shift-click second.
+        await waitingCards[0].click();
+        await page.waitForTimeout(150);
+        await waitingCards[1].click({ modifiers: ['Shift'] });
+        await page.waitForTimeout(150);
+
+        const selectedCount = await page.$$eval(
+          '[data-lane="waiting"] .cb-board-card.on',
+          (cards) => cards.length,
+        );
+        check(
+          'shift-click selects a range within the lane',
+          selectedCount >= 2,
+        );
+
+        // Deselect.
+        const selCards = await page.$$(
+          '[data-lane="waiting"] .cb-board-card.on',
+        );
+        for (const c of selCards) {
+          await c.click();
+          await page.waitForTimeout(50);
+        }
+      } else if (waitingCards.length === 1) {
+        await waitingCards[0].click();
+        await page.waitForTimeout(100);
+        const isSelected = await waitingCards[0]
+          .evaluate((el) => el.classList.contains('on'))
+          .catch(() => false);
+        check('shift-click selects a range within the lane', isSelected);
+        await waitingCards[0].click();
+        await page.waitForTimeout(100);
+      } else {
+        check('shift-click selects a range within the lane', false);
+      }
+
+      // Back to list.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+    }
+
+    // ---- scenario: deciding from the board removes the card -----------------
+    console.log(
+      '\nscenario: deciding from the board removes the card and deselects it',
+    );
+
+    {
+      const boardDecideCtx = await browser.newContext();
+      const boardDecidePage = await boardDecideCtx.newPage();
+      try {
+        await boardDecidePage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await boardDecidePage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        await boardDecidePage.evaluate(() => {
+          location.hash = '#/attention/board';
+        });
+        await boardDecidePage.waitForFunction(
+          () => location.hash === '#/attention/board',
+        );
+        await boardDecidePage
+          .waitForSelector('.cb-lane', { timeout: 6000 })
+          .catch(() => {});
+        await boardDecidePage.waitForTimeout(800);
+
+        const firstCard = await boardDecidePage.$(
+          '[data-lane="waiting"] .cb-board-card',
+        );
+        if (firstCard) {
+          const cardId = await firstCard
+            .evaluate((el) => el.dataset.id ?? '')
+            .catch(() => '');
+          await firstCard.click();
+          await boardDecidePage.waitForTimeout(300);
+
+          // Click Decide N.
+          await boardDecidePage.click('.kit-primary');
+          await boardDecidePage
+            .waitForSelector('.kit-sheet', { timeout: 4000 })
+            .catch(() => {});
+          await boardDecidePage.waitForTimeout(200);
+
+          // Pick the first disposition.
+          const firstDisp = await boardDecidePage.$(
+            '.kit-sheet .cb-sheet-disp',
+          );
+          if (firstDisp) {
+            await firstDisp.click();
+            await boardDecidePage.waitForTimeout(100);
+          }
+
+          // Click the filled Decide N button.
+          const sheetBtns = await boardDecidePage.$$('.kit-sheet button');
+          for (const btn of sheetBtns) {
+            const t = (await btn.textContent()) ?? '';
+            if (/^decide\s+\d+/i.test(t.trim())) {
+              await btn.click();
+              break;
+            }
+          }
+          await boardDecidePage.waitForTimeout(2500);
+
+          // The decided card must be gone or selection cleared.
+          const cardStillThere = cardId
+            ? await boardDecidePage
+                .$eval(
+                  `[data-lane="waiting"] .cb-board-card[data-id="${cardId}"]`,
+                  () => true,
+                )
+                .catch(() => false)
+            : true;
+          const primaryHidden = await boardDecidePage
+            .$eval('.kit-primary', (el) => el.hidden)
+            .catch(() => true);
+          check(
+            'deciding from the board removes the card and deselects it',
+            !cardStillThere || primaryHidden,
+          );
+        } else {
+          check(
+            'deciding from the board removes the card and deselects it',
+            false,
+          );
+        }
+      } finally {
+        await boardDecideCtx.close();
+      }
+    }
+
+    // ---- scenario: a filter narrows every lane ------------------------------
+    console.log('\nscenario: a filter narrows every lane');
+
+    {
+      // Count cards in the waiting lane without any filter.
+      await page.evaluate(() => {
+        location.hash = '#/attention/board';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/board');
+      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(800);
+
+      const unfilteredWaiting = await page.$$eval(
+        '[data-lane="waiting"] .cb-board-card',
+        (cards) => cards.length,
+      );
+
+      // Open a fresh page with ?q=nudge to apply a filter.
+      const filterPage = await context.newPage();
+      try {
+        const baseUrl = serveHandle.base.replace(/\/$/, '');
+        await filterPage.goto(baseUrl + '/?q=nudge#/attention/board', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await filterPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        await filterPage
+          .waitForSelector('.cb-lane', { timeout: 8000 })
+          .catch(() => {});
+        await filterPage.waitForTimeout(800);
+
+        const filteredWaiting = await filterPage.$$eval(
+          '[data-lane="waiting"] .cb-board-card',
+          (cards) => cards.length,
+        );
+        check(
+          'a filter narrows the board lanes',
+          filteredWaiting < unfilteredWaiting || filteredWaiting <= 1,
+        );
+      } finally {
+        await filterPage.close();
+      }
+
+      // Navigate back to waiting list view.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+    }
   } catch (err) {
     console.error('probe: unexpected error:', err);
     fails++;

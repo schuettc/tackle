@@ -206,7 +206,7 @@ function boot() {
 import {
   list,
   createSelection,
-  h as h4
+  h as h5
 } from "/_kit/kit.js";
 
 // item.ts
@@ -656,8 +656,182 @@ function renderItem(ctx, detail) {
   return el;
 }
 
-// attention.ts
+// board.ts
+import { h as h4 } from "/_kit/kit.js";
 var PAGE_SIZE = 200;
+var LANES = [
+  { id: "waiting", label: "waiting on you" },
+  { id: "proposed", label: "proposed" },
+  { id: "due", label: "due" },
+  { id: "new", label: "new" }
+];
+function ageOf(it) {
+  if (!it.created_at) return "";
+  const ms = Date.now() - new Date(it.created_at).getTime();
+  const days = Math.floor(ms / 864e5);
+  if (days === 0) return "today";
+  if (days === 1) return "1d";
+  return `${days}d`;
+}
+function makeBoard(ctx, sel, filters) {
+  const el = h4("div", { class: "cb-board" });
+  const laneState = new Map(
+    LANES.map(({ id }) => [id, { items: [], total: 0 }])
+  );
+  const laneRowsEl = /* @__PURE__ */ new Map();
+  const laneMoreEl = /* @__PURE__ */ new Map();
+  for (const { id, label } of LANES) {
+    const headEl = h4("div", { class: "cb-lane-head" });
+    headEl.textContent = label;
+    const rowsEl = h4("div", { class: "cb-lane-rows" });
+    laneRowsEl.set(id, rowsEl);
+    const moreEl = h4("button", { class: "cb-lane-more", hidden: true });
+    moreEl.textContent = "show more";
+    moreEl.addEventListener("click", () => {
+      void loadMore(id);
+    });
+    laneMoreEl.set(id, moreEl);
+    el.append(
+      h4("div", { class: "cb-lane", "data-lane": id }, headEl, rowsEl, moreEl)
+    );
+  }
+  function buildCard(it, laneId) {
+    const selected = sel.has(it.key);
+    const box = h4("span", { class: "kit-box" + (selected ? " on" : "") });
+    const kk = h4("div", { class: "cb-card-kk" });
+    kk.textContent = `${it.kind} · ${it.key}`;
+    const titleEl = h4("div", { class: "cb-card-title" });
+    titleEl.textContent = it.title ?? it.key;
+    const card2 = h4(
+      "div",
+      {
+        class: "cb-board-card" + (selected ? " on" : ""),
+        tabindex: "0",
+        "data-id": it.key
+      },
+      h4("div", { class: "cb-card-head" }, box, kk),
+      titleEl
+    );
+    const age = ageOf(it);
+    if (age) {
+      const ageEl = h4("div", { class: "cb-card-age" });
+      ageEl.textContent = age;
+      card2.append(ageEl);
+    }
+    if (it.proposal) {
+      const propEl = h4("div", { class: "cb-card-prop" });
+      propEl.textContent = `${it.proposal.disposition} proposed`;
+      card2.append(propEl);
+    }
+    card2.addEventListener("click", (e) => {
+      const state = laneState.get(laneId);
+      const orderedIds = state?.items.map((i) => i.key) ?? [];
+      if (e.shiftKey) {
+        const anchor = sel.anchor();
+        if (anchor !== null) {
+          sel.range(anchor, it.key, orderedIds);
+        } else {
+          sel.toggle(it.key);
+        }
+      } else {
+        sel.toggle(it.key);
+      }
+    });
+    return card2;
+  }
+  function repaintLane(laneId) {
+    const rowsEl = laneRowsEl.get(laneId);
+    const moreEl = laneMoreEl.get(laneId);
+    if (!rowsEl || !moreEl) return;
+    const state = laneState.get(laneId);
+    rowsEl.replaceChildren(...state.items.map((it) => buildCard(it, laneId)));
+    const remaining = state.total - state.items.length;
+    if (remaining > 0) {
+      moreEl.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
+      moreEl.hidden = false;
+    } else {
+      moreEl.hidden = true;
+    }
+  }
+  function repaintSelection() {
+    for (const { id: laneId } of LANES) {
+      const rowsEl = laneRowsEl.get(laneId);
+      if (!rowsEl) continue;
+      const state = laneState.get(laneId);
+      const cards = rowsEl.querySelectorAll(".cb-board-card");
+      cards.forEach((card2, i) => {
+        const it = state.items[i];
+        if (!it) return;
+        const selected = sel.has(it.key);
+        card2.classList.toggle("on", selected);
+        card2.querySelector(".kit-box")?.classList.toggle("on", selected);
+      });
+    }
+  }
+  async function fetchLane(laneId) {
+    const q = {
+      ...filters(),
+      view: laneId,
+      offset: "0",
+      limit: String(PAGE_SIZE)
+    };
+    const data = await ctx.api.get("/items", q);
+    return { items: data.items ?? [], total: data.total };
+  }
+  async function refresh() {
+    const results = await Promise.allSettled(
+      LANES.map(({ id }) => fetchLane(id))
+    );
+    const seenIds = /* @__PURE__ */ new Set();
+    for (let i = 0; i < LANES.length; i++) {
+      const { id } = LANES[i];
+      const result = results[i];
+      if (result.status === "fulfilled") {
+        const { items, total } = result.value;
+        const unique = items.filter((it) => !seenIds.has(it.key));
+        unique.forEach((it) => seenIds.add(it.key));
+        laneState.set(id, { items: unique, total });
+      }
+      repaintLane(id);
+    }
+  }
+  async function loadMore(laneId) {
+    const state = laneState.get(laneId);
+    if (state.items.length >= state.total) return;
+    const q = {
+      ...filters(),
+      view: laneId,
+      offset: String(state.items.length),
+      limit: String(PAGE_SIZE)
+    };
+    try {
+      const data = await ctx.api.get("/items", q);
+      const existingKeys = new Set(
+        LANES.flatMap(
+          ({ id }) => id === laneId ? [] : laneState.get(id)?.items.map((it) => it.key) ?? []
+        )
+      );
+      const more = (data.items ?? []).filter((it) => !existingKeys.has(it.key));
+      laneState.set(laneId, {
+        items: [...state.items, ...more],
+        total: data.total
+      });
+      repaintLane(laneId);
+    } catch {
+    }
+  }
+  const unsubSel = sel.onChange(() => {
+    repaintSelection();
+  });
+  void refresh();
+  function destroy() {
+    unsubSel();
+  }
+  return { el, refresh, destroy };
+}
+
+// attention.ts
+var PAGE_SIZE2 = 200;
 var selection = createSelection();
 var VIEWS = [
   { id: "waiting", label: "waiting on you" },
@@ -700,7 +874,7 @@ function setUrlQ(q) {
   const newUrl = location.pathname + (qs ? "?" + qs : "") + location.hash;
   history.replaceState(null, "", newUrl);
 }
-function ageOf(it) {
+function ageOf2(it) {
   if (!it.created_at) return "";
   const ms = Date.now() - new Date(it.created_at).getTime();
   const days = Math.floor(ms / 864e5);
@@ -709,7 +883,7 @@ function ageOf(it) {
   return `${days}d`;
 }
 function makeAttention(ctx) {
-  const readEl = h4("div", { class: "kit-read" });
+  const readEl = h5("div", { class: "kit-read" });
   let offset = 0;
   let totalItems = 0;
   let loadedItems = [];
@@ -718,13 +892,14 @@ function makeAttention(ctx) {
   let footEl = null;
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
+  let boardHandle = null;
   function buildFoot() {
-    const selCount = h4(
+    const selCount = h5(
       "span",
       { class: "cb-sel-count", hidden: true },
       "0 selected"
     );
-    const selAllBtn = h4(
+    const selAllBtn = h5(
       "button",
       {
         class: "cb-sel-all",
@@ -734,12 +909,12 @@ function makeAttention(ctx) {
       },
       "select all 0 in view"
     );
-    footEl = h4(
+    footEl = h5(
       "div",
       { class: "cb-foot" },
       selCount,
       selAllBtn,
-      h4(
+      h5(
         "button",
         {
           class: "cb-foot-more",
@@ -749,7 +924,7 @@ function makeAttention(ctx) {
             void loadMore();
           }
         },
-        `show ${PAGE_SIZE} more`
+        `show ${PAGE_SIZE2} more`
       )
     );
     return footEl;
@@ -788,7 +963,7 @@ function makeAttention(ctx) {
     },
     row(it) {
       const kindKey = `${it.kind} · ${it.key}`;
-      const age = ageOf(it);
+      const age = ageOf2(it);
       const proposal = it.proposal ? `${it.proposal.disposition} proposed` : void 0;
       return {
         id: it.key,
@@ -846,7 +1021,7 @@ function makeAttention(ctx) {
     const p = {
       view: filters.view,
       offset: String(pageOffset),
-      limit: String(PAGE_SIZE)
+      limit: String(PAGE_SIZE2)
     };
     if (filters.kind) p["kind"] = filters.kind;
     if (filters.repo) p["repo"] = filters.repo;
@@ -903,7 +1078,7 @@ function makeAttention(ctx) {
     if (btn) {
       const remaining = totalItems - offset;
       if (remaining > 0) {
-        btn.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
+        btn.textContent = `show ${Math.min(PAGE_SIZE2, remaining)} more`;
         btn.hidden = false;
       } else {
         btn.hidden = true;
@@ -957,10 +1132,47 @@ function makeAttention(ctx) {
     applyCounts(s.counts);
   }).catch(() => {
   });
+  function getBoardFilters() {
+    const p = {};
+    if (filters.kind) p["kind"] = filters.kind;
+    if (filters.repo) p["repo"] = filters.repo;
+    if (filters.relation) p["relation"] = filters.relation;
+    if (filters.bot) p["bot"] = filters.bot;
+    if (filters.age) p["age"] = filters.age;
+    if (filters.rule) p["rule"] = filters.rule;
+    if (filters.q) p["q"] = filters.q;
+    return p;
+  }
+  function mountBoard() {
+    if (boardHandle) return;
+    const kitRows = handle.el.querySelector(".kit-rows");
+    const kitFoot = handle.el.querySelector(".kit-foot");
+    if (kitRows) kitRows.hidden = true;
+    if (kitFoot) kitFoot.hidden = true;
+    boardHandle = makeBoard(ctx, selection, getBoardFilters);
+    handle.el.append(boardHandle.el);
+  }
+  function unmountBoard() {
+    if (!boardHandle) return;
+    boardHandle.destroy();
+    boardHandle.el.remove();
+    boardHandle = null;
+    const kitRows = handle.el.querySelector(".kit-rows");
+    const kitFoot = handle.el.querySelector(".kit-foot");
+    if (kitRows) kitRows.hidden = false;
+    if (kitFoot) kitFoot.hidden = false;
+  }
   function show(sub) {
     if (sub === "board") {
+      const urlQ2 = getUrlQ();
+      if (urlQ2 !== filters.q) {
+        filters.q = urlQ2;
+        handle.setSearch(urlQ2);
+      }
+      mountBoard();
       return;
     }
+    unmountBoard();
     const urlQ = getUrlQ();
     if (urlQ !== filters.q) {
       filters.q = urlQ;
@@ -991,9 +1203,17 @@ function makeAttention(ctx) {
       if (type === "index") {
         const s = data;
         applyCounts(s?.counts ?? null);
-        void reload();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
       } else if (type === "decided" || type === "proposals") {
-        void reload();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
       }
     },
     primary() {
