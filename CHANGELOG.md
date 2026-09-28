@@ -4,7 +4,14 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.4] — 2026-09-28
+
+### Changed
+- tools-common v0.8.2: `scratch help <cmd>` and `scratch <cmd> -h` print the
+  command's one-line summary under the usage line, and `scratch man` escapes
+  double quotes and a leading `.` correctly.
+
+## [0.5.3] — 2026-09-28
 
 ### Changed
 - The pad key's session id now comes from tools-common's shared harness rule.
@@ -15,6 +22,26 @@ All notable changes to `scratch` are documented here. The format follows
   The `@harness_session` tmux-option fallback is unchanged.
 - Pads are written through tools-common's `WriteFileAtomic`: same fsync and
   kept-temp-on-rename-failure behaviour, temp files now named `.<pad>-*.tmp`.
+
+## [0.5.2] — 2026-09-04
+
+### Changed
+- `path`, `print` and `append` have full help (`-h`, `help <command>`, `man`,
+  `commands --json`), and exit codes follow the family standard: 0 ok,
+  1 runtime error, 2 usage error (e.g. `append` with no text).
+
+## [0.5.1] — 2026-08-30
+
+### Added
+- `scratch version` in the family format and `scratch update`, which
+  self-updates from tackle.tools/dl (via tools-common).
+
+## [0.5.0] — 2026-08-30
+
+### Changed
+- scratch moved into the tackle monorepo (`cmd/scratch`) and is released with
+  prefixed tags (`scratch/vX.Y.Z`); binaries are published to
+  tackle.tools/dl.
 
 ## [0.4.0] — 2026-08-28
 
