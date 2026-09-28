@@ -23,6 +23,7 @@ import type {
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
+import { wireSelection } from './decide.ts';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
@@ -113,13 +114,33 @@ export function makeAttention(ctx: Ctx): Section {
   let loading = false;
   let footEl: HTMLElement | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let totalItemsForView = 0; // updated after every load; used by select-all
 
-  // ---- foot "show 200 more" control ----------------------------------------
+  // ---- foot: show-more + selection count + select all in view ---------------
 
   function buildFoot(): HTMLElement {
+    const selCount = h(
+      'span',
+      { class: 'cb-sel-count', hidden: true },
+      '0 selected',
+    );
+
+    const selAllBtn = h(
+      'button',
+      {
+        class: 'cb-sel-all',
+        onclick() {
+          void selectAllInView();
+        },
+      },
+      'select all in view',
+    );
+
     footEl = h(
       'div',
       { class: 'cb-foot' },
+      selCount,
+      selAllBtn,
       h(
         'button',
         {
@@ -132,6 +153,24 @@ export function makeAttention(ctx: Ctx): Section {
       ),
     );
     return footEl;
+  }
+
+  // selectAllInView fetches every id in the current view and calls selectAll()
+  // so the selection covers the whole view, even across pages.
+  async function selectAllInView(): Promise<void> {
+    let allIds: string[] = loadedItems.map((it) => it.key);
+    if (totalItemsForView > loadedItems.length) {
+      try {
+        const data = await ctx.api.get<ItemsView>('/items', {
+          ...buildQuery(0),
+          limit: String(totalItemsForView),
+        });
+        allIds = (data.items ?? []).map((it) => it.key);
+      } catch {
+        // Non-fatal: select only what's loaded.
+      }
+    }
+    handle.selectAll(allIds);
   }
 
   // ---- list -----------------------------------------------------------------
@@ -190,19 +229,7 @@ export function makeAttention(ctx: Ctx): Section {
       ctx.route.go('item', it.key);
       void openDetail(it.key);
     },
-    onSelect(selected: ItemView[]) {
-      const n = selected.length;
-      ctx.setPrimary(
-        n > 0
-          ? {
-              label: `decide ${n}`,
-              run() {
-                // Task 4 wires the decide sheet; placeholder for now.
-              },
-            }
-          : null,
-      );
-    },
+    // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot(),
   });
 
@@ -263,6 +290,7 @@ export function makeAttention(ctx: Ctx): Section {
       updateFilterChips();
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
       totalItems = data.total;
+      totalItemsForView = data.total;
       loadedItems = data.items ?? [];
       offset = loadedItems.length;
       handle.setItems(loadedItems);
@@ -283,6 +311,7 @@ export function makeAttention(ctx: Ctx): Section {
       loadedItems = [...loadedItems, ...next];
       offset = loadedItems.length;
       totalItems = data.total;
+      totalItemsForView = data.total;
       handle.setItems(loadedItems);
       updateFoot();
     } catch {
@@ -339,6 +368,9 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
   void reload();
+
+  // Wire selection → primary button and foot count (Task 4).
+  wireSelection(ctx, handle);
 
   // Register / to focus the search field (kit v0.11.0).
   // createKeys() in app.ts is called before sections are created, so we

@@ -206,11 +206,227 @@ function boot() {
 import {
   list,
   createSelection,
-  h as h3
+  h as h4
 } from "/_kit/kit.js";
 
 // item.ts
-import { h as h2, facts, card, fold, buttons } from "/_kit/kit.js";
+import { h as h3, facts, card, fold } from "/_kit/kit.js";
+
+// decide.ts
+import {
+  sheet,
+  h as h2,
+  noteField
+} from "/_kit/kit.js";
+var KIND_ALLOWED = {
+  repo: ["keep", "archive", "delete", "wait", "watch", "ignore"],
+  pr: ["keep", "close", "merge", "wait", "watch", "ignore"],
+  issue: ["keep", "close", "wait", "watch", "ignore"],
+  branch: ["keep", "delete", "wait", "watch", "ignore"],
+  worktree: ["keep", "delete", "wait", "ignore"]
+};
+var FALLBACK_ALLOWED = ["keep", "close", "wait", "watch", "ignore"];
+var NEEDS_UNTIL = /* @__PURE__ */ new Set(["wait", "watch"]);
+var DANGER_DISPS = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
+function allowedForKind(kind) {
+  return KIND_ALLOWED[kind] ?? FALLBACK_ALLOWED;
+}
+function allowedForItems(items) {
+  if (items.length === 0) return FALLBACK_ALLOWED;
+  const sets = items.map((it) => new Set(allowedForKind(it.kind)));
+  const first = [...sets[0] ?? new Set(FALLBACK_ALLOWED)];
+  return first.filter((d) => sets.every((s) => s.has(d)));
+}
+function validateUntil(s) {
+  const v = s.trim();
+  if (!v) {
+    return "until is required for wait/watch — e.g. date(2026-12-01) or inactive(90d)";
+  }
+  const open = v.indexOf("(");
+  if (open <= 0 || !v.endsWith(")")) {
+    return "until must be one of: date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d), released(<repo>)";
+  }
+  const op = v.slice(0, open);
+  const arg = v.slice(open + 1, v.length - 1).trim();
+  if (!["date", "merged", "closed", "inactive", "released"].includes(op)) {
+    return `unknown until op "${op}": use date, merged, closed, inactive, or released`;
+  }
+  if (op === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+    return "date must be YYYY-MM-DD";
+  }
+  return null;
+}
+function openDecideSheet(ctx, keys, allowed, onDone) {
+  const n = keys.length;
+  let disposition = "";
+  let until = "";
+  let note = "";
+  let submitting = false;
+  let sh = null;
+  const previewEl = h2("p", { class: "cb-sheet-preview" });
+  previewEl.textContent = `${n} item${n === 1 ? "" : "s"}`;
+  function updatePreview() {
+    previewEl.textContent = `${disposition || "…"} ${n} item${n === 1 ? "" : "s"}`;
+  }
+  const untilInputEl = h2("input", {
+    type: "text",
+    class: "cb-sheet-input",
+    placeholder: "date(YYYY-MM-DD), merged(<pr>), inactive(90d) …"
+  });
+  untilInputEl.addEventListener("input", () => {
+    until = untilInputEl.value;
+  });
+  const untilRow = h2(
+    "div",
+    { class: "cb-sheet-row" },
+    h2("label", { class: "cb-sheet-label" }, "until"),
+    untilInputEl
+  );
+  untilRow.hidden = true;
+  const noteInputEl = noteField({
+    placeholder: "optional note",
+    onCommit(v) {
+      note = v;
+    }
+  });
+  const noteRow = h2(
+    "div",
+    { class: "cb-sheet-row" },
+    h2("label", { class: "cb-sheet-label" }, "note"),
+    noteInputEl
+  );
+  const errEl = h2("p", { class: "cb-sheet-err" });
+  errEl.hidden = true;
+  const dispContainer = h2("div", { class: "cb-sheet-disps" });
+  for (const d of allowed) {
+    const btn = h2(
+      "button",
+      {
+        type: "button",
+        class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
+        onclick() {
+          disposition = d;
+          updatePreview();
+          untilRow.hidden = !NEEDS_UNTIL.has(d);
+          errEl.hidden = true;
+          for (const el of dispContainer.querySelectorAll(".cb-sheet-disp")) {
+            el.classList.toggle("on", el === btn);
+          }
+        }
+      },
+      d
+    );
+    dispContainer.append(btn);
+  }
+  const body = h2(
+    "div",
+    { class: "cb-sheet-body" },
+    dispContainer,
+    untilRow,
+    noteRow,
+    previewEl,
+    errEl
+  );
+  async function doDecide() {
+    if (submitting) return;
+    if (!disposition) {
+      errEl.textContent = "select a disposition";
+      errEl.hidden = false;
+      return;
+    }
+    if (NEEDS_UNTIL.has(disposition)) {
+      const currentUntil = untilInputEl.value.trim();
+      const err = validateUntil(currentUntil);
+      if (err) {
+        errEl.textContent = err;
+        errEl.hidden = false;
+        return;
+      }
+      until = currentUntil;
+    } else {
+      until = "";
+    }
+    submitting = true;
+    errEl.hidden = true;
+    try {
+      const payload = { keys, disposition };
+      if (until) payload["until"] = until;
+      if (note) payload["note"] = note;
+      const result = await ctx.api.post("/decide", payload);
+      if (result.errors && result.errors.length > 0) {
+        errEl.textContent = result.errors.join("; ");
+        errEl.hidden = false;
+        submitting = false;
+        return;
+      }
+      sh?.close();
+      onDone(keys);
+    } catch (err) {
+      errEl.textContent = err instanceof Error ? err.message : "decide failed — try again";
+      errEl.hidden = false;
+      submitting = false;
+    }
+  }
+  sh = sheet({
+    title: `decide ${n} item${n === 1 ? "" : "s"}`,
+    body,
+    actions: [
+      {
+        label: `Decide ${n}`,
+        fill: true,
+        run() {
+          void doDecide();
+        }
+      }
+    ],
+    onClose() {
+      sh = null;
+    }
+  });
+}
+function wireSelection(ctx, listHandle) {
+  function openSheetForSelection() {
+    const keys = listHandle.selectedIds();
+    if (keys.length === 0) return;
+    const selItems = listHandle.selected();
+    const allowed = allowedForItems(selItems);
+    openDecideSheet(ctx, keys, allowed, (decided) => {
+      listHandle.deselect(decided);
+    });
+  }
+  listHandle.selection.onChange((ids) => {
+    const countEl = listHandle.el.querySelector(".cb-sel-count");
+    if (countEl instanceof HTMLElement) {
+      if (ids.length > 0) {
+        countEl.textContent = `${ids.length} selected`;
+        countEl.hidden = false;
+      } else {
+        countEl.hidden = true;
+      }
+    }
+    if (ids.length === 0) {
+      ctx.setPrimary(null);
+    } else {
+      ctx.setPrimary({
+        label: `Decide ${ids.length}`,
+        run: openSheetForSelection
+      });
+    }
+  });
+  try {
+    ctx.keys.register({
+      keys: "d",
+      label: "decide selection",
+      group: "page",
+      run() {
+        openSheetForSelection();
+      }
+    });
+  } catch {
+  }
+}
+
+// item.ts
 var BODY_CAP = 600;
 function fmtDate(s) {
   if (!s) return "—";
@@ -232,88 +448,94 @@ function fmtTime(s) {
   });
 }
 function renderEvidence(evs) {
-  const section = h2("section", { class: "cb-evidence" });
-  section.append(h2("h2", { class: "cb-section-label" }, "evidence"));
+  const section = h3("section", { class: "cb-evidence" });
+  section.append(h3("h2", { class: "cb-section-label" }, "evidence"));
   if (evs.length === 0) {
-    section.append(h2("p", { class: "cb-empty" }, "no evidence"));
+    section.append(h3("p", { class: "cb-empty" }, "no evidence"));
     return section;
   }
   for (const ev of evs) {
-    const by = ev.author ? h2("span", { class: "cb-muted" }, ` by ${ev.author}`) : null;
-    const time = h2(
+    const by = ev.author ? h3("span", { class: "cb-muted" }, ` by ${ev.author}`) : null;
+    const time = h3(
       "span",
       { class: "cb-muted" },
       ` · ${fmtDate(ev.created_at)}`
     );
-    const item = h2(
+    const item = h3(
       "div",
       { class: "cb-evidence-item" },
-      h2("p", { class: "cb-evidence-text" }, ev.text),
-      h2("p", { class: "cb-evidence-meta" }, ...by ? [by] : [], time)
+      h3("p", { class: "cb-evidence-text" }, ev.text),
+      h3("p", { class: "cb-evidence-meta" }, ...by ? [by] : [], time)
     );
     section.append(item);
   }
   return section;
 }
 function renderHistory(events, decisions) {
-  const section = h2("section", { class: "cb-history" });
-  section.append(h2("h2", { class: "cb-section-label" }, "history"));
+  const section = h3("section", { class: "cb-history" });
+  section.append(h3("h2", { class: "cb-section-label" }, "history"));
   if (events.length === 0 && decisions.length === 0) {
-    section.append(h2("p", { class: "cb-empty" }, "no history"));
+    section.append(h3("p", { class: "cb-empty" }, "no history"));
     return section;
   }
   for (const entry of decisions) {
     section.append(
-      h2(
+      h3(
         "div",
         { class: "cb-history-item cb-history-decision" },
-        h2("span", { class: "cb-history-time" }, fmtDate(entry.Time)),
-        h2("span", { class: "cb-history-msg" }, entry.Subject)
+        h3("span", { class: "cb-history-time" }, fmtDate(entry.Time)),
+        h3("span", { class: "cb-history-msg" }, entry.Subject)
       )
     );
   }
   for (const ev of events) {
     const label = ev.actions && ev.actions.length > 0 ? ev.actions.map((a) => a.hook ?? "").filter(Boolean).join(", ") : ev.hook ?? ev.src;
     section.append(
-      h2(
+      h3(
         "div",
         { class: "cb-history-item" },
-        h2("span", { class: "cb-history-time" }, fmtTime(ev.ts)),
-        h2("span", { class: "cb-history-msg" }, label)
+        h3("span", { class: "cb-history-time" }, fmtTime(ev.ts)),
+        h3("span", { class: "cb-history-msg" }, label)
       )
     );
   }
   return section;
 }
-function renderProposalCard(p) {
+function renderProposalCard(ctx, p, key, kind) {
   const stateLabel = p.state === "pending" ? "pending proposal" : `proposal · ${p.state}`;
   const lines = [
-    h2(
+    h3(
       "div",
       { class: "cb-proposal-detail" },
-      h2("span", { class: "cb-label" }, "disposition "),
-      h2("strong", null, p.disposition),
-      p.until ? h2("span", null, ` until ${fmtDate(p.until)}`) : null,
-      p.note ? h2("span", null, ` · ${p.note}`) : null
+      h3("span", { class: "cb-label" }, "disposition "),
+      h3("strong", null, p.disposition),
+      p.until ? h3("span", null, ` until ${fmtDate(p.until)}`) : null,
+      p.note ? h3("span", null, ` · ${p.note}`) : null
     )
   ];
-  const bodyEl = h2("div", { class: "cb-proposal-body" }, ...lines);
+  const bodyEl = h3("div", { class: "cb-proposal-body" }, ...lines);
   const cardActions = [
     {
       label: "accept",
       fill: true,
       run() {
+        void ctx.api.post("/proposals/accept", { ids: [p.id] }).catch(() => {
+        });
       }
     },
     {
       label: "change…",
       run() {
+        openDecideSheet(ctx, [key], allowedForKind(kind), () => {
+        });
       }
     },
     {
       label: "reject",
       danger: true,
       run() {
+        void ctx.api.post("/proposals/reject", { ids: [p.id] }).catch(() => {
+        });
       }
     }
   ];
@@ -324,28 +546,39 @@ function renderProposalCard(p) {
     actions: cardActions
   });
 }
-function renderDecideSection() {
-  const section = h2("section", { class: "cb-decide" });
-  section.append(h2("h2", { class: "cb-section-label" }, "decide"));
-  section.append(
-    buttons([
-      { label: "keep", run() {
-      } },
-      { label: "close", run() {
-      } },
-      { label: "ignore", run() {
-      } }
-    ])
-  );
+var DANGER_DISPS_ITEM = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
+var NEEDS_ELLIPSIS = /* @__PURE__ */ new Set(["wait", "watch"]);
+function renderDecideSection(ctx, key, kind) {
+  const section = h3("section", { class: "cb-decide" });
+  section.append(h3("h2", { class: "cb-section-label" }, "decide"));
+  const allowed = allowedForKind(kind);
+  const dispRow = h3("div", { class: "cb-decide-btns" });
+  for (const d of allowed) {
+    const label = NEEDS_ELLIPSIS.has(d) ? `${d}…` : d;
+    dispRow.append(
+      h3(
+        "button",
+        {
+          type: "button",
+          class: "cb-sheet-disp" + (DANGER_DISPS_ITEM.has(d) ? " cb-sheet-disp--danger" : ""),
+          onclick() {
+            openDecideSheet(ctx, [key], allowed, () => {
+            });
+          }
+        },
+        label
+      )
+    );
+  }
+  section.append(dispRow);
   return section;
 }
 function renderItem(ctx, detail) {
-  void ctx;
   const it = detail.item;
-  const el = h2("article", { class: "cb-item" });
+  const el = h3("article", { class: "cb-item" });
   const kickerParts = [it.kind, it.key, it.relation].filter(Boolean).join(" · ");
-  el.append(h2("p", { class: "cb-kicker" }, kickerParts));
-  el.append(h2("h1", { class: "cb-title" }, it.title ?? it.key));
+  el.append(h3("p", { class: "cb-kicker" }, kickerParts));
+  el.append(h3("h1", { class: "cb-title" }, it.title ?? it.key));
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
   if (it.status) factPairs.push(["status", it.status]);
@@ -360,17 +593,17 @@ function renderItem(ctx, detail) {
   if (it.body) {
     const excerpt = it.body.slice(0, BODY_CAP);
     const rest = it.body.slice(BODY_CAP);
-    const bodyWrap = h2("div", { class: "cb-body" });
-    bodyWrap.append(h2("p", null, excerpt));
+    const bodyWrap = h3("div", { class: "cb-body" });
+    bodyWrap.append(h3("p", null, excerpt));
     if (rest) {
-      bodyWrap.append(fold("read more", h2("p", null, rest)));
+      bodyWrap.append(fold("read more", h3("p", null, rest)));
     }
     el.append(bodyWrap);
   }
   if (it.proposal) {
-    el.append(renderProposalCard(it.proposal));
+    el.append(renderProposalCard(ctx, it.proposal, it.key, it.kind));
   }
-  el.append(renderDecideSection());
+  el.append(renderDecideSection(ctx, it.key, it.kind));
   el.append(renderEvidence(detail.evidence ?? []));
   el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
   return el;
@@ -429,7 +662,7 @@ function ageOf(it) {
   return `${days}d`;
 }
 function makeAttention(ctx) {
-  const readEl = h3("div", { class: "kit-read" });
+  const readEl = h4("div", { class: "kit-read" });
   let offset = 0;
   let totalItems = 0;
   let loadedItems = [];
@@ -437,11 +670,29 @@ function makeAttention(ctx) {
   let loading = false;
   let footEl = null;
   let searchDebounceTimer = null;
+  let totalItemsForView = 0;
   function buildFoot() {
-    footEl = h3(
+    const selCount = h4(
+      "span",
+      { class: "cb-sel-count", hidden: true },
+      "0 selected"
+    );
+    const selAllBtn = h4(
+      "button",
+      {
+        class: "cb-sel-all",
+        onclick() {
+          void selectAllInView();
+        }
+      },
+      "select all in view"
+    );
+    footEl = h4(
       "div",
       { class: "cb-foot" },
-      h3(
+      selCount,
+      selAllBtn,
+      h4(
         "button",
         {
           class: "cb-foot-more",
@@ -453,6 +704,20 @@ function makeAttention(ctx) {
       )
     );
     return footEl;
+  }
+  async function selectAllInView() {
+    let allIds = loadedItems.map((it) => it.key);
+    if (totalItemsForView > loadedItems.length) {
+      try {
+        const data = await ctx.api.get("/items", {
+          ...buildQuery(0),
+          limit: String(totalItemsForView)
+        });
+        allIds = (data.items ?? []).map((it) => it.key);
+      } catch {
+      }
+    }
+    handle.selectAll(allIds);
   }
   const handle = list({
     label: "attention",
@@ -503,16 +768,7 @@ function makeAttention(ctx) {
       ctx.route.go("item", it.key);
       void openDetail(it.key);
     },
-    onSelect(selected) {
-      const n = selected.length;
-      ctx.setPrimary(
-        n > 0 ? {
-          label: `decide ${n}`,
-          run() {
-          }
-        } : null
-      );
-    },
+    // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot()
   });
   const filterCycles = {
@@ -561,6 +817,7 @@ function makeAttention(ctx) {
       updateFilterChips();
       const data = await ctx.api.get("/items", buildQuery(0));
       totalItems = data.total;
+      totalItemsForView = data.total;
       loadedItems = data.items ?? [];
       offset = loadedItems.length;
       handle.setItems(loadedItems);
@@ -579,6 +836,7 @@ function makeAttention(ctx) {
       loadedItems = [...loadedItems, ...next];
       offset = loadedItems.length;
       totalItems = data.total;
+      totalItemsForView = data.total;
       handle.setItems(loadedItems);
       updateFoot();
     } catch {
@@ -625,6 +883,7 @@ function makeAttention(ctx) {
     }
   }
   void reload();
+  wireSelection(ctx, handle);
   if (typeof handle.focusSearch === "function") {
     const focusFn = handle.focusSearch.bind(handle);
     try {

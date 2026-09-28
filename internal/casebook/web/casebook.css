@@ -77,6 +77,126 @@
   flex-wrap: wrap;
 }
 
+/* ---- decide sheet body (.kit-float .kit-sheet) body elements -------------- */
+
+/* Disposition picker */
+.cb-sheet-disps {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.cb-sheet-disp {
+  font: 13px var(--kit-mono);
+  color: var(--kit-fg);
+  background: transparent;
+  border: 1.5px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 4px 14px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.cb-sheet-disp:hover {
+  border-color: var(--kit-muted);
+}
+
+.cb-sheet-disp.on {
+  background: var(--kit-signal-soft);
+  border-color: var(--kit-signal);
+  color: var(--kit-signal);
+}
+
+.cb-sheet-disp--danger {
+  color: var(--kit-danger);
+}
+
+.cb-sheet-disp--danger.on {
+  background: rgba(var(--kit-danger-rgb, 194 42 42) / 0.1);
+  border-color: var(--kit-danger);
+}
+
+/* Row: label + input */
+.cb-sheet-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.cb-sheet-label {
+  font: 11.5px var(--kit-mono);
+  color: var(--kit-muted);
+  width: 48px;
+  flex: none;
+  text-align: right;
+}
+
+.cb-sheet-input {
+  flex: 1;
+  font: 13px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 4px 10px;
+  width: 100%;
+}
+
+.cb-sheet-input:focus-visible {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: 0;
+}
+
+/* Preview text */
+.cb-sheet-preview {
+  font: 13px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 10px 0 0;
+}
+
+/* Error message */
+.cb-sheet-err {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-danger);
+  margin: 6px 0 0;
+}
+
+/* ---- selection foot controls --------------------------------------------- */
+
+.cb-sel-count {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-signal);
+  font-weight: 600;
+}
+
+.cb-sel-all {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  margin-left: 6px;
+}
+
+.cb-sel-all:hover {
+  color: var(--kit-fg);
+}
+
+/* ---- decide buttons in item detail --------------------------------------- */
+
+.cb-decide-btns {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cb-decide-btns .cb-sheet-disp {
+  padding: 4px 12px;
+}
+
 /* ---- needs-you cards (apply section) ------------------------------------- */
 
 .cb-needs-you {

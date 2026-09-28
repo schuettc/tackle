@@ -8,15 +8,18 @@
 // The returned element replaces the .kit-read content; it is a plain
 // HTMLElement, not a kit component, so it can be replaced at will.
 
-import { h, facts, card, fold, buttons, type Button } from '/_kit/kit.js';
+import { h, facts, card, fold, type Button } from '/_kit/kit.js';
 import type {
   ItemDetailView,
   Proposal,
   Evidence,
   Event,
   LogEntry,
+  AcceptResult,
+  RejectResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
+import { openDecideSheet, allowedForKind } from './decide.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
 const BODY_CAP = 600;
@@ -119,7 +122,12 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
 
 // ---- proposal card ----------------------------------------------------------
 
-function renderProposalCard(p: Proposal): HTMLElement {
+function renderProposalCard(
+  ctx: Ctx,
+  p: Proposal,
+  key: string,
+  kind: string,
+): HTMLElement {
   const stateLabel =
     p.state === 'pending' ? 'pending proposal' : `proposal · ${p.state}`;
   const lines: Array<Node | string> = [
@@ -129,7 +137,7 @@ function renderProposalCard(p: Proposal): HTMLElement {
       h('span', { class: 'cb-label' }, 'disposition '),
       h('strong', null, p.disposition),
       p.until ? h('span', null, ` until ${fmtDate(p.until)}`) : null,
-      p.note ? h('span', null, ` · ${p.note}`) : null,
+      p.note ? h('span', null, ` \u00b7 ${p.note}`) : null,
     ),
   ];
   const bodyEl = h('div', { class: 'cb-proposal-body' }, ...lines);
@@ -138,20 +146,24 @@ function renderProposalCard(p: Proposal): HTMLElement {
       label: 'accept',
       fill: true,
       run() {
-        // Task 4 wires accept.
+        void ctx.api
+          .post<AcceptResult>('/proposals/accept', { ids: [p.id] })
+          .catch(() => {});
       },
     },
     {
-      label: 'change…',
+      label: 'change\u2026',
       run() {
-        // Task 4 wires change.
+        openDecideSheet(ctx, [key], allowedForKind(kind), () => {});
       },
     },
     {
       label: 'reject',
       danger: true,
       run() {
-        // Task 4 wires reject.
+        void ctx.api
+          .post<RejectResult>('/proposals/reject', { ids: [p.id] })
+          .catch(() => {});
       },
     },
   ];
@@ -165,25 +177,48 @@ function renderProposalCard(p: Proposal): HTMLElement {
 
 // ---- decide buttons ---------------------------------------------------------
 
-function renderDecideSection(): HTMLElement {
+// Dispositions that are destructive (danger styling).
+const DANGER_DISPS_ITEM = new Set(['close', 'delete', 'archive']);
+// Dispositions that need an until condition (shown with '…' to hint at the sheet).
+const NEEDS_ELLIPSIS = new Set(['wait', 'watch']);
+
+function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
   const section = h('section', { class: 'cb-decide' });
   section.append(h('h2', { class: 'cb-section-label' }, 'decide'));
-  // Allowed disposition buttons are wired in Task 4. For now we render the
-  // label and leave a slot for Task 4 to fill.
-  section.append(
-    buttons([
-      { label: 'keep', run() {} },
-      { label: 'close', run() {} },
-      { label: 'ignore', run() {} },
-    ]),
-  );
+
+  const allowed = allowedForKind(kind);
+
+  // Use .cb-sheet-disp class so the probe can find them and so decide.ts
+  // can reuse the same styling for both the list sheet and the item detail.
+  const dispRow = h('div', { class: 'cb-decide-btns' });
+  for (const d of allowed) {
+    const label = NEEDS_ELLIPSIS.has(d) ? `${d}\u2026` : d;
+    dispRow.append(
+      h(
+        'button',
+        {
+          type: 'button',
+          class:
+            'cb-sheet-disp' +
+            (DANGER_DISPS_ITEM.has(d) ? ' cb-sheet-disp--danger' : ''),
+          onclick() {
+            openDecideSheet(ctx, [key], allowed, () => {
+              // The 'decided' live event triggers a list reload.
+            });
+          },
+        },
+        label,
+      ),
+    );
+  }
+
+  section.append(dispRow);
   return section;
 }
 
 // ---- public -----------------------------------------------------------------
 
 export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
-  void ctx; // ctx used by Task 4 (decide actions); retain the param.
   const it = detail.item;
 
   const el = h('article', { class: 'cb-item' });
@@ -224,11 +259,11 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
 
   // ---- pending proposal card ------------------------------------------------
   if (it.proposal) {
-    el.append(renderProposalCard(it.proposal));
+    el.append(renderProposalCard(ctx, it.proposal, it.key, it.kind));
   }
 
   // ---- decide ---------------------------------------------------------------
-  el.append(renderDecideSection());
+  el.append(renderDecideSection(ctx, it.key, it.kind));
 
   // ---- evidence -------------------------------------------------------------
   el.append(renderEvidence(detail.evidence ?? []));

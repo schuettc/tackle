@@ -459,6 +459,242 @@ async function run() {
         .catch(() => false);
       check('show-more foot element exists in DOM', footExists);
     }
+
+    // ---- scenario: decide in bulk -------------------------------------------
+    console.log('\nscenario: decide in bulk');
+
+    {
+      // Navigate to waiting view and collect rows.
+      await page.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/waiting');
+      await page.waitForTimeout(600);
+      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
+
+      const boxes = await page.$$('.kit-row .kit-box');
+      const selectCount = Math.min(4, boxes.length);
+
+      for (let i = 0; i < selectCount; i++) {
+        await boxes[i].click();
+        await page.waitForTimeout(50);
+      }
+
+      if (selectCount > 0) {
+        await page.waitForTimeout(300);
+
+        // 1. Primary reads 'Decide N'.
+        const primaryText = await page
+          .$eval('.kit-primary', (el) => el.textContent ?? '')
+          .catch(() => '');
+        check(
+          'selecting rows updates the primary',
+          primaryText.trim() === `Decide ${selectCount}`,
+        );
+
+        // Open the decide sheet via the primary button.
+        await page.click('.kit-primary');
+        await page
+          .waitForSelector('.kit-sheet', { timeout: 4000 })
+          .catch(() => {});
+        await page.waitForTimeout(200);
+
+        const sheetEl = await page.$('.kit-sheet');
+        if (sheetEl) {
+          // Find and click the 'close' disposition button.
+          const dispBtns = await page.$$('.kit-sheet .cb-sheet-disp');
+          let clickedClose = false;
+          for (const btn of dispBtns) {
+            const t = (await btn.textContent()) ?? '';
+            if (t.trim() === 'close') {
+              await btn.click();
+              clickedClose = true;
+              break;
+            }
+          }
+          await page.waitForTimeout(150);
+
+          // 2. Preview shows 'close N items'.
+          const preview = await page
+            .$eval('.cb-sheet-preview', (el) => el.textContent ?? '')
+            .catch(() => '');
+          check(
+            'the sheet previews the count',
+            clickedClose &&
+              preview.includes('close') &&
+              preview.includes(`${selectCount} item`),
+          );
+
+          // Click the filled Decide N button.
+          const allSheetBtns = await page.$$('.kit-sheet button');
+          let decided = false;
+          for (const btn of allSheetBtns) {
+            const t = (await btn.textContent()) ?? '';
+            if (/^decide\s+\d+/i.test(t.trim())) {
+              await btn.click();
+              decided = true;
+              break;
+            }
+          }
+
+          // Wait for the API call and list refresh.
+          await page.waitForTimeout(2500);
+
+          // 3. Decided items gone; primary hidden.
+          const rowsAfter = await page.$$eval(
+            '.kit-row',
+            (rows) => rows.length,
+          );
+          const primaryHidden = await page
+            .$eval('.kit-primary', (el) => el.hidden)
+            .catch(() => true);
+          check(
+            'deciding removes the items and clears the count',
+            decided && (rowsAfter === 0 || primaryHidden),
+          );
+        } else {
+          check('the sheet previews the count', false);
+          check('deciding removes the items and clears the count', false);
+        }
+      } else {
+        check('selecting rows updates the primary', false);
+        check('the sheet previews the count', false);
+        check('deciding removes the items and clears the count', false);
+      }
+    }
+
+    // ---- scenario: deciding drops the ids it decided ------------------------
+    console.log('\nscenario: deciding drops the ids it decided');
+
+    {
+      // After the bulk decide above, no waiting rows remain selected.
+      // Select one row in the 'new' view (items that were not in 'waiting')
+      // and verify the primary shows 'Decide 1' (the decided ids are gone).
+      await page.evaluate(() => {
+        location.hash = '#/attention/new';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      await page.waitForTimeout(600);
+      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
+
+      const newBoxes = await page.$$('.kit-row .kit-box');
+      if (newBoxes.length > 0) {
+        await newBoxes[0].click();
+        await page.waitForTimeout(300);
+        const primaryText = await page
+          .$eval('.kit-primary', (el) => el.textContent ?? '')
+          .catch(() => '');
+        // Primary must show exactly 'Decide 1', not more (decided ids not re-counted).
+        check(
+          'a decided id is not re-counted',
+          primaryText.trim() === 'Decide 1',
+        );
+        // Clean up: deselect.
+        await newBoxes[0].click();
+        await page.waitForTimeout(100);
+      } else {
+        // If no 'new' items remain (all are decided), primary must be hidden.
+        const primaryHidden = await page
+          .$eval('.kit-primary', (el) => el.hidden)
+          .catch(() => true);
+        check('a decided id is not re-counted', primaryHidden);
+      }
+    }
+
+    // ---- scenario: decide one from the detail --------------------------------
+    console.log('\nscenario: decide one from the detail');
+
+    {
+      const detailPage = await context.newPage();
+      try {
+        await detailPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await detailPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        // Open an undecided item in the 'new' view.
+        await detailPage.evaluate(() => {
+          location.hash = '#/attention/new';
+        });
+        await detailPage.waitForFunction(
+          () => location.hash === '#/attention/new',
+        );
+        await detailPage.waitForTimeout(600);
+        await detailPage
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+
+        const firstRow = await detailPage.$('.kit-row');
+        if (firstRow) {
+          await firstRow.dblclick();
+          await detailPage
+            .waitForSelector('.kit-read .cb-item', { timeout: 5000 })
+            .catch(() => {});
+          await detailPage.waitForTimeout(300);
+
+          // Click a disposition button in the decide section.
+          const decideButtons = await detailPage.$$(
+            '.cb-decide .cb-sheet-disp',
+          );
+          if (decideButtons.length > 0) {
+            await decideButtons[0].click();
+            await detailPage.waitForTimeout(300);
+
+            // The sheet must appear and mention 1 item (not the selection count).
+            const sheetText = await detailPage
+              .$eval('.kit-sheet', (el) => (el.textContent ?? '').toLowerCase())
+              .catch(() => '');
+            check(
+              'a disposition button opens the sheet for that one key',
+              sheetText.includes('1 item'),
+            );
+
+            // Close without deciding.
+            await detailPage.keyboard.press('Escape');
+            await detailPage.waitForTimeout(200);
+          } else {
+            check(
+              'a disposition button opens the sheet for that one key',
+              false,
+            );
+          }
+        } else {
+          // Fall back: use a direct item link to a repo item (which hasn't been decided above).
+          await detailPage.evaluate(() => {
+            location.hash = '#/item/repo:schuettc/hail';
+          });
+          await detailPage
+            .waitForSelector('.kit-read .cb-item', { timeout: 5000 })
+            .catch(() => {});
+          await detailPage.waitForTimeout(300);
+
+          const decideButtons = await detailPage.$$(
+            '.cb-decide .cb-sheet-disp',
+          );
+          if (decideButtons.length > 0) {
+            await decideButtons[0].click();
+            await detailPage.waitForTimeout(300);
+            const sheetText = await detailPage
+              .$eval('.kit-sheet', (el) => (el.textContent ?? '').toLowerCase())
+              .catch(() => '');
+            check(
+              'a disposition button opens the sheet for that one key',
+              sheetText.includes('1 item'),
+            );
+            await detailPage.keyboard.press('Escape');
+            await detailPage.waitForTimeout(200);
+          } else {
+            check(
+              'a disposition button opens the sheet for that one key',
+              false,
+            );
+          }
+        }
+      } finally {
+        await detailPage.close();
+      }
+    }
   } catch (err) {
     console.error('probe: unexpected error:', err);
     fails++;
