@@ -389,6 +389,41 @@ func TestRejectsUnknownFieldsAndUnknownSessions(t *testing.T) {
 	}
 }
 
+// TestUnknownSessionErrorHasCode verifies that the serve session() guard
+// returns a 404 whose JSON body includes "code":"unknown_session", so the
+// channel can distinguish it from other 404s (e.g. message-not-found).
+// Fail-before evidence: before adding errCode to httpError and the matching
+// JSON output in reply(), the response body had no "code" field.
+func TestUnknownSessionErrorHasCode(t *testing.T) {
+	r := newRig(t)
+	// Request a session-bound endpoint with an unregistered session.
+	var body struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	var rd bytes.Buffer
+	json.NewEncoder(&rd).Encode(map[string]any{"session": "ghost", "shown": []int64{}})
+	req, _ := http.NewRequest("POST", r.url+"/api/agent/settled", &rd)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Fatalf("want 404, got %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Code != "unknown_session" {
+		t.Fatalf("code field: want \"unknown_session\", got %q (body: %+v)", body.Code, body)
+	}
+	if !strings.Contains(body.Error, "ghost") {
+		t.Fatalf("error message must mention session id: %q", body.Error)
+	}
+}
+
 func TestItemDetail(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")

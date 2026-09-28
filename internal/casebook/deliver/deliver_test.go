@@ -427,6 +427,55 @@ func TestStuckReleaseMoveInterrupt(t *testing.T) {
 	}
 }
 
+// TestSettledRefreshesTouchedAtWhenShown verifies that when Settled records
+// shown_at for a delivery it also refreshes touched_at to the shown time.
+// Without the fix, touched_at would remain at sent_at (t0) while now is
+// t0+15min, making the delivery appear Stuck (touched_at > StuckAfter ago);
+// with the fix, touched_at is refreshed to now so Stuck is false.
+// Fail-before evidence: without `touched_at = ?` in the shown_at UPDATE,
+// ended.TouchedAt equals the sent time (t0), not the shown time (t0+15min).
+func TestSettledRefreshesTouchedAtWhenShown(t *testing.T) {
+	q, c := newQueue(t)
+	th := thread(t, q, "s1")
+	_ = post(t, q, th, "one", false)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next: %v %v", d, err)
+	}
+	sentAt := d.TouchedAt
+
+	// Advance clock past StuckAfter; the delivery would be Stuck.
+	c.add(StuckAfter + 5*time.Minute)
+	// Confirm it looks stuck at this point.
+	if got, _ := q.Delivery(ctx, d.ID); !got.Stuck {
+		t.Fatal("delivery should be Stuck before being shown")
+	}
+
+	// Settled with the delivery's id marks it shown (and ends it).
+	// touched_at must be refreshed to now (the shown time), not left at sent_at.
+	now := q.Now()
+	ended, err := q.Settled(ctx, "s1", []int64{d.ID})
+	if err != nil || ended == nil {
+		t.Fatalf("Settled: %v %v", ended, err)
+	}
+
+	// touched_at must equal the shown time, not the sent time.
+	if ended.TouchedAt.Equal(sentAt) {
+		t.Fatalf("touched_at was not refreshed: still at sent time %v (want ~%v)", ended.TouchedAt, now)
+	}
+	if ended.TouchedAt.Before(now.Add(-time.Second)) || ended.TouchedAt.After(now.Add(time.Second)) {
+		t.Fatalf("touched_at %v not close to shown time %v", ended.TouchedAt, now)
+	}
+	// shown_at should equal touched_at (both set to now in the same UPDATE).
+	if !ended.ShownAt.Equal(ended.TouchedAt) {
+		t.Fatalf("shown_at %v != touched_at %v", ended.ShownAt, ended.TouchedAt)
+	}
+	// Delivery is Done, so Stuck is false (the state check in Delivery()).
+	if ended.Stuck {
+		t.Fatal("ended delivery must not be Stuck")
+	}
+}
+
 func TestRenderGolden(t *testing.T) {
 	q, c := newQueue(t)
 	th := thread(t, q, "s1")

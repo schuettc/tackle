@@ -47,9 +47,12 @@ func (c *Client) passive() *Client {
 var ErrNoServe = errors.New("casebook serve isn't running")
 
 // StatusError is a non-2xx answer from serve.
+// ErrCode is the machine-readable "code" field from the JSON error body, when
+// present (e.g. "unknown_session"); empty string if the field was absent.
 type StatusError struct {
-	Code int
-	Msg  string
+	Code    int
+	Msg     string
+	ErrCode string
 }
 
 func (e *StatusError) Error() string { return fmt.Sprintf("casebook serve: %d %s", e.Code, e.Msg) }
@@ -89,13 +92,14 @@ func (c *Client) Do(ctx context.Context, method, path string, body, out any) (in
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode >= 300 {
 		var e struct {
-			Error string `json:"error"`
+			Error   string `json:"error"`
+			ErrCode string `json:"code"`
 		}
 		_ = json.Unmarshal(b, &e)
 		if e.Error == "" {
 			e.Error = string(bytes.TrimSpace(b))
 		}
-		return resp.StatusCode, &StatusError{Code: resp.StatusCode, Msg: e.Error}
+		return resp.StatusCode, &StatusError{Code: resp.StatusCode, Msg: e.Error, ErrCode: e.ErrCode}
 	}
 	if out != nil && resp.StatusCode != http.StatusNoContent && len(b) > 0 {
 		if err := json.Unmarshal(b, out); err != nil {

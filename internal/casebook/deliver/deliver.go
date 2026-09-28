@@ -584,21 +584,30 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 	return touched, skipped, err
 }
 
+// closeDelivery is the tx-scoped core of ending a delivery: the delivery row
+// transitions from 'inflight' to dState (finished_at = now) and all unsettled
+// messages take msgState (settled_at = now). Returns ErrNotFound when the
+// delivery is not inflight. Used by both end() and Settled() so the two NOT IN
+// lists stay identical.
+func closeDelivery(ctx context.Context, tx *sql.Tx, now int64, id int64, dState, msgState string) error {
+	res, err := tx.ExecContext(ctx, "UPDATE deliveries SET state = ?, finished_at = ? WHERE id = ? AND state = 'inflight'", dState, now, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE messages SET state = ?, settled_at = ? WHERE delivery_id = ? AND author = 'court'
+		AND state NOT IN ('answered', 'declined', 'failed', 'unanswered', 'interrupted')`, msgState, now, id)
+	return err
+}
+
 // end finishes a delivery: unsettled messages take msgState, the delivery
 // takes dState.
 func (q *Queue) end(ctx context.Context, id int64, dState, msgState string) error {
 	now := ms(q.Now())
 	return q.DB.Tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, "UPDATE deliveries SET state = ?, finished_at = ? WHERE id = ? AND state = 'inflight'", dState, now, id)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return ErrNotFound
-		}
-		_, err = tx.ExecContext(ctx, `UPDATE messages SET state = ?, settled_at = ? WHERE delivery_id = ? AND author = 'court'
-			AND state NOT IN ('answered', 'declined', 'failed', 'unanswered', 'interrupted')`, msgState, now, id)
-		return err
+		return closeDelivery(ctx, tx, now, id, dState, msgState)
 	})
 }
 
@@ -613,11 +622,15 @@ func (q *Queue) Settled(ctx context.Context, session string, shownIDs []int64) (
 	var endedID int64
 
 	err := q.DB.Tx(ctx, func(tx *sql.Tx) error {
-		// Record shown_at for each provided delivery id that belongs to this session.
+		// Record shown_at (and refresh touched_at) for each provided delivery id
+		// that belongs to this session. Refreshing touched_at here means the
+		// stuck clock counts from when the agent was shown the delivery, not
+		// from when it was sent (which can be StuckAfter ago if the agent was
+		// mid-turn when it arrived).
 		for _, id := range shownIDs {
 			if _, err := tx.ExecContext(ctx,
-				"UPDATE deliveries SET shown_at = ? WHERE id = ? AND session_id = ? AND shown_at = 0",
-				now, id, session); err != nil {
+				"UPDATE deliveries SET shown_at = ?, touched_at = ? WHERE id = ? AND session_id = ? AND shown_at = 0",
+				now, now, id, session); err != nil {
 				return err
 			}
 		}
@@ -640,16 +653,8 @@ func (q *Queue) Settled(ctx context.Context, session string, shownIDs []int64) (
 			return nil // unshown: stays in flight for the next turn
 		}
 
-		// End the delivery: mark done and mark unsettled messages unanswered.
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE deliveries SET state = ?, finished_at = ? WHERE id = ? AND state = 'inflight'",
-			Done, now, id); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE messages SET state = ?, settled_at = ? WHERE delivery_id = ? AND author = 'court'
-			 AND state NOT IN ('answered', 'declined', 'failed', 'unanswered', 'interrupted')`,
-			Unanswered, now, id); err != nil {
+		// End the delivery via the shared helper (same NOT IN list as end()).
+		if err := closeDelivery(ctx, tx, now, id, Done, Unanswered); err != nil {
 			return err
 		}
 		endedID = id

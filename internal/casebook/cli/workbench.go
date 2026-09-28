@@ -182,6 +182,11 @@ var (
 // Code JSONL transcript) and returns the delivery ids of casebook deliveries the
 // agent was shown. Entries of type "queue-operation" are excluded (those only
 // mean queued, not shown). Any failure returns nil silently.
+//
+// The scan uses bufio.Reader.ReadBytes to handle arbitrarily long lines (large
+// tool results can exceed the 256 KiB bufio.Scanner default). When the file is
+// larger than 8 MiB the first (potentially partial) line after the seek is
+// discarded.
 func shownInTranscript(ctx context.Context, transcriptPath string) []int64 {
 	if transcriptPath == "" {
 		return nil
@@ -194,16 +199,21 @@ func shownInTranscript(ctx context.Context, transcriptPath string) []int64 {
 
 	// Read at most the last 8 MiB.
 	const maxBytes = 8 << 20
+	seeked := false
 	if fi, err := f.Stat(); err == nil && fi.Size() > maxBytes {
 		if _, err := f.Seek(-maxBytes, io.SeekEnd); err != nil {
 			return nil
 		}
+		seeked = true
 	}
 
+	// entry mirrors the JSONL fields we care about.
+	// message.content may be a JSON string or a JSON array of blocks
+	// ({"type":"text","text":"..."}); both forms are decoded by rawContent.
 	type entry struct {
 		Type    string `json:"type"`
 		Message *struct {
-			Content string `json:"content"`
+			Content json.RawMessage `json:"content"`
 		} `json:"message"`
 		Attachment *struct {
 			Type   string `json:"type"`
@@ -212,37 +222,73 @@ func shownInTranscript(ctx context.Context, transcriptPath string) []int64 {
 	}
 
 	seen := map[int64]bool{}
-	sc := bufio.NewScanner(io.LimitReader(f, maxBytes))
-	sc.Buffer(make([]byte, 256*1024), 256*1024)
-	for sc.Scan() {
+	rd := bufio.NewReader(io.LimitReader(f, maxBytes))
+	if seeked {
+		// The first bytes after the seek may be a partial (mid-line) fragment;
+		// discard up to and including the first newline.
+		_, _ = rd.ReadBytes('\n')
+	}
+	for {
 		select {
 		case <-ctx.Done():
 			return deliveryList(seen)
 		default:
 		}
-		line := sc.Bytes()
-		if !bytes.Contains(line, []byte("casebook")) {
-			continue
-		}
-		var e entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			continue
-		}
-		switch e.Type {
-		case "queue-operation":
-			// These only mean queued, not shown — skip.
-			continue
-		case "user":
-			if e.Message != nil {
-				extractCasebookDeliveries(e.Message.Content, seen)
+		line, err := rd.ReadBytes('\n')
+		if len(line) > 0 {
+			if bytes.Contains(line, []byte("casebook")) {
+				var e entry
+				if json.Unmarshal(line, &e) == nil {
+					// queue-operation entries only mean queued, not shown — skip.
+					// NOTE: the guard below is load-bearing: a queue-op entry may
+					// also have a message subfield (see testdata/transcript.jsonl);
+					// removing this check would cause those deliveries to be
+					// counted as shown.
+					if e.Type != "queue-operation" {
+						if e.Message != nil {
+							extractCasebookDeliveries(rawContent(e.Message.Content), seen)
+						}
+						if e.Attachment != nil && e.Attachment.Type == "queued_command" {
+							extractCasebookDeliveries(e.Attachment.Prompt, seen)
+						}
+					}
+				}
 			}
-		case "attachment":
-			if e.Attachment != nil && e.Attachment.Type == "queued_command" {
-				extractCasebookDeliveries(e.Attachment.Prompt, seen)
-			}
+		}
+		if err != nil {
+			break
 		}
 	}
 	return deliveryList(seen)
+}
+
+// rawContent decodes a JSON content field that may be a string or an array of
+// content blocks ({"type":"text","text":"..."}). It returns the concatenation
+// of all text-type block texts, or the string directly.
+func rawContent(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	// Try plain string first.
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	// Try array of content blocks.
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) == nil {
+		var sb strings.Builder
+		for _, b := range blocks {
+			if b.Type == "text" {
+				sb.WriteString(b.Text)
+			}
+		}
+		return sb.String()
+	}
+	return ""
 }
 
 // extractCasebookDeliveries scans text for <channel source="casebook" ...> tags

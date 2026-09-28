@@ -192,21 +192,25 @@ func (ch *Channel) loop(ctx context.Context) {
 }
 
 // callSessionBound executes a session-bound API call fn. If serve responds with
-// 404 (unknown session — either serve just started and the wake loop hasn't had a
-// chance to register presence, or serve restarted and forgot the session),
-// callSessionBound registers presence using ch.Client (which may start serve) and
-// retries fn once. Any other error is returned immediately without a retry.
+// a 404 whose JSON body carries "code":"unknown_session" (meaning serve started
+// fresh and the wake loop hasn't registered presence yet, or serve restarted
+// and forgot the session), callSessionBound registers presence using ch.Client
+// (which may start serve) and retries fn once.
+//
+// Any other error — including a 404 for a missing message or item — is returned
+// immediately without a retry, so a wrong message id does not cause a spurious
+// presence registration.
 func (ch *Channel) callSessionBound(ctx context.Context, fn func() (string, error)) (string, error) {
 	result, err := fn()
 	if err == nil {
 		return result, nil
 	}
 	var se *StatusError
-	if !errors.As(err, &se) || se.Code != http.StatusNotFound {
+	if !errors.As(err, &se) || se.Code != http.StatusNotFound || se.ErrCode != "unknown_session" {
 		return result, err
 	}
-	// 404: serve doesn't know our session. Register presence (ch.Client may
-	// start serve) then retry the call once.
+	// 404 with code="unknown_session": serve doesn't know our session.
+	// Register presence (ch.Client may start serve) then retry once.
 	if presErr := ch.presence(ctx, ch.Client); presErr != nil {
 		return "", err // return the original 404 error, not the presence error
 	}

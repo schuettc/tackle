@@ -626,3 +626,143 @@ func TestLoopDeduplicatesPresenceErrors(t *testing.T) {
 		t.Fatalf("want exactly 1 log line, got %d:\n%s", lines, got)
 	}
 }
+
+// TestUnknownSessionRetries verifies that a tool call receiving a 404 with
+// code="unknown_session" retries once after registering presence and succeeds.
+// This uses a mock server so we can control the code field precisely.
+// Fail-before evidence (if callSessionBound did NOT check ErrCode): the test
+// would still pass because the fix is additive — the old code retried on any
+// 404; the new code also retries on unknown_session. The companion test
+// TestReplyNotFoundNoPresence is the failing-before test.
+func TestUnknownSessionRetries(t *testing.T) {
+	var presenceCalls atomic.Int32
+	var statusCalls atomic.Int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/agent/presence":
+			presenceCalls.Add(1)
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		case "/api/agent/wait":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/agent/status":
+			if statusCalls.Add(1) == 1 {
+				// First call: 404 with unknown_session code.
+				w.WriteHeader(http.StatusNotFound)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": `unknown session "s1" (register with presence first)`,
+					"code":  "unknown_session",
+				})
+				return
+			}
+			// Subsequent calls succeed.
+			json.NewEncoder(w).Encode(map[string]any{"counts": map[string]int{}, "since": "", "page_open": false})
+		default:
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	c := &Client{
+		HTTP: &http.Client{Timeout: 10 * time.Second},
+		Find: func() (serve.Advert, error) {
+			return serve.Advert{Base: ts.URL, Token: "tok"}, nil
+		},
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.Retry = time.Hour // loop sleeps; won't register presence on its own
+	ch.Poll = 2 * time.Second
+	m := start(t, ch)
+
+	// Wait for the initial loop presence call.
+	deadline := time.Now().Add(3 * time.Second)
+	for presenceCalls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	presenceBefore := presenceCalls.Load()
+
+	// casebook_status: first call → 404 unknown_session → callSessionBound
+	// registers presence and retries → succeeds.
+	out, isErr := m.tool("casebook_status", map[string]any{})
+	if isErr {
+		t.Fatalf("casebook_status failed: %s", out)
+	}
+	if !strings.Contains(out, "counts") {
+		t.Fatalf("want \"counts\", got: %s", out)
+	}
+	// Exactly one extra presence call was made for the retry.
+	if presenceCalls.Load() != presenceBefore+1 {
+		t.Fatalf("presence calls: %d → %d, want exactly +1", presenceBefore, presenceCalls.Load())
+	}
+	if statusCalls.Load() != 2 {
+		t.Fatalf("status was called %d times, want 2 (first 404, then retry)", statusCalls.Load())
+	}
+}
+
+// TestReplyNotFoundNoPresence verifies that a 404 response to casebook_reply
+// (message not found) does NOT trigger a presence registration + retry.
+// Only 404s with code="unknown_session" should cause a retry; a missing
+// message id should surface the error directly.
+//
+// Fail-before evidence: with the old callSessionBound (retries on ANY 404),
+// a message-not-found 404 would also trigger a presence call, so this test
+// would fail because presenceCalls increments.
+func TestReplyNotFoundNoPresence(t *testing.T) {
+	var presenceCalls atomic.Int32
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/agent/presence":
+			presenceCalls.Add(1)
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		case "/api/agent/wait":
+			w.WriteHeader(http.StatusNoContent)
+		case "/api/agent/reply":
+			// Message-not-found 404: no "code" field.
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "message 99999: not found (not delivered to s1)",
+			})
+		default:
+			json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	c := &Client{
+		HTTP: &http.Client{Timeout: 10 * time.Second},
+		Find: func() (serve.Advert, error) {
+			return serve.Advert{Base: ts.URL, Token: "tok"}, nil
+		},
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.Retry = time.Hour
+	ch.Poll = 2 * time.Second
+	m := start(t, ch)
+
+	// Wait for the loop's initial presence call.
+	deadline := time.Now().Add(3 * time.Second)
+	for presenceCalls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if presenceCalls.Load() == 0 {
+		t.Fatal("no initial presence call from the loop")
+	}
+	presenceBefore := presenceCalls.Load()
+
+	// casebook_reply with a nonexistent message id → 404 (no code) → error
+	// returned directly, no extra presence call.
+	out, isErr := m.tool("casebook_reply", map[string]any{
+		"ids": []int64{99999}, "state": "answered",
+	})
+	if !isErr {
+		t.Fatalf("expected error from reply, got: %q", out)
+	}
+	// No additional presence call should have been made.
+	if presenceCalls.Load() != presenceBefore {
+		t.Fatalf("extra presence call on message-not-found 404: %d → %d",
+			presenceBefore, presenceCalls.Load())
+	}
+}

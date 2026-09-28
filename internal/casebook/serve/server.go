@@ -257,15 +257,18 @@ func (s *Server) Handler() http.Handler {
 }
 
 // httpError carries a status out of a handler helper.
+// errCode, when non-empty, is written as a "code" field in the JSON error
+// response for machine-readable disambiguation (e.g. "unknown_session").
 type httpError struct {
-	code int
-	msg  string
+	code    int
+	msg     string
+	errCode string
 }
 
 func (e httpError) Error() string { return e.msg }
 
 func bad(format string, a ...any) error {
-	return httpError{http.StatusBadRequest, fmt.Sprintf(format, a...)}
+	return httpError{code: http.StatusBadRequest, msg: fmt.Sprintf(format, a...)}
 }
 
 // decode reads a JSON body, rejecting unknown fields and oversized bodies.
@@ -290,7 +293,11 @@ func reply(w http.ResponseWriter, v any, err error) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		body := map[string]string{"error": err.Error()}
+		if errors.As(err, &he) && he.errCode != "" {
+			body["code"] = he.errCode
+		}
+		json.NewEncoder(w).Encode(body)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

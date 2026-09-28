@@ -34,7 +34,7 @@ func (s *Server) session(ctx context.Context, id string) (deliver.Session, error
 	}
 	sess, err := s.Queue.Session(ctx, id)
 	if err != nil {
-		return sess, httpError{http.StatusNotFound, fmt.Sprintf("unknown session %q (register with presence first)", id)}
+		return sess, httpError{code: http.StatusNotFound, msg: fmt.Sprintf("unknown session %q (register with presence first)", id), errCode: "unknown_session"}
 	}
 	return sess, nil
 }
@@ -169,7 +169,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text)
 	if err != nil {
 		if errors.Is(err, deliver.ErrNotFound) {
-			reply(w, nil, httpError{http.StatusNotFound, err.Error()})
+			reply(w, nil, httpError{code: http.StatusNotFound, msg: err.Error()})
 		} else {
 			reply(w, nil, bad("%v", err))
 		}
@@ -310,7 +310,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if _, ok := s.Index.Item(k.String()); !ok {
-			reply(w, nil, httpError{http.StatusNotFound, fmt.Sprintf("%s is not a known item", k)})
+			reply(w, nil, httpError{code: http.StatusNotFound, msg: fmt.Sprintf("%s is not a known item", k)})
 			return
 		}
 		fragment = "#/item/" + url.PathEscape(k.String())
@@ -322,7 +322,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		fragment = "#/attention/" + in.View
 	}
 	if s.openPage == nil {
-		reply(w, nil, httpError{http.StatusConflict, "this casebook serve can't open a browser"})
+		reply(w, nil, httpError{code: http.StatusConflict, msg: "this casebook serve can't open a browser"})
 		return
 	}
 	if err := s.openPage(fragment); err != nil {

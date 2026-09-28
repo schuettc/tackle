@@ -72,7 +72,7 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 	}
 	it, ok := s.Index.Item(k.String())
 	if !ok {
-		reply(w, nil, httpError{http.StatusNotFound, k.String() + " is not a known item"})
+		reply(w, nil, httpError{code: http.StatusNotFound, msg: k.String() + " is not a known item"})
 		return
 	}
 	v := ItemView{Item: it}
@@ -236,7 +236,7 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	p, err := s.Props.Get(ctx, in.ID)
 	if err != nil || p.State != propose.Pending {
-		reply(w, nil, httpError{http.StatusNotFound, fmt.Sprintf("proposal %d is not pending", in.ID)})
+		reply(w, nil, httpError{code: http.StatusNotFound, msg: fmt.Sprintf("proposal %d is not pending", in.ID)})
 		return
 	}
 	o := proposalOpts(p)
@@ -459,7 +459,7 @@ func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var thread int64
 	if err := s.DB.QueryRowContext(ctx, "SELECT thread_id FROM batches WHERE id = ?", in.Batch).Scan(&thread); err != nil {
-		reply(w, nil, httpError{http.StatusNotFound, "no such batch"})
+		reply(w, nil, httpError{code: http.StatusNotFound, msg: "no such batch"})
 		return
 	}
 	n, err := s.Queue.SendBatch(ctx, in.Batch)

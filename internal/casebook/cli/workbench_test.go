@@ -242,6 +242,74 @@ func TestSettledShownFlag(t *testing.T) {
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
 
+// TestShownInTranscriptQueueOpOnly verifies that a delivery that appears ONLY
+// in queue-operation entries is NOT included in the shown set.
+// The transcript.jsonl fixture has delivery 8 only in a queue-operation entry;
+// shownInTranscript must return [6,7] (not 8).
+// Fail-before evidence: temporarily removing the queue-operation skip in
+// shownInTranscript would add 8 to the result.
+func TestShownInTranscriptQueueOpOnly(t *testing.T) {
+	transcriptPath := filepath.Join("testdata", "transcript.jsonl")
+	ids := shownInTranscript(context.Background(), transcriptPath)
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// delivery 8 appears only in a queue-operation entry and must NOT be shown.
+	for _, id := range ids {
+		if id == 8 {
+			t.Fatalf("delivery 8 appeared in shown set %v — queue-operation entries must be excluded", ids)
+		}
+	}
+	// deliveries 6 and 7 must still be present.
+	if len(ids) != 2 || ids[0] != 6 || ids[1] != 7 {
+		t.Fatalf("shown %v, want [6 7]", ids)
+	}
+}
+
+// TestShownInTranscriptLongLine verifies that a transcript line longer than
+// 256 KiB (the old bufio.Scanner cap) does not stop the scan; a casebook
+// delivery entry appearing after the long line is still found.
+// Fail-before evidence: with the old Scanner-based code the 300 KiB line
+// caused scanner.Scan() to return false (ErrTooLong) and the delivery entry
+// was never read.
+func TestShownInTranscriptLongLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Write a line longer than 300 KiB (> the old 256 KiB scanner limit).
+	longContent := strings.Repeat("x", 300*1024)
+	fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"%s"}}`+"\n", longContent)
+	// Follow with a casebook delivery entry.
+	fmt.Fprintf(f, `{"type":"user","message":{"role":"user","content":"<channel source=\"casebook\" delivery=\"42\"><\/channel>"}}`+"\n")
+	f.Close()
+
+	ids := shownInTranscript(context.Background(), path)
+	if len(ids) != 1 || ids[0] != 42 {
+		t.Fatalf("want [42], got %v — long line before delivery entry not handled", ids)
+	}
+}
+
+// TestShownInTranscriptArrayContent verifies that a user entry whose
+// message.content is an array of blocks (as Claude emits for multi-block
+// content) is parsed and casebook delivery tags inside text blocks are found.
+// Fail-before evidence: the old code decoded content as a string only;
+// an array value caused json.Unmarshal to put "" in the string field, so the
+// tag was never found.
+func TestShownInTranscriptArrayContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "transcript.jsonl")
+	// Array content with a casebook tag inside a text block.
+	line := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<channel source=\"casebook\" delivery=\"99\"><\/channel>"},{"type":"text","text":"other block"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ids := shownInTranscript(context.Background(), path)
+	if len(ids) != 1 || ids[0] != 99 {
+		t.Fatalf("want [99] from array content, got %v", ids)
+	}
+}
+
 // TestSettledNoServeShownFlag verifies that --shown works silently even when
 // there is no serve running (no serve → silent exit 0).
 func TestSettledNoServeShownFlag(t *testing.T) {
