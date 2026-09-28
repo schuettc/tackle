@@ -14,6 +14,7 @@ import {
   allowedForKind,
   allowedForKeys,
   keyWithoutKind,
+  pluralize,
 } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 
@@ -320,5 +321,28 @@ describe('stripOwnKey', () => {
   test('subject not containing key is unchanged', () => {
     const subject = 'decide \u2192 close by schuettc';
     assert.equal(stripOwnKey(subject, 'pr:schuettc/hail#3'), subject);
+  });
+});
+
+// ---- pluralize --------------------------------------------------------------
+
+describe('pluralize', () => {
+  test('1 item (singular)', () => {
+    assert.equal(pluralize(1, 'item'), '1 item');
+  });
+  test('2 items (default plural = singular + s)', () => {
+    assert.equal(pluralize(2, 'item'), '2 items');
+  });
+  test('0 uses plural form', () => {
+    assert.equal(pluralize(0, 'item'), '0 items');
+  });
+  test('explicit plural overrides default', () => {
+    assert.equal(pluralize(1, 'ox', 'oxen'), '1 ox');
+    assert.equal(pluralize(2, 'ox', 'oxen'), '2 oxen');
+  });
+  test('1 selected (no noun — just number + word)', () => {
+    // This is the "N selected" pattern; the noun is omitted by design.
+    assert.equal(pluralize(1, 'selected'), '1 selected');
+    assert.equal(pluralize(4, 'selected'), '4 selecteds'); // base, not used in UI
   });
 });

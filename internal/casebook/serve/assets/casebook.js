@@ -261,6 +261,9 @@ function allowedForKeys(vocab, keys) {
   const first = [...sets[0] ?? /* @__PURE__ */ new Set()];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
+function pluralize(n, singular, plural) {
+  return `${n} ${n === 1 ? singular : plural ?? singular + "s"}`;
+}
 function stripOwnKey(subject, key) {
   if (!key) return subject;
   const withSpace = key + " ";
@@ -1115,7 +1118,7 @@ function makeAttention(ctx) {
     const countEl = h6(
       "p",
       { class: "cb-read-empty-count" },
-      `${totalItemsForView} items`
+      pluralize(totalItemsForView, "item")
     );
     const promptEl = h6(
       "p",
@@ -1127,7 +1130,7 @@ function makeAttention(ctx) {
   function updateReadEmptyCount() {
     const countEl = readEl.querySelector(".cb-read-empty-count");
     if (countEl) {
-      countEl.textContent = `${totalItemsForView} items`;
+      countEl.textContent = pluralize(totalItemsForView, "item");
     }
   }
   function showReadEmpty() {
@@ -1155,11 +1158,10 @@ function makeAttention(ctx) {
       selection.deselect(keys);
       void reload();
     });
-    footEl = h6(
+    const footRight = h6(
       "div",
-      { class: "cb-foot" },
-      selCount,
-      selAllBtn,
+      { class: "cb-foot-right" },
+      propFoot.el,
       h6(
         "button",
         {
@@ -1171,9 +1173,9 @@ function makeAttention(ctx) {
           }
         },
         `show ${PAGE_SIZE2} more`
-      ),
-      propFoot.el
+      )
     );
+    footEl = h6("div", { class: "cb-foot" }, selCount, selAllBtn, footRight);
     return footEl;
   }
   function updateProposalBulk(selectedIds) {
@@ -1344,6 +1346,8 @@ function makeAttention(ctx) {
     const selAll = footEl.querySelector(".cb-sel-all");
     if (selAll instanceof HTMLElement) {
       selAll.textContent = `select all ${totalItemsForView} in view`;
+      const allSelected = totalItemsForView > 0 && selection.ids().length >= totalItemsForView;
+      selAll.hidden = allSelected;
     }
     const btn = footEl.querySelector(".cb-foot-more");
     if (btn) {
@@ -1391,6 +1395,13 @@ function makeAttention(ctx) {
   wireSelection(ctx, handle);
   selection.onChange((ids) => {
     updateProposalBulk(ids);
+    if (footEl) {
+      const selAll = footEl.querySelector(".cb-sel-all");
+      if (selAll) {
+        const allSelected = totalItemsForView > 0 && ids.length >= totalItemsForView;
+        selAll.hidden = allSelected;
+      }
+    }
   });
   ctx.keys.register({
     keys: "a",

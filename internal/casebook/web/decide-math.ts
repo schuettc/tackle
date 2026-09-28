@@ -57,6 +57,24 @@ export function allowedForKeys(
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
 
+// ---- pluralize helper ------------------------------------------------------
+
+/**
+ * pluralize returns "N singular" or "N plural" depending on n.
+ * If plural is omitted, it defaults to singular + "s".
+ *
+ * pluralize(1, 'item')  → '1 item'
+ * pluralize(2, 'item')  → '2 items'
+ * pluralize(0, 'item')  → '0 items'
+ */
+export function pluralize(
+  n: number,
+  singular: string,
+  plural?: string,
+): string {
+  return `${n} ${n === 1 ? singular : (plural ?? singular + 's')}`;
+}
+
 // ---- history display helpers ------------------------------------------------
 
 /**

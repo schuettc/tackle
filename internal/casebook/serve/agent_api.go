@@ -210,15 +210,14 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Proposals are only for items that are currently in attention (awaiting
-	// Court's decision). A decided item whose earlier wait has expired and
-	// returned to attention is still accepted; the engine's own Attention()
-	// set is the authoritative source.
+	// Proposals are only valid for items that exist in the casebook index and
+	// are currently in attention (awaiting Court's decision). Agents receive
+	// keys from casebook's own tools (casebook_show, casebook_status), so an
+	// unknown key is a programming error
+	// — the proposal would sit orphaned, invisible to Court.
 	//
-	// Items not yet known to the index (not yet synced from GitHub) pass
-	// through: the agent may propose on items it discovered before the next
-	// sync ran. Only items that ARE in the index but NOT in attention are
-	// refused
+	// A wait/watch decision whose until has lapsed returns the item to
+	// attention (StatusDue); such items are accepted by InAttention().
 	var attentionKeys []string
 	var msgs []string
 	for _, raw := range in.Keys {
@@ -228,7 +227,11 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		it, known := s.Index.Item(k.String())
-		if known && !s.Index.InAttention(k.String()) {
+		if !known {
+			msgs = append(msgs, fmt.Sprintf("no item %s in casebook", k))
+			continue
+		}
+		if !s.Index.InAttention(k.String()) {
 			msgs = append(msgs, fmt.Sprintf("%s is not in attention: current status is %s", k, it.Status))
 			continue
 		}

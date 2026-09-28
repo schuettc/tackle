@@ -298,19 +298,33 @@
 
 /* ---- selection foot controls --------------------------------------------- */
 
-/* The foot wrapper sits inside .kit-foot; make it flex so selcount, select-all
- * and show-more line up in a row on the same baseline. */
+/* The foot wrapper sits inside .kit-foot: selection count on the left,
+ * bulk actions on the right, nothing wrapping. .cb-foot-right uses
+ * margin-left:auto to push action buttons to the trailing edge. */
 .cb-foot {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cb-foot-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 .cb-sel-count {
   font: 12.5px var(--kit-mono);
   color: var(--kit-signal);
   font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cb-sel-all {
@@ -320,11 +334,41 @@
   border: 0;
   cursor: pointer;
   padding: 0;
-  margin-left: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cb-sel-all:hover {
   color: var(--kit-fg);
+}
+
+.cb-foot-more {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cb-foot-more:hover {
+  color: var(--kit-fg);
+}
+
+/* Bulk proposal buttons in the proposed view foot: keep on one line. */
+.cb-prop-bulk {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.cb-prop-accept,
+.cb-prop-reject {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* ---- decide buttons in item detail --------------------------------------- */

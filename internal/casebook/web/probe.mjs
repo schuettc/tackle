@@ -2765,6 +2765,173 @@ async function run() {
       }
     }
 
+    // ---- fix-round-2: foot layout — single line, no wrap, no overlap --------
+    console.log(
+      '\nscenario: foot layout — single line, no wrap at 400\u202fpx list width',
+    );
+
+    {
+      const footPage = await context.newPage();
+      try {
+        await footPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await footPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        // Helper: check that every foot control is single-line (no wrapping)
+        // and that no two controls overlap horizontally.
+        async function checkFootLayout(view, label) {
+          await footPage.evaluate((v) => {
+            location.hash = `#/attention/${v}`;
+          }, view);
+          await footPage.waitForFunction(
+            (v) => location.hash === `#/attention/${v}`,
+            view,
+          );
+          await footPage
+            .waitForSelector('.kit-row', { timeout: 5000 })
+            .catch(() => {});
+          await footPage.waitForTimeout(400);
+
+          // Select all visible rows to trigger the bulk/sel-count display.
+          const boxes = await footPage.$$('.kit-row .kit-box');
+          for (const box of boxes) {
+            await box.click();
+            await footPage.waitForTimeout(30);
+          }
+          await footPage.waitForTimeout(300);
+
+          // Collect bounding rects of all visible foot controls.
+          const footRects = await footPage.evaluate(() => {
+            const foot = document.querySelector('.cb-foot');
+            if (!foot) return null;
+            // Gather all interactive foot controls (visible ones only).
+            const selectors = [
+              '.cb-sel-count',
+              '.cb-sel-all',
+              '.cb-prop-accept',
+              '.cb-prop-reject',
+              '.cb-foot-more',
+            ];
+            const rects = [];
+            for (const sel of selectors) {
+              const el = foot.querySelector(sel);
+              if (!el || el.hidden || getComputedStyle(el).display === 'none')
+                continue;
+              const r = el.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) continue;
+              // lineHeight: scrollHeight > clientHeight would indicate wrap.
+              rects.push({
+                sel,
+                top: r.top,
+                bottom: r.bottom,
+                left: r.left,
+                right: r.right,
+                scrollH: el.scrollHeight,
+                clientH: el.clientHeight,
+              });
+            }
+            return rects;
+          });
+
+          if (!footRects || footRects.length === 0) {
+            check(`${label}: foot controls found`, false);
+            return;
+          }
+
+          // Each control must not be taller than a single line.
+          // A line height of ~20 px is typical; wrapping adds at least half again.
+          // We check scrollHeight <= clientHeight (no overflow) as the wrap signal.
+          let allSingleLine = true;
+          for (const r of footRects) {
+            if (r.scrollH > r.clientH + 2) {
+              allSingleLine = false;
+              console.error(
+                `    wrap detected in ${r.sel}: scrollH=${r.scrollH} clientH=${r.clientH}`,
+              );
+            }
+          }
+          check(
+            `${label}: all foot controls are single-line (no wrapping)`,
+            allSingleLine,
+          );
+
+          // No two controls must overlap horizontally (left/right rectangles).
+          let noOverlap = true;
+          for (let i = 0; i < footRects.length; i++) {
+            for (let j = i + 1; j < footRects.length; j++) {
+              const a = footRects[i];
+              const b = footRects[j];
+              // Overlap: a.right > b.left && b.right > a.left (horizontal).
+              if (a.right > b.left + 1 && b.right > a.left + 1) {
+                noOverlap = false;
+                console.error(
+                  `    overlap: ${a.sel} [${a.left.toFixed(0)}\..\.${a.right.toFixed(0)}] overlaps ${b.sel} [${b.left.toFixed(0)}\..\.${b.right.toFixed(0)}]`,
+                );
+              }
+            }
+          }
+          check(`${label}: no foot controls overlap`, noOverlap);
+        }
+
+        // Test with a selection in the proposed view.
+        await checkFootLayout('proposed', 'proposed view with selection');
+
+        // Test with a selection in the new view (no bulk buttons).
+        await checkFootLayout('new', 'new view with selection');
+
+        // Take fix-round-2 screenshots.
+        await footPage.setViewportSize({ width: 1600, height: 900 });
+
+        // proposed: 1 selected
+        await footPage.evaluate(() => {
+          location.hash = '#/attention/proposed';
+        });
+        await footPage.waitForFunction(
+          () => location.hash === '#/attention/proposed',
+        );
+        await footPage
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+        await footPage.waitForTimeout(400);
+        const propRows1 = await footPage.$$('.kit-row .kit-box');
+        if (propRows1.length > 0) await propRows1[0].click();
+        await footPage.waitForTimeout(300);
+        await footPage.screenshot({ path: '/tmp/t5fix2-proposed-1sel.png' });
+
+        // proposed: all selected
+        for (let i = 1; i < propRows1.length; i++) {
+          await propRows1[i].click();
+          await footPage.waitForTimeout(30);
+        }
+        await footPage.waitForTimeout(300);
+        await footPage.screenshot({ path: '/tmp/t5fix2-proposed-allsel.png' });
+
+        // new: 2 selected
+        await footPage.evaluate(() => {
+          location.hash = '#/attention/new';
+        });
+        await footPage.waitForFunction(
+          () => location.hash === '#/attention/new',
+        );
+        await footPage
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+        await footPage.waitForTimeout(400);
+        const newRows = await footPage.$$('.kit-row .kit-box');
+        if (newRows.length > 0) await newRows[0].click();
+        if (newRows.length > 1) await newRows[1].click();
+        await footPage.waitForTimeout(300);
+        await footPage.screenshot({ path: '/tmp/t5fix2-new-2sel.png' });
+        console.log(
+          '  t5fix2 screenshots: /tmp/t5fix2-proposed-1sel.png  /tmp/t5fix2-proposed-allsel.png  /tmp/t5fix2-new-2sel.png',
+        );
+      } finally {
+        await footPage.close();
+      }
+    }
+
     // ---- G: live proposals event updates the agent name in list rows --------
     {
       const claudePage = await context.newPage();

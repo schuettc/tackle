@@ -24,7 +24,7 @@ import type {
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
 import { wireSelection } from './decide.ts';
-import { keyWithoutKind } from './decide-math.ts';
+import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { makeBoard } from './board.ts';
 import {
   agentFromSource,
@@ -146,7 +146,7 @@ export function makeAttention(ctx: Ctx): Section {
     const countEl = h(
       'p',
       { class: 'cb-read-empty-count' },
-      `${totalItemsForView} items`,
+      pluralize(totalItemsForView, 'item'),
     );
     const promptEl = h(
       'p',
@@ -160,7 +160,7 @@ export function makeAttention(ctx: Ctx): Section {
   function updateReadEmptyCount(): void {
     const countEl = readEl.querySelector<HTMLElement>('.cb-read-empty-count');
     if (countEl) {
-      countEl.textContent = `${totalItemsForView} items`;
+      countEl.textContent = pluralize(totalItemsForView, 'item');
     }
   }
 
@@ -176,6 +176,8 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- foot: show-more + selection count + select all in view ---------------
 
   function buildFoot(): HTMLElement {
+    // Left side: selection count (shown when N>0) and select-all button
+    // (hidden once every item in view is already selected).
     const selCount = h(
       'span',
       { class: 'cb-sel-count', hidden: true },
@@ -193,17 +195,19 @@ export function makeAttention(ctx: Ctx): Section {
       'select all 0 in view',
     );
 
+    // Right side: bulk proposal buttons (proposed view only) and show-more.
+    // .cb-prop-bulk and .cb-foot-more are pushed right via margin-left:auto
+    // on .cb-foot-right (see casebook.css).
     // Bulk proposal buttons (only visible in the 'proposed' view).
     propFoot = bulkProposalActions(ctx, (keys: string[]) => {
       selection.deselect(keys);
       void reload();
     });
 
-    footEl = h(
+    const footRight = h(
       'div',
-      { class: 'cb-foot' },
-      selCount,
-      selAllBtn,
+      { class: 'cb-foot-right' },
+      propFoot.el,
       h(
         'button',
         {
@@ -215,8 +219,9 @@ export function makeAttention(ctx: Ctx): Section {
         },
         `show ${PAGE_SIZE} more`,
       ),
-      propFoot.el,
     );
+
+    footEl = h('div', { class: 'cb-foot' }, selCount, selAllBtn, footRight);
     return footEl;
   }
 
@@ -424,10 +429,13 @@ export function makeAttention(ctx: Ctx): Section {
   function updateFoot(): void {
     if (!footEl) return;
 
-    // Update the select-all button text with the current view total.
-    const selAll = footEl.querySelector('.cb-sel-all');
+    // Update the select-all button text and hide it once all items are selected.
+    const selAll = footEl.querySelector<HTMLElement>('.cb-sel-all');
     if (selAll instanceof HTMLElement) {
       selAll.textContent = `select all ${totalItemsForView} in view`;
+      const allSelected =
+        totalItemsForView > 0 && selection.ids().length >= totalItemsForView;
+      selAll.hidden = allSelected;
     }
 
     // Show or hide only the show-more button; the foot itself stays visible
@@ -494,9 +502,18 @@ export function makeAttention(ctx: Ctx): Section {
   // Wire selection → primary button and foot count (Task 4).
   wireSelection(ctx, handle);
 
-  // Also update proposal bulk buttons when selection changes.
+  // Also update proposal bulk buttons and select-all visibility when selection changes.
   selection.onChange((ids) => {
     updateProposalBulk(ids);
+    // Hide "select all N in view" once every item in view is already selected.
+    if (footEl) {
+      const selAll = footEl.querySelector<HTMLElement>('.cb-sel-all');
+      if (selAll) {
+        const allSelected =
+          totalItemsForView > 0 && ids.length >= totalItemsForView;
+        selAll.hidden = allSelected;
+      }
+    }
   });
 
   // Register 'a' and 'r' keys to accept/reject the open item's proposal.
