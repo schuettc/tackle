@@ -19,3 +19,6 @@ docs/superpowers/
 
 # cull binary
 /cull
+
+# Python cache
+__pycache__/
