@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,7 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,8 +28,9 @@ import (
 
 // Test seams for the workbench commands.
 var (
-	openBrowser   = localweb.OpenBrowser
-	startDetached = defaultStartDetached
+	openBrowser      = localweb.OpenBrowser
+	startDetached    = defaultStartDetached
+	newSettledClient = func() *channel.Client { return channel.NewClient() }
 )
 
 // defaultStartDetached starts serve in the background from this binary.
@@ -45,6 +51,7 @@ func settledFlags() *flag.FlagSet {
 		"Tells casebook serve an agent's turn ended, so its queued page messages go out. Called by pi-casebook and the Claude Code Stop hook. Never fails, never prints.", func(fs *flag.FlagSet) {
 			fs.String("session", "", "the session whose turn ended")
 			fs.String("harness", "", "claude: read the session id from the Stop hook payload on stdin")
+			fs.String("shown", "", "comma-separated delivery ids the agent was shown this turn (bad values ignored)")
 		})()
 }
 
@@ -119,8 +126,19 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				defer cancel()
 				session := strFlag(fs, "session")
+				var shownIDs []int64
+				// Parse --shown flag: comma-separated ids; bad values ignored.
+				if s := strFlag(fs, "shown"); s != "" {
+					for _, part := range strings.Split(s, ",") {
+						if id, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil {
+							shownIDs = append(shownIDs, id)
+						}
+					}
+				}
 				if strFlag(fs, "harness") == "claude" {
-					type readResult struct{ b []byte }
+					type readResult struct {
+						b []byte
+					}
 					done := make(chan readResult, 1)
 					go func() {
 						b, _ := io.ReadAll(io.LimitReader(stdin, 1<<20))
@@ -128,7 +146,14 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 					}()
 					select {
 					case res := <-done:
-						session = harness.FromHookPayload(res.b).SessionID
+						cap := harness.FromHookPayload(res.b)
+						session = cap.SessionID
+						// Scan the transcript for casebook deliveries the agent was shown.
+						if cap.TranscriptPath != "" {
+							if ids := shownInTranscript(ctx, cap.TranscriptPath); len(ids) > 0 {
+								shownIDs = append(shownIDs, ids...)
+							}
+						}
 					case <-ctx.Done():
 						return nil
 					}
@@ -136,13 +161,116 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				if session == "" {
 					return nil
 				}
-				c := channel.NewClient()
-				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/settled", map[string]string{"session": session}, nil)
+				c := newSettledClient()
+				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/settled", map[string]any{"session": session, "shown": shownIDs}, nil)
 				return nil
 			},
 		},
 		{Name: "channel", Group: "plumbing", Summary: "the MCP channel an agent session runs (stdio; self-routed)"},
 	}
+}
+
+// chanTagRE matches a <channel ...> opening tag; deliveryRE extracts delivery="N";
+// casebookSourceRE checks for source="casebook" within the tag attributes.
+var (
+	chanTagRE        = regexp.MustCompile(`<channel\s([^>]*)>`)
+	deliveryAttrRE   = regexp.MustCompile(`delivery="(\d+)"`)
+	casebookSourceRE = regexp.MustCompile(`source="casebook"`)
+)
+
+// shownInTranscript reads at most the last 8 MiB of transcriptPath (a Claude
+// Code JSONL transcript) and returns the delivery ids of casebook deliveries the
+// agent was shown. Entries of type "queue-operation" are excluded (those only
+// mean queued, not shown). Any failure returns nil silently.
+func shownInTranscript(ctx context.Context, transcriptPath string) []int64 {
+	if transcriptPath == "" {
+		return nil
+	}
+	f, err := os.Open(transcriptPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	// Read at most the last 8 MiB.
+	const maxBytes = 8 << 20
+	if fi, err := f.Stat(); err == nil && fi.Size() > maxBytes {
+		if _, err := f.Seek(-maxBytes, io.SeekEnd); err != nil {
+			return nil
+		}
+	}
+
+	type entry struct {
+		Type    string `json:"type"`
+		Message *struct {
+			Content string `json:"content"`
+		} `json:"message"`
+		Attachment *struct {
+			Type   string `json:"type"`
+			Prompt string `json:"prompt"`
+		} `json:"attachment"`
+	}
+
+	seen := map[int64]bool{}
+	sc := bufio.NewScanner(io.LimitReader(f, maxBytes))
+	sc.Buffer(make([]byte, 256*1024), 256*1024)
+	for sc.Scan() {
+		select {
+		case <-ctx.Done():
+			return deliveryList(seen)
+		default:
+		}
+		line := sc.Bytes()
+		if !bytes.Contains(line, []byte("casebook")) {
+			continue
+		}
+		var e entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			continue
+		}
+		switch e.Type {
+		case "queue-operation":
+			// These only mean queued, not shown — skip.
+			continue
+		case "user":
+			if e.Message != nil {
+				extractCasebookDeliveries(e.Message.Content, seen)
+			}
+		case "attachment":
+			if e.Attachment != nil && e.Attachment.Type == "queued_command" {
+				extractCasebookDeliveries(e.Attachment.Prompt, seen)
+			}
+		}
+	}
+	return deliveryList(seen)
+}
+
+// extractCasebookDeliveries scans text for <channel source="casebook" ...> tags
+// and collects their delivery="N" values into seen.
+func extractCasebookDeliveries(text string, seen map[int64]bool) {
+	for _, m := range chanTagRE.FindAllStringSubmatch(text, -1) {
+		attrs := m[1]
+		if !casebookSourceRE.MatchString(attrs) {
+			continue
+		}
+		if dm := deliveryAttrRE.FindStringSubmatch(attrs); dm != nil {
+			if id, err := strconv.ParseInt(dm[1], 10, 64); err == nil {
+				seen[id] = true
+			}
+		}
+	}
+}
+
+// deliveryList converts a seen map to a sorted (insertion-order-independent) slice.
+func deliveryList(seen map[int64]bool) []int64 {
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]int64, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	return out
 }
 
 // channelMain is `casebook channel`: MCP on stdin/stdout, diagnostics on stderr.

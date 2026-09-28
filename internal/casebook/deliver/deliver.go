@@ -118,6 +118,7 @@ type Delivery struct {
 	SentAt     time.Time `json:"sent_at"`
 	TouchedAt  time.Time `json:"touched_at"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
+	ShownAt    time.Time `json:"shown_at,omitzero"`
 	Stuck      bool      `json:"stuck"`
 	Messages   []Message `json:"messages"`
 }
@@ -412,16 +413,16 @@ func (q *Queue) Inflight(ctx context.Context, session string) (*Delivery, error)
 // Delivery reads one delivery with its messages.
 func (q *Queue) Delivery(ctx context.Context, id int64) (Delivery, error) {
 	var d Delivery
-	var sent, touched, fin int64
-	err := q.DB.QueryRowContext(ctx, "SELECT id, session_id, state, sent_at, touched_at, finished_at FROM deliveries WHERE id = ?", id).
-		Scan(&d.ID, &d.SessionID, &d.State, &sent, &touched, &fin)
+	var sent, touched, fin, shown int64
+	err := q.DB.QueryRowContext(ctx, "SELECT id, session_id, state, sent_at, touched_at, finished_at, shown_at FROM deliveries WHERE id = ?", id).
+		Scan(&d.ID, &d.SessionID, &d.State, &sent, &touched, &fin, &shown)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, ErrNotFound
 	}
 	if err != nil {
 		return d, err
 	}
-	d.SentAt, d.TouchedAt, d.FinishedAt = tm(sent), tm(touched), tm(fin)
+	d.SentAt, d.TouchedAt, d.FinishedAt, d.ShownAt = tm(sent), tm(touched), tm(fin), tm(shown)
 	d.Stuck = d.State == InFlight && q.Now().Sub(d.TouchedAt) > StuckAfter
 	d.Messages, err = q.messages(ctx, "delivery_id = ? AND author = 'court' ORDER BY queued_at, COALESCE(batch_id, 0), batch_pos, id", id)
 	return d, err
@@ -561,7 +562,10 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 			}
 		}
 		for did := range deliveries {
-			if _, err := tx.ExecContext(ctx, "UPDATE deliveries SET touched_at = ? WHERE id = ?", now, did); err != nil {
+			// touched_at always refreshed; shown_at stamped on first reply (agent evidently saw it).
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE deliveries SET touched_at = ?, shown_at = CASE WHEN shown_at = 0 THEN ? ELSE shown_at END WHERE id = ?",
+				now, now, did); err != nil {
 				return err
 			}
 			var open int
@@ -598,18 +602,63 @@ func (q *Queue) end(ctx context.Context, id int64, dState, msgState string) erro
 	})
 }
 
-// Settled is the harness reporting the session's turn ended: its delivery in
-// flight ends and anything it didn't settle becomes unanswered. No-op when
-// nothing is in flight.
-func (q *Queue) Settled(ctx context.Context, session string) (*Delivery, error) {
-	d, err := q.Inflight(ctx, session)
-	if err != nil || d == nil {
+// Settled is the harness reporting the session's turn ended. shownIDs lists
+// the delivery ids the agent was shown this turn (for this session only);
+// shown_at is recorded for each. The in-flight delivery is then ended (unsettled
+// messages → unanswered) only if it has been shown (shown_at > 0). An unshown
+// delivery stays in flight — it will be shown in the next turn and that turn's
+// end will settle it. Returns the ended delivery, or nil if nothing was ended.
+func (q *Queue) Settled(ctx context.Context, session string, shownIDs []int64) (*Delivery, error) {
+	now := ms(q.Now())
+	var endedID int64
+
+	err := q.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Record shown_at for each provided delivery id that belongs to this session.
+		for _, id := range shownIDs {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE deliveries SET shown_at = ? WHERE id = ? AND session_id = ? AND shown_at = 0",
+				now, id, session); err != nil {
+				return err
+			}
+		}
+
+		// Find the in-flight delivery and its shown status.
+		var id int64
+		var shownAt int64
+		err := tx.QueryRowContext(ctx,
+			"SELECT id, shown_at FROM deliveries WHERE session_id = ? AND state = 'inflight'",
+			session).Scan(&id, &shownAt)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // nothing in flight
+		}
+		if err != nil {
+			return err
+		}
+
+		// Only end the delivery if it has been shown to the agent.
+		if shownAt == 0 {
+			return nil // unshown: stays in flight for the next turn
+		}
+
+		// End the delivery: mark done and mark unsettled messages unanswered.
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE deliveries SET state = ?, finished_at = ? WHERE id = ? AND state = 'inflight'",
+			Done, now, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE messages SET state = ?, settled_at = ? WHERE delivery_id = ? AND author = 'court'
+			 AND state NOT IN ('answered', 'declined', 'failed', 'unanswered', 'interrupted')`,
+			Unanswered, now, id); err != nil {
+			return err
+		}
+		endedID = id
+		return nil
+	})
+	if err != nil || endedID == 0 {
 		return nil, err
 	}
-	if err := q.end(ctx, d.ID, Done, Unanswered); err != nil {
-		return nil, err
-	}
-	out, err := q.Delivery(ctx, d.ID)
+	out, err := q.Delivery(ctx, endedID)
 	return &out, err
 }
 

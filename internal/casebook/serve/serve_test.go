@@ -184,10 +184,12 @@ func TestSettledEndsTurn(t *testing.T) {
 	r := newRig(t)
 	th := r.attach(t, "s1")
 	m := r.send(t, th, "check CI", false)
-	r.do(t, "GET", "/api/agent/wait?session=s1", nil, nil)
+	var w waited
+	r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w)
 	r.do(t, "POST", "/api/agent/progress", map[string]any{"session": "s1", "text": "checking CI on #671", "n": 2, "total": 4}, nil)
 	var out map[string]any
-	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1"}, &out); c != 200 || out["delivery"] == nil {
+	// Pass the delivery id in shown so Settled ends it (updated from old unconditional call).
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1", "shown": []int64{w.Delivery.ID}}, &out); c != 200 || out["delivery"] == nil {
 		t.Fatalf("settled %d %v", c, out)
 	}
 	got, _ := r.s.Queue.Message(ctx, m.ID)
@@ -204,9 +206,10 @@ func TestLateReplyHTTPShape(t *testing.T) {
 	th := r.attach(t, "s1")
 	m1 := r.send(t, th, "one", false)
 	m2 := r.send(t, th, "two", false)
-	r.do(t, "GET", "/api/agent/wait?session=s1", nil, nil) // deliver both
-	// End the turn: both messages become unanswered.
-	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1"}, nil); c != 200 {
+	var w waited
+	r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w) // deliver both
+	// End the turn: both messages become unanswered. Pass shown id (updated from old unconditional call).
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1", "shown": []int64{w.Delivery.ID}}, nil); c != 200 {
 		t.Fatalf("settled %d", c)
 	}
 
@@ -246,6 +249,55 @@ func TestLateReplyHTTPShape(t *testing.T) {
 	}
 	if len(out2.Skipped) != 1 || out2.Skipped[0].ID != m2.ID || out2.Skipped[0].State != "unanswered" {
 		t.Fatalf("skipped %+v", out2.Skipped)
+	}
+}
+
+// TestSettledPiPattern tests the pi harness pattern end to end:
+// a delivery goes out, settled without it in shown 	→ still in flight;
+// settled with it 	→ ended, next queued message goes out.
+func TestSettledPiPattern(t *testing.T) {
+	r := newRig(t)
+	th := r.attach(t, "s1")
+	m1 := r.send(t, th, "first", false)
+	m2 := r.send(t, th, "second", false)
+
+	// Deliver m1 (and m2 is queued behind it).
+	var w1 waited
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w1); c != 200 || len(w1.Delivery.Messages) != 2 {
+		t.Fatalf("first wait %d %+v", c, w1)
+	}
+	if w1.Delivery.Messages[0].ID != m1.ID || w1.Delivery.Messages[1].ID != m2.ID {
+		t.Fatalf("first delivery messages %+v", w1.Delivery.Messages)
+	}
+
+	// Now queue a third message AFTER the delivery is in flight (it must wait).
+	m3 := r.send(t, th, "third", false)
+
+	// Settle without showing the delivery 	→ delivery stays in flight.
+	var out1 map[string]any
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1"}, &out1); c != 200 {
+		t.Fatalf("settled (no shown) %d", c)
+	}
+	if out1["delivery"] != nil {
+		t.Fatalf("expected no delivery ended, got %v", out1["delivery"])
+	}
+	// m3 must still be queued (inflight delivery blocks it).
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1&timeout=1", nil, nil); c != http.StatusNoContent {
+		t.Fatalf("mid-turn wait after unshown settle: %d, want 204", c)
+	}
+
+	// Settle with the delivery id in shown 	→ delivery ends.
+	var out2 map[string]any
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{"session": "s1", "shown": []int64{w1.Delivery.ID}}, &out2); c != 200 {
+		t.Fatalf("settled (shown) %d", c)
+	}
+	if out2["delivery"] == nil {
+		t.Fatalf("expected delivery ended, got nil")
+	}
+	// m3 must now be delivered.
+	var w3 waited
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w3); c != 200 || len(w3.Delivery.Messages) != 1 || w3.Delivery.Messages[0].ID != m3.ID {
+		t.Fatalf("third wait %d %+v", c, w3)
 	}
 }
 

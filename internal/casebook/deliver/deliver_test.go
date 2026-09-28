@@ -147,7 +147,8 @@ func TestSettledEndsTurnAndMarksUnanswered(t *testing.T) {
 	d, _ := q.Next(ctx, "s1")
 	q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "")
 	q.Reply(ctx, "s1", []int64{m2.ID}, Working, "")
-	ended, err := q.Settled(ctx, "s1")
+	// Pass the delivery id so Settled knows it was shown (updated from old unconditional call).
+	ended, err := q.Settled(ctx, "s1", []int64{d.ID})
 	if err != nil || ended == nil || ended.State != Done {
 		t.Fatalf("settled %+v %v", ended, err)
 	}
@@ -157,7 +158,7 @@ func TestSettledEndsTurnAndMarksUnanswered(t *testing.T) {
 	if got, _ := q.Message(ctx, m1.ID); got.State != Answered {
 		t.Fatalf("m1 %s", got.State)
 	}
-	if again, _ := q.Settled(ctx, "s1"); again != nil {
+	if again, _ := q.Settled(ctx, "s1", nil); again != nil {
 		t.Fatalf("second settle %+v", again)
 	}
 	if n, _ := q.Resend(ctx, []int64{m2.ID, m1.ID}); n != 1 {
@@ -166,6 +167,113 @@ func TestSettledEndsTurnAndMarksUnanswered(t *testing.T) {
 	d2, _ := q.Next(ctx, "s1")
 	if d2 == nil || d2.ID == d.ID || len(d2.Messages) != 1 || d2.Messages[0].ID != m2.ID {
 		t.Fatalf("resent delivery %+v", d2)
+	}
+}
+
+// TestSettledLeavesUnshownDeliveryInFlight verifies that a turn's end does NOT
+// end a delivery the agent was never shown.
+func TestSettledLeavesUnshownDeliveryInFlight(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	m := post(t, q, th, "one", false)
+	q.Next(ctx, "s1") // delivery is now inflight
+
+	// Settle without showing the delivery id → must stay in flight.
+	ended, err := q.Settled(ctx, "s1", nil)
+	if err != nil {
+		t.Fatalf("settled err: %v", err)
+	}
+	if ended != nil {
+		t.Fatalf("Settled returned non-nil when delivery was unshown: %+v", ended)
+	}
+	// Message still delivered (in flight), not unanswered.
+	got, _ := q.Message(ctx, m.ID)
+	if got.State != Delivered {
+		t.Fatalf("message state %s, want %s", got.State, Delivered)
+	}
+	// Inflight delivery is still there.
+	d, err := q.Inflight(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("inflight after unshown settle: %v %v", d, err)
+	}
+}
+
+// TestSettledWithShownIDEndsDelivery verifies that a delivery is ended when
+// its id is passed in shownIDs.
+func TestSettledWithShownIDEndsDelivery(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	m := post(t, q, th, "one", false)
+	d, _ := q.Next(ctx, "s1")
+
+	// First settle without shown → stays in flight.
+	if ended, _ := q.Settled(ctx, "s1", nil); ended != nil {
+		t.Fatalf("expected nil when unshown, got %+v", ended)
+	}
+	// Now settle with the delivery id → ends it.
+	ended, err := q.Settled(ctx, "s1", []int64{d.ID})
+	if err != nil {
+		t.Fatalf("settled err: %v", err)
+	}
+	if ended == nil || ended.State != Done {
+		t.Fatalf("expected Done delivery, got %+v", ended)
+	}
+	if got, _ := q.Message(ctx, m.ID); got.State != Unanswered {
+		t.Fatalf("message state %s, want %s", got.State, Unanswered)
+	}
+}
+
+// TestReplyImpliesShownThenSettledEnds verifies that replying to a message in a
+// delivery marks it shown, so a subsequent Settled (with no shownIDs) ends it.
+func TestReplyImpliesShownThenSettledEnds(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	m := post(t, q, th, "one", false)
+	q.Next(ctx, "s1")
+
+	// Reply to the message → delivery is now implicitly shown.
+	if _, _, err := q.Reply(ctx, "s1", []int64{m.ID}, Working, ""); err != nil {
+		t.Fatalf("reply err: %v", err)
+	}
+	// Settle without passing shown ids → still ends it (reply implied shown).
+	ended, err := q.Settled(ctx, "s1", nil)
+	if err != nil {
+		t.Fatalf("settled err: %v", err)
+	}
+	if ended == nil || ended.State != Done {
+		t.Fatalf("expected Done, got %+v", ended)
+	}
+}
+
+// TestSettledIgnoresOtherSessionsShownIDs verifies that passing a delivery id
+// belonging to another session does not affect that session's delivery.
+func TestSettledIgnoresOtherSessionsShownIDs(t *testing.T) {
+	q, _ := newQueue(t)
+	q.Touch(ctx, Session{ID: "s2"})
+	th1 := thread(t, q, "s1")
+	th2 := thread(t, q, "s2")
+	_ = post(t, q, th1, "for s1", false)
+	_ = post(t, q, th2, "for s2", false)
+
+	d1, _ := q.Next(ctx, "s1")
+	d2, _ := q.Next(ctx, "s2")
+
+	// Settle s1's turn, passing s2's delivery id as shown → s2's delivery must not be affected.
+	ended, err := q.Settled(ctx, "s1", []int64{d2.ID})
+	if err != nil {
+		t.Fatalf("settled err: %v", err)
+	}
+	if ended != nil {
+		t.Fatalf("s2's delivery id must not end s1's delivery (s1's was not shown): %+v", ended)
+	}
+	// s2's delivery is still inflight and unmodified.
+	s2d, _ := q.Delivery(ctx, d2.ID)
+	if s2d.State != InFlight || !s2d.ShownAt.IsZero() {
+		t.Fatalf("s2 delivery affected: state=%s shownAt=%v", s2d.State, s2d.ShownAt)
+	}
+	// s1's delivery is still inflight.
+	if d, _ := q.Inflight(ctx, "s1"); d == nil || d.ID != d1.ID {
+		t.Fatalf("s1 delivery not inflight: %v", d)
 	}
 }
 
@@ -193,8 +301,8 @@ func TestLateReplyToUnanswered(t *testing.T) {
 	m2 := post(t, q, th, "two", false)
 	d, _ := q.Next(ctx, "s1")
 
-	// End the turn: both messages become unanswered.
-	if _, err := q.Settled(ctx, "s1"); err != nil {
+	// End the turn: both messages become unanswered (pass the delivery id so it is settled).
+	if _, err := q.Settled(ctx, "s1", []int64{d.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := q.Message(ctx, m1.ID); got.State != Unanswered {

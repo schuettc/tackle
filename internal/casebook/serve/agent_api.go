@@ -334,7 +334,8 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Session string `json:"session"`
+		Session string  `json:"session"`
+		Shown   []int64 `json:"shown"` // delivery ids the agent was shown this turn
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -345,7 +346,7 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	d, err := s.Queue.Settled(ctx, in.Session)
+	d, err := s.Queue.Settled(ctx, in.Session, in.Shown)
 	if err != nil {
 		reply(w, nil, err)
 		return

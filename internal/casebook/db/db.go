@@ -58,7 +58,8 @@ CREATE TABLE deliveries (
   state       TEXT NOT NULL,
   sent_at     INTEGER NOT NULL,
   touched_at  INTEGER NOT NULL,
-  finished_at INTEGER NOT NULL DEFAULT 0
+  finished_at INTEGER NOT NULL DEFAULT 0,
+  shown_at    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE messages (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
