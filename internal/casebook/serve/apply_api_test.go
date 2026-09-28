@@ -2,7 +2,9 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -129,52 +131,89 @@ func TestApproveRunsCasebookLaneAndDispatchesAgentLane(t *testing.T) {
 	}
 }
 
-// TestPauseStopsAfterCurrentStepAndResumeContinues verifies that
-// POST /api/jobs/pause sets paused=true and POST /api/jobs/resume clears it.
+// TestPauseStopsAfterCurrentStepAndResumeContinues proves the casebook lane
+// stops after the current step: with two pending steps, pausing during the
+// first leaves the second pending; resuming runs it.
 func TestPauseStopsAfterCurrentStepAndResumeContinues(t *testing.T) {
 	r := newRig(t)
 
-	// Create a job (no session needed for casebook-only-style state checks).
-	job, err := r.s.Apply.Create(ctx, agentTestPlan(), "mbp")
+	dir := t.TempDir() // a real dir so the precondition's os.Stat succeeds
+	tip := strings.Repeat("a", 40)
+	var jobID int64
+
+	// A spy that reports both branches as already gone (so no command runs), and
+	// pauses the job the moment the FIRST step is checked "during" its run.
+	r.s.Runner.RunGit = func(_ context.Context, _ string, args ...string) (string, error) {
+		if len(args) >= 2 && args[0] == "rev-parse" && args[1] == "--git-dir" {
+			return ".git", nil
+		}
+		if len(args) >= 3 && args[0] == "rev-parse" && args[1] == "--verify" {
+			if strings.Contains(args[2], "feat/p") && jobID != 0 {
+				_ = r.s.Apply.SetPaused(ctx, jobID, true)
+			}
+			return "", errors.New("no such ref")
+		}
+		return "", nil
+	}
+
+	mkStep := func(branch string) apply.Step {
+		return apply.Step{
+			Key:          "branch:schuettc/hail@" + branch,
+			Action:       "branch-delete-local",
+			Lane:         apply.LaneCasebook,
+			Command:      "git -C '" + dir + "' update-ref -d refs/heads/" + branch + " " + tip,
+			ExpectedTip:  tip,
+			Precondition: "branch-tip-unchanged-and-landed",
+		}
+	}
+	plan := apply.Plan{BuiltAt: time.Now(), Head: "head-pause", Steps: []apply.Step{mkStep("feat/p"), mkStep("feat/q")}}
+	job, err := r.s.Apply.Create(ctx, plan, "mbp")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	// Approve so it's not in planned state (planned jobs return 409 for pause).
-	if _, err := r.s.Apply.Approve(ctx, job.ID, "s1-dummy"); err != nil {
-		// s1-dummy is not a registered session but Approve only checks agent steps;
-		// for test purposes bypass by approving via the store directly.
-		t.Logf("Approve (expected to fail for unregistered session): %v", err)
-	}
-	// We need session to be registered for approval.
-	// Let's use a plan with no agent-lane steps for the pause/resume test.
-	jobNoAgent, err := r.s.Apply.Create(ctx, apply.Plan{
-		BuiltAt: time.Now(),
-		Head:    "head1",
-		Steps:   nil,
-	}, "mbp")
-	if err != nil {
-		t.Fatalf("Create no-agent job: %v", err)
-	}
-	if _, err := r.s.Apply.Approve(ctx, jobNoAgent.ID, ""); err != nil {
-		t.Fatalf("Approve no-agent: %v", err)
+	jobID = job.ID
+	step1, step2 := job.Steps[0], job.Steps[1]
+
+	// Approve via the endpoint so the casebook lane starts.
+	var jv JobView
+	if code := r.do(t, "POST", "/api/apply/approve", map[string]any{"plan_id": job.ID}, &jv); code != http.StatusOK {
+		t.Fatalf("approve: %d", code)
 	}
 
-	// Pause.
-	var pauseOut JobView
-	if code := r.do(t, "POST", "/api/jobs/pause", map[string]any{"id": jobNoAgent.ID}, &pauseOut); code != http.StatusOK {
-		t.Fatalf("pause: got %d", code)
+	// The lane runs step1, sees the pause, and stops before step2.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s1, _ := r.s.Apply.GetStep(ctx, step1.ID)
+		j, _ := r.s.Apply.Get(ctx, job.ID)
+		if j.Paused && (s1.State == apply.StepVerified || s1.State == apply.StepFailed) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !pauseOut.Job.Paused {
-		t.Error("job not paused after pause")
+	s1, _ := r.s.Apply.GetStep(ctx, step1.ID)
+	if s1.State != apply.StepVerified {
+		t.Fatalf("step1 state = %q, want verified", s1.State)
+	}
+	s2, _ := r.s.Apply.GetStep(ctx, step2.ID)
+	if s2.State != apply.StepPending {
+		t.Fatalf("step2 state = %q after pause, want pending (lane must stop after the current step)", s2.State)
 	}
 
-	// Resume.
-	var resumeOut JobView
-	if code := r.do(t, "POST", "/api/jobs/resume", map[string]any{"id": jobNoAgent.ID}, &resumeOut); code != http.StatusOK {
-		t.Fatalf("resume: got %d", code)
+	// Resume: the second step now runs to completion.
+	if code := r.do(t, "POST", "/api/jobs/resume", map[string]any{"id": job.ID}, nil); code != http.StatusOK {
+		t.Fatalf("resume: %d", code)
 	}
-	if resumeOut.Job.Paused {
-		t.Error("job still paused after resume")
+	deadline = time.Now().Add(3 * time.Second)
+	var final apply.JobStep
+	for time.Now().Before(deadline) {
+		final, _ = r.s.Apply.GetStep(ctx, step2.ID)
+		if final.State == apply.StepVerified || final.State == apply.StepFailed {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if final.State != apply.StepVerified {
+		t.Fatalf("step2 state = %q after resume, want verified", final.State)
 	}
 }
 
@@ -403,6 +442,26 @@ func TestAnswerSkipReturnsItemToAttention(t *testing.T) {
 	}
 	if updated.State != apply.StepSkipped {
 		t.Errorf("step state = %q, want skipped", updated.State)
+	}
+
+	// The item returns to Attention: it appears in an Attention view for its key.
+	var list struct {
+		Items []struct {
+			Key string `json:"key"`
+		} `json:"items"`
+	}
+	if code := r.do(t, "GET", "/api/items?view=all", nil, &list); code != http.StatusOK {
+		t.Fatalf("GET /api/items: %d", code)
+	}
+	var found bool
+	for _, it := range list.Items {
+		if it.Key == step.Key {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("item %q not in Attention view after skip; items: %+v", step.Key, list.Items)
 	}
 }
 

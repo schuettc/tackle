@@ -55,12 +55,16 @@ type Server struct {
 	mu        sync.Mutex
 	rebuildMu sync.Mutex               // serializes rebuild: one at a time, including rule evaluation
 	waiters   map[string]chan struct{} // session → wake
-	activity  atomic.Int64             // unix ms of the last API request
-	streams   atomic.Int32             // open page event streams (connected tabs)
-	streamWG  sync.WaitGroup           // Run waits for streams to end before closing the database
-	rebuilds  atomic.Int32             // count of rebuild calls; exposed for tests to verify no loops
-	life      context.Context          // Run's context; done while shutting down
-	stop      context.CancelFunc
+
+	laneMu      sync.Mutex        // guards laneRun
+	laneRun     map[int64]bool    // job id → a casebook lane is running for it
+	onLaneStart func(jobID int64) // test hook: called once per lane that actually starts
+	activity    atomic.Int64      // unix ms of the last API request
+	streams     atomic.Int32      // open page event streams (connected tabs)
+	streamWG    sync.WaitGroup    // Run waits for streams to end before closing the database
+	rebuilds    atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
+	life        context.Context   // Run's context; done while shutting down
+	stop        context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -137,7 +141,11 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 // previous serve left in flight as interrupted and builds the index.
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
-		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}}
+		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
+	// Record the serve lifetime context now so lanes started during New (a
+	// restart resume) are cancelled when serve stops. Run passes the same
+	// cancelable context and re-records it alongside s.stop.
+	s.life = ctx
 	s.Runner = apply.Runner{
 		Repo:   a.Repo,
 		Gh:     a.Gh,
@@ -152,8 +160,95 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	if err := s.rebuild(ctx); err != nil {
 		return nil, err
 	}
+	// Resume jobs a previous serve left mid-run: casebook-lane steps stuck in
+	// running go back to pending and their lanes relaunch (each step re-checks
+	// the world first, so this is safe).
+	if err := s.resumeInterruptedJobs(ctx); err != nil {
+		return nil, err
+	}
 	s.activity.Store(time.Now().UnixMilli())
 	return s, nil
+}
+
+// laneCtx is the context casebook lanes run under: serve's lifetime, so lanes
+// are cancelled when serve stops (never context.Background()).
+func (s *Server) laneCtx() context.Context {
+	if s.life != nil {
+		return s.life
+	}
+	return context.Background()
+}
+
+// startCasebookLane launches the casebook lane for a job at most once at a time
+// (a per-job single-flight guard). If a lane is already running for the job the
+// call is a no-op. The guard entry is cleared when the lane goroutine returns.
+func (s *Server) startCasebookLane(job apply.Job) {
+	s.laneMu.Lock()
+	if s.laneRun == nil {
+		s.laneRun = map[int64]bool{}
+	}
+	if s.laneRun[job.ID] {
+		s.laneMu.Unlock()
+		return
+	}
+	s.laneRun[job.ID] = true
+	s.laneMu.Unlock()
+
+	if s.onLaneStart != nil {
+		s.onLaneStart(job.ID)
+	}
+
+	go func() {
+		defer func() {
+			s.laneMu.Lock()
+			delete(s.laneRun, job.ID)
+			s.laneMu.Unlock()
+		}()
+		bgCtx := s.laneCtx()
+		env := s.buildEnv()
+		pauseFn := func() bool {
+			j, err := s.Apply.Get(bgCtx, job.ID)
+			return err == nil && j.Paused
+		}
+		if err := s.Apply.RunCasebookLane(bgCtx, job, s.Runner, env, pauseFn); err != nil {
+			fmt.Fprintf(os.Stderr, "casebook serve: RunCasebookLane job %d: %v\n", job.ID, err)
+		}
+	}()
+}
+
+// resumeInterruptedJobs relaunches casebook lanes for jobs a previous serve
+// left running (or approved with casebook steps). Casebook-lane steps stuck in
+// running are requeued to pending; agent-lane steps are left as they are (the
+// agent reports them).
+func (s *Server) resumeInterruptedJobs(ctx context.Context) error {
+	jobs, err := s.Apply.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, job := range jobs {
+		if job.State != apply.JobRunning && job.State != apply.JobApproved {
+			continue
+		}
+		var hasCasebook bool
+		for _, st := range job.Steps {
+			if st.Lane == apply.LaneCasebook {
+				hasCasebook = true
+				break
+			}
+		}
+		if !hasCasebook {
+			continue
+		}
+		if _, err := s.Apply.RequeueRunningCasebookSteps(ctx, job.ID); err != nil {
+			return err
+		}
+		fresh, err := s.Apply.Get(ctx, job.ID)
+		if err != nil {
+			return err
+		}
+		s.startCasebookLane(fresh)
+	}
+	return nil
 }
 
 func (s *Server) build(ctx context.Context) (engine.Result, error) {

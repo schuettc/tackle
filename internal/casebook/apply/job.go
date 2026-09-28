@@ -138,9 +138,9 @@ var validStepTransitions = map[StepState]map[StepState]bool{
 	StepReported: {StepVerified: true, StepFailed: true},
 	StepVerified: {},
 	StepSkipped:  {},
-	StepPaused:   {StepRunning: true, StepSkipped: true},
+	StepPaused:   {StepRunning: true, StepSkipped: true, StepPending: true},
 	StepFailed:   {},
-	StepNeedsYou: {StepRunning: true, StepSkipped: true},
+	StepNeedsYou: {StepRunning: true, StepSkipped: true, StepPending: true},
 }
 
 // ErrInvalidTransition is returned when a state transition is not allowed.
@@ -874,6 +874,27 @@ func (s *Store) MarkUndone(ctx context.Context, stepID int64) error {
 		return fmt.Errorf("step %d not found or already undone", stepID)
 	}
 	return nil
+}
+
+// RequeueRunningCasebookSteps moves this job's casebook-lane steps that were
+// left in the running state back to pending, so a restarted serve can re-run
+// them safely. This is sound because every casebook step re-checks the world
+// before it runs: a branch already gone verifies without a command, and a
+// compare-and-delete refuses a moved ref. Agent-lane steps are never touched
+// (the agent reports them). Returns the number of steps reset.
+func (s *Store) RequeueRunningCasebookSteps(ctx context.Context, jobID int64) (int, error) {
+	now := s.Now()
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET state = ?, updated_at = ? WHERE job_id = ? AND lane = ? AND state = ?`,
+		StepPending, ms(now), jobID, string(LaneCasebook), StepRunning)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
 }
 
 // GetStep returns one step by ID.
