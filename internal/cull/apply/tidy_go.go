@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -36,6 +37,7 @@ func TidyGo(src []byte) ([]byte, []string, error) {
 
 func tidyGoImports(binPath string, src []byte) ([]byte, []string, error) {
 	cmd := exec.Command(binPath)
+	cmd.Env = envWithoutKey()
 	cmd.Stdin = bytes.NewReader(src)
 	var out, errBuf bytes.Buffer
 	cmd.Stdout = &out
@@ -48,6 +50,19 @@ func tidyGoImports(binPath string, src []byte) ([]byte, []string, error) {
 		return nil, nil, err
 	}
 	return out.Bytes(), removed, nil
+}
+
+// envWithoutKey is the current environment minus TYPESAFE_API_KEY: the
+// key never reaches a helper subprocess such as goimports.
+func envWithoutKey() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "TYPESAFE_API_KEY=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	return env
 }
 
 func removedImportPaths(before, after []byte) ([]string, error) {

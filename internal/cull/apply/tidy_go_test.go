@@ -1,6 +1,8 @@
 package apply
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -107,4 +109,31 @@ func withFallback(forced bool) string {
 		return "fallback"
 	}
 	return "goimports-or-fallback"
+}
+
+// TestTidyGoImportsEnvHasNoKey runs a fake goimports that records its
+// environment: TYPESAFE_API_KEY must not reach it (M-1).
+func TestTidyGoImportsEnvHasNoKey(t *testing.T) {
+	t.Setenv("TYPESAFE_API_KEY", "sk-secret-test")
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env.txt")
+	bin := filepath.Join(dir, "goimports")
+	script := "#!/bin/sh\nenv > '" + envFile + "'\ncat\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	src := "package a\n"
+	if _, _, err := tidyGoImports(bin, []byte(src)); err != nil {
+		t.Fatal(err)
+	}
+	env, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(env), "TYPESAFE_API_KEY") {
+		t.Fatalf("goimports got TYPESAFE_API_KEY in its environment")
+	}
+	if !strings.Contains(string(env), "PATH=") {
+		t.Fatalf("goimports env lost PATH:\n%s", env)
+	}
 }
