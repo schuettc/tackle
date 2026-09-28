@@ -26,6 +26,10 @@ var validStatuses = []string{StatusDraft, StatusActive}
 // idRe is the allowed pattern for rule IDs.
 var idRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
+// ValidID reports whether id is a safe rule id: lower-case letters, digits and
+// hyphens only, so it can never name a path outside rules/.
+func ValidID(id string) bool { return idRe.MatchString(id) }
+
 // Rule is a standing rule stored at casebook-data/rules/<id>.toml.
 // Its format is documented in internal/casebook/FORMAT.md §Rules.
 type Rule struct {

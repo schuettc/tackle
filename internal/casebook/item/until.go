@@ -55,7 +55,7 @@ func ParseUntil(s string) (Cond, error) {
 		}
 		return Cond{Op: op, Ref: k}, nil
 	case "inactive":
-		d, err := parseDur(arg)
+		d, err := ParseDuration(arg)
 		if err != nil {
 			return Cond{}, fmt.Errorf("invalid until %q: %w", s, err)
 		}
@@ -97,7 +97,8 @@ func (c Cond) Met(it Key, decidedAt time.Time, f Facts, now time.Time) (met, kno
 	return false, false
 }
 
-func parseDur(s string) (time.Duration, error) {
+// ParseDuration parses casebook's duration syntax: <n>h, <n>d or <n>w.
+func ParseDuration(s string) (time.Duration, error) {
 	if len(s) < 2 {
 		return 0, fmt.Errorf("bad duration %q", s)
 	}

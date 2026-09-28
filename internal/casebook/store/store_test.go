@@ -228,3 +228,18 @@ func TestWriteReadRuleCommits(t *testing.T) {
 		t.Errorf("expected nil after delete, got %+v", got2)
 	}
 }
+
+func TestRuleIDsCannotEscapeRulesDir(t *testing.T) {
+	r, _ := newStore(t)
+	for _, id := range []string{"../casebook", "a/b", "", "UPPER"} {
+		if _, err := r.ReadRule(id); err == nil {
+			t.Errorf("ReadRule(%q) accepted", id)
+		}
+		if err := r.DeleteRule(ctx, id, "x"); err == nil {
+			t.Errorf("DeleteRule(%q) accepted", id)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "casebook.toml")); err != nil {
+		t.Fatalf("casebook.toml touched: %v", err)
+	}
+}

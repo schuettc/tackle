@@ -341,6 +341,9 @@ func (r *Repo) Rules() ([]rules.Rule, []error) {
 
 // ReadRule reads a single rule by id. Returns nil, nil when the file is absent.
 func (r *Repo) ReadRule(id string) (*rules.Rule, error) {
+	if !rules.ValidID(id) {
+		return nil, fmt.Errorf("invalid rule id %q", id)
+	}
 	b, err := r.ReadFile("rules/" + id + ".toml")
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -358,6 +361,9 @@ func (r *Repo) ReadRule(id string) (*rules.Rule, error) {
 // WriteRule writes ru as rules/<id>.toml and commits with msg. It does not
 // push; call Sync to propagate the change.
 func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
+	if err := ru.Validate(); err != nil {
+		return err
+	}
 	b, err := rules.Encode(ru)
 	if err != nil {
 		return err
@@ -371,6 +377,9 @@ func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
 
 // DeleteRule removes the rules/<id>.toml file and commits with msg.
 func (r *Repo) DeleteRule(ctx context.Context, id, msg string) error {
+	if !rules.ValidID(id) {
+		return fmt.Errorf("invalid rule id %q", id)
+	}
 	rel := "rules/" + id + ".toml"
 	p := filepath.Join(r.Dir, filepath.FromSlash(rel))
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {

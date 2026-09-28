@@ -7,7 +7,7 @@ import (
 func TestVocabularyHasEveryFieldWithOps(t *testing.T) {
 	fields := Vocabulary()
 	// §4.1 lists 25 fields; each must have at least one operator.
-	if len(fields) < 24 {
+	if len(fields) != 25 {
 		t.Errorf("got %d fields, want at least 24 (spec §4.1)", len(fields))
 	}
 	names := make(map[string]bool, len(fields))

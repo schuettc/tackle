@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/schuettc/tackle/internal/casebook/item"
 )
 
 // FieldType classifies what kind of value a field holds.
@@ -97,27 +99,10 @@ func Vocabulary() []Field {
 	return vocab
 }
 
-// parseDur parses the duration syntax from item.parseDur: <n>h, <n>d, <n>w.
-// We duplicate the tiny parser here to avoid a circular package dependency.
+// parseDur validates casebook's duration syntax (item.ParseDuration).
 func parseDur(s string) error {
-	s = strings.TrimSpace(s)
-	if len(s) < 2 {
-		return fmt.Errorf("bad duration %q: use <n>h, <n>d or <n>w", s)
-	}
-	suffix := s[len(s)-1]
-	if suffix != 'h' && suffix != 'd' && suffix != 'w' {
-		return fmt.Errorf("bad duration %q: use <n>h, <n>d or <n>w", s)
-	}
-	digits := s[:len(s)-1]
-	for _, ch := range digits {
-		if ch < '0' || ch > '9' {
-			return fmt.Errorf("bad duration %q: non-numeric prefix", s)
-		}
-	}
-	if len(digits) == 0 {
-		return fmt.Errorf("bad duration %q: missing number", s)
-	}
-	return nil
+	_, err := item.ParseDuration(strings.TrimSpace(s))
+	return err
 }
 
 // splitIn splits a comma-separated "in" value list, trimming spaces.
