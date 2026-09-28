@@ -55,6 +55,7 @@ type Server struct {
 	mu        sync.Mutex
 	rebuildMu sync.Mutex               // serializes rebuild: one at a time, including rule evaluation
 	waiters   map[string]chan struct{} // session → wake
+	streamMu  sync.Mutex               // guards streams counter + setPageOpen decision (one critical section)
 
 	laneMu           sync.Mutex        // guards laneRun
 	laneRun          map[int64]bool    // job id → a casebook lane is running for it
@@ -108,9 +109,15 @@ func (s *Server) pageStream(w http.ResponseWriter, r *http.Request) {
 		defer context.AfterFunc(s.life, cancel)()
 	}
 	r = r.WithContext(ctx)
+	// Increment and the flag write are one critical section: a concurrent
+	// decrement+clear between our Add and setPageOpen would otherwise leave the
+	// flag stuck at "1" after the last tab closes.
+	connCtx := r.Context()
+	s.streamMu.Lock()
 	if s.streams.Add(1) == 1 {
-		s.setPageOpen(r.Context(), true)
+		s.setPageOpen(connCtx, true)
 	}
+	s.streamMu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		t := time.NewTicker(15 * time.Second)
@@ -128,9 +135,13 @@ func (s *Server) pageStream(w http.ResponseWriter, r *http.Request) {
 		close(done)
 		// A stream that ends because serve is stopping doesn't mean the tab
 		// closed: leave the flag set so the next serve reopens the page.
+		// Decrement and the flag write are one critical section (mirrors the
+		// increment path above).
+		s.streamMu.Lock()
 		if s.streams.Add(-1) == 0 && (s.life == nil || s.life.Err() == nil) {
 			s.setPageOpen(context.Background(), false)
 		}
+		s.streamMu.Unlock()
 	}()
 	s.Bus.ServeSSE(w, r)
 }

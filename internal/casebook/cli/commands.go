@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -579,8 +578,7 @@ func recordFlags() *flag.FlagSet {
 func boolFlag(fs *flag.FlagSet, name string) bool  { return fs.Lookup(name).Value.String() == "true" }
 func strFlag(fs *flag.FlagSet, name string) string { return fs.Lookup(name).Value.String() }
 func intFlag(fs *flag.FlagSet, name string) int {
-	n, _ := strconv.Atoi(fs.Lookup(name).Value.String())
-	return n
+	return fs.Lookup(name).Value.(flag.Getter).Get().(int)
 }
 
 func filter(items []engine.Item, fs *flag.FlagSet) []engine.Item {
