@@ -119,6 +119,21 @@ func restarted(adv serve.Advert) string {
 	return s
 }
 
+// logLoopErrOnce writes err to w only when it is not ErrNoServe and its
+// message differs from *last. On write it updates *last. Callers clear *last
+// on success so the same error is logged again after a recovery.
+func logLoopErrOnce(w io.Writer, last *string, err error) {
+	if errors.Is(err, ErrNoServe) {
+		return
+	}
+	msg := err.Error()
+	if msg == *last {
+		return
+	}
+	fmt.Fprintf(w, "casebook channel: %v\n", err)
+	*last = msg
+}
+
 // loop keeps presence fresh and long-polls for deliveries, emitting each as a
 // channel event. The next poll is armed as soon as an event is queued
 // (channelmcp.Notify only queues), so nothing sent meanwhile is missed. It
@@ -127,7 +142,8 @@ func restarted(adv serve.Advert) string {
 func (ch *Channel) loop(ctx context.Context) {
 	c := ch.Client.passive()
 	lastPresence := time.Time{}
-	var seen time.Time // StartedAt of the serve this loop last reached
+	var seen time.Time     // StartedAt of the serve this loop last reached
+	var lastLoopErr string // last non-ErrNoServe loop error logged; "" after success
 	for ctx.Err() == nil {
 		if adv, err := c.Find(); err == nil && !adv.StartedAt.Equal(seen) {
 			if !seen.IsZero() {
@@ -139,11 +155,12 @@ func (ch *Channel) loop(ctx context.Context) {
 		}
 		if time.Since(lastPresence) > ch.Presence {
 			if err := ch.presence(ctx, c); err != nil {
-				fmt.Fprintf(ch.Log, "casebook channel: %v\n", err)
+				logLoopErrOnce(ch.Log, &lastLoopErr, err)
 				sleep(ctx, ch.Retry)
 				continue
 			}
 			lastPresence = time.Now()
+			lastLoopErr = ""
 		}
 		var got struct {
 			Delivery deliver.Delivery `json:"delivery"`
@@ -156,9 +173,10 @@ func (ch *Channel) loop(ctx context.Context) {
 			if errors.As(err, &se) && se.Code == http.StatusNotFound {
 				lastPresence = time.Time{} // serve restarted and forgot us
 			}
-			fmt.Fprintf(ch.Log, "casebook channel: %v\n", err)
+			logLoopErrOnce(ch.Log, &lastLoopErr, err)
 			sleep(ctx, ch.Retry)
 		case code == http.StatusOK && got.Delivery.ID != 0:
+			lastLoopErr = ""
 			var ids []string
 			for _, m := range got.Delivery.Messages {
 				ids = append(ids, strconv.FormatInt(m.ID, 10))
@@ -167,6 +185,8 @@ func (ch *Channel) loop(ctx context.Context) {
 			if err := ch.Server.Notify(got.Text, meta); err != nil {
 				fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
 			}
+		default:
+			lastLoopErr = ""
 		}
 	}
 }

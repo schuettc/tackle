@@ -2,6 +2,7 @@ package channel
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -531,5 +532,97 @@ func TestFromEnvHarness(t *testing.T) {
 	t.Setenv("AGENT_SESSION_CHILD", "1")
 	if id := FromEnv(); id.Session != "pi-1" || id.Harness != "pi" {
 		t.Fatalf("bridge child %+v", id)
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer used by loop tests that write
+// to ch.Log from a separate goroutine.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (n int, err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestLoopNoLogWhenServeDown verifies that the wake loop emits no log output
+// when casebook serve simply isn't running (ErrNoServe). Idle serve-down is
+// the expected steady state when the agent hasn't invoked a tool yet, and the
+// user must not receive a notification every Retry interval.
+func TestLoopNoLogWhenServeDown(t *testing.T) {
+	apptest.New(t) // hermetic CASEBOOK_HOME
+	var buf syncBuffer
+	c := &Client{
+		HTTP: &http.Client{Timeout: 5 * time.Second},
+		Find: func() (serve.Advert, error) { return serve.Advert{}, serve.ErrNotRunning },
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.Log = &buf
+	ch.Retry = 20 * time.Millisecond
+	ch.Poll = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ch.loop(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-done
+
+	if got := buf.String(); strings.Contains(got, "isn't running") {
+		t.Fatalf("log must not contain \"isn't running\"; got:\n%s", got)
+	}
+}
+
+// TestLoopDeduplicatesPresenceErrors verifies that a recurring loop error
+// (presence returning 500) is logged only once, not on every Retry cycle.
+// A recovery (presence succeeding) would reset the dedup; here the error
+// never clears so the count must stay at exactly one.
+func TestLoopDeduplicatesPresenceErrors(t *testing.T) {
+	apptest.New(t) // hermetic CASEBOOK_HOME
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+
+	var buf syncBuffer
+	c := &Client{
+		HTTP: &http.Client{Timeout: 5 * time.Second},
+		Find: func() (serve.Advert, error) {
+			return serve.Advert{Base: ts.URL, Token: "tok"}, nil
+		},
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.Log = &buf
+	ch.Retry = 20 * time.Millisecond
+	ch.Poll = 100 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ch.loop(ctx)
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+	<-done
+
+	got := buf.String()
+	lines := strings.Count(got, "casebook channel:")
+	if lines != 1 {
+		t.Fatalf("want exactly 1 log line, got %d:\n%s", lines, got)
 	}
 }
