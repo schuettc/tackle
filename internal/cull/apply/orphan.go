@@ -17,27 +17,43 @@ import (
 // removedBodies are the source text of the spans RemoveSpans just took
 // out.
 //
-// Currently implemented for Go (lang == "go"); other languages report no
-// orphans.
+// Declarations: Go top-level funcs (not methods), vars, consts, types
+// (go/ast); Python column-0 def/async def/class and NAME = (so pytest
+// fixtures count: they are matched by parameter name); TypeScript
+// column-0 function/class/const/let/var, optionally exported. The same
+// word-boundary rule applies to all: mentioned in a removed body, and at
+// most its own declaration's mention left in after. Advisory only.
 func OrphanedHelpers(before, after []byte, lang string, removedBodies []string) []string {
-	if lang != "go" || len(removedBodies) == 0 {
+	if len(removedBodies) == 0 {
 		return nil
 	}
-	names := topLevelGoNames(before)
+	var names []string
+	selfNames := map[string]bool{}
+	switch lang {
+	case "go":
+		names = topLevelGoNames(before)
+		// A removed test's own body mentions its own name (in its func
+		// signature); that's a self-reference, not a call to a helper,
+		// so it must not count as "referenced in a removed test body".
+		for _, body := range removedBodies {
+			for n := range removedDeclNames(body) {
+				selfNames[n] = true
+			}
+		}
+	case "python", "typescript":
+		names = topLevelScriptNames(lang, string(before))
+		for _, body := range removedBodies {
+			for _, n := range topLevelScriptNames(lang, body) {
+				selfNames[n] = true
+			}
+		}
+	default:
+		return nil
+	}
 	if len(names) == 0 {
 		return nil
 	}
 	removedText := strings.Join(removedBodies, "\n")
-
-	// A removed test's own body mentions its own name (in its func
-	// signature); that's a self-reference, not a call to a helper, so
-	// it must not count as "referenced in a removed test body".
-	selfNames := map[string]bool{}
-	for _, body := range removedBodies {
-		for n := range removedDeclNames(body) {
-			selfNames[n] = true
-		}
-	}
 
 	var orphans []string
 	for _, name := range names {
@@ -56,6 +72,32 @@ func OrphanedHelpers(before, after []byte, lang string, removedBodies []string) 
 	}
 	sort.Strings(orphans)
 	return orphans
+}
+
+var (
+	pyTopDecl   = regexp.MustCompile(`(?m)^(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)`)
+	pyTopAssign = regexp.MustCompile(`(?m)^([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=[^=]`)
+	tsTopDecl   = regexp.MustCompile(`(?m)^(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?(?:function\*?|class|const|let|var)[ \t]+([A-Za-z_$][\w$]*)`)
+)
+
+// topLevelScriptNames lists the column-0 declarations in a Python or
+// TypeScript source (deduped, in order).
+func topLevelScriptNames(lang, src string) []string {
+	res := []*regexp.Regexp{tsTopDecl}
+	if lang == "python" {
+		res = []*regexp.Regexp{pyTopDecl, pyTopAssign}
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, re := range res {
+		for _, m := range re.FindAllStringSubmatch(src, -1) {
+			if !seen[m[1]] {
+				seen[m[1]] = true
+				names = append(names, m[1])
+			}
+		}
+	}
+	return names
 }
 
 func wordRegexp(name string) *regexp.Regexp {
