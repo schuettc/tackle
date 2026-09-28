@@ -15,6 +15,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -159,6 +160,7 @@ export async function startServe() {
     token: adv.token,
     stop() {
       if (!exited) proc.kill();
+      rmSync(home, { recursive: true, force: true });
     },
   };
 }

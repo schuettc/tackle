@@ -51,6 +51,28 @@ async function findChrome() {
   }
 }
 
+// Track the serve handle so signal handlers can clean it up.
+let _serveHandle = null;
+
+function cleanup() {
+  if (_serveHandle) {
+    _serveHandle.stop();
+    _serveHandle = null;
+  }
+}
+
+process.on('SIGTERM', () => {
+  cleanup();
+  process.exit(143); // 128 + SIGTERM(15)
+});
+process.on('SIGINT', () => {
+  cleanup();
+  process.exit(130); // 128 + SIGINT(2)
+});
+process.on('exit', () => {
+  cleanup();
+});
+
 async function run() {
   const browser = await findChrome();
   if (!browser) {
@@ -73,6 +95,7 @@ async function run() {
   try {
     console.log('probe: starting casebook serve…');
     serveHandle = await startServe();
+    _serveHandle = serveHandle;
     console.log(`probe: serve at ${serveHandle.base}`);
   } catch (err) {
     await browser.close();
@@ -192,7 +215,7 @@ async function run() {
   } finally {
     await context.close();
     await browser.close();
-    serveHandle.stop();
+    cleanup();
   }
 
   console.log(`\nprobe: ${passes} passed, ${fails} failed`);
