@@ -27,6 +27,8 @@ const (
 	JobDone JobState = "done"
 	// JobFailed is terminated due to an error.
 	JobFailed JobState = "failed"
+	// JobCancelled is a planned job that was cancelled before it ran.
+	JobCancelled JobState = "cancelled"
 )
 
 // StepState is the lifecycle state of a JobStep.
@@ -115,13 +117,16 @@ func tm(v int64) time.Time {
 }
 
 // validJobTransitions maps from → set of valid to-states.
+// Note: planned → approved is handled exclusively by Approve(); use Cancel() to
+// cancel a planned job. Finish() refuses planned and all terminal states.
 var validJobTransitions = map[JobState]map[JobState]bool{
-	JobPlanned:  {JobApproved: true, JobFailed: true},
-	JobApproved: {JobRunning: true, JobFailed: true},
-	JobRunning:  {JobPaused: true, JobDone: true, JobFailed: true},
-	JobPaused:   {JobRunning: true, JobFailed: true},
-	JobDone:     {},
-	JobFailed:   {},
+	JobPlanned:   {JobFailed: true},
+	JobApproved:  {JobRunning: true, JobFailed: true},
+	JobRunning:   {JobPaused: true, JobDone: true, JobFailed: true},
+	JobPaused:    {JobRunning: true, JobFailed: true},
+	JobDone:      {},
+	JobFailed:    {},
+	JobCancelled: {},
 }
 
 // validStepTransitions maps from → set of valid to-states.
@@ -261,18 +266,30 @@ func (s *Store) Approve(ctx context.Context, jobID int64, session string) (Job, 
 }
 
 // SetPaused persists the paused flag on a job without changing its state.
+// It returns an error if no job with the given ID exists.
 func (s *Store) SetPaused(ctx context.Context, jobID int64, paused bool) error {
 	p := 0
 	if paused {
 		p = 1
 	}
-	_, err := s.DB.ExecContext(ctx, `UPDATE jobs SET paused = ? WHERE id = ?`, p, jobID)
-	return err
+	res, err := s.DB.ExecContext(ctx, `UPDATE jobs SET paused = ? WHERE id = ?`, p, jobID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("job %d not found", jobID)
+	}
+	return nil
 }
 
 // Finish sets the terminal state (JobDone or JobFailed) on a job and records
 // finished_at. Any state other than done or failed is rejected. Finish
-// operates on any non-terminal job state (planned, approved, running, paused).
+// refuses planned jobs (use Cancel for those) and any already-terminal state
+// (done, failed, cancelled).
 func (s *Store) Finish(ctx context.Context, jobID int64, state JobState) error {
 	if state != JobDone && state != JobFailed {
 		return fmt.Errorf("Finish: state must be done or failed, got %q", state)
@@ -286,13 +303,39 @@ func (s *Store) Finish(ctx context.Context, jobID int64, state JobState) error {
 			}
 			return err
 		}
+		// Planned jobs have never run; use Cancel instead.
+		if current == JobPlanned {
+			return &ErrInvalidTransition{Kind: "job", ID: jobID, From: current, To: state}
+		}
 		// Terminal states cannot be finished again.
-		if current == JobDone || current == JobFailed {
+		if current == JobDone || current == JobFailed || current == JobCancelled {
 			return &ErrInvalidTransition{Kind: "job", ID: jobID, From: current, To: state}
 		}
 		_, err := tx.ExecContext(ctx,
 			`UPDATE jobs SET state = ?, finished_at = ? WHERE id = ?`,
 			state, ms(now), jobID)
+		return err
+	})
+}
+
+// Cancel transitions a planned job to cancelled, recording finished_at.
+// It returns an error if the job is not in the planned state.
+func (s *Store) Cancel(ctx context.Context, jobID int64) error {
+	now := s.Now()
+	return s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		var current JobState
+		if err := tx.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, jobID).Scan(&current); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("job %d not found", jobID)
+			}
+			return err
+		}
+		if current != JobPlanned {
+			return &ErrInvalidTransition{Kind: "job", ID: jobID, From: current, To: JobCancelled}
+		}
+		_, err := tx.ExecContext(ctx,
+			`UPDATE jobs SET state = ?, finished_at = ? WHERE id = ?`,
+			JobCancelled, ms(now), jobID)
 		return err
 	})
 }
@@ -429,8 +472,66 @@ func (s *Store) SetJobState(ctx context.Context, jobID int64, state JobState) er
 	})
 }
 
-// NextRunnable returns the first pending step in the given lane for the job,
-// or (JobStep{}, false, nil) if none exist or the job is paused.
+// ClaimNext atomically claims the lowest-pos pending step of the given lane
+// for the job, moving it to running (with updated_at) and returning it.
+// Returns (JobStep{}, false, nil) if no step is available, the job is paused,
+// or the job is not in the running or approved state.
+func (s *Store) ClaimNext(ctx context.Context, jobID int64, lane Lane) (JobStep, bool, error) {
+	now := s.Now()
+	var claimed JobStep
+	var found bool
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Verify the job exists, is not paused, and is in a runnable state.
+		var state JobState
+		var paused int
+		if err := tx.QueryRowContext(ctx, `SELECT state, paused FROM jobs WHERE id = ?`, jobID).Scan(&state, &paused); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("job %d not found", jobID)
+			}
+			return err
+		}
+		if paused != 0 || (state != JobRunning && state != JobApproved) {
+			return nil
+		}
+		// Find the lowest-pos pending step.
+		var stepID int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT id FROM steps WHERE job_id = ? AND lane = ? AND state = ? ORDER BY pos LIMIT 1`,
+			jobID, string(lane), StepPending,
+		).Scan(&stepID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		// Move it to running.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE steps SET state = ?, updated_at = ? WHERE id = ?`,
+			StepRunning, ms(now), stepID,
+		); err != nil {
+			return err
+		}
+		// Read back the claimed step.
+		row := tx.QueryRowContext(ctx,
+			`SELECT id, job_id, key, action, lane, command, precondition, posts, expected_tip, text, restore,
+			        state, detail, verified_at
+			 FROM steps WHERE id = ?`, stepID)
+		var err error
+		claimed, err = scanStep(row)
+		if err != nil {
+			return err
+		}
+		found = true
+		return nil
+	})
+	if err != nil {
+		return JobStep{}, false, err
+	}
+	return claimed, found, nil
+}
+
+// NextRunnable is deprecated: use ClaimNext. It returns the first pending step
+// in the given lane without claiming it; preserved for callers not yet migrated.
 func (s *Store) NextRunnable(ctx context.Context, jobID int64, lane Lane) (JobStep, bool, error) {
 	// Check if the job is paused.
 	var paused int
@@ -459,16 +560,42 @@ func (s *Store) NextRunnable(ctx context.Context, jobID int64, lane Lane) (JobSt
 	return st, true, nil
 }
 
-// SetStepText sets the approved public text for a step.
+// SetStepText sets the approved public text for a step and updates updated_at.
+// It returns an error if no step with the given ID exists.
 func (s *Store) SetStepText(ctx context.Context, stepID int64, text string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE steps SET text = ? WHERE id = ?`, text, stepID)
-	return err
+	now := s.Now()
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET text = ?, updated_at = ? WHERE id = ?`, text, ms(now), stepID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("step %d not found", stepID)
+	}
+	return nil
 }
 
-// SetStepRestore sets the restore command for a step.
+// SetStepRestore sets the restore command for a step and updates updated_at.
+// It returns an error if no step with the given ID exists.
 func (s *Store) SetStepRestore(ctx context.Context, stepID int64, restore string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE steps SET restore = ? WHERE id = ?`, restore, stepID)
-	return err
+	now := s.Now()
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET restore = ?, updated_at = ? WHERE id = ?`, restore, ms(now), stepID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("step %d not found", stepID)
+	}
+	return nil
 }
 
 // OpenNeedsYou creates a new open needs-you card for the given job.

@@ -2,6 +2,7 @@ package apply
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -231,9 +232,10 @@ func TestListJobsReturnsStateAndSteps(t *testing.T) {
 		t.Fatalf("List: got %d jobs; want 2", len(jobs))
 	}
 
-	// Advance job1 to approved via SetJobState.
-	if err := s.SetJobState(ctx, job1.ID, JobApproved); err != nil {
-		t.Fatalf("planned→approved: %v", err)
+	// Advance job1 to approved via Approve (planned→approved must use Approve, not SetJobState).
+	// job1 uses testPlan() which has agent-lane steps, so a session is required.
+	if _, err := s.Approve(ctx, job1.ID, "sess-list"); err != nil {
+		t.Fatalf("planned→approved via Approve: %v", err)
 	}
 
 	// Verify state is reflected in List.
@@ -277,34 +279,41 @@ func TestListJobsReturnsStateAndSteps(t *testing.T) {
 		t.Error("done→running should fail")
 	}
 
-	// NextRunnable: create a fresh job and advance steps.
+	// ClaimNext: create a fresh job, approve it, then claim steps.
 	plan3 := testPlan()
 	job3, err := s.Create(ctx, plan3, "macbook-pro")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// All steps are pending; NextRunnable for casebook lane should return steps[0].
-	next, ok, err := s.NextRunnable(ctx, job3.ID, LaneCasebook)
+	// Approve job3 so ClaimNext can proceed (testPlan has agent steps).
+	if _, err := s.Approve(ctx, job3.ID, "sess-3"); err != nil {
+		t.Fatalf("Approve job3: %v", err)
+	}
+	// ClaimNext for casebook lane should atomically claim and return steps[0].
+	next, ok, err := s.ClaimNext(ctx, job3.ID, LaneCasebook)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("NextRunnable: expected to find a runnable step")
+		t.Fatal("ClaimNext: expected to find a runnable step")
 	}
 	if next.Action != "branch-delete-local" {
-		t.Errorf("NextRunnable: action = %q; want branch-delete-local", next.Action)
+		t.Errorf("ClaimNext: action = %q; want branch-delete-local", next.Action)
+	}
+	if next.State != StepRunning {
+		t.Errorf("ClaimNext: step.State = %q; want running", next.State)
 	}
 
-	// NextRunnable for agent lane with all steps pending.
-	next, ok, err = s.NextRunnable(ctx, job3.ID, LaneAgent)
+	// ClaimNext for agent lane.
+	next, ok, err = s.ClaimNext(ctx, job3.ID, LaneAgent)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Fatal("NextRunnable agent: expected to find a runnable step")
+		t.Fatal("ClaimNext agent: expected to find a runnable step")
 	}
 	if next.Action != "pr-close" {
-		t.Errorf("NextRunnable agent: action = %q; want pr-close", next.Action)
+		t.Errorf("ClaimNext agent: action = %q; want pr-close", next.Action)
 	}
 }
 
@@ -395,16 +404,27 @@ func TestApproveJob(t *testing.T) {
 	}
 }
 
-// TestSetPausedAndNextRunnableWhilePaused verifies pause/resume and that
-// NextRunnable returns nothing while the job is paused.
-func TestSetPausedAndNextRunnableWhilePaused(t *testing.T) {
+// TestSetPausedAndClaimNextWhilePaused verifies pause/resume and that
+// ClaimNext returns nothing while the job is paused.
+func TestSetPausedAndClaimNextWhilePaused(t *testing.T) {
 	ctx := context.Background()
 	d := openTestDB(t)
 	s := NewStore(d)
 
-	job, err := s.Create(ctx, testPlan(), "mac")
+	// Use a casebook-only plan so Approve doesn't require a session.
+	csPlan := Plan{
+		Steps: []Step{
+			{Key: "k1", Action: "step-x", Lane: LaneCasebook, Command: "echo x"},
+			{Key: "k2", Action: "step-y", Lane: LaneCasebook, Command: "echo y"},
+		},
+	}
+	job, err := s.Create(ctx, csPlan, "mac")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Approve so ClaimNext can operate.
+	if _, err := s.Approve(ctx, job.ID, ""); err != nil {
+		t.Fatalf("Approve: %v", err)
 	}
 
 	// SetPaused true.
@@ -419,25 +439,25 @@ func TestSetPausedAndNextRunnableWhilePaused(t *testing.T) {
 		t.Error("job should be paused after SetPaused(true)")
 	}
 
-	// NextRunnable returns nothing while paused.
-	_, ok, err := s.NextRunnable(ctx, job.ID, LaneCasebook)
+	// ClaimNext returns nothing while paused.
+	_, ok, err := s.ClaimNext(ctx, job.ID, LaneCasebook)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ok {
-		t.Error("NextRunnable should return nothing while paused")
+		t.Error("ClaimNext should return nothing while paused")
 	}
 
 	// Resume.
 	if err := s.SetPaused(ctx, job.ID, false); err != nil {
 		t.Fatalf("SetPaused false: %v", err)
 	}
-	_, ok, err = s.NextRunnable(ctx, job.ID, LaneCasebook)
+	_, ok, err = s.ClaimNext(ctx, job.ID, LaneCasebook)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !ok {
-		t.Error("NextRunnable should return a step after resume")
+		t.Error("ClaimNext should return a step after resume")
 	}
 }
 
@@ -731,5 +751,378 @@ func TestRestartRoundTrip(t *testing.T) {
 		if cards[0].Text != "some details" {
 			t.Errorf("card.Text = %q; want 'some details'", cards[0].Text)
 		}
+	}
+}
+
+// ── Fix 1: Cancel planned jobs ───────────────────────────────────────────────
+
+// TestCancelPlannedJob verifies Cancel transitions planned → cancelled and sets finished_at.
+func TestCancelPlannedJob(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Cancel(ctx, job.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	got, err := s.Get(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != JobCancelled {
+		t.Errorf("state = %q; want cancelled", got.State)
+	}
+	if got.FinishedAt.IsZero() {
+		t.Error("FinishedAt should be set after Cancel")
+	}
+}
+
+// TestCancelNonPlannedJobFails verifies Cancel on a non-planned job returns an error.
+func TestCancelNonPlannedJobFails(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job.ID, "sess-x"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Cancel(ctx, job.ID); err == nil {
+		t.Error("Cancel on approved job should fail")
+	}
+}
+
+// TestFinishRefusesPlanned verifies Finish returns ErrInvalidTransition for a planned job.
+func TestFinishRefusesPlanned(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Finish(ctx, job.ID, JobDone)
+	if err == nil {
+		t.Fatal("Finish on planned job should fail")
+	}
+	var inv *ErrInvalidTransition
+	if !isInvalidTransition(err, &inv) {
+		t.Errorf("expected ErrInvalidTransition, got %T: %v", err, err)
+	}
+}
+
+// TestFinishRefusesCancelledAndDone verifies Finish refuses already-terminal jobs.
+func TestFinishRefusesCancelledAndDone(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	// cancelled
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Cancel(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, job.ID, JobFailed); err == nil {
+		t.Error("Finish on cancelled job should fail")
+	}
+
+	// done
+	job2, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job2.ID, "sess-x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetJobState(ctx, job2.ID, JobRunning); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, job2.ID, JobDone); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Finish(ctx, job2.ID, JobFailed); err == nil {
+		t.Error("Finish on done job should fail")
+	}
+}
+
+func isInvalidTransition(err error, out **ErrInvalidTransition) bool {
+	var e *ErrInvalidTransition
+	if errors.As(err, &e) {
+		if out != nil {
+			*out = e
+		}
+		return true
+	}
+	return false
+}
+
+// ── Fix 2: ClaimNext atomic step claim ───────────────────────────────────────
+
+// TestClaimNext verifies ClaimNext atomically moves a pending step to running.
+func TestClaimNext(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job.ID, "sess-x"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Claim from casebook lane.
+	step, ok, err := s.ClaimNext(ctx, job.ID, LaneCasebook)
+	if err != nil {
+		t.Fatalf("ClaimNext: %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNext: expected to find a step")
+	}
+	if step.Action != "branch-delete-local" {
+		t.Errorf("action = %q; want branch-delete-local", step.Action)
+	}
+	if step.State != StepRunning {
+		t.Errorf("step.State = %q; want running", step.State)
+	}
+
+	// The step should now be running; claiming again should return the next one.
+	step2, ok, err := s.ClaimNext(ctx, job.ID, LaneCasebook)
+	if err != nil {
+		t.Fatalf("ClaimNext second: %v", err)
+	}
+	if !ok {
+		t.Fatal("ClaimNext second: expected to find another step")
+	}
+	if step2.Action != "branch-delete-remote" {
+		t.Errorf("action = %q; want branch-delete-remote", step2.Action)
+	}
+	if step2.ID == step.ID {
+		t.Error("second claim returned the same step as the first")
+	}
+}
+
+// TestClaimNextNotRunningOrApproved verifies ClaimNext returns nothing for planned/done jobs.
+func TestClaimNextNotRunningOrApproved(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	// Planned job: ClaimNext should return nothing.
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := s.ClaimNext(ctx, job.ID, LaneCasebook)
+	if err != nil {
+		t.Fatalf("ClaimNext on planned: %v", err)
+	}
+	if ok {
+		t.Error("ClaimNext on planned job should return nothing")
+	}
+}
+
+// TestClaimNextConcurrent verifies two goroutines each claim a different step.
+func TestClaimNextConcurrent(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	// Build a plan with exactly two casebook steps.
+	twoPlan := Plan{
+		Steps: []Step{
+			{Key: "k1", Action: "step-a", Lane: LaneCasebook, Command: "echo a"},
+			{Key: "k2", Action: "step-b", Lane: LaneCasebook, Command: "echo b"},
+		},
+	}
+	job, err := s.Create(ctx, twoPlan, "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// casebook-only, so session="" is OK.
+	if _, err := s.Approve(ctx, job.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	results := make(chan JobStep, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			step, ok, err := s.ClaimNext(ctx, job.ID, LaneCasebook)
+			if err != nil || !ok {
+				results <- JobStep{} // sentinel
+				return
+			}
+			results <- step
+		}()
+	}
+
+	s1 := <-results
+	s2 := <-results
+	if s1.ID == 0 || s2.ID == 0 {
+		t.Fatal("both goroutines should have claimed a step")
+	}
+	if s1.ID == s2.ID {
+		t.Errorf("both goroutines claimed the same step (id=%d)", s1.ID)
+	}
+
+	// One pending step → exactly one goroutine succeeds.
+	onePlan := Plan{
+		Steps: []Step{
+			{Key: "k1", Action: "only-step", Lane: LaneCasebook, Command: "echo x"},
+		},
+	}
+	job2, err := s.Create(ctx, onePlan, "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approve(ctx, job2.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	results2 := make(chan bool, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, ok, err := s.ClaimNext(ctx, job2.ID, LaneCasebook)
+			results2 <- (err == nil && ok)
+		}()
+	}
+	got1 := <-results2
+	got2 := <-results2
+	if got1 == got2 {
+		t.Errorf("expected exactly one goroutine to claim: got1=%v got2=%v", got1, got2)
+	}
+}
+
+// ── Fix 3: SetStepText and SetStepRestore update updated_at ──────────────────
+
+// TestSetStepTextUpdatedAt verifies SetStepText updates updated_at.
+func TestSetStepTextUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+
+	t0 := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
+
+	s := &Store{DB: d, Now: func() time.Time { return t0 }}
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := job.Steps[0].ID
+
+	// Advance Now so updated_at changes.
+	s.Now = func() time.Time { return t1 }
+
+	if err := s.SetStepText(ctx, stepID, "hello"); err != nil {
+		t.Fatalf("SetStepText: %v", err)
+	}
+
+	var updatedAt int64
+	if err := d.QueryRowContext(ctx, `SELECT updated_at FROM steps WHERE id = ?`, stepID).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != ms(t1) {
+		t.Errorf("updated_at = %d; want %d (t1)", updatedAt, ms(t1))
+	}
+}
+
+// TestSetStepRestoreUpdatedAt verifies SetStepRestore updates updated_at.
+func TestSetStepRestoreUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+
+	t0 := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 9, 27, 11, 0, 0, 0, time.UTC)
+
+	s := &Store{DB: d, Now: func() time.Time { return t0 }}
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := job.Steps[0].ID
+
+	s.Now = func() time.Time { return t1 }
+
+	if err := s.SetStepRestore(ctx, stepID, "git checkout main"); err != nil {
+		t.Fatalf("SetStepRestore: %v", err)
+	}
+
+	var updatedAt int64
+	if err := d.QueryRowContext(ctx, `SELECT updated_at FROM steps WHERE id = ?`, stepID).Scan(&updatedAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != ms(t1) {
+		t.Errorf("updated_at = %d; want %d (t1)", updatedAt, ms(t1))
+	}
+}
+
+// ── Fix 4: not-found errors for SetPaused, SetStepText, SetStepRestore ───────
+
+// TestSetPausedNotFound verifies SetPaused returns an error for a nonexistent job.
+func TestSetPausedNotFound(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	if err := s.SetPaused(ctx, 9999, true); err == nil {
+		t.Error("SetPaused on nonexistent job should return an error")
+	}
+}
+
+// TestSetStepTextNotFound verifies SetStepText returns an error for a nonexistent step.
+func TestSetStepTextNotFound(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	if err := s.SetStepText(ctx, 9999, "text"); err == nil {
+		t.Error("SetStepText on nonexistent step should return an error")
+	}
+}
+
+// TestSetStepRestoreNotFound verifies SetStepRestore returns an error for a nonexistent step.
+func TestSetStepRestoreNotFound(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	if err := s.SetStepRestore(ctx, 9999, "restore"); err == nil {
+		t.Error("SetStepRestore on nonexistent step should return an error")
+	}
+}
+
+// ── Fix 5: planned → approved only through Approve ───────────────────────────
+
+// TestSetJobStatePlannedToApprovedFails verifies SetJobState cannot move planned → approved.
+func TestSetJobStatePlannedToApprovedFails(t *testing.T) {
+	ctx := context.Background()
+	d := openTestDB(t)
+	s := NewStore(d)
+
+	job, err := s.Create(ctx, testPlan(), "mac")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetJobState(ctx, job.ID, JobApproved); err == nil {
+		t.Error("SetJobState planned→approved should fail; use Approve() instead")
 	}
 }
