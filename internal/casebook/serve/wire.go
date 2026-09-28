@@ -190,3 +190,37 @@ type JobStepResult struct {
 type JobAskResult struct {
 	NeedsYou apply.NeedsYou `json:"needs_you"`
 }
+
+// PlanView is the response body of POST /api/apply/plan.
+type PlanView struct {
+	Plan   apply.Plan    `json:"plan"`
+	Groups []apply.Group `json:"groups"`
+	Job    apply.Job     `json:"job"`
+}
+
+// JobView is the response body of GET /api/job and POST /api/apply/approve.
+type JobView struct {
+	Job      apply.Job        `json:"job"`
+	NeedsYou []apply.NeedsYou `json:"needs_you"`
+}
+
+// JobsView is the response body of GET /api/jobs.
+type JobsView struct {
+	Jobs []apply.Job `json:"jobs"`
+}
+
+// NeedsYouView is the response body of GET /api/needs-you.
+type NeedsYouView struct {
+	Cards []apply.NeedsYou `json:"cards"`
+}
+
+// AnswerResult is the response body of POST /api/jobs/answer.
+type AnswerResult struct {
+	NeedsYou apply.NeedsYou `json:"needs_you"`
+}
+
+// UndoResult is the response body of POST /api/jobs/undo.
+type UndoResult struct {
+	StepID int64 `json:"step_id"`
+	Sent   bool  `json:"sent"` // true if sent to agent, false if ran locally
+}

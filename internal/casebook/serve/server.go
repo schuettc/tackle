@@ -37,14 +37,15 @@ var assets embed.FS
 
 // Server is a running casebook serve.
 type Server struct {
-	App   *app.App
-	DB    *db.DB
-	Queue *deliver.Queue
-	Props *propose.Store
-	Apply *apply.Store
-	Bus   *bus.Bus
-	Index *Index
-	Now   func() time.Time
+	App    *app.App
+	DB     *db.DB
+	Queue  *deliver.Queue
+	Props  *propose.Store
+	Apply  *apply.Store
+	Bus    *bus.Bus
+	Index  *Index
+	Now    func() time.Time
+	Runner apply.Runner // for the casebook lane (nil: no-op runner)
 
 	// Wait is the long-poll timeout cap and WatchEvery the HEAD poll; tests
 	// shorten them.
@@ -137,6 +138,12 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
 		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}}
+	s.Runner = apply.Runner{
+		Repo:   a.Repo,
+		Gh:     a.Gh,
+		RunGit: gitx.Run,
+		Now:    s.Now,
+	}
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {
@@ -326,6 +333,16 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
 	m.HandleFunc("POST /api/agent/job-step", s.agentJobStep)
 	m.HandleFunc("POST /api/agent/job-ask", s.agentJobAsk)
+	// apply
+	m.HandleFunc("POST /api/apply/plan", s.postApplyPlan)
+	m.HandleFunc("POST /api/apply/approve", s.postApplyApprove)
+	m.HandleFunc("GET /api/jobs", s.getJobs)
+	m.HandleFunc("GET /api/job", s.getJob)
+	m.HandleFunc("GET /api/needs-you", s.getNeedsYou)
+	m.HandleFunc("POST /api/jobs/pause", s.postJobsPause)
+	m.HandleFunc("POST /api/jobs/resume", s.postJobsResume)
+	m.HandleFunc("POST /api/jobs/undo", s.postJobsUndo)
+	m.HandleFunc("POST /api/jobs/answer", s.postJobsAnswer)
 	// rules
 	m.HandleFunc("GET /api/rules", s.getRules)
 	m.HandleFunc("GET /api/rule", s.getRule)

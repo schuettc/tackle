@@ -66,6 +66,12 @@ var wireRoots = []any{
 	VocabularyView{},
 	JobStepResult{},
 	JobAskResult{},
+	PlanView{},
+	JobView{},
+	JobsView{},
+	NeedsYouView{},
+	AnswerResult{},
+	UndoResult{},
 }
 
 const wirePath = "../web/wire.d.ts"

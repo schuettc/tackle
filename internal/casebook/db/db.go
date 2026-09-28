@@ -116,15 +116,16 @@ CREATE TABLE events (
 // that enforces one delivery in flight per session at the database level.
 const schemaV2 = `
 CREATE TABLE jobs (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  plan_json   TEXT NOT NULL,
-  machine     TEXT NOT NULL,
-  session     TEXT NOT NULL DEFAULT '',
-  state       TEXT NOT NULL,
-  paused      INTEGER NOT NULL DEFAULT 0,
-  created_at  INTEGER NOT NULL,
-  approved_at INTEGER NOT NULL DEFAULT 0,
-  finished_at INTEGER NOT NULL DEFAULT 0
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_json     TEXT NOT NULL,
+  machine       TEXT NOT NULL,
+  session       TEXT NOT NULL DEFAULT '',
+  state         TEXT NOT NULL,
+  paused        INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  approved_at   INTEGER NOT NULL DEFAULT 0,
+  finished_at   INTEGER NOT NULL DEFAULT 0,
+  dispatched_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE steps (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +143,8 @@ CREATE TABLE steps (
   state        TEXT NOT NULL,
   detail       TEXT NOT NULL DEFAULT '',
   updated_at   INTEGER NOT NULL,
-  verified_at  INTEGER NOT NULL DEFAULT 0
+  verified_at  INTEGER NOT NULL DEFAULT 0,
+  undone_at    INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX steps_job ON steps(job_id, pos);
 CREATE TABLE needs_you (

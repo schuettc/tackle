@@ -166,6 +166,34 @@ export interface JobAskResult {
   needs_you: NeedsYou;
 }
 
+export interface PlanView {
+  plan: Plan;
+  groups: Group[] | null;
+  job: Job;
+}
+
+export interface JobView {
+  job: Job;
+  needs_you: NeedsYou[] | null;
+}
+
+export interface JobsView {
+  jobs: Job[] | null;
+}
+
+export interface NeedsYouView {
+  cards: NeedsYou[] | null;
+}
+
+export interface AnswerResult {
+  needs_you: NeedsYou;
+}
+
+export interface UndoResult {
+  step_id: number;
+  sent: boolean;
+}
+
 export interface ItemView {
   key: string;
   kind: string;
@@ -330,6 +358,31 @@ export interface NeedsYou {
   answered_at?: string;
 }
 
+export interface Plan {
+  built_at: string;
+  head?: string;
+  steps: Step[] | null;
+}
+
+export interface Group {
+  action: string;
+  lane: string;
+  steps: Step[] | null;
+}
+
+export interface Job {
+  id: number;
+  machine: string;
+  session: string;
+  state: string;
+  paused: boolean;
+  created_at: string;
+  approved_at?: string;
+  finished_at?: string;
+  dispatched_at?: string;
+  steps: JobStep[] | null;
+}
+
 export interface Decision {
   disposition: string;
   note?: string;
@@ -387,6 +440,34 @@ export interface Exclusion {
   reason?: string;
   by: string;
   at: string;
+}
+
+export interface Step {
+  key: string;
+  action: string;
+  lane: string;
+  command: string;
+  precondition?: string;
+  posts?: boolean;
+  expected_tip?: string;
+}
+
+export interface JobStep {
+  id: number;
+  job_id: number;
+  key: string;
+  action: string;
+  lane: string;
+  command: string;
+  precondition?: string;
+  posts?: boolean;
+  expected_tip?: string;
+  text?: string;
+  restore?: string;
+  state: string;
+  detail?: string;
+  verified_at?: string;
+  undone_at?: string;
 }
 
 export interface Conflict {

@@ -55,15 +55,16 @@ const (
 
 // Job is a persisted apply plan with execution state.
 type Job struct {
-	ID         int64     `json:"id"`
-	Machine    string    `json:"machine"`
-	Session    string    `json:"session"`
-	State      JobState  `json:"state"`
-	Paused     bool      `json:"paused"`
-	CreatedAt  time.Time `json:"created_at"`
-	ApprovedAt time.Time `json:"approved_at,omitzero"`
-	FinishedAt time.Time `json:"finished_at,omitzero"`
-	Steps      []JobStep `json:"steps"`
+	ID           int64     `json:"id"`
+	Machine      string    `json:"machine"`
+	Session      string    `json:"session"`
+	State        JobState  `json:"state"`
+	Paused       bool      `json:"paused"`
+	CreatedAt    time.Time `json:"created_at"`
+	ApprovedAt   time.Time `json:"approved_at,omitzero"`
+	FinishedAt   time.Time `json:"finished_at,omitzero"`
+	DispatchedAt time.Time `json:"dispatched_at,omitzero"`
+	Steps        []JobStep `json:"steps"`
 }
 
 // JobStep is one persisted step within a Job.
@@ -82,6 +83,7 @@ type JobStep struct {
 	State        StepState `json:"state"`
 	Detail       string    `json:"detail,omitempty"`
 	VerifiedAt   time.Time `json:"verified_at,omitzero"`
+	UndoneAt     time.Time `json:"undone_at,omitzero"`
 }
 
 // NeedsYou is a card requesting Court's attention for a job (and optionally a step).
@@ -136,9 +138,9 @@ var validStepTransitions = map[StepState]map[StepState]bool{
 	StepReported: {StepVerified: true, StepFailed: true},
 	StepVerified: {},
 	StepSkipped:  {},
-	StepPaused:   {StepRunning: true},
+	StepPaused:   {StepRunning: true, StepSkipped: true},
 	StepFailed:   {},
-	StepNeedsYou: {StepRunning: true},
+	StepNeedsYou: {StepRunning: true, StepSkipped: true},
 }
 
 // ErrInvalidTransition is returned when a state transition is not allowed.
@@ -343,7 +345,7 @@ func (s *Store) Cancel(ctx context.Context, jobID int64) error {
 // Get returns the job with the given ID, including its steps.
 func (s *Store) Get(ctx context.Context, id int64) (Job, error) {
 	row := s.DB.QueryRowContext(ctx,
-		`SELECT id, machine, session, state, paused, created_at, approved_at, finished_at FROM jobs WHERE id = ?`, id)
+		`SELECT id, machine, session, state, paused, created_at, approved_at, finished_at, dispatched_at FROM jobs WHERE id = ?`, id)
 	job, err := scanJob(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -362,7 +364,7 @@ func (s *Store) Get(ctx context.Context, id int64) (Job, error) {
 // List returns all jobs ordered by id, each with its steps.
 func (s *Store) List(ctx context.Context) ([]Job, error) {
 	rows, err := s.DB.QueryContext(ctx,
-		`SELECT id, machine, session, state, paused, created_at, approved_at, finished_at FROM jobs ORDER BY id`)
+		`SELECT id, machine, session, state, paused, created_at, approved_at, finished_at, dispatched_at FROM jobs ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +396,7 @@ func (s *Store) List(ctx context.Context) ([]Job, error) {
 func (s *Store) Steps(ctx context.Context, jobID int64) ([]JobStep, error) {
 	rows, err := s.DB.QueryContext(ctx,
 		`SELECT id, job_id, key, action, lane, command, precondition, posts, expected_tip, text, restore,
-		        state, detail, verified_at
+		        state, detail, verified_at, undone_at
 		 FROM steps WHERE job_id = ? ORDER BY pos`, jobID)
 	if err != nil {
 		return nil, err
@@ -514,7 +516,7 @@ func (s *Store) ClaimNext(ctx context.Context, jobID int64, lane Lane) (JobStep,
 		// Read back the claimed step.
 		row := tx.QueryRowContext(ctx,
 			`SELECT id, job_id, key, action, lane, command, precondition, posts, expected_tip, text, restore,
-			        state, detail, verified_at
+			        state, detail, verified_at, undone_at
 			 FROM steps WHERE id = ?`, stepID)
 		var err error
 		claimed, err = scanStep(row)
@@ -781,32 +783,34 @@ type scanner interface {
 
 func scanJob(sc scanner) (Job, error) {
 	var j Job
-	var createdAt, approvedAt, finishedAt int64
+	var createdAt, approvedAt, finishedAt, dispatchedAt int64
 	var paused int
-	if err := sc.Scan(&j.ID, &j.Machine, &j.Session, &j.State, &paused, &createdAt, &approvedAt, &finishedAt); err != nil {
+	if err := sc.Scan(&j.ID, &j.Machine, &j.Session, &j.State, &paused, &createdAt, &approvedAt, &finishedAt, &dispatchedAt); err != nil {
 		return Job{}, err
 	}
 	j.Paused = paused != 0
 	j.CreatedAt = tm(createdAt)
 	j.ApprovedAt = tm(approvedAt)
 	j.FinishedAt = tm(finishedAt)
+	j.DispatchedAt = tm(dispatchedAt)
 	return j, nil
 }
 
 func scanStep(sc scanner) (JobStep, error) {
 	var st JobStep
-	var verifiedAt int64
+	var verifiedAt, undoneAt int64
 	var posts int
 	var lane string
 	if err := sc.Scan(&st.ID, &st.JobID, &st.Key, &st.Action, &lane,
 		&st.Command, &st.Precondition, &posts, &st.ExpectedTip,
 		&st.Text, &st.Restore,
-		&st.State, &st.Detail, &verifiedAt); err != nil {
+		&st.State, &st.Detail, &verifiedAt, &undoneAt); err != nil {
 		return JobStep{}, err
 	}
 	st.Lane = Lane(lane)
 	st.Posts = posts != 0
 	st.VerifiedAt = tm(verifiedAt)
+	st.UndoneAt = tm(undoneAt)
 	return st, nil
 }
 
@@ -831,4 +835,59 @@ func scanNeedsYouRows(rows *sql.Rows) ([]NeedsYou, error) {
 		result = append(result, n)
 	}
 	return result, rows.Err()
+}
+
+// MarkDispatched atomically marks a job as dispatched (sets dispatched_at if it
+// was 0). It returns true when this call set the value (first dispatch), false
+// when the job was already dispatched. Idempotency: a job already dispatched is
+// never dispatched again (spec binding note).
+func (s *Store) MarkDispatched(ctx context.Context, jobID int64) (bool, error) {
+	now := s.Now()
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE jobs SET dispatched_at = ? WHERE id = ? AND dispatched_at = 0`,
+		ms(now), jobID)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// MarkUndone records that a step has been undone (sets undone_at).
+// It returns an error if the step does not exist or is already undone.
+func (s *Store) MarkUndone(ctx context.Context, stepID int64) error {
+	now := s.Now()
+	res, err := s.DB.ExecContext(ctx,
+		`UPDATE steps SET undone_at = ? WHERE id = ? AND undone_at = 0`,
+		ms(now), stepID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("step %d not found or already undone", stepID)
+	}
+	return nil
+}
+
+// GetStep returns one step by ID.
+func (s *Store) GetStep(ctx context.Context, stepID int64) (JobStep, error) {
+	row := s.DB.QueryRowContext(ctx,
+		`SELECT id, job_id, key, action, lane, command, precondition, posts, expected_tip, text, restore,
+		        state, detail, verified_at, undone_at
+		 FROM steps WHERE id = ?`, stepID)
+	st, err := scanStep(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return JobStep{}, fmt.Errorf("step %d not found", stepID)
+		}
+		return JobStep{}, err
+	}
+	return st, nil
 }
