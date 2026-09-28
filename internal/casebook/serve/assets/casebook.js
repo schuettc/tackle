@@ -10,16 +10,29 @@ import {
 
 // router.ts
 var listeners = [];
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+function pathEscape(s) {
+  return encodeURIComponent(s).replace(/%3A/gi, ":").replace(/%40/gi, "@");
+}
 function parse(hash) {
   const path = hash.replace(/^#\//, "");
   const slash = path.indexOf("/");
   if (slash === -1) {
     return { section: path || "attention", sub: "" };
   }
-  return { section: path.slice(0, slash), sub: path.slice(slash + 1) };
+  return {
+    section: path.slice(0, slash),
+    sub: safeDecode(path.slice(slash + 1))
+  };
 }
 function go(section, sub) {
-  location.hash = sub ? `#/${section}/${sub}` : `#/${section}`;
+  location.hash = sub ? `#/${section}/${pathEscape(sub)}` : `#/${section}`;
 }
 function onRoute(cb) {
   listeners.push(cb);
@@ -673,7 +686,7 @@ function ageOf(it) {
   if (days === 1) return "1d";
   return `${days}d`;
 }
-function makeBoard(ctx, sel, filters, onOpen) {
+function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
   const el = h4("div", { class: "cb-board" });
   const laneState = new Map(
     LANES.map(({ id }) => [id, { items: [], total: 0 }])
@@ -790,6 +803,7 @@ function makeBoard(ctx, sel, filters, onOpen) {
     const data = await ctx.api.get("/items", q);
     return { items: data.items ?? [], total: data.total };
   }
+  let boardTotalUnique = 0;
   async function refresh() {
     const results = await Promise.allSettled(
       LANES.map(({ id }) => fetchLane(id))
@@ -802,10 +816,17 @@ function makeBoard(ctx, sel, filters, onOpen) {
         const { items, total } = result.value;
         const unique = items.filter((it) => !seenIds.has(it.key));
         unique.forEach((it) => seenIds.add(it.key));
-        laneState.set(id, { items: unique, total });
+        const adjustedTotal = items.length >= total ? unique.length : total;
+        laneState.set(id, { items: unique, total: adjustedTotal });
       }
       repaintLane(id);
     }
+    let uniqueCount = 0;
+    for (const { id } of LANES) {
+      uniqueCount += laneState.get(id)?.items.length ?? 0;
+    }
+    boardTotalUnique = uniqueCount;
+    onRefresh?.(boardTotalUnique);
   }
   async function loadMore(laneId) {
     const state = laneState.get(laneId);
@@ -839,7 +860,15 @@ function makeBoard(ctx, sel, filters, onOpen) {
   function destroy() {
     unsubSel();
   }
-  return { el, refresh, destroy };
+  function totalItems() {
+    return boardTotalUnique;
+  }
+  function allKeys() {
+    return LANES.flatMap(
+      ({ id }) => laneState.get(id)?.items.map((it) => it.key) ?? []
+    );
+  }
+  return { el, refresh, destroy, totalItems, allKeys };
 }
 
 // attention.ts
@@ -905,6 +934,30 @@ function makeAttention(ctx) {
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
   let boardHandle = null;
+  function renderReadEmpty() {
+    const nameEl = h5("p", { class: "cb-read-empty-section" }, "attention");
+    const countEl = h5(
+      "p",
+      { class: "cb-read-empty-count" },
+      `${totalItemsForView} items`
+    );
+    const promptEl = h5(
+      "p",
+      { class: "cb-read-empty-prompt" },
+      "Select an item to see it here."
+    );
+    return h5("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
+  }
+  function updateReadEmptyCount() {
+    const countEl = readEl.querySelector(".cb-read-empty-count");
+    if (countEl) {
+      countEl.textContent = `${totalItemsForView} items`;
+    }
+  }
+  function showReadEmpty() {
+    readEl.replaceChildren(renderReadEmpty());
+  }
+  showReadEmpty();
   function buildFoot() {
     const selCount = h5(
       "span",
@@ -942,6 +995,10 @@ function makeAttention(ctx) {
     return footEl;
   }
   async function selectAllInView() {
+    if (boardHandle) {
+      handle.selectAll(boardHandle.allKeys());
+      return;
+    }
     let allIds = loadedItems.map((it) => it.key);
     if (totalItemsForView > loadedItems.length) {
       try {
@@ -1058,6 +1115,7 @@ function makeAttention(ctx) {
       offset = loadedItems.length;
       handle.setItems(loadedItems);
       updateFoot();
+      updateReadEmptyCount();
     } catch {
     } finally {
       loading = false;
@@ -1162,9 +1220,21 @@ function makeAttention(ctx) {
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
-    boardHandle = makeBoard(ctx, selection, getBoardFilters, (key, laneId) => {
-      filters.view = laneId;
-    });
+    boardHandle = makeBoard(
+      ctx,
+      selection,
+      getBoardFilters,
+      (key, laneId) => {
+        filters.view = laneId;
+      },
+      (total) => {
+        if (!footEl) return;
+        const selAll = footEl.querySelector(".cb-sel-all");
+        if (selAll instanceof HTMLElement) {
+          selAll.textContent = `select all ${total} in view`;
+        }
+      }
+    );
     handle.el.append(boardHandle.el);
   }
   function unmountBoard() {
@@ -1212,6 +1282,7 @@ function makeAttention(ctx) {
           on: v.id === filters.view
         }))
       );
+      showReadEmpty();
       void reload();
     } else if (sub) {
       handle.setChips(

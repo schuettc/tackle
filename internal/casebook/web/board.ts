@@ -60,7 +60,14 @@ export function makeBoard(
   sel: Selection,
   filters: () => Record<string, string>,
   onOpen?: (key: string, laneId: string) => void,
-): { el: HTMLElement; refresh(): Promise<void>; destroy(): void } {
+  onRefresh?: (totalUniqueItems: number) => void,
+): {
+  el: HTMLElement;
+  refresh(): Promise<void>;
+  destroy(): void;
+  totalItems(): number;
+  allKeys(): string[];
+} {
   // The board element fills the space left by hiding .kit-rows inside the kit
   // list panel.  `.cb-board` has `flex: 1; overflow-x: auto` from casebook.css
   // so it fills the column and lets users scroll sideways across four lanes.
@@ -226,6 +233,9 @@ export function makeBoard(
     return { items: data.items ?? [], total: data.total };
   }
 
+  // Total unique items across all lanes (updated after each refresh).
+  let boardTotalUnique = 0;
+
   // Re-fetch all four lanes in parallel; deduplicate by key in precedence order.
   async function refresh(): Promise<void> {
     const results = await Promise.allSettled(
@@ -241,13 +251,27 @@ export function makeBoard(
         // Keep only items not already shown in a higher-precedence lane.
         const unique = items.filter((it) => !seenIds.has(it.key));
         unique.forEach((it) => seenIds.add(it.key));
-        // Adjust total: if we dropped duplicates the "show more" logic should
-        // still be based on this lane's actual API total, but the displayed
-        // items are the deduplicated set.
-        laneState.set(id, { items: unique, total });
+        // Adjust total so that "show N more" reflects only the items this lane
+        // will actually show after de-duplication.
+        //   - If the API returned every item for this lane on the first page
+        //     (items.length >= total), we know the full set and the displayed
+        //     count is exactly unique.length — no more pages to show.
+        //   - If there are more pages (items.length < total), we keep the raw
+        //     total because additional pages may contain keys not yet in other
+        //     lanes.
+        const adjustedTotal = items.length >= total ? unique.length : total;
+        laneState.set(id, { items: unique, total: adjustedTotal });
       }
       repaintLane(id);
     }
+
+    // Count total unique items across all lanes for the board-mode select-all.
+    let uniqueCount = 0;
+    for (const { id } of LANES) {
+      uniqueCount += laneState.get(id)?.items.length ?? 0;
+    }
+    boardTotalUnique = uniqueCount;
+    onRefresh?.(boardTotalUnique);
   }
 
   // Load the next page of a lane (called from the "show more" button).
@@ -298,5 +322,19 @@ export function makeBoard(
     unsubSel();
   }
 
-  return { el, refresh, destroy };
+  // Total unique items across all lanes (de-duplicated), updated after each
+  // refresh().  Used by the attention foot's "select all N in view" button.
+  function totalItems(): number {
+    return boardTotalUnique;
+  }
+
+  // All unique keys across all lanes in precedence order.  Used by the
+  // "select all" action when the board view is active.
+  function allKeys(): string[] {
+    return LANES.flatMap(
+      ({ id }) => laneState.get(id)?.items.map((it) => it.key) ?? [],
+    );
+  }
+
+  return { el, refresh, destroy, totalItems, allKeys };
 }

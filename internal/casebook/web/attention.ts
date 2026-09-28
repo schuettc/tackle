@@ -118,6 +118,41 @@ export function makeAttention(ctx: Ctx): Section {
   let totalItemsForView = 0; // updated after every load; used by select-all
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
+  // ---- empty reading-column state ------------------------------------------
+
+  // Render the empty state for the reading column (no item open).
+  // Shows the section name, current view count, and a prompt.
+  function renderReadEmpty(): HTMLElement {
+    const nameEl = h('p', { class: 'cb-read-empty-section' }, 'attention');
+    const countEl = h(
+      'p',
+      { class: 'cb-read-empty-count' },
+      `${totalItemsForView} items`,
+    );
+    const promptEl = h(
+      'p',
+      { class: 'cb-read-empty-prompt' },
+      'Select an item to see it here.',
+    );
+    return h('div', { class: 'cb-read-empty' }, nameEl, countEl, promptEl);
+  }
+
+  // Update the count shown in the reading-column empty state (if it is showing).
+  function updateReadEmptyCount(): void {
+    const countEl = readEl.querySelector<HTMLElement>('.cb-read-empty-count');
+    if (countEl) {
+      countEl.textContent = `${totalItemsForView} items`;
+    }
+  }
+
+  // Show the empty reading-column state (replaces any open item detail).
+  function showReadEmpty(): void {
+    readEl.replaceChildren(renderReadEmpty());
+  }
+
+  // Initialise the reading column with the empty state so it is never blank.
+  showReadEmpty();
+
   // ---- foot: show-more + selection count + select all in view ---------------
 
   function buildFoot(): HTMLElement {
@@ -161,6 +196,11 @@ export function makeAttention(ctx: Ctx): Section {
   // selectAllInView fetches every id in the current view and calls selectAll()
   // so the selection covers the whole view, even across pages.
   async function selectAllInView(): Promise<void> {
+    // Board mode: select all unique items across all four lanes.
+    if (boardHandle) {
+      handle.selectAll(boardHandle.allKeys());
+      return;
+    }
     let allIds: string[] = loadedItems.map((it) => it.key);
     if (totalItemsForView > loadedItems.length) {
       try {
@@ -298,6 +338,7 @@ export function makeAttention(ctx: Ctx): Section {
       offset = loadedItems.length;
       handle.setItems(loadedItems);
       updateFoot();
+      updateReadEmptyCount();
     } catch {
       // non-fatal; leave the list as-is
     } finally {
@@ -448,11 +489,25 @@ export function makeAttention(ctx: Ctx): Section {
     const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
-    boardHandle = makeBoard(ctx, selection, getBoardFilters, (key, laneId) => {
-      // Record the card's lane as the active view so that when the item is
-      // opened the list reloads with that view (brief §4, item 2).
-      filters.view = laneId;
-    });
+    boardHandle = makeBoard(
+      ctx,
+      selection,
+      getBoardFilters,
+      (key, laneId) => {
+        // Record the card's lane as the active view so that when the item is
+        // opened the list reloads with that view (brief §4, item 2).
+        filters.view = laneId;
+      },
+      (total) => {
+        // After each board refresh, update the foot's "select all N in view"
+        // button so it reflects the de-duplicated count across all lanes.
+        if (!footEl) return;
+        const selAll = footEl.querySelector('.cb-sel-all');
+        if (selAll instanceof HTMLElement) {
+          selAll.textContent = `select all ${total} in view`;
+        }
+      },
+    );
     handle.el.append(boardHandle.el);
   }
 
@@ -515,6 +570,7 @@ export function makeAttention(ctx: Ctx): Section {
           on: v.id === filters.view,
         })),
       );
+      showReadEmpty();
       void reload();
     } else if (sub) {
       // Not a view id: treat as an item key from a direct #/item/<key> link
