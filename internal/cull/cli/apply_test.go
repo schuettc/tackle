@@ -8,7 +8,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/schuettc/tackle/internal/cull/apply"
 	"github.com/schuettc/tackle/internal/cull/check"
@@ -225,5 +227,52 @@ func writeFixture(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestApplySignalsRestore: SIGTERM and SIGHUP during the after-run kill
+// the test command and restore every file (exit 2), like SIGINT (I-5).
+func TestApplySignalsRestore(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			root := applyProject(t, "TestUpper")
+			writeFixture(t, root, ".cull.toml",
+				"test_command = 'if [ -d .cull/rollback ]; then : > started; sleep 60; fi'\n")
+			go func() {
+				for i := 0; i < 600; i++ {
+					if _, err := os.Stat(filepath.Join(root, "started")); err == nil {
+						_ = syscall.Kill(os.Getpid(), sig)
+						return
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+			}()
+			code, _, errw := run(t, "", "apply", "--verdict", "cut")
+			if code != 2 || !strings.Contains(errw, "interrupted") {
+				t.Fatalf("code %d, errw %q", code, errw)
+			}
+			if calcTestNow(t, root) != applyCalcTest {
+				t.Error("not restored byte-for-byte")
+			}
+		})
+	}
+}
+
+// TestApplyJSONSnapshotOnStderr: in --json mode the snapshot path still
+// reaches stderr as soon as it is written (I-5).
+func TestApplyJSONSnapshotOnStderr(t *testing.T) {
+	applyProject(t, "TestUpper")
+	code, out, errw := run(t, "", "apply", "--verdict", "cut", "--json", "--no-verify")
+	if code != 0 {
+		t.Fatalf("code %d, errw %q", code, errw)
+	}
+	var got struct {
+		Snapshot string `json:"snapshot"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got.Snapshot == "" || !strings.Contains(errw, got.Snapshot) {
+		t.Errorf("errw %q should name snapshot %q", errw, got.Snapshot)
 	}
 }

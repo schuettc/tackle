@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/schuettc/tackle/internal/cull/apply"
@@ -77,15 +78,16 @@ func runApply(args []string, out, errw io.Writer) error {
 	jsonMode := boolFlag(fs, "json")
 	var progress io.Writer = errw
 	if jsonMode {
-		progress = nil // keep stderr to the single JSON error envelope
+		progress = nil // stderr gets only the snapshot line and the JSON error envelope
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// Any of these restores every file (the test command is killed first).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	outcome, runErr := apply.Run(ctx, apply.Options{
 		Root: root, IDs: ids, VerdictCut: verdict == "cut", NoVerify: boolFlag(fs, "no-verify"),
-		Timeout: timeout, TestCommand: cfg.TestCommand, Stderr: progress,
+		Timeout: timeout, TestCommand: cfg.TestCommand, Stderr: progress, Notice: errw,
 	})
 
 	if jsonMode {

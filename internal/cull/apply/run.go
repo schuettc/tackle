@@ -28,6 +28,7 @@ type Options struct {
 	Timeout     time.Duration // per test command; 0 means DefaultTimeout
 	TestCommand string        // .cull.toml test_command ("" = auto-detect)
 	Stderr      io.Writer     // progress lines; nil discards
+	Notice      io.Writer     // the snapshot path line; nil means Stderr
 }
 
 // Outcome is what one apply run did (or would have done, when RolledBack).
@@ -206,7 +207,16 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 		return out, exitf(2, "writing rollback snapshot: %v; nothing changed", serr)
 	}
 	out.Snapshot = snap
-	fmt.Fprintf(stderr, "cull apply: snapshot %s\n", snap)
+	notice := opt.Notice
+	if notice == nil {
+		notice = stderr
+	}
+	fmt.Fprintf(notice, "cull apply: snapshot %s\n", snap)
+
+	// An interrupt that arrived after the baseline: nothing is written yet.
+	if ctx.Err() != nil {
+		return out, exitf(2, "interrupted before any change; nothing changed")
+	}
 
 	// From the first write on, every exit path restores.
 	wrote := false
@@ -231,7 +241,15 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 	}
 
 	if opt.NoVerify {
-		return out, nil
+		if ctx.Err() == nil {
+			return out, nil
+		}
+		if rerr := restore(edits); rerr != nil {
+			out.RollbackFailed = true
+			return out, restoreFailed(snap, rerr)
+		}
+		out.RolledBack = true
+		return out, exitf(2, "interrupted; rolled back (snapshot: %s)", snap)
 	}
 	logCommands(stderr, "after", cmds)
 	out.After = runVerify(ctx, cmds, timeout)

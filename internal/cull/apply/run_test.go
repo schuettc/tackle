@@ -670,3 +670,76 @@ def test_env():
 		t.Errorf("After = %+v", out.After)
 	}
 }
+
+// TestApplyInterruptBeforeFirstWrite: an interrupt that lands after the
+// baseline passed but before the first write changes nothing (I-5).
+func TestApplyInterruptBeforeFirstWrite(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	orig := runVerify
+	calls := 0
+	runVerify = func(c context.Context, cmds []verify.Command, timeout time.Duration) []verify.Result {
+		calls++
+		rs := orig(c, cmds, timeout)
+		cancel() // the signal arrives just after the baseline passed
+		return rs
+	}
+	t.Cleanup(func() { runVerify = orig })
+	writes := 0
+	origWrite := writeFile
+	writeFile = func(p string, d []byte, m os.FileMode) error { writes++; return origWrite(p, d, m) }
+	t.Cleanup(func() { writeFile = origWrite })
+
+	out, err := Run(ctx, Options{Root: root, VerdictCut: true, Timeout: time.Minute})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") || !strings.Contains(err.Error(), "nothing changed") {
+		t.Errorf("err = %v", err)
+	}
+	if writes != 0 || calls != 1 || out.RolledBack {
+		t.Errorf("writes = %d verify calls = %d RolledBack = %v; want nothing written", writes, calls, out.RolledBack)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
+		t.Errorf("file changed:\n%s", got)
+	}
+}
+
+// TestApplyNoVerifyInterruptRestores: under --no-verify an interrupt
+// during the writes is not reported as success; every file is restored.
+func TestApplyNoVerifyInterruptRestores(t *testing.T) {
+	root, a, b := twoFileProject(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	origWrite := writeFile
+	writeFile = func(p string, d []byte, m os.FileMode) error { cancel(); return origWrite(p, d, m) }
+	t.Cleanup(func() { writeFile = origWrite })
+
+	out, err := Run(ctx, Options{Root: root, VerdictCut: true, NoVerify: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") || !out.RolledBack {
+		t.Errorf("err = %v RolledBack = %v", err, out.RolledBack)
+	}
+	if readFile(t, root, "a_test.go") != a || readFile(t, root, "b_test.go") != b {
+		t.Error("files not restored")
+	}
+}
+
+// TestApplySnapshotNotice: the snapshot path goes to Notice even when the
+// progress writer (Stderr) is nil, as in --json mode (I-5).
+func TestApplySnapshotNotice(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	var notice strings.Builder
+	out, err := runApply(t, Options{Root: root, VerdictCut: true, NoVerify: true, Notice: &notice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Snapshot == "" || !strings.Contains(notice.String(), out.Snapshot) {
+		t.Errorf("notice = %q, want the snapshot %q", notice.String(), out.Snapshot)
+	}
+}
