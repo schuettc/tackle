@@ -380,7 +380,11 @@ func loadAndEdit(root, wantSum string, e *fileEdit) error {
 		}
 		bodies = append(bodies, string(data[sp.Start:sp.End]))
 	}
-	removed := RemoveSpans(data, e.spans)
+	spans := e.spans
+	if e.lang == "typescript" {
+		spans = withTSSemicolons(data, spans)
+	}
+	removed := RemoveSpans(data, spans)
 	tidied, imports, err := Tidy(root, e.rel, e.lang, data, removed)
 	if err != nil {
 		return fmt.Errorf("tidying %s: %v", e.rel, err)

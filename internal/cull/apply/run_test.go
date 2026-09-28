@@ -663,9 +663,11 @@ def test_env():
 	if code := exitCode(err); code != 0 {
 		t.Fatalf("exit %d: %v\n%+v", code, err, out)
 	}
-	got := readFile(t, root, "test_calc.py")
-	if strings.Contains(got, "test_env") || strings.Contains(got, "import os") || !strings.Contains(got, "def test_keep") {
-		t.Errorf("test_calc.py =\n%s", got)
+	// Exact bytes (I-7): os went with test_env; unittest was already
+	// unused before the cut, so it stays (I-4); no trailing blank lines.
+	want := "import unittest\n\n\ndef test_keep():\n    assert 1 + 1 == 2\n"
+	if got := readFile(t, root, "test_calc.py"); got != want {
+		t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
 	}
 	if len(out.After) != 1 || !out.After[0].OK || out.After[0].Command != cmd {
 		t.Errorf("After = %+v", out.After)
@@ -873,4 +875,106 @@ func TestApplyTidyOnlyWhatTheCutOrphaned(t *testing.T) {
 			t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
 		}
 	})
+}
+
+// assertPyGaps is a formatter-free style check: every top-level def,
+// class or decorator block after the first is preceded by exactly two
+// blank lines (the input's own separator), and the file ends with
+// exactly one newline.
+func assertPyGaps(t *testing.T, src string) {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	for i, l := range lines {
+		if i == 0 || !(strings.HasPrefix(l, "def ") || strings.HasPrefix(l, "class ") || strings.HasPrefix(l, "@")) {
+			continue
+		}
+		if strings.HasPrefix(lines[i-1], "@") {
+			continue // a decorated def: the gap is above the decorator
+		}
+		if i < 3 || lines[i-1] != "" || lines[i-2] != "" || lines[i-3] == "" {
+			t.Errorf("line %d %q is not preceded by exactly two blank lines:\n%s", i+1, l, src)
+		}
+	}
+	if !strings.HasSuffix(src, "\n") || strings.HasSuffix(src, "\n\n") {
+		t.Errorf("file does not end with exactly one newline: %q", src)
+	}
+}
+
+// assertTSStyle: no line holding only ";", no blank line before EOF,
+// no leading blank lines, no two blank lines in a row.
+func assertTSStyle(t *testing.T, src string) {
+	t.Helper()
+	for i, l := range strings.Split(src, "\n") {
+		if strings.TrimSpace(l) == ";" {
+			t.Errorf("line %d holds only \";\":\n%s", i+1, src)
+		}
+	}
+	if strings.HasPrefix(src, "\n") || strings.HasSuffix(src, "\n\n") || strings.Contains(src, "\n\n\n") {
+		t.Errorf("stray blank lines: %q", src)
+	}
+}
+
+// TestApplyPythonExact (I-1, I-7): exact bytes for the middle, first and
+// last test of a Python file, a surgical multi-line import edit, and the
+// file's two-blank-line separator kept.
+func TestApplyPythonExact(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	src := "import json\nfrom os import (\n    path,\n    sep,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_b():\n    assert sep\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"
+	for _, c := range []struct {
+		cut  []string
+		want string
+	}{
+		{[]string{"test_b"},
+			"import json\nfrom os import (\n    path,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"},
+		{[]string{"test_a"},
+			"import json\nfrom os import (\n    path,\n    sep,\n)\n\n\ndef test_b():\n    assert sep\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"},
+		{[]string{"test_c", "test_d"},
+			"import json\nfrom os import (\n    path,\n    sep,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_b():\n    assert sep\n"},
+	} {
+		t.Run(strings.Join(c.cut, ","), func(t *testing.T) {
+			root := t.TempDir()
+			fixtureFile(t, root, "test_calc.py", "pytest_mark = lambda f: f\n"+src, 0o644)
+			writeReport(t, root, []string{"test_calc.py"}, c.cut...)
+			if _, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "python3 -m py_compile test_calc.py"}); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, root, "test_calc.py")
+			if want := "pytest_mark = lambda f: f\n" + c.want; got != want {
+				t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
+			}
+			assertPyGaps(t, strings.TrimPrefix(got, "pytest_mark = lambda f: f\n"))
+		})
+	}
+}
+
+// TestApplyTypeScriptExact (I-1, I-7): exact bytes for a semicolon-style
+// TS file (middle, first and last test), a surgical multi-line import
+// edit, and no line left holding only ";".
+func TestApplyTypeScriptExact(t *testing.T) {
+	requireTSApply(t)
+	src := "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"
+	for _, c := range []struct {
+		cut  string
+		want string
+	}{
+		{"subs", "import { describe } from \"vitest\";\nimport {\n  add,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"},
+		{"adds", "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"},
+		{"adds again", "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n"},
+	} {
+		t.Run(c.cut, func(t *testing.T) {
+			root := t.TempDir()
+			fixtureFile(t, root, "web/calc.test.ts", src, 0o644)
+			writeReport(t, root, []string{"web/calc.test.ts"}, c.cut)
+			if _, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"}); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, root, "web/calc.test.ts")
+			if got != c.want {
+				t.Errorf("calc.test.ts =\n%q\nwant\n%q", got, c.want)
+			}
+			assertTSStyle(t, got)
+		})
+	}
 }
