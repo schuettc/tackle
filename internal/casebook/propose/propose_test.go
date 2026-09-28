@@ -91,8 +91,18 @@ func TestEvidenceAndProgress(t *testing.T) {
 	if p.N != 3 || p.UpdatedAt.Sub(p.StartedAt) != 3*time.Minute {
 		t.Fatalf("progress %+v", p)
 	}
-	if d, _ := s.ClearProgress(ctx, "s1"); d != 3*time.Minute {
+	d, lines, err := s.ClearProgress(ctx, "s1")
+	if err != nil {
+		t.Fatalf("ClearProgress: %v", err)
+	}
+	if d != 3*time.Minute {
 		t.Fatalf("worked for %v", d)
+	}
+	if len(lines) != 2 {
+		t.Fatalf("progress lines: got %d, want 2", len(lines))
+	}
+	if lines[0].Text != "checking CI on #671" || lines[1].Text != "checking CI on #672" {
+		t.Fatalf("progress lines: %+v", lines)
 	}
 	if _, ok, _ := s.Progress(ctx, "s1"); ok {
 		t.Fatal("progress not cleared")

@@ -66,7 +66,7 @@ export interface ThreadsView {
 }
 
 export interface MessagesView {
-  messages: Message[] | null;
+  messages: MessageView[] | null;
   batch: number;
   drafts: Message[] | null;
 }
@@ -286,6 +286,23 @@ export interface Thread {
   created_at: string;
 }
 
+export interface MessageView {
+  id: number;
+  thread_id: number;
+  author: string;
+  body: string;
+  attached: Attached;
+  batch_id?: number;
+  batch_pos?: number;
+  delivery_id?: number;
+  reply_to?: number;
+  state: string;
+  created_at: string;
+  queued_at?: string;
+  settled_at?: string;
+  worked?: WorkedView;
+}
+
 export interface Message {
   id: number;
   thread_id: number;
@@ -423,6 +440,11 @@ export interface Attached {
   job?: string;
 }
 
+export interface WorkedView {
+  duration_ms: number;
+  lines: ProgressLine[] | null;
+}
+
 export interface Condition {
   field: string;
   op: string;
@@ -476,4 +498,11 @@ export interface Conflict {
   until?: string;
   decided_by: string;
   decided_at: string;
+}
+
+export interface ProgressLine {
+  text: string;
+  n?: number;
+  total?: number;
+  at: string;
 }

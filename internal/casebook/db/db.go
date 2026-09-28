@@ -114,7 +114,19 @@ CREATE TABLE events (
 
 // schemaV2 adds jobs, steps, and needs_you tables, plus the unique index
 // that enforces one delivery in flight per session at the database level.
+// It also adds the worked_json column on messages (for 'worked' messages that
+// carry a turn's progress history) and the progress_log table.
 const schemaV2 = `
+ALTER TABLE messages ADD COLUMN worked_json TEXT NOT NULL DEFAULT '';
+CREATE TABLE progress_log (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT NOT NULL REFERENCES sessions(id),
+  text       TEXT NOT NULL,
+  n          INTEGER NOT NULL DEFAULT 0,
+  total      INTEGER NOT NULL DEFAULT 0,
+  at         INTEGER NOT NULL
+);
+CREATE INDEX progress_log_session ON progress_log(session_id, id);
 CREATE TABLE jobs (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   plan_json     TEXT NOT NULL,

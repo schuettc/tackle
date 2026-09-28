@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -712,5 +713,140 @@ func TestMoveDeliveryWakesOldSession(t *testing.T) {
 		}
 	case <-time.After(r.s.Wait + time.Second):
 		t.Fatal("s1 did not wake after move; expected prompt wakeup")
+	}
+}
+
+// TestSettledRecordsWorkedWithHistory verifies that when a turn ends after two
+// progress updates, a 'worked' message is written to the session's thread
+// carrying the duration and both progress lines in order, and that reloading
+// the thread returns the same data.
+func TestSettledRecordsWorkedWithHistory(t *testing.T) {
+	r := newRig(t)
+	th := r.attach(t, "s1")
+
+	// Send a message to the session and collect the delivery.
+	r.send(t, th, "investigate the flaky tests", false)
+	var w waited
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w); c != http.StatusOK {
+		t.Fatalf("wait: %d", c)
+	}
+
+	// Two progress updates during the turn.
+	if c := r.do(t, "POST", "/api/agent/progress", map[string]any{
+		"session": "s1", "text": "running test suite", "n": 1, "total": 3,
+	}, nil); c != http.StatusOK {
+		t.Fatalf("progress 1: %d", c)
+	}
+	if c := r.do(t, "POST", "/api/agent/progress", map[string]any{
+		"session": "s1", "text": "checking flaky log", "n": 2, "total": 3,
+	}, nil); c != http.StatusOK {
+		t.Fatalf("progress 2: %d", c)
+	}
+
+	// Settle the turn.
+	var sr SettledResult
+	if c := r.do(t, "POST", "/api/agent/settled", map[string]any{
+		"session": "s1",
+		"shown":   []int64{w.Delivery.ID},
+	}, &sr); c != http.StatusOK {
+		t.Fatalf("settled: %d", c)
+	}
+	if sr.WorkedMs == 0 {
+		t.Fatal("expected non-zero worked_ms in SettledResult")
+	}
+
+	// Thread messages should now include a 'worked' message with 2 lines.
+	var mv struct {
+		Messages []struct {
+			ID     int64  `json:"id"`
+			State  string `json:"state"`
+			Author string `json:"author"`
+			Worked *struct {
+				DurationMs int64 `json:"duration_ms"`
+				Lines      []struct {
+					Text  string `json:"text"`
+					N     int    `json:"n"`
+					Total int    `json:"total"`
+				} `json:"lines"`
+			} `json:"worked"`
+		} `json:"messages"`
+	}
+	if c := r.do(t, "GET", fmt.Sprintf("/api/messages?thread=%d", th), nil, &mv); c != http.StatusOK {
+		t.Fatalf("get messages: %d", c)
+	}
+
+	var workedIdx = -1
+	for i, m := range mv.Messages {
+		if m.State == "worked" {
+			workedIdx = i
+			break
+		}
+	}
+	if workedIdx < 0 {
+		t.Fatalf("no worked message in thread; got %d messages: %+v", len(mv.Messages), mv.Messages)
+	}
+	wm := mv.Messages[workedIdx]
+	if wm.Author != "s1" {
+		t.Errorf("worked message author = %q, want %q", wm.Author, "s1")
+	}
+	if wm.Worked == nil {
+		t.Fatal("worked field is nil on worked message")
+	}
+	if wm.Worked.DurationMs == 0 {
+		t.Error("worked.duration_ms is 0")
+	}
+	if len(wm.Worked.Lines) != 2 {
+		t.Fatalf("worked.lines len = %d, want 2; lines: %+v", len(wm.Worked.Lines), wm.Worked.Lines)
+	}
+	if wm.Worked.Lines[0].Text != "running test suite" || wm.Worked.Lines[0].N != 1 || wm.Worked.Lines[0].Total != 3 {
+		t.Errorf("lines[0] = %+v", wm.Worked.Lines[0])
+	}
+	if wm.Worked.Lines[1].Text != "checking flaky log" || wm.Worked.Lines[1].N != 2 || wm.Worked.Lines[1].Total != 3 {
+		t.Errorf("lines[1] = %+v", wm.Worked.Lines[1])
+	}
+
+	// Reload: GET /api/messages again 									— same result (persisted).
+	var mv2 struct {
+		Messages []struct {
+			State  string `json:"state"`
+			Worked *struct {
+				Lines []struct {
+					Text string `json:"text"`
+				} `json:"lines"`
+			} `json:"worked"`
+		} `json:"messages"`
+	}
+	if c := r.do(t, "GET", fmt.Sprintf("/api/messages?thread=%d", th), nil, &mv2); c != http.StatusOK {
+		t.Fatalf("reload messages: %d", c)
+	}
+	var reloaded *struct {
+		State  string `json:"state"`
+		Worked *struct {
+			Lines []struct {
+				Text string `json:"text"`
+			} `json:"lines"`
+		} `json:"worked"`
+	}
+	for i := range mv2.Messages {
+		if mv2.Messages[i].State == "worked" {
+			reloaded = &mv2.Messages[i]
+			break
+		}
+	}
+	if reloaded == nil {
+		t.Fatal("reload: no worked message")
+	}
+	if reloaded.Worked == nil || len(reloaded.Worked.Lines) != 2 {
+		t.Fatalf("reload: worked data missing or incomplete: %+v", reloaded)
+	}
+	if reloaded.Worked.Lines[0].Text != "running test suite" {
+		t.Errorf("reload lines[0] = %+v", reloaded.Worked.Lines[0])
+	}
+
+	// Progress log must be cleared: no rows remain for this session.
+	var count int
+	_ = r.s.DB.QueryRowContext(ctx, "SELECT count(*) FROM progress_log WHERE session_id = 's1'").Scan(&count)
+	if count != 0 {
+		t.Errorf("progress_log has %d rows after settle, want 0", count)
 	}
 }

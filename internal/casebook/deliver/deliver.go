@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/db"
+	"github.com/schuettc/tackle/internal/casebook/propose"
 )
 
 // Message states.
@@ -84,6 +85,13 @@ func (a Attached) Empty() bool {
 	return len(a.Keys) == 0 && a.Open == "" && a.Rule == "" && a.Job == ""
 }
 
+// WorkedView is the progress history carried by a 'worked' message. It holds
+// the total duration and the ordered list of progress lines from the turn.
+type WorkedView struct {
+	DurationMs int64                  `json:"duration_ms"`
+	Lines      []propose.ProgressLine `json:"lines"`
+}
+
 // Message is one message in a thread.
 type Message struct {
 	ID         int64     `json:"id"`
@@ -99,6 +107,10 @@ type Message struct {
 	CreatedAt  time.Time `json:"created_at"`
 	QueuedAt   time.Time `json:"queued_at,omitzero"`
 	SettledAt  time.Time `json:"settled_at,omitzero"`
+	// WorkedJSON holds the JSON-encoded WorkedView for messages with state
+	// "worked". It is not sent over the wire (json:"-"); serve decodes it
+	// into the MessageView wrapper returned by GET /api/messages.
+	WorkedJSON string `json:"-"`
 }
 
 // Final reports whether a message state is settled.
@@ -223,13 +235,13 @@ func (q *Queue) MoveThread(ctx context.Context, thread int64, session string) er
 	return nil
 }
 
-const msgCols = "id, thread_id, author, body, attached, COALESCE(batch_id, 0), batch_pos, COALESCE(delivery_id, 0), COALESCE(reply_to, 0), state, created_at, queued_at, settled_at"
+const msgCols = "id, thread_id, author, body, attached, COALESCE(batch_id, 0), batch_pos, COALESCE(delivery_id, 0), COALESCE(reply_to, 0), state, created_at, queued_at, settled_at, worked_json"
 
 func scanMessage(sc interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var att string
 	var c, qd, st int64
-	if err := sc.Scan(&m.ID, &m.ThreadID, &m.Author, &m.Body, &att, &m.BatchID, &m.BatchPos, &m.DeliveryID, &m.ReplyTo, &m.State, &c, &qd, &st); err != nil {
+	if err := sc.Scan(&m.ID, &m.ThreadID, &m.Author, &m.Body, &att, &m.BatchID, &m.BatchPos, &m.DeliveryID, &m.ReplyTo, &m.State, &c, &qd, &st, &m.WorkedJSON); err != nil {
 		return m, err
 	}
 	if att != "" {
@@ -315,6 +327,22 @@ func (q *Queue) Post(ctx context.Context, thread int64, body string, att Attache
 	if err != nil {
 		return Message{}, err
 	}
+	return q.Message(ctx, id)
+}
+
+// PostWorked inserts a server-generated 'worked' message into a thread,
+// recording a turn's progress history. The message is immediately in the
+// 'worked' final state with no delivery or batch.
+func (q *Queue) PostWorked(ctx context.Context, thread int64, author, body, workedJSON string) (Message, error) {
+	now := ms(q.Now())
+	res, err := q.DB.ExecContext(ctx,
+		`INSERT INTO messages(thread_id, author, body, attached, state, created_at, worked_json)
+		 VALUES (?, ?, ?, '', 'worked', ?, ?)`,
+		thread, author, body, now, workedJSON)
+	if err != nil {
+		return Message{}, err
+	}
+	id, _ := res.LastInsertId()
 	return q.Message(ctx, id)
 }
 

@@ -97,9 +97,18 @@ func (b *Bus) Head(ctx context.Context) (int64, error) {
 	return c, err
 }
 
-// Trim drops events older than age.
+// Trim drops events older than age, and also trims progress_log rows for
+// sessions that have not been seen since before the same cutoff.
 func (b *Bus) Trim(ctx context.Context, age time.Duration) error {
-	_, err := b.db.ExecContext(ctx, "DELETE FROM events WHERE created_at < ?", time.Now().Add(-age).UnixMilli())
+	cutoff := time.Now().Add(-age).UnixMilli()
+	if _, err := b.db.ExecContext(ctx, "DELETE FROM events WHERE created_at < ?", cutoff); err != nil {
+		return err
+	}
+	// Remove orphaned progress_log rows for sessions that have been absent
+	// longer than the trim window (sessions are never deleted, but their log
+	// rows can accumulate if a session died without settling its turn).
+	_, err := b.db.ExecContext(ctx,
+		"DELETE FROM progress_log WHERE session_id IN (SELECT id FROM sessions WHERE last_seen < ?)", cutoff)
 	return err
 }
 

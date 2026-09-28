@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/apply"
@@ -68,9 +69,37 @@ type ThreadsView struct {
 	Threads []deliver.Thread `json:"threads"`
 }
 
+// WorkedView is the progress history from a completed turn, carried on a
+// 'worked' message. It matches deliver.WorkedView.
+type WorkedView = deliver.WorkedView
+
+// ProgressLine is one entry in a turn's progress history. It matches
+// propose.ProgressLine and is exported on WorkedView.Lines.
+type ProgressLine = propose.ProgressLine
+
+// MessageView wraps deliver.Message and adds the decoded WorkedView for
+// messages with state "worked" (a turn's progress fold-in, spec §3.5).
+type MessageView struct {
+	deliver.Message
+	Worked *WorkedView `json:"worked,omitempty"`
+}
+
+// toMessageView converts a deliver.Message to a MessageView, decoding the
+// worked field when present.
+func toMessageView(m deliver.Message) MessageView {
+	mv := MessageView{Message: m}
+	if m.WorkedJSON != "" {
+		var w WorkedView
+		if err := json.Unmarshal([]byte(m.WorkedJSON), &w); err == nil {
+			mv.Worked = &w
+		}
+	}
+	return mv
+}
+
 // MessagesView is the response body of GET /api/messages.
 type MessagesView struct {
-	Messages []deliver.Message `json:"messages"`
+	Messages []MessageView     `json:"messages"`
 	Batch    int64             `json:"batch"`
 	Drafts   []deliver.Message `json:"drafts"`
 }

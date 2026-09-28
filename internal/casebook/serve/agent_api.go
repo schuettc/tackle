@@ -356,11 +356,19 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	worked, _ := s.Props.ClearProgress(ctx, in.Session)
+	worked, lines, _ := s.Props.ClearProgress(ctx, in.Session)
 	result := SettledResult{Session: in.Session, WorkedMs: worked.Milliseconds()}
 	if d != nil {
 		id := d.ID
 		result.Delivery = &id
+	}
+	// If the turn had progress lines, record a 'worked' message in the thread
+	// so the page can show the history after a reload (spec §3.5).
+	if len(lines) > 0 {
+		if thID, ok := s.currentThread(ctx, in.Session, d); ok {
+			wv := WorkedView{DurationMs: worked.Milliseconds(), Lines: lines}
+			s.postWorkedMessage(ctx, in.Session, thID, worked, wv)
+		}
 	}
 	ev := map[string]any{"session": in.Session, "worked_ms": result.WorkedMs}
 	if result.Delivery != nil {
@@ -374,6 +382,51 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	delete(s.waiters, in.Session)
 	s.mu.Unlock()
 	reply(w, result, nil)
+}
+
+// currentThread returns the thread ID for recording a worked message:
+// the settled delivery's first message's thread, or the session's most
+// recent thread. Returns (0, false) when the session has no thread.
+func (s *Server) currentThread(ctx context.Context, sessionID string, d *deliver.Delivery) (int64, bool) {
+	if d != nil && len(d.Messages) > 0 {
+		return d.Messages[0].ThreadID, true
+	}
+	threads, err := s.Queue.Threads(ctx, sessionID)
+	if err != nil || len(threads) == 0 {
+		return 0, false
+	}
+	return threads[len(threads)-1].ID, true
+}
+
+// workedBody formats a duration as "worked for Xm Ys" (spec §3.5).
+func workedBody(d time.Duration) string {
+	d = d.Round(time.Second)
+	h := int(d.Hours())
+	m := int(d.Minutes()) % 60
+	sec := int(d.Seconds()) % 60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("worked for %dh %dm %ds", h, m, sec)
+	case m > 0:
+		return fmt.Sprintf("worked for %dm %ds", m, sec)
+	default:
+		return fmt.Sprintf("worked for %ds", sec)
+	}
+}
+
+// postWorkedMessage inserts a 'worked' message into thread thID and publishes
+// the messages/thread bus events.
+func (s *Server) postWorkedMessage(ctx context.Context, sessionID string, thID int64, dur time.Duration, wv WorkedView) {
+	wj, err := json.Marshal(wv)
+	if err != nil {
+		return
+	}
+	msg, err := s.Queue.PostWorked(ctx, thID, sessionID, workedBody(dur), string(wj))
+	if err != nil {
+		return
+	}
+	s.Bus.Publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID})
+	s.Bus.Publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID})
 }
 
 // jobForSession validates that the job exists and is owned by the given

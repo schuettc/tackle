@@ -340,10 +340,10 @@ func (s *Server) getMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bid, drafts, err := s.Queue.DraftBatch(ctx, id)
-	var out []deliver.Message
+	var out []MessageView
 	for _, m := range ms {
 		if m.State != deliver.Draft {
-			out = append(out, m)
+			out = append(out, toMessageView(m))
 		}
 	}
 	reply(w, MessagesView{Messages: nonNil(out), Batch: bid, Drafts: nonNil(drafts)}, err)

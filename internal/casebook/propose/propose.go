@@ -50,6 +50,14 @@ type Evidence struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// ProgressLine is one progress update recorded during a turn.
+type ProgressLine struct {
+	Text  string    `json:"text"`
+	N     int       `json:"n,omitempty"`
+	Total int       `json:"total,omitempty"`
+	At    time.Time `json:"at"`
+}
+
 // Progress is a session's live progress line.
 type Progress struct {
 	SessionID string    `json:"session_id"`
@@ -308,7 +316,8 @@ func (s *Store) Evidence(ctx context.Context, key string) ([]Evidence, error) {
 	return out, rows.Err()
 }
 
-// SetProgress updates a session's progress line, keeping its start time.
+// SetProgress updates a session's progress line, keeping its start time, and
+// appends the update to progress_log so ClearProgress can return the history.
 func (s *Store) SetProgress(ctx context.Context, session, text string, n, total int) (Progress, error) {
 	now := ms(s.Now())
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO progress(session_id, text, n, total, started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -317,6 +326,9 @@ func (s *Store) SetProgress(ctx context.Context, session, text string, n, total 
 	if err != nil {
 		return Progress{}, err
 	}
+	// Append to the history log for this turn.
+	_, _ = s.DB.ExecContext(ctx, `INSERT INTO progress_log(session_id, text, n, total, at) VALUES (?, ?, ?, ?, ?)`,
+		session, text, n, total, now)
 	p, _, err := s.Progress(ctx, session)
 	return p, err
 }
@@ -334,15 +346,43 @@ func (s *Store) Progress(ctx context.Context, session string) (Progress, bool, e
 	return p, err == nil, err
 }
 
-// ClearProgress removes a session's line when its turn ends and returns how
-// long it ran (0 if there was none).
-func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duration, error) {
+// ClearProgress removes a session's progress line and history when its turn
+// ends. It returns the duration the turn ran (0 if there was none) and the
+// ordered list of progress lines logged during the turn.
+func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duration, []ProgressLine, error) {
 	p, ok, err := s.Progress(ctx, session)
-	if err != nil || !ok {
-		return 0, err
+	if err != nil {
+		return 0, nil, err
 	}
-	if _, err := s.DB.ExecContext(ctx, "DELETE FROM progress WHERE session_id = ?", session); err != nil {
-		return 0, err
+	// Collect history from progress_log before deleting.
+	rows, err := s.DB.QueryContext(ctx, "SELECT text, n, total, at FROM progress_log WHERE session_id = ? ORDER BY id", session)
+	if err != nil {
+		return 0, nil, err
 	}
-	return p.UpdatedAt.Sub(p.StartedAt), nil
+	var lines []ProgressLine
+	for rows.Next() {
+		var l ProgressLine
+		var at int64
+		if err := rows.Scan(&l.Text, &l.N, &l.Total, &at); err != nil {
+			rows.Close()
+			return 0, nil, err
+		}
+		l.At = tm(at)
+		lines = append(lines, l)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, nil, err
+	}
+	// Delete progress_log rows for this session.
+	if _, err := s.DB.ExecContext(ctx, "DELETE FROM progress_log WHERE session_id = ?", session); err != nil {
+		return 0, nil, err
+	}
+	// Delete the live progress row if it exists.
+	if ok {
+		if _, err := s.DB.ExecContext(ctx, "DELETE FROM progress WHERE session_id = ?", session); err != nil {
+			return 0, nil, err
+		}
+		return p.UpdatedAt.Sub(p.StartedAt), lines, nil
+	}
+	return 0, lines, nil
 }
