@@ -1652,6 +1652,174 @@ async function run() {
         await emptyReadPage.close();
       }
     }
+
+    // ---- scenario: fidelity — geometry and computed style -------------------
+    console.log('\nscenario: fidelity — geometry and computed style');
+
+    {
+      const fidPage = await context.newPage();
+      try {
+        await fidPage.setViewportSize({ width: 1600, height: 900 });
+        await fidPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await fidPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        // Navigate to item detail (encoded key as the server uses).
+        await fidPage.evaluate(() => {
+          location.hash = '#/item/issue:schuettc%2Fhail%234';
+        });
+        await fidPage
+          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
+          .catch(() => {});
+        await fidPage.waitForTimeout(600);
+
+        // 1. Reading document geometry: left edge ≥ 40 px from list right edge;
+        //    document width ≤ 700 px.
+        {
+          const listRight = await fidPage
+            .$eval('.kit-list', (el) => el.getBoundingClientRect().right)
+            .catch(() => 0);
+          const docRect = await fidPage
+            .$eval('.kit-doc', (el) => {
+              const r = el.getBoundingClientRect();
+              return { left: r.left, width: r.width };
+            })
+            .catch(() => ({ left: 0, width: 0 }));
+          check(
+            'reading document left edge is ≥ 40 px from list right edge',
+            docRect.left - listRight >= 40,
+          );
+          check(
+            'reading document width is ≤ 700 px',
+            docRect.width > 0 && docRect.width <= 700,
+          );
+        }
+
+        // 2. Kicker font-family is monospace.
+        {
+          const kickerFont = await fidPage
+            .$eval('.kit-read .cb-kicker', (el) =>
+              getComputedStyle(el).fontFamily.toLowerCase(),
+            )
+            .catch(() => '');
+          check(
+            'kicker font-family is monospace',
+            kickerFont.includes('mono') ||
+              kickerFont.includes('menlo') ||
+              kickerFont.includes('courier'),
+          );
+        }
+
+        // 3. Section labels are uppercase and mono.
+        {
+          const labelStyle = await fidPage
+            .$eval('.kit-read .kit-label', (el) => {
+              const cs = getComputedStyle(el);
+              return {
+                transform: cs.textTransform,
+                font: cs.fontFamily.toLowerCase(),
+              };
+            })
+            .catch(() => ({ transform: '', font: '' }));
+          check(
+            'section label text-transform is uppercase',
+            labelStyle.transform === 'uppercase',
+          );
+          check(
+            'section label font-family is monospace',
+            labelStyle.font.includes('mono') ||
+              labelStyle.font.includes('menlo') ||
+              labelStyle.font.includes('courier'),
+          );
+        }
+
+        // 4. Brand mark width and height are > 0 and it is visible.
+        {
+          const markSize = await fidPage
+            .$eval('.kit-brand svg', (el) => {
+              const r = el.getBoundingClientRect();
+              return {
+                width: r.width,
+                height: r.height,
+                visible:
+                  el.offsetParent !== null ||
+                  el.getBoundingClientRect().width > 0,
+              };
+            })
+            .catch(() => ({ width: 0, height: 0, visible: false }));
+          check('brand mark width > 0', markSize.width > 0);
+          check('brand mark height > 0', markSize.height > 0);
+          check('brand mark is visible', markSize.visible);
+        }
+
+        // ---- after-screenshots (light) ------------------------------------
+        await fidPage.screenshot({
+          path: '/tmp/fid-light-item.png',
+          fullPage: false,
+        });
+
+        // Navigate to list view for second screenshot.
+        await fidPage.evaluate(() => {
+          location.hash = '#/attention/new';
+        });
+        await fidPage.waitForFunction(
+          () => location.hash === '#/attention/new',
+        );
+        await fidPage.waitForTimeout(600);
+        await fidPage
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+        await fidPage.waitForTimeout(300);
+        await fidPage.screenshot({
+          path: '/tmp/fid-light-new.png',
+          fullPage: false,
+        });
+
+        // ---- after-screenshots (dark) ------------------------------------
+        // Toggle to dark mode.
+        await fidPage.click('button.kit-ctl:has-text("theme")');
+        await fidPage.waitForTimeout(200);
+        // If we're not in dark yet, click once more (system → light → dark).
+        const theme = await fidPage.$eval(
+          'html',
+          (el) => el.dataset.theme ?? '',
+        );
+        if (theme !== 'dark') {
+          await fidPage.click('button.kit-ctl:has-text("theme")');
+          await fidPage.waitForTimeout(200);
+        }
+
+        // Dark screenshot of the list view.
+        await fidPage.screenshot({
+          path: '/tmp/fid-dark-new.png',
+          fullPage: false,
+        });
+
+        // Navigate to item detail for dark screenshot.
+        await fidPage.evaluate(() => {
+          location.hash = '#/item/issue:schuettc%2Fhail%234';
+        });
+        await fidPage
+          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
+          .catch(() => {});
+        await fidPage.waitForTimeout(600);
+        await fidPage.screenshot({
+          path: '/tmp/fid-dark-item.png',
+          fullPage: false,
+        });
+
+        console.log(
+          '  screenshots: /tmp/fid-light-item.png  /tmp/fid-light-new.png',
+        );
+        console.log(
+          '               /tmp/fid-dark-item.png   /tmp/fid-dark-new.png',
+        );
+      } finally {
+        await fidPage.close();
+      }
+    }
   } catch (err) {
     console.error('probe: unexpected error:', err);
     fails++;

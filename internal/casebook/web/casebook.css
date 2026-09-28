@@ -288,6 +288,15 @@
 
 /* ---- selection foot controls --------------------------------------------- */
 
+/* The foot wrapper sits inside .kit-foot; make it flex so selcount, select-all
+ * and show-more line up in a row on the same baseline. */
+.cb-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
 .cb-sel-count {
   font: 12.5px var(--kit-mono);
   color: var(--kit-signal);

@@ -75,7 +75,14 @@ function boot() {
       handle.setLive("stale");
     }
   });
-  const mark = h(
+  function svgEl(tag, attrs, ...children) {
+    const NS = "http://www.w3.org/2000/svg";
+    const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    for (const child of children) el.appendChild(child);
+    return el;
+  }
+  const mark = svgEl(
     "svg",
     {
       viewBox: "0 0 64 64",
@@ -84,9 +91,9 @@ function boot() {
       "aria-hidden": "true"
     },
     // ink tile
-    h("rect", { width: "64", height: "64", rx: "14", fill: "#14161d" }),
+    svgEl("rect", { width: "64", height: "64", rx: "14", fill: "#14161d" }),
     // open book outline
-    h("path", {
+    svgEl("path", {
       d: "M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z",
       fill: "none",
       stroke: "#d98f66",
@@ -94,16 +101,16 @@ function boot() {
       "stroke-linejoin": "round"
     }),
     // spine
-    h("path", { d: "M32 18V52", stroke: "#d98f66", "stroke-width": "4.4" }),
+    svgEl("path", { d: "M32 18V52", stroke: "#d98f66", "stroke-width": "4.4" }),
     // one neutral rule on the left page
-    h("path", {
+    svgEl("path", {
       d: "M15 29H25",
       stroke: "#9aa0ab",
       "stroke-width": "5",
       "stroke-linecap": "round"
     }),
     // tick on the right page (fully drawn — resting frame)
-    h("path", {
+    svgEl("path", {
       d: "M37 33L42 38L50 26",
       fill: "none",
       stroke: "#d98f66",
@@ -507,7 +514,7 @@ function fmtTime(s) {
 }
 function renderEvidence(evs) {
   const section = h3("section", { class: "cb-evidence" });
-  section.append(h3("h2", { class: "cb-section-label" }, "evidence"));
+  section.append(h3("h3", { class: "kit-label" }, "evidence"));
   if (evs.length === 0) {
     section.append(h3("p", { class: "cb-empty" }, "no evidence"));
     return section;
@@ -531,7 +538,7 @@ function renderEvidence(evs) {
 }
 function renderHistory(events, decisions) {
   const section = h3("section", { class: "cb-history" });
-  section.append(h3("h2", { class: "cb-section-label" }, "history"));
+  section.append(h3("h3", { class: "kit-label" }, "history"));
   if (events.length === 0 && decisions.length === 0) {
     section.append(h3("p", { class: "cb-empty" }, "no history"));
     return section;
@@ -606,7 +613,7 @@ function renderProposalCard(ctx, p, key) {
 }
 function renderDecideSection(ctx, key, kind) {
   const section = h3("section", { class: "cb-decide" });
-  section.append(h3("h2", { class: "cb-section-label" }, "decide"));
+  section.append(h3("h3", { class: "kit-label" }, "decide"));
   const dispRow = h3("div", { class: "cb-decide-btns" });
   section.append(dispRow);
   void getVocab(ctx).then((vocab) => {
@@ -620,7 +627,7 @@ function renderDecideSection(ctx, key, kind) {
           "button",
           {
             type: "button",
-            class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
+            class: "kit-btn cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger danger" : ""),
             onclick() {
               openDecideSheet(ctx, [key], () => {
               });
@@ -637,8 +644,8 @@ function renderItem(ctx, detail) {
   const it = detail.item;
   const el = h3("article", { class: "cb-item" });
   const kickerParts = [it.kind, it.key, it.relation].filter(Boolean).join(" · ");
-  el.append(h3("p", { class: "cb-kicker" }, kickerParts));
-  el.append(h3("h1", { class: "cb-title" }, it.title ?? it.key));
+  el.append(h3("p", { class: "cb-kicker kit-kick" }, kickerParts));
+  el.append(h3("h1", { class: "cb-title kit-h1" }, it.title ?? it.key));
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
   if (it.status) factPairs.push(["status", it.status]);
@@ -666,7 +673,7 @@ function renderItem(ctx, detail) {
   el.append(renderDecideSection(ctx, it.key, it.kind));
   el.append(renderEvidence(detail.evidence ?? []));
   el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
-  return el;
+  return h3("div", { class: "kit-doc" }, el);
 }
 
 // board.ts

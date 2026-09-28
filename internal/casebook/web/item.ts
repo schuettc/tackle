@@ -56,7 +56,7 @@ function fmtTime(s: string): string {
 
 function renderEvidence(evs: Evidence[]): HTMLElement {
   const section = h('section', { class: 'cb-evidence' });
-  section.append(h('h2', { class: 'cb-section-label' }, 'evidence'));
+  section.append(h('h3', { class: 'kit-label' }, 'evidence'));
   if (evs.length === 0) {
     section.append(h('p', { class: 'cb-empty' }, 'no evidence'));
     return section;
@@ -85,7 +85,7 @@ function renderEvidence(evs: Evidence[]): HTMLElement {
 
 function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
   const section = h('section', { class: 'cb-history' });
-  section.append(h('h2', { class: 'cb-section-label' }, 'history'));
+  section.append(h('h3', { class: 'kit-label' }, 'history'));
 
   if (events.length === 0 && decisions.length === 0) {
     section.append(h('p', { class: 'cb-empty' }, 'no history'));
@@ -180,7 +180,7 @@ function renderProposalCard(ctx: Ctx, p: Proposal, key: string): HTMLElement {
 
 function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
   const section = h('section', { class: 'cb-decide' });
-  section.append(h('h2', { class: 'cb-section-label' }, 'decide'));
+  section.append(h('h3', { class: 'kit-label' }, 'decide'));
 
   const dispRow = h('div', { class: 'cb-decide-btns' });
   section.append(dispRow);
@@ -199,8 +199,8 @@ function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
           {
             type: 'button',
             class:
-              'cb-sheet-disp' +
-              (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : ''),
+              'kit-btn cb-sheet-disp' +
+              (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger danger' : ''),
             onclick() {
               openDecideSheet(ctx, [key], () => {
                 // The 'decided' live event triggers a list reload.
@@ -227,10 +227,10 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
   const kickerParts = [it.kind, it.key, it.relation]
     .filter(Boolean)
     .join(' · ');
-  el.append(h('p', { class: 'cb-kicker' }, kickerParts));
+  el.append(h('p', { class: 'cb-kicker kit-kick' }, kickerParts));
 
   // ---- title ----------------------------------------------------------------
-  el.append(h('h1', { class: 'cb-title' }, it.title ?? it.key));
+  el.append(h('h1', { class: 'cb-title kit-h1' }, it.title ?? it.key));
 
   // ---- facts ----------------------------------------------------------------
   const factPairs: Array<[string, string]> = [];
@@ -271,5 +271,6 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
   // ---- history (journal + decision commits) ---------------------------------
   el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
 
-  return el;
+  // Wrap in .kit-doc for the kit's centred, max-width reading column.
+  return h('div', { class: 'kit-doc' }, el);
 }

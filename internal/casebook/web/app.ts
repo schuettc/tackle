@@ -108,7 +108,23 @@ export function boot(): void {
   // Casebook mark: the open-casebook glyph (resting frame of mark.svg) inlined
   // as DOM so the kit bar renders it at whatever size the brand slot needs.
   // Shape-matches favicon.svg and mark.svg's resting frame (PALETTE.md).
-  const mark = h(
+  //
+  // SVG elements must be created with createElementNS (SVG namespace) so the
+  // browser renders them as vector graphics.  h() uses document.createElement
+  // which creates HTML elements that have no intrinsic size or SVG rendering.
+  function svgEl(
+    tag: string,
+    attrs: Record<string, string>,
+    ...children: SVGElement[]
+  ): SVGElement {
+    const NS = 'http://www.w3.org/2000/svg';
+    const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    for (const child of children) el.appendChild(child);
+    return el;
+  }
+
+  const mark = svgEl(
     'svg',
     {
       viewBox: '0 0 64 64',
@@ -117,9 +133,9 @@ export function boot(): void {
       'aria-hidden': 'true',
     },
     // ink tile
-    h('rect', { width: '64', height: '64', rx: '14', fill: '#14161d' }),
+    svgEl('rect', { width: '64', height: '64', rx: '14', fill: '#14161d' }),
     // open book outline
-    h('path', {
+    svgEl('path', {
       d: 'M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z',
       fill: 'none',
       stroke: '#d98f66',
@@ -127,16 +143,16 @@ export function boot(): void {
       'stroke-linejoin': 'round',
     }),
     // spine
-    h('path', { d: 'M32 18V52', stroke: '#d98f66', 'stroke-width': '4.4' }),
+    svgEl('path', { d: 'M32 18V52', stroke: '#d98f66', 'stroke-width': '4.4' }),
     // one neutral rule on the left page
-    h('path', {
+    svgEl('path', {
       d: 'M15 29H25',
       stroke: '#9aa0ab',
       'stroke-width': '5',
       'stroke-linecap': 'round',
     }),
     // tick on the right page (fully drawn — resting frame)
-    h('path', {
+    svgEl('path', {
       d: 'M37 33L42 38L50 26',
       fill: 'none',
       stroke: '#d98f66',
