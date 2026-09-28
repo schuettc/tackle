@@ -2,10 +2,13 @@ package verify
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -255,21 +258,46 @@ func TestRunTimeout(t *testing.T) {
 }
 
 func TestRunTimeoutBoundedWaitAfterKill(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found; needed to spawn a detached, pipe-holding grandchild")
+	}
+
 	old := killGrace
 	killGrace = 500 * time.Millisecond
 	defer func() { killGrace = old }()
 
+	const timeout = 200 * time.Millisecond
+
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	// The python3 grandchild calls os.setsid() to escape the parent's
+	// process group (so SIGKILL on the group doesn't reach it), and is
+	// started in the background *without* redirecting its stdout/stderr:
+	// it inherits the pipes runOne reads from, so it alone can keep them
+	// open past the parent's death. The foreground `sleep 30` is the
+	// command the timeout actually kills.
+	script := fmt.Sprintf(
+		`python3 -c 'import os,time; os.setsid(); open(%q,"w").write(str(os.getpid())); time.sleep(30)' & sleep 30`,
+		pidFile,
+	)
 	cmds := []Command{
-		// Spawns a detached grandchild in its own session, holding the
-		// stdout/stderr pipe open well past the parent's death, then the
-		// parent itself sleeps past the timeout.
-		{Dir: ".", Argv: []string{"sh", "-c", "setsid sleep 30 </dev/null >/dev/null 2>&1 & sleep 30"}},
+		{Dir: ".", Argv: []string{"sh", "-c", script}},
 	}
+
+	t.Cleanup(func() {
+		b, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			return
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	})
+
 	start := time.Now()
-	results := Run(context.Background(), cmds, 200*time.Millisecond)
+	results := Run(context.Background(), cmds, timeout)
 	elapsed := time.Since(start)
-	// Clean up any stray detached sleep from this test.
-	_ = exec.Command("pkill", "-f", "setsid sleep 30").Run()
 
 	if len(results) != 1 {
 		t.Fatalf("len(results) = %d, want 1", len(results))
@@ -281,9 +309,50 @@ func TestRunTimeoutBoundedWaitAfterKill(t *testing.T) {
 	if r.OK {
 		t.Errorf("OK = true, want false")
 	}
-	if elapsed > 2*time.Second {
-		t.Errorf("elapsed = %v, want well under 2s (bounded wait after kill)", elapsed)
+	// A lower bound close to timeout+killGrace proves runOne actually
+	// waited out (most of) killGrace for the detached grandchild's pipe,
+	// rather than returning immediately after the kill.
+	lower := timeout + killGrace*8/10
+	upper := timeout + killGrace + 2*time.Second
+	if elapsed < lower {
+		t.Errorf("elapsed = %v, want >= %v (killGrace wait didn't happen)", elapsed, lower)
 	}
+	if elapsed > upper {
+		t.Errorf("elapsed = %v, want < %v (killGrace wait should be bounded)", elapsed, upper)
+	}
+
+	// Wait briefly for the pid file the grandchild writes, then confirm
+	// killing it (via t.Cleanup above, run after this check would be too
+	// late) actually removes a live process.
+	var pid int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(pidFile)
+		if err == nil && len(strings.TrimSpace(string(b))) > 0 {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(b)))
+			if err == nil {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatalf("grandchild never wrote its pid to %s", pidFile)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("grandchild pid %d not alive before cleanup kill: %v", pid, err)
+	}
+	if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+		t.Fatalf("kill grandchild pid %d: %v", pid, err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Errorf("grandchild pid %d still alive after SIGKILL", pid)
 }
 
 func TestRunEnvHasNoKey(t *testing.T) {
