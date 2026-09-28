@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -136,5 +137,34 @@ func TestSettledWithoutServeIsSilent(t *testing.T) {
 		if code, out := runIn("not json", args...); code != 0 || out != "" {
 			t.Errorf("%v: %d %q", args, code, out)
 		}
+	}
+}
+
+// TestSettledClaudeHungStdinReturns verifies that "settled --harness claude"
+// returns promptly (well under 5 s) even when stdin never closes, prints
+// nothing, and exits 0.
+func TestSettledClaudeHungStdinReturns(t *testing.T) {
+	wbSetup(t)
+	pr, _ := io.Pipe() // writer is never closed – simulates a hung stdin
+	defer pr.Close()
+
+	type result struct {
+		code int
+		out  string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, errw bytes.Buffer
+		code := Main([]string{"settled", "--harness", "claude"}, pr, &out, &errw)
+		done <- result{code, out.String() + errw.String()}
+	}()
+
+	select {
+	case res := <-done:
+		if res.code != 0 || res.out != "" {
+			t.Fatalf("settled: code=%d output=%q", res.code, res.out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("settled --harness claude with a never-closing stdin did not return within 5 s")
 	}
 }

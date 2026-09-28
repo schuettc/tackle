@@ -26,8 +26,9 @@ type Advert struct {
 	PID       int       `json:"pid"`
 	Version   string    `json:"version"`
 	StartedAt time.Time `json:"started_at"`
-	// Reopened: a tab was connected when the previous serve went away, so
-	// this one opened the page again in a new tab (the old tab's token is dead).
+	// Reopened: a tab was connected when the previous serve went away, so the
+	// page is opened again (Options.Ready) in a new tab; the old tab's token is
+	// dead. Channels read it to tell their agents.
 	Reopened bool `json:"reopened,omitempty"`
 }
 

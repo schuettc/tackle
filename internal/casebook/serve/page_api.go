@@ -503,9 +503,17 @@ func (s *Server) postMoveDelivery(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	err := s.Queue.MoveDelivery(r.Context(), in.ID, in.Session)
+	ctx := r.Context()
+	// Look up the current session before the move so we can wake it: moving a
+	// delivery ends the old session's in-flight slot, making any messages queued
+	// behind it sendable, but only the new session would be woken otherwise.
+	d, err := s.Queue.Delivery(ctx, in.ID)
 	if err == nil {
-		s.Bus.Publish(r.Context(), "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
+		err = s.Queue.MoveDelivery(ctx, in.ID, in.Session)
+	}
+	if err == nil {
+		s.Bus.Publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
+		s.wake(d.SessionID) // parity with postRelease: wake the old session
 		s.wake(in.Session)
 	}
 	reply(w, nil, err)

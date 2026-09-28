@@ -348,8 +348,10 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if err != nil {
 		return err
 	}
+	// Reopened records that a tab was connected when the previous serve went
+	// away, whether or not a Ready callback is set to open the page again.
 	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC(),
-		Reopened: wasOpen && o.Ready != nil}
+		Reopened: wasOpen}
 	if o.Open != nil {
 		s.openPage = func(fragment string) error { return o.Open(srv.URL + fragment) }
 	}

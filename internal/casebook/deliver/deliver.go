@@ -457,6 +457,12 @@ func (q *Queue) Next(ctx context.Context, session string) (*Delivery, error) {
 		if n == 0 {
 			return nil
 		}
+		// Commit the delivery as 'inflight' and mark its messages 'delivered'.
+		// Semantics: a delivery is marked delivered when serve hands it to the
+		// channel's long-poll, before the agent confirms receipt. If that
+		// response is lost the delivery stays in flight until the agent settles
+		// it, Court releases/moves it (stuck after StuckAfter), or serve
+		// restarts (→ interrupted state, eligible for resend).
 		res, err := tx.ExecContext(ctx, "INSERT INTO deliveries(session_id, state, sent_at, touched_at) VALUES (?, 'inflight', ?, ?)", session, now, now)
 		if err != nil {
 			return err

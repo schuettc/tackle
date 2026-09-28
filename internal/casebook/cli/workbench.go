@@ -114,16 +114,28 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				if _, err := parse(fs, args, io.Discard); err != nil {
 					return nil
 				}
+				// The 2 s budget covers both the stdin read and the HTTP call so
+				// an unclosed stdin (e.g. a hung Claude hook) never blocks forever.
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
 				session := strFlag(fs, "session")
 				if strFlag(fs, "harness") == "claude" {
-					b, _ := io.ReadAll(io.LimitReader(stdin, 1<<20))
-					session = harness.FromHookPayload(b).SessionID
+					type readResult struct{ b []byte }
+					done := make(chan readResult, 1)
+					go func() {
+						b, _ := io.ReadAll(io.LimitReader(stdin, 1<<20))
+						done <- readResult{b}
+					}()
+					select {
+					case res := <-done:
+						session = harness.FromHookPayload(res.b).SessionID
+					case <-ctx.Done():
+						return nil
+					}
 				}
 				if session == "" {
 					return nil
 				}
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
 				c := channel.NewClient()
 				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/settled", map[string]string{"session": session}, nil)
 				return nil

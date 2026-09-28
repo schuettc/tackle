@@ -519,3 +519,61 @@ func TestPageOpenFollowsTheStream(t *testing.T) {
 	closeB()
 	eventually(t, "the last tab to close the page", func() bool { return !status() && flag() == "0" })
 }
+
+// TestMoveDeliveryWakesOldSession checks that moving an in-flight delivery
+// to another session promptly wakes the old session's waiting long-poll so
+// the message queued behind it is delivered without waiting the full long-poll
+// timeout (~55 s in production; s.Wait in the test rig).
+//
+// MoveDelivery moves the delivery's threads to the new session, so the queued
+// "second" message must live in a separate thread that stays with s1.
+func TestMoveDeliveryWakesOldSession(t *testing.T) {
+	r := newRig(t)
+	// Register s2 so the move target is valid.
+	r.attach(t, "s2")
+
+	// Thread1 for s1: m1 goes in-flight in D1.
+	th1 := r.attach(t, "s1")
+	r.send(t, th1, "first message", false)
+	var w1 waited
+	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w1); c != 200 || len(w1.Delivery.Messages) == 0 {
+		t.Fatalf("first wait %d %+v", c, w1)
+	}
+
+	// Thread2 for s1 (separate from D1's thread): m2 is queued behind D1.
+	// MoveDelivery only moves threads that appear in D1, so thread2 stays with s1.
+	var th2 struct {
+		ID int64 `json:"id"`
+	}
+	if c := r.do(t, "POST", "/api/threads", map[string]any{"session": "s1", "name": "triage2"}, &th2); c != 200 {
+		t.Fatalf("create thread2 %d", c)
+	}
+	r.send(t, th2.ID, "second message", false)
+
+	// Start a long-poll for s1 – it should block because D1 is in flight.
+	done := make(chan waited, 1)
+	go func() {
+		var w waited
+		r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w)
+		done <- w
+	}()
+	time.Sleep(150 * time.Millisecond)
+
+	// Move D1 to s2 and check that s1's long-poll wakes promptly.
+	start := time.Now()
+	if c := r.do(t, "POST", "/api/deliveries/move", map[string]any{"id": w1.Delivery.ID, "session": "s2"}, nil); c != 200 {
+		t.Fatalf("move %d", c)
+	}
+
+	select {
+	case w := <-done:
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Fatalf("s1 woke too slowly after move: %v (want < 1s)", elapsed)
+		}
+		if len(w.Delivery.Messages) != 1 {
+			t.Fatalf("expected the queued second message in s1's new delivery, got %+v", w.Delivery.Messages)
+		}
+	case <-time.After(r.s.Wait + time.Second):
+		t.Fatal("s1 did not wake after move; expected prompt wakeup")
+	}
+}

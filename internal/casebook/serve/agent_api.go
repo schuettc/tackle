@@ -131,6 +131,10 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 				working = prev.Messages[0].Body
 			}
 			text := deliver.Render(*d, working, summary, time.Local)
+			// The messages are already marked 'delivered' in the DB (see
+			// deliver.Queue.Next). Handing d to the HTTP response is the
+			// moment the agent receives them; the delivery stays in-flight
+			// until the agent settles or Court intervenes.
 			s.Bus.Publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
 			reply(w, map[string]any{"delivery": d, "text": text}, nil)
 			return
