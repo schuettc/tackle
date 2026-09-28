@@ -378,6 +378,60 @@ func (r *rig) gitRemoteHead(t *testing.T) string {
 	return out
 }
 
+// TestDecideReturnsDecidedKeys verifies that DecideResult carries decided_keys
+// holding every normalized key that was actually committed.
+// Fail-before evidence: before adding DecidedKeys to the struct, the response
+// body had no decided_keys field.
+func TestDecideReturnsDecidedKeys(t *testing.T) {
+	r := newRig(t)
+
+	// Succeed for all keys
+	var res struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide",
+		map[string]any{"keys": []string{"pr:schuettc/hail#3"}, "disposition": "keep"},
+		&res); c != 200 {
+		t.Fatalf("decide %d", c)
+	}
+	if res.Decided != 1 {
+		t.Fatalf("decided %d, want 1", res.Decided)
+	}
+	if len(res.DecidedKeys) != 1 || res.DecidedKeys[0] != "pr:schuettc/hail#3" {
+		t.Fatalf("decided_keys %v, want [pr:schuettc/hail#3]", res.DecidedKeys)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("unexpected errors %v", res.Errors)
+	}
+
+	// Partial failure: merge is valid for pr: but not issue:.
+	var partial struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide",
+		map[string]any{
+			"keys":        []string{"pr:schuettc/hail#3", "issue:schuettc/hail#4"},
+			"disposition": "merge",
+		},
+		&partial); c != 200 {
+		t.Fatalf("partial decide %d", c)
+	}
+	// pr: should succeed with merge; issue: should fail (merge not allowed for issue).
+	if partial.Decided != 1 {
+		t.Fatalf("partial decided %d, want 1", partial.Decided)
+	}
+	if len(partial.DecidedKeys) != 1 || partial.DecidedKeys[0] != "pr:schuettc/hail#3" {
+		t.Fatalf("partial decided_keys %v, want [pr:schuettc/hail#3]", partial.DecidedKeys)
+	}
+	if len(partial.Errors) == 0 {
+		t.Fatalf("expected errors for issue:, got none")
+	}
+}
+
 func TestRejectsUnknownFieldsAndUnknownSessions(t *testing.T) {
 	r := newRig(t)
 	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"repo:a/b"}, "disposition": "keep", "colour": "red"}, nil); c != 400 {

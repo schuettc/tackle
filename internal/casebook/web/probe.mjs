@@ -460,6 +460,217 @@ async function run() {
       check('show-more foot element exists in DOM', footExists);
     }
 
+    // ---- scenario: foot stays visible when view fits one page ---------------
+    console.log('\nscenario: foot stays visible when view fits one page');
+
+    {
+      // Navigate to the 'new' view. The fixture has only a handful of items
+      // (well under PAGE_SIZE=200) so there is no 'show more' needed.
+      // The foot element must NOT be hidden: the selection count and the
+      // select-all button must be visible even when the show-more button hides.
+      await page.evaluate(() => {
+        location.hash = '#/attention/new';
+      });
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      await page.waitForTimeout(600);
+      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(300);
+
+      // cb-foot must not be hidden (the hidden attribute sets display:none).
+      const footNotHidden = await page
+        .$eval('.cb-foot', (el) => !el.hidden)
+        .catch(() => false);
+      check('cb-foot is not hidden when view fits one page', footNotHidden);
+
+      // cb-sel-all must be in the rendered flow (offsetParent !== null means it
+      // is not hidden by itself or any ancestor).
+      const selAllVisible = await page
+        .$eval('.cb-sel-all', (el) => el.offsetParent !== null)
+        .catch(() => false);
+      check('select-all is visible when view fits one page', selAllVisible);
+    }
+
+    // ---- scenario: select-all button shows total count ----------------------
+    console.log('\nscenario: select-all button shows total count');
+
+    {
+      // Still on the 'new' view from the previous scenario.
+      // The select-all button text must include the total item count, e.g.
+      // "select all 4 in view" not just "select all in view".
+      const selAllText = await page
+        .$eval('.cb-sel-all', (el) => el.textContent ?? '')
+        .catch(() => '');
+      check(
+        'select-all text includes the item count',
+        /select all \d+ in view/.test(selAllText),
+      );
+    }
+
+    // ---- scenario: dispositions for a mixed-kind selection are the intersection
+    console.log(
+      '\nscenario: dispositions for a mixed-kind selection are the intersection',
+    );
+
+    {
+      // Select every visible row in 'new' view (repo:, pr:, issue:, branch: kinds).
+      // Intersection of their allowed dispositions excludes 'merge' (pr-only).
+      const boxes = await page.$$('.kit-row .kit-box');
+      for (let i = 0; i < boxes.length; i++) {
+        await boxes[i].click();
+        await page.waitForTimeout(40);
+      }
+      await page.waitForTimeout(300);
+
+      // Open the decide sheet.
+      await page.click('.kit-primary').catch(() => {});
+      await page
+        .waitForSelector('.kit-sheet', { timeout: 4000 })
+        .catch(() => {});
+      await page.waitForTimeout(200);
+
+      const dispTexts = await page.$$eval('.kit-sheet .cb-sheet-disp', (btns) =>
+        btns.map((b) => (b.textContent ?? '').trim()),
+      );
+
+      // 'merge' is valid only for pr: — must not appear for a mixed selection.
+      check(
+        'mixed-kind selection does not offer pr-only disposition (merge)',
+        !dispTexts.includes('merge'),
+      );
+
+      // Close without deciding and deselect.
+      await page.keyboard.press('Escape');
+      await page
+        .waitForFunction(
+          () => document.querySelector('.kit-backdrop') === null,
+          { timeout: 3000 },
+        )
+        .catch(() => {});
+      await page.waitForTimeout(200);
+      const selBoxes = await page.$$('.kit-row .kit-box');
+      for (const b of selBoxes) {
+        await b.click().catch(() => {});
+        await page.waitForTimeout(30);
+      }
+      await page.waitForTimeout(200);
+    }
+
+    // ---- scenario: partial decide deselects succeeded, keeps failed selected -
+    console.log(
+      '\nscenario: partial decide deselects succeeded and keeps failed selected',
+    );
+
+    {
+      // Use a fresh browser context so the route interceptor is fully isolated
+      // and cannot leak into the subsequent 'decide in bulk' scenario.
+      const partialCtx = await browser.newContext();
+      const partialPage = await partialCtx.newPage();
+      try {
+        await partialPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await partialPage.waitForSelector('.kit-bar', { timeout: 8000 });
+
+        // Navigate to 'new' view and select two rows.
+        await partialPage.evaluate(() => {
+          location.hash = '#/attention/new';
+        });
+        await partialPage.waitForFunction(
+          () => location.hash === '#/attention/new',
+        );
+        await partialPage.waitForTimeout(600);
+        await partialPage
+          .waitForSelector('.kit-row', { timeout: 5000 })
+          .catch(() => {});
+
+        const newBoxes = await partialPage.$$('.kit-row .kit-box');
+        if (newBoxes.length >= 2) {
+          await newBoxes[0].click();
+          await partialPage.waitForTimeout(50);
+          await newBoxes[1].click();
+          await partialPage.waitForTimeout(300);
+
+          // Intercept /api/decide to simulate a partial success:
+          // first key decided, second key errors.
+          // The fresh context ensures the route cannot leak into other scenarios.
+          await partialPage.route('**/api/decide', async (route, request) => {
+            const body = JSON.parse(request.postData() || '{}');
+            const keys = body.keys || [];
+            await route.fulfill({
+              status: 200,
+              contentType: 'application/json',
+              body: JSON.stringify({
+                decided: keys.length > 0 ? 1 : 0,
+                decided_keys: keys.length > 0 ? [keys[0]] : [],
+                errors:
+                  keys.length > 1
+                    ? [keys[1] + ': disposition not allowed for this kind']
+                    : [],
+                pushed: false,
+              }),
+            });
+          });
+
+          // Open the decide sheet via the primary button.
+          await partialPage.click('.kit-primary');
+          await partialPage
+            .waitForSelector('.kit-sheet', { timeout: 4000 })
+            .catch(() => {});
+          await partialPage.waitForTimeout(200);
+
+          // Pick the first available disposition.
+          const firstDisp = await partialPage.$('.kit-sheet .cb-sheet-disp');
+          if (firstDisp) {
+            await firstDisp.click();
+            await partialPage.waitForTimeout(100);
+          }
+
+          // Click the filled Decide N button.
+          const sheetBtns = await partialPage.$$('.kit-sheet button');
+          for (const btn of sheetBtns) {
+            const t = (await btn.textContent()) ?? '';
+            if (/^decide\s+\d+/i.test(t.trim())) {
+              await btn.click();
+              break;
+            }
+          }
+          await partialPage.waitForTimeout(800);
+
+          // The error for the failed key must be visible inside the sheet.
+          const errVisible = await partialPage
+            .$eval(
+              '.cb-sheet-err',
+              (el) =>
+                el.offsetParent !== null && (el.textContent || '').length > 0,
+            )
+            .catch(() => false);
+          check(
+            'partial decide shows the error for the failed key',
+            errVisible,
+          );
+
+          // Only the first key was decided (deselected). The second key remains
+          // selected. Primary must show 'Decide 1' (not 'Decide 2').
+          const primaryText = await partialPage
+            .$eval('.kit-primary', (el) => el.textContent ?? '')
+            .catch(() => '');
+          check(
+            'partial decide deselects only the succeeded key (primary Decide 1)',
+            primaryText.trim() === 'Decide 1',
+          );
+        } else {
+          check('partial decide shows the error for the failed key', false);
+          check(
+            'partial decide deselects only the succeeded key (primary Decide 1)',
+            false,
+          );
+        }
+      } finally {
+        await partialCtx.close();
+      }
+    }
+
     // ---- scenario: decide in bulk -------------------------------------------
     console.log('\nscenario: decide in bulk');
 

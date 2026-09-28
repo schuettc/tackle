@@ -19,7 +19,7 @@ import type {
   RejectResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import { openDecideSheet, allowedForKind } from './decide.ts';
+import { openDecideSheet, allowedForKind, DANGER_DISPS } from './decide.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
 const BODY_CAP = 600;
@@ -177,8 +177,6 @@ function renderProposalCard(
 
 // ---- decide buttons ---------------------------------------------------------
 
-// Dispositions that are destructive (danger styling).
-const DANGER_DISPS_ITEM = new Set(['close', 'delete', 'archive']);
 // Dispositions that need an until condition (shown with '…' to hint at the sheet).
 const NEEDS_ELLIPSIS = new Set(['wait', 'watch']);
 
@@ -200,7 +198,7 @@ function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
           type: 'button',
           class:
             'cb-sheet-disp' +
-            (DANGER_DISPS_ITEM.has(d) ? ' cb-sheet-disp--danger' : ''),
+            (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : ''),
           onclick() {
             openDecideSheet(ctx, [key], allowed, () => {
               // The 'decided' live event triggers a list reload.

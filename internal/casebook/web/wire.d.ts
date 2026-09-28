@@ -43,6 +43,7 @@ export interface ItemDetailView {
 
 export interface DecideResult {
   decided: number;
+  decided_keys: string[] | null;
   errors: string[] | null;
   pushed: boolean;
 }

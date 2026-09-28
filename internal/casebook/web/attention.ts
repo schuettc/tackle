@@ -133,7 +133,7 @@ export function makeAttention(ctx: Ctx): Section {
           void selectAllInView();
         },
       },
-      'select all in view',
+      'select all 0 in view',
     );
 
     footEl = h(
@@ -145,6 +145,7 @@ export function makeAttention(ctx: Ctx): Section {
         'button',
         {
           class: 'cb-foot-more',
+          hidden: true, // shown by updateFoot() when there are more items
           onclick() {
             void loadMore();
           },
@@ -323,15 +324,28 @@ export function makeAttention(ctx: Ctx): Section {
 
   function updateFoot(): void {
     if (!footEl) return;
-    const btn = footEl.querySelector('.cb-foot-more');
-    if (!btn) return;
-    const remaining = totalItems - offset;
-    if (remaining > 0) {
-      btn.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
-      footEl.hidden = false;
-    } else {
-      footEl.hidden = true;
+
+    // Update the select-all button text with the current view total.
+    const selAll = footEl.querySelector('.cb-sel-all');
+    if (selAll instanceof HTMLElement) {
+      selAll.textContent = `select all ${totalItemsForView} in view`;
     }
+
+    // Show or hide only the show-more button; the foot itself stays visible
+    // so the selection count and select-all remain accessible.
+    const btn = footEl.querySelector<HTMLElement>('.cb-foot-more');
+    if (btn) {
+      const remaining = totalItems - offset;
+      if (remaining > 0) {
+        btn.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
+        btn.hidden = false;
+      } else {
+        btn.hidden = true;
+      }
+    }
+
+    // The foot div itself is always visible.
+    footEl.hidden = false;
   }
 
   async function openDetail(key: string): Promise<void> {

@@ -42,9 +42,10 @@ type ItemDetailView struct {
 
 // DecideResult is the response body of POST /api/decide and POST /api/proposals/change.
 type DecideResult struct {
-	Decided int      `json:"decided"`
-	Errors  []string `json:"errors"`
-	Pushed  bool     `json:"pushed"`
+	Decided     int      `json:"decided"`
+	DecidedKeys []string `json:"decided_keys"`
+	Errors      []string `json:"errors"`
+	Pushed      bool     `json:"pushed"`
 }
 
 // AcceptResult is the response body of POST /api/proposals/accept.

@@ -231,9 +231,15 @@ var DANGER_DISPS = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
 function allowedForKind(kind) {
   return KIND_ALLOWED[kind] ?? FALLBACK_ALLOWED;
 }
-function allowedForItems(items) {
-  if (items.length === 0) return FALLBACK_ALLOWED;
-  const sets = items.map((it) => new Set(allowedForKind(it.kind)));
+function kindFromKey(key) {
+  const i = key.indexOf(":");
+  return i > 0 ? key.slice(0, i) : "";
+}
+function allowedForKeys(keys) {
+  if (keys.length === 0) return FALLBACK_ALLOWED;
+  const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
+  if (kinds.length === 0) return FALLBACK_ALLOWED;
+  const sets = kinds.map((k) => new Set(allowedForKind(k)));
   const first = [...sets[0] ?? new Set(FALLBACK_ALLOWED)];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
@@ -353,14 +359,17 @@ function openDecideSheet(ctx, keys, allowed, onDone) {
       if (until) payload["until"] = until;
       if (note) payload["note"] = note;
       const result = await ctx.api.post("/decide", payload);
+      const decidedKeys = result.decided_keys ?? [];
+      if (decidedKeys.length > 0) {
+        onDone(decidedKeys);
+      }
       if (result.errors && result.errors.length > 0) {
         errEl.textContent = result.errors.join("; ");
         errEl.hidden = false;
         submitting = false;
-        return;
+      } else {
+        sh?.close();
       }
-      sh?.close();
-      onDone(keys);
     } catch (err) {
       errEl.textContent = err instanceof Error ? err.message : "decide failed — try again";
       errEl.hidden = false;
@@ -388,8 +397,7 @@ function wireSelection(ctx, listHandle) {
   function openSheetForSelection() {
     const keys = listHandle.selectedIds();
     if (keys.length === 0) return;
-    const selItems = listHandle.selected();
-    const allowed = allowedForItems(selItems);
+    const allowed = allowedForKeys(keys);
     openDecideSheet(ctx, keys, allowed, (decided) => {
       listHandle.deselect(decided);
     });
@@ -422,7 +430,11 @@ function wireSelection(ctx, listHandle) {
         openSheetForSelection();
       }
     });
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.startsWith("key clash:")) {
+      throw err;
+    }
   }
 }
 
@@ -546,7 +558,6 @@ function renderProposalCard(ctx, p, key, kind) {
     actions: cardActions
   });
 }
-var DANGER_DISPS_ITEM = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
 var NEEDS_ELLIPSIS = /* @__PURE__ */ new Set(["wait", "watch"]);
 function renderDecideSection(ctx, key, kind) {
   const section = h3("section", { class: "cb-decide" });
@@ -560,7 +571,7 @@ function renderDecideSection(ctx, key, kind) {
         "button",
         {
           type: "button",
-          class: "cb-sheet-disp" + (DANGER_DISPS_ITEM.has(d) ? " cb-sheet-disp--danger" : ""),
+          class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
           onclick() {
             openDecideSheet(ctx, [key], allowed, () => {
             });
@@ -685,7 +696,7 @@ function makeAttention(ctx) {
           void selectAllInView();
         }
       },
-      "select all in view"
+      "select all 0 in view"
     );
     footEl = h4(
       "div",
@@ -696,6 +707,8 @@ function makeAttention(ctx) {
         "button",
         {
           class: "cb-foot-more",
+          hidden: true,
+          // shown by updateFoot() when there are more items
           onclick() {
             void loadMore();
           }
@@ -846,15 +859,21 @@ function makeAttention(ctx) {
   }
   function updateFoot() {
     if (!footEl) return;
-    const btn = footEl.querySelector(".cb-foot-more");
-    if (!btn) return;
-    const remaining = totalItems - offset;
-    if (remaining > 0) {
-      btn.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
-      footEl.hidden = false;
-    } else {
-      footEl.hidden = true;
+    const selAll = footEl.querySelector(".cb-sel-all");
+    if (selAll instanceof HTMLElement) {
+      selAll.textContent = `select all ${totalItemsForView} in view`;
     }
+    const btn = footEl.querySelector(".cb-foot-more");
+    if (btn) {
+      const remaining = totalItems - offset;
+      if (remaining > 0) {
+        btn.textContent = `show ${Math.min(PAGE_SIZE, remaining)} more`;
+        btn.hidden = false;
+      } else {
+        btn.hidden = true;
+      }
+    }
+    footEl.hidden = false;
   }
   async function openDetail(key) {
     try {

@@ -42,17 +42,34 @@ const FALLBACK_ALLOWED = ['keep', 'close', 'wait', 'watch', 'ignore'];
 const NEEDS_UNTIL = new Set(['wait', 'watch']);
 
 // Dispositions that are destructive (rendered with danger styling).
-const DANGER_DISPS = new Set(['close', 'delete', 'archive']);
+// Exported so item.ts can import it instead of duplicating.
+export const DANGER_DISPS = new Set(['close', 'delete', 'archive']);
 
 /** allowedForKind returns the valid dispositions for one item kind. */
 export function allowedForKind(kind: string): string[] {
   return KIND_ALLOWED[kind] ?? FALLBACK_ALLOWED;
 }
 
-/** allowedForItems returns the intersection of allowed dispositions across all item kinds. */
-function allowedForItems(items: ItemView[]): string[] {
-  if (items.length === 0) return FALLBACK_ALLOWED;
-  const sets = items.map((it) => new Set(allowedForKind(it.kind)));
+/**
+ * kindFromKey extracts the kind from a key by taking the prefix before the
+ * first colon.  "pr:schuettc/hail#3" → "pr".
+ */
+function kindFromKey(key: string): string {
+  const i = key.indexOf(':');
+  return i > 0 ? key.slice(0, i) : '';
+}
+
+/**
+ * allowedForKeys returns the intersection of allowed dispositions for every
+ * key in the slice, derived from each key's kind prefix.  This is the correct
+ * way to compute allowed for a selection: it works for keys on unrendered
+ * pages (where no ItemView is available) as well as rendered ones.
+ */
+export function allowedForKeys(keys: string[]): string[] {
+  if (keys.length === 0) return FALLBACK_ALLOWED;
+  const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
+  if (kinds.length === 0) return FALLBACK_ALLOWED;
+  const sets = kinds.map((k) => new Set(allowedForKind(k)));
   const first = [...(sets[0] ?? new Set(FALLBACK_ALLOWED))];
   return first.filter((d) => sets.every((s) => s.has(d)));
 }
@@ -222,14 +239,22 @@ export function openDecideSheet(
       if (until) payload['until'] = until;
       if (note) payload['note'] = note;
       const result = await ctx.api.post<DecideResult>('/decide', payload);
+      // decided_keys lists the keys that were actually committed.  Deselect
+      // those whether or not some keys also failed, so partial success is
+      // reflected immediately.
+      const decidedKeys = result.decided_keys ?? [];
+      if (decidedKeys.length > 0) {
+        onDone(decidedKeys);
+      }
       if (result.errors && result.errors.length > 0) {
+        // Show per-key errors; keep the sheet open so the user can retry or
+        // dismiss.  The succeeded keys have already been deselected above.
         errEl.textContent = result.errors.join('; ');
         errEl.hidden = false;
         submitting = false;
-        return;
+      } else {
+        sh?.close();
       }
-      sh?.close();
-      onDone(keys);
     } catch (err) {
       errEl.textContent =
         err instanceof Error ? err.message : 'decide failed — try again';
@@ -280,8 +305,9 @@ export function wireSelection(
   function openSheetForSelection(): void {
     const keys = listHandle.selectedIds();
     if (keys.length === 0) return;
-    const selItems = listHandle.selected();
-    const allowed = allowedForItems(selItems);
+    // Derive allowed dispositions from the key prefixes so that items on
+    // unrendered pages (selected via select-all across pages) are counted too.
+    const allowed = allowedForKeys(keys);
     openDecideSheet(ctx, keys, allowed, (decided) => {
       listHandle.deselect(decided);
       // A "decided" live event will trigger the list reload; no manual
@@ -313,6 +339,9 @@ export function wireSelection(
   });
 
   // Register "d" to decide the selection.
+  // The kit throws with a message starting "key clash:" when the key is
+  // already registered (e.g. another section registered "d").  We swallow
+  // only that error and rethrow anything else.
   try {
     ctx.keys.register({
       keys: 'd',
@@ -322,7 +351,11 @@ export function wireSelection(
         openSheetForSelection();
       },
     });
-  } catch {
-    // Already registered (e.g. another section registered "d").
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.startsWith('key clash:')) {
+      throw err;
+    }
+    // Clash with an existing binding: this section's "d" key is taken.
   }
 }
