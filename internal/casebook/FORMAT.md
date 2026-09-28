@@ -73,7 +73,7 @@ Never stored: command lines, commit or tag messages, titles, bodies, field value
 This machine's clones under its configured roots. Each clone has:
 - path, identifying GitHub repo, remotes (non-GitHub URLs redacted)
 - bare, dirty, stash count, local `core.hooksPath`, adopted (casebook's shims chained in)
-- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip
+- branches: upstream, ahead, unpushed count, oldest unpushed commit time, tip, tip_at (committer date), landed_state ("yes" | "no" | "unknown" | "" = never checked), landed ("in <default>" or "merged #<n>", set only when landed_state=="yes"), landed_tip (tip SHA, set only when landed_state=="yes"), landed_how ("default-branch" or "merged-pr", set only when landed_state=="yes")
 - linked worktrees: path, branch, head, detached, dirty
 
 The file is deterministic and holds no timestamps of its own, so an unchanged machine produces no commit.

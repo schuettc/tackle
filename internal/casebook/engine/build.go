@@ -80,10 +80,10 @@ func (r Result) Attention() []Item {
 
 // machineLanded records the per-machine landed verdict for one branch item.
 type machineLanded struct {
-	Machine string
-	Landed  string // "" = not landed (or not checked); "in main"; "merged #N"
-	Checked bool   // LandedTip was set = ComputeLanded ran
-	Tip     string // the tip that was checked
+	Machine     string
+	Landed      string // "in main", "merged #N", or "" (not landed)
+	LandedState string // "yes" | "no" | "unknown" | "" (empty = snapshot written before LandedState existed)
+	Tip         string // tip SHA; non-empty only when LandedState == "yes"
 }
 
 type builder struct {
@@ -286,11 +286,17 @@ func (b *builder) snapshots() {
 					it.UpdatedAt = br.TipAt
 				}
 				// Record per-machine landed status for cross-machine combination.
+				// Treat an empty LandedState (snapshot written before the field
+				// existed) as "unknown" so we don't falsely count it as "no".
+				ls := br.LandedState
+				if ls == "" && br.Landed != "" {
+					ls = "yes" // old snapshot that set Landed but not LandedState
+				}
 				b.branchLanded[k.String()] = append(b.branchLanded[k.String()], machineLanded{
-					Machine: snap.Machine,
-					Landed:  br.Landed,
-					Checked: br.LandedTip != "",
-					Tip:     br.LandedTip,
+					Machine:     snap.Machine,
+					Landed:      br.Landed,
+					LandedState: ls,
+					Tip:         br.LandedTip, // non-empty only when LandedState=="yes"
 				})
 				if br.Gone {
 					// Upstream deleted on the remote: usually a squash-merged PR
@@ -313,11 +319,12 @@ func (b *builder) snapshots() {
 // the per-machine verdicts collected in b.branchLanded during snapshots().
 // Combined semantics (spec §4.1):
 //
-//   - "all-machines": landed everywhere it exists
-//   - "some-machines": landed on some, confirmed NOT landed on others
-//   - "none": confirmed not landed on every machine that checked
-//   - "unknown": at least one machine hasn't checked (LandedTip=="")
-//     and none say "not landed"
+//   - "all-machines": landed on every machine (LandedState=="yes" everywhere)
+//   - "some-machines": landed>0 && notLanded>0 (regardless of unknown count)
+//   - "none": no landed, notLanded>0, no unknown
+//   - "unknown": any other combination (any unknown with no not-landed contradicting it)
+//
+// LandedTips holds only the tips of machines whose LandedState=="yes".
 func (b *builder) finishLanded(it *Item) {
 	if it.Kind != item.KindBranch {
 		return
@@ -335,19 +342,20 @@ func (b *builder) finishLanded(it *Item) {
 	)
 	seen := map[string]bool{}
 	for _, ml := range verdicts {
-		if ml.Tip != "" {
-			tips[ml.Machine] = ml.Tip
-		}
-		if ml.Landed != "" {
+		switch ml.LandedState {
+		case "yes":
 			landedCount++
-			if !seen[ml.Landed] {
+			if ml.Tip != "" {
+				tips[ml.Machine] = ml.Tip
+			}
+			if ml.Landed != "" && !seen[ml.Landed] {
 				seen[ml.Landed] = true
 				reasons = append(reasons, ml.Landed)
 			}
-		} else if ml.Checked {
-			notLandedCount++ // checked and confirmed not landed
-		} else {
-			unknownCount++ // ComputeLanded not run
+		case "no":
+			notLandedCount++
+		default: // "unknown" or "" (snapshot from before LandedState was added)
+			unknownCount++
 		}
 	}
 	if len(tips) > 0 {
@@ -356,18 +364,14 @@ func (b *builder) finishLanded(it *Item) {
 	if len(reasons) > 0 {
 		it.LandedHow = strings.Join(reasons, "; ")
 	}
-	total := len(verdicts)
 	switch {
-	case landedCount == total:
+	case landedCount > 0 && notLandedCount == 0 && unknownCount == 0:
 		it.Landed = "all-machines"
-	case landedCount > 0 && notLandedCount > 0 && unknownCount == 0:
-		it.Landed = "some-machines"
-	case landedCount > 0 && unknownCount > 0:
-		it.Landed = "unknown"
-	case landedCount == 0 && unknownCount == 0:
+	case landedCount > 0 && notLandedCount > 0:
+		it.Landed = "some-machines" // regardless of unknown count
+	case landedCount == 0 && notLandedCount > 0 && unknownCount == 0:
 		it.Landed = "none"
 	default:
-		// Mix of unknown and not-landed, none confirmed landed.
 		it.Landed = "unknown"
 	}
 }

@@ -125,10 +125,11 @@ type Branch struct {
 	Unpushed       int       `json:"unpushed,omitempty"` // commits on no remote
 	OldestUnpushed time.Time `json:"oldest_unpushed,omitzero"`
 	Tip            string    `json:"tip"`
-	TipAt          time.Time `json:"tip_at,omitzero"`      // committer date of the tip commit
-	Landed         string    `json:"landed,omitempty"`     // "" = unknown/no; "in <default>" or "merged #<n>"
-	LandedTip      string    `json:"landed_tip,omitempty"` // tip SHA checked by ComputeLanded (set whenever we check, landed or not)
-	LandedHow      string    `json:"landed_how,omitempty"` // "default-branch" or "merged-pr" (empty when not landed)
+	TipAt          time.Time `json:"tip_at,omitzero"`        // committer date of the tip commit
+	Landed         string    `json:"landed,omitempty"`       // "" = not landed; "in <default>" or "merged #<n>"
+	LandedState    string    `json:"landed_state,omitempty"` // "yes" | "no" | "unknown" | "" (empty = never checked)
+	LandedTip      string    `json:"landed_tip,omitempty"`   // tip SHA; set ONLY when LandedState == "yes"
+	LandedHow      string    `json:"landed_how,omitempty"`   // "default-branch" or "merged-pr" (empty when not landed)
 }
 
 // Worktree is one linked worktree of a clone.

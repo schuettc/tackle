@@ -3,6 +3,7 @@ package observe
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -47,14 +48,30 @@ func FetchMergedPRs(ctx context.Context, r Runner, repos []string, prev map[stri
 	return out
 }
 
-// ComputeLanded determines whether each non-default local branch in the
-// snapshot has landed: its tip is an ancestor of the default branch, or it
-// matches a merged PR (squash-merge aware). It modifies the snapshot in-place.
+// cloneRemote picks the remote name whose value matches the clone's repo.
+func cloneRemote(c *Clone) string {
+	for name, val := range c.Remotes {
+		if strings.EqualFold(val, c.Repo) {
+			return name
+		}
+	}
+	return "origin"
+}
+
+// isDefaultBranch reports whether name is the clone's default or a well-known default.
+func isDefaultBranch(name, def string) bool {
+	return name == def || name == "main" || name == "master"
+}
+
+// ComputeAncestorLanded runs the git merge-base ancestor check for every
+// non-default branch in the snapshot. After this call:
+//   - LandedState = "yes", Landed = "in <def>", LandedHow = "default-branch",
+//     LandedTip = tip  — when the tip is an ancestor of the default branch.
+//   - LandedState = "unknown", all others empty — when not an ancestor (the
+//     merged-PR check has not yet run).
 //
-// After ComputeLanded runs, each non-default branch has LandedTip set to the
-// tip SHA that was checked. This sentinel distinguishes "checked and not landed"
-// (LandedTip set, Landed="") from "not yet checked" (both empty).
-func ComputeLanded(ctx context.Context, snap *Snapshot, repos map[string]RepoObs, merged map[string]MergedPRList) {
+// A git failure also leaves the branch as "unknown".
+func ComputeAncestorLanded(ctx context.Context, snap *Snapshot, repos map[string]RepoObs) {
 	for ci := range snap.Clones {
 		c := &snap.Clones[ci]
 		if c.Repo == "" {
@@ -65,59 +82,125 @@ func ComputeLanded(ctx context.Context, snap *Snapshot, repos map[string]RepoObs
 		if def == "" {
 			def = "main"
 		}
-		// Pick the remote whose value matches this clone's repo (identity remote).
-		remote := "origin"
-		for name, val := range c.Remotes {
-			if strings.EqualFold(val, c.Repo) {
-				remote = name
-				break
-			}
-		}
-		ml := merged[strings.ToLower(c.Repo)]
+		remote := cloneRemote(c)
 		for bi := range c.Branches {
 			b := &c.Branches[bi]
-			if b.Name == def || b.Name == "main" || b.Name == "master" {
+			if isDefaultBranch(b.Name, def) {
 				continue
 			}
-			// Record the tip we are about to check (LandedTip != "" means we ran).
-			b.LandedTip = b.Tip
+			// Reset so re-computation is idempotent.
+			b.Landed, b.LandedState, b.LandedTip, b.LandedHow = "", "", "", ""
 
-			// First: is the tip an ancestor of the default branch?
 			for _, ref := range []string{
 				"refs/remotes/" + remote + "/" + def,
 				"refs/heads/" + def,
 			} {
 				if _, err := gitx.Run(ctx, c.Path, "merge-base", "--is-ancestor", b.Tip, ref); err == nil {
 					b.Landed = "in " + def
+					b.LandedState = "yes"
+					b.LandedTip = b.Tip
 					b.LandedHow = "default-branch"
 					break
 				}
 			}
-			if b.Landed != "" {
-				continue
+			if b.LandedState == "" {
+				b.LandedState = "unknown"
 			}
+		}
+	}
+}
 
-			// Second: check merged PRs (squash-merge aware).
-			if !ml.Fetched {
-				// Cannot determine; leave Landed="" (unknown).
+// ReposWithUnlandedBranches returns the sorted set of repos (owner/name) that
+// have at least one non-default local branch whose LandedState is not "yes".
+// Call after ComputeAncestorLanded to find repos that still need a merged-PR
+// check.
+func ReposWithUnlandedBranches(snap Snapshot, repos map[string]RepoObs) []string {
+	seen := map[string]bool{}
+	for _, c := range snap.Clones {
+		if c.Repo == "" {
+			continue
+		}
+		def := "main"
+		if r, ok := repos[strings.ToLower(c.Repo)]; ok && r.DefaultBranch != "" {
+			def = r.DefaultBranch
+		}
+		for _, b := range c.Branches {
+			if isDefaultBranch(b.Name, def) {
 				continue
 			}
+			if b.LandedState != "yes" {
+				seen[c.Repo] = true
+				break
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for r := range seen {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ComputeMergedPRLanded checks merged-PR data for every non-default branch
+// whose LandedState is not yet "yes". After this call:
+//   - LandedState = "yes", Landed = "merged #N", LandedHow = "merged-pr",
+//     LandedTip = tip — when a merged PR's headRefOid matches (or is
+//     squash-merge ancestor of) the tip.
+//   - LandedState = "no"  — when merged list was fetched but no PR matched.
+//   - LandedState = "unknown" — when MergedPRList.Fetched is false.
+func ComputeMergedPRLanded(ctx context.Context, snap *Snapshot, merged map[string]MergedPRList) {
+	for ci := range snap.Clones {
+		c := &snap.Clones[ci]
+		if c.Repo == "" {
+			continue
+		}
+		ml := merged[strings.ToLower(c.Repo)]
+		for bi := range c.Branches {
+			b := &c.Branches[bi]
+			if b.LandedState == "yes" {
+				continue // already confirmed landed
+			}
+			if !ml.Fetched {
+				b.LandedState = "unknown"
+				continue
+			}
+			// Merged list available; search for a matching PR.
 			for _, pr := range ml.PRs {
 				if pr.HeadRefName != b.Name {
 					continue
 				}
 				if pr.HeadRefOid == b.Tip {
 					b.Landed = "merged #" + strconv.Itoa(pr.Number)
+					b.LandedState = "yes"
+					b.LandedTip = b.Tip
 					b.LandedHow = "merged-pr"
 					break
 				}
 				// Squash merge: our tip may be an ancestor of the merged head.
 				if _, err := gitx.Run(ctx, c.Path, "merge-base", "--is-ancestor", b.Tip, pr.HeadRefOid); err == nil {
 					b.Landed = "merged #" + strconv.Itoa(pr.Number)
+					b.LandedState = "yes"
+					b.LandedTip = b.Tip
 					b.LandedHow = "merged-pr"
 					break
 				}
 			}
+			if b.LandedState != "yes" {
+				b.LandedState = "no"
+			}
 		}
 	}
+}
+
+// ComputeLanded is the combined two-phase landed check. It first runs the git
+// ancestor check (ComputeAncestorLanded), then the merged-PR check
+// (ComputeMergedPRLanded) for branches still not confirmed as landed.
+//
+// Use ComputeAncestorLanded + ReposWithUnlandedBranches + FetchMergedPRs +
+// ComputeMergedPRLanded directly when you need to skip fetching for repos
+// whose branches are all already confirmed as ancestor-landed.
+func ComputeLanded(ctx context.Context, snap *Snapshot, repos map[string]RepoObs, merged map[string]MergedPRList) {
+	ComputeAncestorLanded(ctx, snap, repos)
+	ComputeMergedPRLanded(ctx, snap, merged)
 }

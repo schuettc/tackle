@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"syscall"
 
 	"github.com/schuettc/tackle/internal/casebook/config"
@@ -94,12 +93,15 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		var gr observe.RefreshReport
 		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
 		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
-		// Fetch merged PRs for repos with non-default local branches, then
-		// compute landed status for this machine's branches.
+		// Two-phase landed computation:
+		// 1. Git ancestry check for all non-default branches.
+		// 2. Fetch merged PRs only for repos that still have unlanded branches.
+		// 3. Merged-PR check for the remaining branches.
 		allRepos := observe.AllRepos(g)
-		reposToCheck := reposWithNonDefaultBranches(snap, allRepos)
+		observe.ComputeAncestorLanded(ctx, &snap, allRepos)
+		reposToCheck := observe.ReposWithUnlandedBranches(snap, allRepos)
 		g.MergedPRs = observe.FetchMergedPRs(ctx, a.Gh, reposToCheck, g.MergedPRs, a.Now())
-		observe.ComputeLanded(ctx, &snap, allRepos, g.MergedPRs)
+		observe.ComputeMergedPRLanded(ctx, &snap, g.MergedPRs)
 		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
 			return rep, err
 		}
@@ -150,35 +152,6 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	}
 	_, err = a.pushSync(ctx, &rep)
 	return rep, err
-}
-
-// reposWithNonDefaultBranches returns the unique set of repos (as owner/name
-// strings) that have at least one local branch that is not "main", "master",
-// or the repo's own default branch. These are the repos that need a merged-PR
-// list to determine landed status.
-func reposWithNonDefaultBranches(snap observe.Snapshot, repos map[string]observe.RepoObs) []string {
-	seen := map[string]bool{}
-	for _, c := range snap.Clones {
-		if c.Repo == "" {
-			continue
-		}
-		def := "main"
-		if r, ok := repos[strings.ToLower(c.Repo)]; ok && r.DefaultBranch != "" {
-			def = r.DefaultBranch
-		}
-		for _, b := range c.Branches {
-			if b.Name != def && b.Name != "main" && b.Name != "master" {
-				seen[c.Repo] = true
-				break
-			}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for r := range seen {
-		out = append(out, r)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func (a *App) remoteSync(ctx context.Context, rep *SyncReport) error {

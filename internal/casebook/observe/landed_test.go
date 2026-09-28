@@ -100,6 +100,9 @@ func TestLandedInDefaultBranchByAncestor(t *testing.T) {
 	if b.LandedTip != featTip {
 		t.Errorf("LandedTip = %q, want %q", b.LandedTip, featTip)
 	}
+	if b.LandedState != "yes" {
+		t.Errorf("LandedState = %q, want \"yes\"", b.LandedState)
+	}
 }
 
 // TestLandedByMergedPRHeadOid: tip not in main; merged PR #7 headRefOid == tip
@@ -131,7 +134,7 @@ func TestLandedByMergedPRHeadOid(t *testing.T) {
 }
 
 // TestNotLandedWhenTipDivergesAndNoMergedPR: Fetched=true, no matching PR,
-// not an ancestor → Landed "".
+// not an ancestor → Landed "", LandedState="no", LandedTip empty.
 func TestNotLandedWhenTipDivergesAndNoMergedPR(t *testing.T) {
 	dir, featTip := setupDivergedRepo(t)
 	snap := makeSnapForDir(dir, "acme/proj", "origin")
@@ -146,14 +149,17 @@ func TestNotLandedWhenTipDivergesAndNoMergedPR(t *testing.T) {
 	if b.Landed != "" {
 		t.Errorf("Landed = %q, want %q (not landed)", b.Landed, "")
 	}
-	// LandedTip should be set (we checked this tip)
-	if b.LandedTip != featTip {
-		t.Errorf("LandedTip = %q, want %q (should record checked tip)", b.LandedTip, featTip)
+	if b.LandedState != "no" {
+		t.Errorf("LandedState = %q, want \"no\" (confirmed not landed)", b.LandedState)
+	}
+	// LandedTip must be empty: it is only set when LandedState=="yes".
+	if b.LandedTip != "" {
+		t.Errorf("LandedTip = %q, want \"\" (only set when confirmed landed)", b.LandedTip)
 	}
 }
 
 // TestLandedUnknownWhenMergedListUnavailable: MergedPRList.Fetched=false and
-// not an ancestor → Landed "" and LandedHow "" (unknown).
+// not an ancestor → Landed "", LandedHow "", LandedState="unknown", LandedTip empty.
 func TestLandedUnknownWhenMergedListUnavailable(t *testing.T) {
 	dir, featTip := setupDivergedRepo(t)
 	snap := makeSnapForDir(dir, "acme/proj", "origin")
@@ -166,14 +172,17 @@ func TestLandedUnknownWhenMergedListUnavailable(t *testing.T) {
 
 	b := snap.Clones[0].Branches[0]
 	if b.Landed != "" {
-		t.Errorf("Landed = %q, want %q (unknown)", b.Landed, "")
+		t.Errorf("Landed = %q, want \"\" (unknown)", b.Landed)
 	}
 	if b.LandedHow != "" {
-		t.Errorf("LandedHow = %q, want %q (unknown)", b.LandedHow, "")
+		t.Errorf("LandedHow = %q, want \"\" (unknown)", b.LandedHow)
 	}
-	// LandedTip should still be set because we ran the git ancestor check
-	if b.LandedTip != featTip {
-		t.Errorf("LandedTip = %q, want %q (should record checked tip)", b.LandedTip, featTip)
+	if b.LandedState != "unknown" {
+		t.Errorf("LandedState = %q, want \"unknown\"", b.LandedState)
+	}
+	// LandedTip must be empty: it is only set when LandedState=="yes".
+	if b.LandedTip != "" {
+		t.Errorf("LandedTip = %q, want \"\" (only set when confirmed landed)", b.LandedTip)
 	}
 }
 
@@ -212,5 +221,164 @@ func TestFetchMergedPRsOnlyForReposWithUnlandedCandidates(t *testing.T) {
 		if strings.Contains(call, "acme/repo-a") {
 			t.Errorf("runner called for repo-a (should not be queried): %s", call)
 		}
+	}
+}
+
+// TestLandedStateField verifies that ComputeLanded sets LandedState correctly
+// and that LandedTip is set only when LandedState == "yes".
+func TestLandedStateField(t *testing.T) {
+	t.Run("ancestor landed → LandedState=yes, LandedTip set", func(t *testing.T) {
+		dir, featTip, _ := setupAncestorRepo(t)
+		snap := makeSnapForDir(dir, "acme/proj", "origin")
+		addBranch(&snap, 0, "feat", featTip)
+
+		repos := map[string]RepoObs{"acme/proj": {Repo: "acme/proj", DefaultBranch: "main"}}
+		merged := map[string]MergedPRList{"acme/proj": {Fetched: true}}
+
+		ComputeLanded(ctx, &snap, repos, merged)
+
+		b := snap.Clones[0].Branches[0]
+		if b.LandedState != "yes" {
+			t.Errorf("LandedState = %q, want %q", b.LandedState, "yes")
+		}
+		if b.LandedTip != featTip {
+			t.Errorf("LandedTip = %q, want %q (should be set when landed)", b.LandedTip, featTip)
+		}
+	})
+
+	t.Run("not landed, merged list fetched → LandedState=no, LandedTip empty", func(t *testing.T) {
+		dir, featTip := setupDivergedRepo(t)
+		snap := makeSnapForDir(dir, "acme/proj", "origin")
+		addBranch(&snap, 0, "feat", featTip)
+
+		repos := map[string]RepoObs{"acme/proj": {Repo: "acme/proj", DefaultBranch: "main"}}
+		merged := map[string]MergedPRList{"acme/proj": {Fetched: true, PRs: nil}} // fetched, no matching PR
+
+		ComputeLanded(ctx, &snap, repos, merged)
+
+		b := snap.Clones[0].Branches[0]
+		if b.LandedState != "no" {
+			t.Errorf("LandedState = %q, want %q", b.LandedState, "no")
+		}
+		if b.LandedTip != "" {
+			t.Errorf("LandedTip = %q, want %q (should be empty when not landed)", b.LandedTip, "")
+		}
+	})
+
+	t.Run("not ancestor, merged list not fetched → LandedState=unknown, LandedTip empty", func(t *testing.T) {
+		dir, featTip := setupDivergedRepo(t)
+		snap := makeSnapForDir(dir, "acme/proj", "origin")
+		addBranch(&snap, 0, "feat", featTip)
+
+		repos := map[string]RepoObs{"acme/proj": {Repo: "acme/proj", DefaultBranch: "main"}}
+		merged := map[string]MergedPRList{"acme/proj": {Fetched: false}} // not fetched
+
+		ComputeLanded(ctx, &snap, repos, merged)
+
+		b := snap.Clones[0].Branches[0]
+		if b.LandedState != "unknown" {
+			t.Errorf("LandedState = %q, want %q", b.LandedState, "unknown")
+		}
+		if b.LandedTip != "" {
+			t.Errorf("LandedTip = %q, want %q (should be empty when unknown)", b.LandedTip, "")
+		}
+	})
+
+	t.Run("merged PR → LandedState=yes, LandedTip set", func(t *testing.T) {
+		dir, featTip := setupDivergedRepo(t)
+		snap := makeSnapForDir(dir, "acme/proj", "origin")
+		addBranch(&snap, 0, "feat", featTip)
+
+		repos := map[string]RepoObs{"acme/proj": {Repo: "acme/proj", DefaultBranch: "main"}}
+		merged := map[string]MergedPRList{
+			"acme/proj": {Fetched: true, PRs: []MergedPR{
+				{Number: 7, HeadRefName: "feat", HeadRefOid: featTip},
+			}},
+		}
+
+		ComputeLanded(ctx, &snap, repos, merged)
+
+		b := snap.Clones[0].Branches[0]
+		if b.LandedState != "yes" {
+			t.Errorf("LandedState = %q, want %q", b.LandedState, "yes")
+		}
+		if b.LandedTip != featTip {
+			t.Errorf("LandedTip = %q, want %q (should be set when landed)", b.LandedTip, featTip)
+		}
+	})
+}
+
+// TestReposWithUnlandedBranches verifies that ReposWithUnlandedBranches only
+// returns repos where at least one non-default branch is not yet confirmed landed
+// (LandedState != "yes"), so FetchMergedPRs is not called for already-landed repos.
+func TestReposWithUnlandedBranches(t *testing.T) {
+	testgit.Env(t)
+
+	dirA, featTipA, _ := setupAncestorRepo(t)
+	dirB, featTipB := setupDivergedRepo(t)
+
+	// Build a snapshot with two repos:
+	// - repo-a: "feat" is ancestor-landed (LandedState="yes")
+	// - repo-b: "feat" is NOT ancestor-landed (LandedState="unknown")
+	snap := Snapshot{
+		Version: SnapshotVersion, Machine: "mbp",
+		Clones: []Clone{
+			{
+				Path: dirA, Repo: "acme/repo-a",
+				Remotes:  map[string]string{"origin": "acme/repo-a"},
+				Branches: []Branch{{Name: "feat", Tip: featTipA}},
+			},
+			{
+				Path: dirB, Repo: "acme/repo-b",
+				Remotes:  map[string]string{"origin": "acme/repo-b"},
+				Branches: []Branch{{Name: "feat", Tip: featTipB}},
+			},
+		},
+	}
+
+	repos := map[string]RepoObs{
+		"acme/repo-a": {Repo: "acme/repo-a", DefaultBranch: "main"},
+		"acme/repo-b": {Repo: "acme/repo-b", DefaultBranch: "main"},
+	}
+
+	// Run only the ancestor check — sets LandedState on each branch.
+	ComputeAncestorLanded(ctx, &snap, repos)
+
+	// repo-a's feat is ancestor-landed (LandedState="yes").
+	brA := snap.Clones[0].Branches[0]
+	if brA.LandedState != "yes" {
+		t.Errorf("repo-a/feat LandedState = %q, want \"yes\"", brA.LandedState)
+	}
+	// repo-b's feat is NOT ancestor-landed (LandedState="unknown").
+	brB := snap.Clones[1].Branches[0]
+	if brB.LandedState == "yes" {
+		t.Errorf("repo-b/feat LandedState = %q, should not be \"yes\"", brB.LandedState)
+	}
+
+	// ReposWithUnlandedBranches must return only repo-b.
+	unlanded := ReposWithUnlandedBranches(snap, repos)
+	if len(unlanded) != 1 || unlanded[0] != "acme/repo-b" {
+		t.Errorf("ReposWithUnlandedBranches = %v, want [acme/repo-b]", unlanded)
+	}
+
+	// FetchMergedPRs with only unlanded repos: runner must NOT be called for repo-a.
+	runner := &recordRunner{reply: func(args []string) ([]byte, error) {
+		return []byte("[]"), nil
+	}}
+	FetchMergedPRs(ctx, runner, unlanded, nil, time.Now())
+	for _, call := range runner.calls {
+		if strings.Contains(call, "acme/repo-a") {
+			t.Errorf("FetchMergedPRs called for repo-a (already landed): %s", call)
+		}
+	}
+	// Must have called repo-b exactly once.
+	found := false
+	for _, call := range runner.calls {
+		if strings.Contains(call, "acme/repo-b") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FetchMergedPRs not called for repo-b: calls = %v", runner.calls)
 	}
 }

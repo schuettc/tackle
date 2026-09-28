@@ -372,8 +372,8 @@ func toPR(n gqlPR, repo string) PRObs {
 	}
 	if n.BodyText != "" {
 		body := n.BodyText
-		if len(body) > 600 {
-			body = body[:600]
+		if runes := []rune(body); len(runes) > 600 {
+			body = string(runes[:600])
 		}
 		p.Body = body
 	}

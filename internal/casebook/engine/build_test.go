@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -302,18 +303,22 @@ func TestLandedCombinedAcrossMachines(t *testing.T) {
 		{Repo: "schuettc/hail", DefaultBranch: "main"},
 	}}
 
-	// Helper to build a snapshot with one branch at given Landed/LandedTip/LandedHow values.
-	branchSnap := func(machine, landed, landedTip, landedHow string) observe.Snapshot {
+	// branchSnap builds a snapshot with one branch. landedState is "yes", "no",
+	// "unknown", or "" (never checked). LandedTip is set ONLY when state=="yes".
+	branchSnap := func(machine, landedState string) observe.Snapshot {
+		br := observe.Branch{Name: "feat", Tip: "abc", LandedState: landedState}
+		if landedState == "yes" {
+			br.Landed = "in main"
+			br.LandedHow = "default-branch"
+			br.LandedTip = "abc"
+		}
 		return observe.Snapshot{Version: 1, Machine: machine, Clones: []observe.Clone{{
 			Path: "/c/hail", Repo: "schuettc/hail",
-			Branches: []observe.Branch{{
-				Name: "feat", Tip: "abc", LandedTip: landedTip,
-				Landed: landed, LandedHow: landedHow,
-			}},
+			Branches: []observe.Branch{br},
 		}}}
 	}
 
-	check := func(t *testing.T, label, wantLanded string, snaps ...observe.Snapshot) {
+	check := func(t *testing.T, label, wantLanded string, wantTips map[string]string, snaps ...observe.Snapshot) {
 		t.Helper()
 		in := Input{
 			Now: now, GitHub: g, Snapshots: snaps,
@@ -325,33 +330,139 @@ func TestLandedCombinedAcrossMachines(t *testing.T) {
 		if it.Landed != wantLanded {
 			t.Errorf("%s: Landed = %q, want %q", label, it.Landed, wantLanded)
 		}
+		// LandedTips must contain exactly the machines whose LandedState=="yes".
+		if len(it.LandedTips) != len(wantTips) {
+			t.Errorf("%s: LandedTips len = %d, want %d: got %v, want %v", label, len(it.LandedTips), len(wantTips), it.LandedTips, wantTips)
+		}
+		for m, tip := range wantTips {
+			if it.LandedTips[m] != tip {
+				t.Errorf("%s: LandedTips[%s] = %q, want %q", label, m, it.LandedTips[m], tip)
+			}
+		}
 	}
 
-	// both landed → "all-machines"
+	// both landed → "all-machines"; LandedTips has both machines.
 	check(t, "both landed",
 		"all-machines",
-		branchSnap("mbp", "in main", "abc", "default-branch"),
-		branchSnap("imac", "in main", "abc", "default-branch"),
+		map[string]string{"mbp": "abc", "imac": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "yes"),
 	)
 
-	// A landed, B confirmed not landed → "some-machines"
+	// A landed, B confirmed not landed → "some-machines"; only mbp in LandedTips.
 	check(t, "some-machines",
 		"some-machines",
-		branchSnap("mbp", "in main", "abc", "default-branch"),
-		branchSnap("imac", "", "abc", ""), // LandedTip set (checked), Landed="" (not landed)
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "no"),
 	)
 
-	// A landed, B unknown (ComputeLanded never ran) → "unknown"
+	// A landed, B unknown (ComputeLanded never ran) → "unknown"; only mbp in LandedTips.
 	check(t, "A landed B unknown",
 		"unknown",
-		branchSnap("mbp", "in main", "abc", "default-branch"),
-		branchSnap("imac", "", "", ""), // LandedTip="" → not checked
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", ""),
 	)
 
-	// none landed, all checked → "none"
+	// none landed, all checked → "none"; LandedTips empty.
 	check(t, "none",
 		"none",
-		branchSnap("mbp", "", "abc", ""),
-		branchSnap("imac", "", "abc", ""),
+		map[string]string{},
+		branchSnap("mbp", "no"),
+		branchSnap("imac", "no"),
 	)
+
+	// A landed, B not landed, C unknown → "some-machines" (landed>0 && notLanded>0).
+	check(t, "some-machines with unknown",
+		"some-machines",
+		map[string]string{"mbp": "abc"},
+		branchSnap("mbp", "yes"),
+		branchSnap("imac", "no"),
+		branchSnap("laptop", ""),
+	)
+
+	// none landed, one unknown → "unknown".
+	check(t, "none landed one unknown",
+		"unknown",
+		map[string]string{},
+		branchSnap("mbp", "no"),
+		branchSnap("imac", ""),
+	)
+}
+
+// TestFinishLandedCombinations is a table-driven test covering every combination
+// of {landed, notLanded, unknown} counts 0/1 for finishLanded cross-machine logic.
+//
+// Rules (spec §4.1):
+//   - all landed, no not, no unknown → "all-machines"
+//   - landed>0 && notLanded>0        → "some-machines" (regardless of unknown)
+//   - no landed, notLanded>0, no unknown → "none"
+//   - else                           → "unknown"
+func TestFinishLandedCombinations(t *testing.T) {
+	g := observe.NewGitHub()
+	g.User = "schuettc"
+	g.Owners["schuettc"] = &observe.Owner{Login: "schuettc", Reachable: true, FetchedAt: now, Repos: []observe.RepoObs{
+		{Repo: "schuettc/hail", DefaultBranch: "main"},
+	}}
+
+	// makeSnaps builds one snapshot per machine, with the given LandedState.
+	makeSnap := func(machine, landedState string) observe.Snapshot {
+		br := observe.Branch{Name: "feat", Tip: "t", LandedState: landedState}
+		if landedState == "yes" {
+			br.Landed = "in main"
+			br.LandedHow = "default-branch"
+			br.LandedTip = "t"
+		}
+		return observe.Snapshot{Version: 1, Machine: machine, Clones: []observe.Clone{{
+			Path: "/c/hail", Repo: "schuettc/hail",
+			Branches: []observe.Branch{br},
+		}}}
+	}
+	build := func(snaps []observe.Snapshot) Item {
+		in := Input{
+			Now: now, GitHub: g, Snapshots: snaps,
+			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
+			Seen: map[string]time.Time{},
+		}
+		it, _ := Build(in).Find("branch:schuettc/hail@feat")
+		return it
+	}
+
+	tests := []struct {
+		name    string
+		landed  int // count of machines with LandedState=="yes"
+		not     int // count of machines with LandedState=="no"
+		unknown int // count of machines with LandedState=="" (never checked)
+		want    string
+	}{
+		// Single-machine cases.
+		{"1 landed, 0 not, 0 unknown", 1, 0, 0, "all-machines"},
+		{"0 landed, 1 not, 0 unknown", 0, 1, 0, "none"},
+		{"0 landed, 0 not, 1 unknown", 0, 0, 1, "unknown"},
+		// Two-machine mixed cases.
+		{"1 landed, 1 not, 0 unknown", 1, 1, 0, "some-machines"},
+		{"1 landed, 0 not, 1 unknown", 1, 0, 1, "unknown"},
+		{"0 landed, 1 not, 1 unknown", 0, 1, 1, "unknown"},
+		// Three-machine: landed + not + unknown → some-machines (landed wins over unknown).
+		{"1 landed, 1 not, 1 unknown", 1, 1, 1, "some-machines"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var snaps []observe.Snapshot
+			for i := 0; i < tt.landed; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("landed%d", i), "yes"))
+			}
+			for i := 0; i < tt.not; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("not%d", i), "no"))
+			}
+			for i := 0; i < tt.unknown; i++ {
+				snaps = append(snaps, makeSnap(fmt.Sprintf("unknown%d", i), ""))
+			}
+			it := build(snaps)
+			if it.Landed != tt.want {
+				t.Errorf("Landed = %q, want %q", it.Landed, tt.want)
+			}
+		})
+	}
 }
