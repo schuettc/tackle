@@ -66,6 +66,8 @@ github.com/schuettc/tools-common v0.8.2 h1:zP27Zjzq+05USBrTBM3ownj2GEUUn0E0gGzLd
 github.com/schuettc/tools-common v0.8.2/go.mod h1:0JSstEbB+vc5PLi3PA5d2VU9FkyROMYTiNpRU8UwYFM=
 github.com/schuettc/tools-common v0.9.1 h1:Z74NnWjSzV4khwo25z2nUriqyDxsg4YK1gWJwws/R0g=
 github.com/schuettc/tools-common v0.9.1/go.mod h1:0JSstEbB+vc5PLi3PA5d2VU9FkyROMYTiNpRU8UwYFM=
+github.com/schuettc/tools-common v0.10.1 h1:fHJiKDLvOuvIWDe7VxApNot8MkPmV91fdMxa4l61lBA=
+github.com/schuettc/tools-common v0.10.1/go.mod h1:0JSstEbB+vc5PLi3PA5d2VU9FkyROMYTiNpRU8UwYFM=
 github.com/schuettc/tools-common/sqlitedb v0.1.0 h1:FWCr2R+ybvWFYy+brXNpjBd5viubBmqlapSxFQzGCNY=
 github.com/schuettc/tools-common/sqlitedb v0.1.0/go.mod h1:ZXEFHnfG82YGlcJ9p3ZFHXgB+U0WwxL4b4+w+B2K/QM=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=

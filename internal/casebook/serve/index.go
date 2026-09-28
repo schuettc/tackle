@@ -2,6 +2,7 @@ package serve
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,12 +59,17 @@ const (
 
 // Query filters a view.
 type Query struct {
-	View   string
-	Kind   string
-	Repo   string // owner/name or owner
-	Text   string // substring of key or title
-	Offset int
-	Limit  int
+	View     string
+	Kind     string
+	Repo     string          // owner/name or owner
+	Text     string          // substring of key or title
+	Relation string          // incoming / outgoing / self (own)
+	Bot      string          // "bot" or "human"
+	Age      string          // duration string, e.g. "30d"; matches items older than the duration
+	Rule     string          // rule id whose matched keys are in MatchSet
+	MatchSet map[string]bool // precomputed by getItems when Rule != ""
+	Offset   int
+	Limit    int
 }
 
 // ItemView is an item as the page and the agent see it.
@@ -92,6 +98,20 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	return true
 }
 
+// parseAgeDays parses a duration string like "30d" or "7d" and returns the
+// number of days. Only the "d" suffix is accepted. Returns 0 on parse failure.
+func parseAgeDays(s string) int {
+	s = strings.TrimSpace(s)
+	if !strings.HasSuffix(s, "d") {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
 func matches(q Query, it engine.Item) bool {
 	if q.Kind != "" && string(it.Kind) != q.Kind {
 		return false
@@ -102,6 +122,44 @@ func matches(q Query, it engine.Item) bool {
 	if q.Text != "" {
 		t := strings.ToLower(q.Text)
 		if !strings.Contains(strings.ToLower(it.ID), t) && !strings.Contains(strings.ToLower(it.Title), t) {
+			return false
+		}
+	}
+	if q.Relation != "" {
+		// The engine stores relation as "incoming", "outgoing", "own", and
+		// relation aliases (e.g. "fork-of:X"). Map "self" → "own" for the
+		// query convenience the brief names.
+		want := q.Relation
+		if want == "self" {
+			want = "own"
+		}
+		if it.Relation != want {
+			return false
+		}
+	}
+	if q.Bot != "" {
+		switch q.Bot {
+		case "bot":
+			if !it.AuthorIsBot {
+				return false
+			}
+		case "human":
+			if it.AuthorIsBot {
+				return false
+			}
+		}
+	}
+	if days := parseAgeDays(q.Age); days > 0 {
+		if it.CreatedAt.IsZero() {
+			return false
+		}
+		threshold := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+		if !it.CreatedAt.Before(threshold) {
+			return false
+		}
+	}
+	if q.MatchSet != nil {
+		if !q.MatchSet[it.ID] {
 			return false
 		}
 	}

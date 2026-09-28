@@ -53,7 +53,8 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	pending, err := s.Props.Pending(r.Context())
+	ctx := r.Context()
+	pending, err := s.Props.Pending(ctx)
 	if err != nil {
 		reply(w, nil, err)
 		return
@@ -62,7 +63,34 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	if view == "" {
 		view = ViewAll
 	}
-	items, total := s.Index.List(Query{View: view, Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"), Offset: atoi(q.Get("offset")), Limit: atoi(q.Get("limit"))}, pending)
+	query := Query{
+		View:     view,
+		Kind:     q.Get("kind"),
+		Repo:     q.Get("repo"),
+		Text:     q.Get("q"),
+		Relation: q.Get("relation"),
+		Bot:      q.Get("bot"),
+		Age:      q.Get("age"),
+		Rule:     q.Get("rule"),
+		Offset:   atoi(q.Get("offset")),
+		Limit:    atoi(q.Get("limit")),
+	}
+	// Precompute rule match set if requested.
+	if query.Rule != "" {
+		ru, err := s.App.Repo.ReadRule(query.Rule)
+		if err == nil && ru != nil {
+			ms, _ := ru.MatchAll(s.Index.Result(), s.Now())
+			set := make(map[string]bool, len(ms))
+			for _, m := range ms {
+				set[m.Key] = true
+			}
+			query.MatchSet = set
+		} else {
+			// Rule not found or error: match nothing.
+			query.MatchSet = map[string]bool{}
+		}
+	}
+	items, total := s.Index.List(query, pending)
 	if items == nil {
 		items = []ItemView{}
 	}

@@ -36,12 +36,13 @@ if (!SERVE_ARGS.includes('--no-open')) {
   );
 }
 
-// Find the casebook binary: CASEBOOK_BIN env var, then bin/casebook in the repo.
+// Find the casebook binary: CASEBOOK_BIN env var (CI pre-builds and sets
+// this), or rebuild from source so the binary always embeds the latest assets.
 function findBinary() {
   if (process.env.CASEBOOK_BIN) return process.env.CASEBOOK_BIN;
   const built = join(repoRoot, 'bin', 'casebook');
-  if (existsSync(built)) return built;
-  // Fall back: build it now (CI pre-builds; this covers local runs).
+  // Always rebuild: the probe tests the current source, and the binary embeds
+  // internal/casebook/serve/assets/ which was just rewritten by build:js/css.
   console.error('[serve.mjs] building casebook binary…');
   execSync(`go build -o "${built}" ./cmd/casebook`, {
     cwd: repoRoot,
@@ -59,7 +60,6 @@ function setupHome() {
   const fixture = join(here, 'testdata', 'home');
   const home = join(tmpdir(), `casebook-probe-${process.pid}`);
 
-  mkdirSync(join(home, 'cache'), { recursive: true });
   mkdirSync(join(home, 'config'), { recursive: true });
   mkdirSync(join(home, 'data'), { recursive: true });
   mkdirSync(join(home, 'state', 'live'), { recursive: true });
@@ -69,10 +69,12 @@ function setupHome() {
   const repoPath = join(home, 'data', 'repo');
   execSync(`git clone -q "${bundlePath}" "${repoPath}"`, { stdio: 'pipe' });
 
-  // Copy the github cache (absent is also fine; LoadGitHub handles it).
+  // Copy the github cache to the state directory, which is where CachePath()
+  // looks: $CASEBOOK_HOME/state/github.json (tools.StateDir("casebook") joins
+  // $CASEBOOK_HOME with "state").
   const srcCache = join(fixture, 'cache', 'github.json');
   if (existsSync(srcCache)) {
-    cpSync(srcCache, join(home, 'cache', 'github.json'));
+    cpSync(srcCache, join(home, 'state', 'github.json'));
   }
 
   // Write a minimal config.toml. casebook_repo is left blank so it defaults
