@@ -17,6 +17,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/rules"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -311,4 +312,70 @@ func (r *Repo) Validate() []error {
 		errs = append(errs, err)
 	}
 	return errs
+}
+
+// Rules reads every rules/*.toml file. Parse errors are collected in errs and
+// those files are skipped.
+func (r *Repo) Rules() ([]rules.Rule, []error) {
+	paths, err := r.Glob("rules/*.toml")
+	if err != nil {
+		return nil, []error{err}
+	}
+	var out []rules.Rule
+	var errs []error
+	for _, rel := range paths {
+		b, err := r.ReadFile(rel)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", rel, err))
+			continue
+		}
+		ru, err := rules.Decode(b)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", rel, err))
+			continue
+		}
+		out = append(out, ru)
+	}
+	return out, errs
+}
+
+// ReadRule reads a single rule by id. Returns nil, nil when the file is absent.
+func (r *Repo) ReadRule(id string) (*rules.Rule, error) {
+	b, err := r.ReadFile("rules/" + id + ".toml")
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ru, err := rules.Decode(b)
+	if err != nil {
+		return nil, fmt.Errorf("rules/%s.toml: %w", id, err)
+	}
+	return &ru, nil
+}
+
+// WriteRule writes ru as rules/<id>.toml and commits with msg. It does not
+// push; call Sync to propagate the change.
+func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
+	b, err := rules.Encode(ru)
+	if err != nil {
+		return err
+	}
+	if _, err := r.WriteFile("rules/"+ru.ID+".toml", b); err != nil {
+		return err
+	}
+	_, err = r.Commit(ctx, msg)
+	return err
+}
+
+// DeleteRule removes the rules/<id>.toml file and commits with msg.
+func (r *Repo) DeleteRule(ctx context.Context, id, msg string) error {
+	rel := "rules/" + id + ".toml"
+	p := filepath.Join(r.Dir, filepath.FromSlash(rel))
+	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("delete rule %q: %w", id, err)
+	}
+	_, err := r.Commit(ctx, msg)
+	return err
 }

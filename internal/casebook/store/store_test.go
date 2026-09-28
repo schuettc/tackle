@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tackle/internal/casebook/testgit"
 )
 
@@ -153,5 +154,77 @@ func TestValidateReportsBadFiles(t *testing.T) {
 		if !strings.Contains(e.Error(), ".toml") {
 			t.Errorf("error lacks the file: %v", e)
 		}
+	}
+}
+
+func TestWriteReadRuleCommits(t *testing.T) {
+	r, _ := newStore(t)
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	ru := rules.Rule{
+		ID:        "landed-branches",
+		Name:      "Landed branches → delete",
+		Status:    rules.StatusActive,
+		CreatedBy: "court",
+		CreatedAt: now,
+		EditedAt:  now,
+		Match: []rules.Condition{
+			{Field: "kind", Op: "is", Value: "branch"},
+			{Field: "landed", Op: "is", Value: "all-machines"},
+		},
+		Propose: rules.Action{
+			Disposition: "delete",
+			Note:        "landed ({how}); restore tip {tip}",
+		},
+	}
+	msg := "rule landed-branches → active by court"
+	if err := r.WriteRule(ctx, ru, msg); err != nil {
+		t.Fatalf("WriteRule: %v", err)
+	}
+
+	// commit subject
+	subj := testgit.Git(t, r.Dir, "log", "-1", "--format=%s")
+	if subj != msg {
+		t.Errorf("commit subject = %q, want %q", subj, msg)
+	}
+
+	// read back
+	got, err := r.ReadRule("landed-branches")
+	if err != nil {
+		t.Fatalf("ReadRule: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ReadRule returned nil")
+	}
+	if got.ID != "landed-branches" || got.Status != rules.StatusActive {
+		t.Errorf("got %+v", got)
+	}
+	if len(got.Match) != 2 || got.Match[0].Field != "kind" {
+		t.Errorf("Match %+v", got.Match)
+	}
+
+	// Rules() lists it
+	all, errs := r.Rules()
+	if len(errs) != 0 {
+		t.Fatalf("Rules errors: %v", errs)
+	}
+	if len(all) != 1 || all[0].ID != "landed-branches" {
+		t.Errorf("Rules = %+v", all)
+	}
+
+	// DeleteRule removes it and commits
+	delMsg := "rule landed-branches deactivated by court"
+	if err := r.DeleteRule(ctx, "landed-branches", delMsg); err != nil {
+		t.Fatalf("DeleteRule: %v", err)
+	}
+	subj2 := testgit.Git(t, r.Dir, "log", "-1", "--format=%s")
+	if subj2 != delMsg {
+		t.Errorf("delete commit subject = %q, want %q", subj2, delMsg)
+	}
+	got2, err := r.ReadRule("landed-branches")
+	if err != nil {
+		t.Fatalf("ReadRule after delete: %v", err)
+	}
+	if got2 != nil {
+		t.Errorf("expected nil after delete, got %+v", got2)
 	}
 }

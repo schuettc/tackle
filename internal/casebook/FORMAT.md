@@ -78,6 +78,83 @@ This machine's clones under its configured roots. Each clone has:
 
 The file is deterministic and holds no timestamps of its own, so an unchanged machine produces no commit.
 
+## Standing rules: `rules/`
+
+One TOML file per rule at `rules/<id>.toml`. The `id` must match `^[a-z0-9-]+$`.
+
+```toml
+id = "landed-branches"
+name = "Landed branches → delete"
+status = "draft"                      # draft | active
+created_by = "court"                  # user login, or "pi:<session>"
+created_at = 2026-09-27T10:00:00Z
+edited_at = 2026-09-27T10:00:00Z     # last edit of the conditions or the proposal
+
+[[match]]                             # all conditions must hold
+field = "kind"
+op = "is"
+value = "branch"
+[[match]]
+field = "landed"
+op = "is"
+value = "all-machines"
+[[match]]
+field = "worktree"
+op = "is-not"
+value = "dirty"
+
+[propose]
+disposition = "delete"
+until = ""
+note = "landed ({how}); restore tip {tip}"
+
+[[exclude]]
+key = "branch:schuettc/galley@feat/headcount-licensing"
+reason = "keep for reference"
+by = "court"
+at = 2026-09-27T10:05:00Z
+```
+
+`status` is `draft` (no effect) or `active` (proposes matches after every sync). `edited_at` is updated on every edit of `[[match]]` or `[propose]`; §4.2 uses it to decide whether to re-propose items that were previously rejected.
+
+Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `rule <id> deactivated by <who>`.
+
+### Field vocabulary
+
+The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`.
+
+| Field | Type | Allowed values / notes |
+|---|---|---|
+| `kind` | enum | `repo` \| `pr` \| `issue` \| `branch` \| `worktree` |
+| `repo` | text | `owner/name` |
+| `owner` | text | GitHub login |
+| `relation` | enum | `outgoing` \| `incoming` \| `own` |
+| `status` | enum | `new` \| `to-apply` \| `waiting` \| `due` \| `done` \| `drift` \| `conflict` |
+| `direction` | enum | `outgoing` \| `incoming` \| `own` |
+| `author` | text | GitHub login |
+| `bot` | bool | `true` \| `false` |
+| `title` | text | supports `matches` (regex) |
+| `label` | text | label name |
+| `age` | duration | time since created; use `older-than`/`newer-than` |
+| `pushed` | duration | time since last push |
+| `updated` | duration | time since last update |
+| `landed` | enum | `all-machines` \| `some-machines` \| `none` \| `unknown` |
+| `landed-how` | enum | `default-branch` \| `merged-pr` |
+| `gone-upstream` | bool | branch merged and remote ref gone |
+| `unpushed` | bool | has local-only commits |
+| `dirty` | bool | has uncommitted changes |
+| `worktree` | enum | `dirty` \| `clean` \| `none` |
+| `archived` | bool | repo is archived on GitHub |
+| `fork` | bool | repo is a fork |
+| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` |
+| `open-issues` | count | number of open issues |
+| `has-decision` | bool | item has a recorded decision |
+| `policy-hit` | text | policy rule name, e.g. `outgoing-stale` |
+
+## Restore records: `restores/`
+
+Reserved for P3 (apply). A restore record captures the state of an item before a destructive step (branch delete, repo archive, etc.) so the step can be undone. Format to be documented in P3.
+
 ## Not in the repository
 
 The GitHub observation cache (`~/.local/state/casebook/github.json`), the drift record (`seen.json`), the event spool and the hook shims are machine-local.
@@ -87,4 +164,4 @@ So is `casebook serve`'s working state, `~/.local/state/casebook/casebook.db` (S
 ## Version history
 
 - **1** (casebook 0.1.x): decisions, journal, snapshots, views.
-- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Nothing else changes; the upgrade rewrites only `casebook.toml`.
+- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`.
