@@ -365,7 +365,6 @@ func toPR(n gqlPR, repo string) PRObs {
 		p.LastCommentAuthor = "ghost"
 		if c.Author != nil {
 			p.LastCommentAuthor = c.Author.Login
-			p.LastCommentAuthorIsBot = c.Author.TypeName == "Bot"
 		}
 	}
 	for _, l := range n.Labels.Nodes {

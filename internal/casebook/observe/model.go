@@ -39,7 +39,6 @@ type PRObs struct {
 	CreatedAt              time.Time `json:"created_at,omitzero"`
 	UpdatedAt              time.Time `json:"updated_at,omitzero"`
 	LastCommentAuthor      string    `json:"last_comment_author,omitempty"`
-	LastCommentAuthorIsBot bool      `json:"last_comment_author_is_bot,omitempty"` // true when last comment author __typename == "Bot"
 	LastCommentAt          time.Time `json:"last_comment_at,omitzero"`
 	URL                    string    `json:"url,omitempty"`
 	Labels                 []string  `json:"labels,omitempty"`
