@@ -54,3 +54,45 @@ func TestDistinguishing(t *testing.T) {
 		}
 	}
 }
+
+// TestLiteralsDropsOnlyTheSignature (I-2): decorators, inline test.each
+// tables and one-liner bodies keep their literals; only the signature
+// (Python def header, Go func line up to "{", TS title) is dropped.
+func TestLiteralsDropsOnlyTheSignature(t *testing.T) {
+	cases := []struct {
+		name, lang, body string
+		want             []string
+	}{
+		{"python parametrize", "python",
+			"@pytest.mark.parametrize(\"x,y\", [(1, \"a\"), (2, \"b\")])\ndef test_p(x, y):\n    assert f(x) == y\n",
+			[]string{"x,y", "1", "a", "2", "b"}},
+		{"python multi-line signature", "python",
+			"def test_d(\n    a: int = 5,\n    b: str = \"s\",\n) -> None:\n    assert a == 6\n",
+			[]string{"6"}},
+		{"python async one-liner", "python",
+			"async def test_o(): assert g(\"q\") == 3\n",
+			[]string{"q", "3"}},
+		{"go one-liner", "go",
+			"func TestA(t *testing.T) { check(t, \"a\", 2) }",
+			[]string{"a", "2"}},
+		{"go doc comment", "go",
+			"// TestB checks \"x\".\nfunc TestB(t *testing.T) {\n\tcheck(t, \"b\")\n}",
+			[]string{"b"}},
+		{"ts test.each", "typescript",
+			"test.each([[\"a\", 1], [\"b\", 2]])(\"adds %s\", (x, n) => {\n  expect(f(x)).toBe(n);\n})",
+			[]string{"a", "1", "b", "2"}},
+		{"ts leading comment", "typescript",
+			"// note \"c\"\ntest(\"title 3\", () => {\n  expect(g(\"v\")).toBe(4);\n})",
+			[]string{"v", "4"}},
+		{"ts one-liner", "typescript",
+			"it('t 9', () => expect(h('w')).toBe(5))",
+			[]string{"w", "5"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := Literals(c.lang, c.body); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("Literals(%s) = %q, want %q", c.lang, got, c.want)
+			}
+		})
+	}
+}

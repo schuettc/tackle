@@ -3,6 +3,8 @@ package check
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -253,5 +255,94 @@ func TestGroupCheckEgressGate(t *testing.T) {
 	}
 	if f2.calls.Load() != 0 {
 		t.Errorf("evaluator called %d times, want 0", f2.calls.Load())
+	}
+}
+
+// langGroupFixture writes rel with src (three near-duplicate tests named
+// in names), runs check so they are grouped and judged consolidate, and
+// returns the root and the group id.
+func langGroupFixture(t *testing.T, rel, src string, names ...string) (root, groupID string) {
+	t.Helper()
+	root = t.TempDir()
+	writeFile(t, root, ".cull.toml", "egress = true\ntest_command = \"true\"\n")
+	writeFile(t, root, rel, src)
+	cons := map[string]bool{}
+	for _, n := range names {
+		cons[n] = true
+	}
+	report, err := Run(context.Background(), &fakeEval{consolidate: cons}, Options{Path: root, Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Groups) != 1 {
+		t.Fatalf("groups = %+v (skipped %+v), want 1", report.Groups, report.Skipped)
+	}
+	return root, report.Groups[0].ID
+}
+
+// TestGroupCheckPythonParametrize (I-2): a parametrize rewrite carries its
+// rows in the decorator; a complete one passes, a dropped row is named.
+func TestGroupCheckPythonParametrize(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	member := func(n, v string) string {
+		return "def test_foo_" + n + "():\n    cfg = \"cfg\"\n    val = \"" + v + "\"\n    assert val and cfg\n    y = 1\n    assert y == 1\n    assert cfg.upper()\n"
+	}
+	src := member("a", "a") + "\n\n" + member("b", "b") + "\n\n" + member("c", "c")
+	table := func(vals string) string {
+		return "import pytest\n\n\n@pytest.mark.parametrize(\"val\", [" + vals + "])\ndef test_foo(val):\n    cfg = \"cfg\"\n    assert val and cfg\n    y = 1\n    assert y == 1\n    assert cfg.upper()\n"
+	}
+	for _, c := range []struct {
+		vals    string
+		missing []string
+	}{
+		{`"a", "b", "c"`, nil},
+		{`"a", "b"`, []string{"py:tests/test_calc.py:test_foo_c"}},
+	} {
+		root, groupID := langGroupFixture(t, "tests/test_calc.py", src, "test_foo_a", "test_foo_b", "test_foo_c")
+		writeFile(t, root, "tests/test_calc.py", table(c.vals))
+		gc, err := CheckGroup(context.Background(), &fakeEval{}, root, groupID, Options{Refresh: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(gc.MissingRows) != fmt.Sprint(c.missing) || gc.OK != (c.missing == nil) {
+			t.Errorf("%s: MissingRows = %v OK = %v, want %v", c.vals, gc.MissingRows, gc.OK, c.missing)
+		}
+	}
+}
+
+// TestGroupCheckTSTitleNotARow (I-2): a TS member whose span starts with
+// a leading comment used to keep its title line, making the title a
+// "distinguishing" row value the rewrite had to repeat verbatim. Only the
+// title is dropped now. (The TS extractor does not emit test.each calls,
+// so the table here is a loop; test.each rows are covered in similar.)
+func TestGroupCheckTSTitleNotARow(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil || os.Getenv("CULL_TS") == "" {
+		t.Skip("node or CULL_TS not available")
+	}
+	member := func(v string) string {
+		return "// case " + v + "\ntest(\"foo " + v + "\", () => {\n  const cfg = \"cfg\";\n  const val = \"" + v + "\";\n  expect(val + cfg).toBeTruthy();\n  const y = 1;\n  expect(y).toBe(1);\n});\n"
+	}
+	src := member("a") + "\n" + member("b") + "\n" + member("c")
+	table := func(vals string) string {
+		return "test(\"foo table\", () => {\n  for (const val of [" + vals + "]) {\n    const cfg = \"cfg\";\n    expect(val + cfg).toBeTruthy();\n    const y = 1;\n    expect(y).toBe(1);\n  }\n});\n"
+	}
+	for _, c := range []struct {
+		vals    string
+		missing []string
+	}{
+		{`"a", "b", "c"`, nil},
+		{`"a", "c"`, []string{"ts:web/calc.test.ts:foo b"}},
+	} {
+		root, groupID := langGroupFixture(t, "web/calc.test.ts", src, "foo a", "foo b", "foo c")
+		writeFile(t, root, "web/calc.test.ts", table(c.vals))
+		gc, err := CheckGroup(context.Background(), &fakeEval{}, root, groupID, Options{Refresh: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(gc.MissingRows) != fmt.Sprint(c.missing) || gc.OK != (c.missing == nil) {
+			t.Errorf("%s: MissingRows = %v OK = %v, want %v", c.vals, gc.MissingRows, gc.OK, c.missing)
+		}
 	}
 }
