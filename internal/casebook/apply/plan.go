@@ -158,16 +158,22 @@ func newSnapLookup(snap observe.Snapshot) snapLookup {
 // branchTip returns the Tip SHA for branchName in the clone at clonePath, or
 // "" if not found.
 func (sl snapLookup) branchTip(clonePath, branchName string) string {
+	b, _ := sl.branch(clonePath, branchName)
+	return b.Tip
+}
+
+// branch returns the snapshot's record of branchName in the clone at clonePath.
+func (sl snapLookup) branch(clonePath, branchName string) (observe.Branch, bool) {
 	c, ok := sl.cloneByPath[clonePath]
 	if !ok {
-		return ""
+		return observe.Branch{}, false
 	}
 	for _, b := range c.Branches {
 		if b.Name == branchName {
-			return b.Tip
+			return b, true
 		}
 	}
-	return ""
+	return observe.Branch{}, false
 }
 
 // identityRemote returns the remote name and clone for the first clone (by
@@ -238,14 +244,14 @@ func machineClones(it engine.Item, machine string) []string {
 //
 // Remote delete: one step from the first clone (stable order) that has a
 // remote whose Remotes value equals the item's repo (case-insensitive). The
-// remote name comes from that Remotes entry; ExpectedTip is the same branch
-// tip from that clone (precondition: remote-tip-unchanged-and-landed).
-// Omitted when the remote tracking branch is already gone (Fields.GoneUpstream).
-// Omitted when no clone on this machine has a matching remote.
-//
-// How we decide whether a remote copy exists: we call it.Fields(now) and read
-// GoneUpstream, which reflects observe.Branch.Gone (upstream set but deleted
-// on the remote, typically squash-merged).
+// remote name comes from that Remotes entry. The branch is on the remote only
+// when that clone's branch has an upstream that isn't gone; a branch that was
+// never pushed, or whose upstream the remote already deleted, gets no remote
+// step. ExpectedTip is set only when the local tip equals what the remote has
+// (no unpushed commits); otherwise it is empty, and the precondition
+// (remote-tip-unchanged-and-landed) reads the remote's tip live and requires
+// that exact commit to be landed. Omitted when no clone on this machine has a
+// matching remote.
 func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
 	if it.Decision.Disposition != item.Delete {
 		return nil
@@ -268,12 +274,15 @@ func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) [
 		})
 	}
 
-	// Remote delete: once, from the first clone that has a matching remote.
-	// Skip if the remote tracking branch is already gone.
-	if !it.Fields(now).GoneUpstream {
-		remoteName, remoteClone := sl.identityRemote(localClones, it.Key.Repo())
-		if remoteName != "" {
-			tip := sl.branchTip(remoteClone.Path, branch)
+	// Remote delete: once, from the first clone that has a matching remote,
+	// and only if that clone's branch is on the remote.
+	remoteName, remoteClone := sl.identityRemote(localClones, it.Key.Repo())
+	if remoteName != "" {
+		if b, ok := sl.branch(remoteClone.Path, branch); ok && b.Upstream != "" && !b.Gone {
+			tip := ""
+			if b.Unpushed == 0 {
+				tip = b.Tip
+			}
 			steps = append(steps, Step{
 				Key:          it.ID,
 				Action:       "branch-delete-remote",

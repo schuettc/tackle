@@ -64,7 +64,7 @@ func TestPlanGroupsByActionAndLane(t *testing.T) {
 		Path:     "/Users/me/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/thing", Tip: "aaa"}},
+		Branches: []observe.Branch{{Name: "feat/thing", Upstream: "origin/x", Tip: "aaa"}},
 	}})
 	plan, err := Build([]engine.Item{br, rp}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestBranchDeleteIsCasebookLaneWithExactCommand(t *testing.T) {
 		Path:     "/Users/me/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/my-branch", Tip: "tip123"}},
+		Branches: []observe.Branch{{Name: "feat/my-branch", Upstream: "origin/x", Tip: "tip123"}},
 	}})
 	plan, err := Build([]engine.Item{it}, snap, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -291,7 +291,7 @@ func TestLocalStepsOnlyForThisMachine(t *testing.T) {
 		Path:     "/Users/A/repos/myrepo",
 		Repo:     "schuettc/myrepo",
 		Remotes:  map[string]string{"origin": "schuettc/myrepo"},
-		Branches: []observe.Branch{{Name: "feat/shared", Tip: "tipA"}},
+		Branches: []observe.Branch{{Name: "feat/shared", Upstream: "origin/x", Tip: "tipA"}},
 	}})
 	plan, err := Build([]engine.Item{branch, worktree}, snapA, epoch, builtAt, 30*time.Minute)
 	if err != nil {
@@ -365,8 +365,9 @@ func TestRemoteNameFromSnapshotUpstream(t *testing.T) {
 			"upstream": "schuettc/myrepo",
 		},
 		Branches: []observe.Branch{{
-			Name: "feat/my-branch",
-			Tip:  "abc1234deadbeef",
+			Name:     "feat/my-branch",
+			Upstream: "upstream/feat/my-branch",
+			Tip:      "abc1234deadbeef",
 		}},
 	}})
 
@@ -454,8 +455,9 @@ func TestBranchStepsHaveExpectedTips(t *testing.T) {
 			"origin": "schuettc/myrepo",
 		},
 		Branches: []observe.Branch{{
-			Name: "feat/tips",
-			Tip:  wantTip,
+			Name:     "feat/tips",
+			Upstream: "origin/feat/tips",
+			Tip:      wantTip,
 		}},
 	}})
 
@@ -514,4 +516,55 @@ func TestWorktreeStepUsesSnapshotClone(t *testing.T) {
 	if step.Command != wantCmd {
 		t.Errorf("worktree step Command =\n  %q\nwant\n  %q", step.Command, wantCmd)
 	}
+}
+
+func TestNoRemoteStepForAnUnpushedBranch(t *testing.T) {
+	now := time.Now()
+	it, snap := remoteFixture(t, "never-pushed", "", false, 0)
+	p, err := Build([]engine.Item{it}, snap, now, now, 30*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range p.Steps {
+		if s.Action == "branch-delete-remote" {
+			t.Fatalf("remote step planned for a branch with no upstream: %+v", s)
+		}
+	}
+}
+
+func TestRemoteStepExpectsTipOnlyWhenNothingUnpushed(t *testing.T) {
+	now := time.Now()
+	for _, c := range []struct {
+		unpushed int
+		want     string
+	}{{0, "abc123"}, {2, ""}} {
+		it, snap := remoteFixture(t, "feat", "origin/feat", false, c.unpushed)
+		p, err := Build([]engine.Item{it}, snap, now, now, 30*time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got *Step
+		for i := range p.Steps {
+			if p.Steps[i].Action == "branch-delete-remote" {
+				got = &p.Steps[i]
+			}
+		}
+		if got == nil || got.ExpectedTip != c.want {
+			t.Fatalf("unpushed %d: remote step %+v, want expected tip %q", c.unpushed, got, c.want)
+		}
+	}
+}
+
+// remoteFixture is a landed branch in one clone on machine "m" with the given
+// upstream, gone flag and unpushed count; its tip is "abc123".
+func remoteFixture(t *testing.T, branch, upstream string, gone bool, unpushed int) (engine.Item, observe.Snapshot) {
+	t.Helper()
+	it := branchItem("schuettc/repo", branch, "m", "/src/repo")
+	snap := snapWith("m", []observe.Clone{{
+		Path:     "/src/repo",
+		Repo:     "schuettc/repo",
+		Remotes:  map[string]string{"origin": "schuettc/repo"},
+		Branches: []observe.Branch{{Name: branch, Tip: "abc123", Upstream: upstream, Gone: gone, Unpushed: unpushed}},
+	}})
+	return it, snap
 }
