@@ -136,7 +136,7 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 			// moment the agent receives them; the delivery stays in-flight
 			// until the agent settles or Court intervenes.
 			s.Bus.Publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
-			reply(w, map[string]any{"delivery": d, "text": text}, nil)
+			reply(w, WaitView{Delivery: d, Text: text}, nil)
 			return
 		}
 		select {
@@ -184,7 +184,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 	if skipped == nil {
 		skipped = []deliver.SkippedMessage{}
 	}
-	reply(w, map[string]any{"settled": settled, "skipped": skipped}, nil)
+	reply(w, ReplyResult{Settled: settled, Skipped: skipped}, nil)
 }
 
 func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +217,7 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Bus.Publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
 	}
-	reply(w, map[string]any{"proposed": len(ps), "proposals": nonNil(ps), "errors": nonNil(msgs)}, nil)
+	reply(w, ProposeResult{Proposed: len(ps), Proposals: nonNil(ps), Errors: nonNil(msgs)}, nil)
 }
 
 func (s *Server) agentEvidence(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +279,7 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pending, _ := s.Props.Pending(ctx)
-	reply(w, map[string]any{"counts": s.Index.Counts(pending), "since": s.summary(ctx, sess), "page_open": s.PageOpen()}, nil)
+	reply(w, StatusView{Counts: s.Index.Counts(pending), Since: s.summary(ctx, sess), PageOpen: s.PageOpen()}, nil)
 }
 
 // agentOpen is casebook_open: open the page in Court's browser.
@@ -329,7 +329,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	reply(w, map[string]string{"opened": fragment}, nil)
+	reply(w, OpenResult{Opened: fragment}, nil)
 }
 
 func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
@@ -352,11 +352,16 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	worked, _ := s.Props.ClearProgress(ctx, in.Session)
-	ev := map[string]any{"session": in.Session, "worked_ms": worked.Milliseconds()}
+	result := SettledResult{Session: in.Session, WorkedMs: worked.Milliseconds()}
 	if d != nil {
-		ev["delivery"] = d.ID
+		id := d.ID
+		result.Delivery = &id
+	}
+	ev := map[string]any{"session": in.Session, "worked_ms": result.WorkedMs}
+	if result.Delivery != nil {
+		ev["delivery"] = *result.Delivery
 	}
 	s.Bus.Publish(ctx, "settled", ev)
 	s.wake(in.Session)
-	reply(w, ev, nil)
+	reply(w, result, nil)
 }

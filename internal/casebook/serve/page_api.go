@@ -38,10 +38,16 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		synced = fi.ModTime().UTC()
 	}
 	sessions, _ := s.Queue.Sessions(ctx)
-	reply(w, map[string]any{
-		"machine": s.App.Cfg.Machine, "user": s.App.Cfg.User, "head": s.Index.Head(), "built_at": s.Index.BuiltAt(),
-		"synced_at": synced, "offline_queued": queued, "counts": s.Index.Counts(pending), "notices": s.Index.Notices(),
-		"sessions": len(sessions),
+	reply(w, SummaryView{
+		Machine:       s.App.Cfg.Machine,
+		User:          s.App.Cfg.User,
+		Head:          s.Index.Head(),
+		BuiltAt:       s.Index.BuiltAt(),
+		SyncedAt:      synced,
+		OfflineQueued: queued,
+		Counts:        s.Index.Counts(pending),
+		Notices:       s.Index.Notices(),
+		Sessions:      len(sessions),
 	}, nil)
 }
 
@@ -60,7 +66,7 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []ItemView{}
 	}
-	reply(w, map[string]any{"total": total, "items": items}, nil)
+	reply(w, ItemsView{Total: total, Items: items}, nil)
 }
 
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +94,13 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 		hist = hist[len(hist)-50:]
 	}
 	log, _ := s.App.Repo.Log(ctx, k.File())
-	reply(w, map[string]any{"item": v, "proposals": nonNil(proposals), "evidence": nonNil(evidence),
-		"history": nonNil(hist), "decisions": nonNil(log)}, nil)
+	reply(w, ItemDetailView{
+		Item:      v,
+		Proposals: nonNil(proposals),
+		Evidence:  nonNil(evidence),
+		History:   nonNil(hist),
+		Decisions: nonNil(log),
+	}, nil)
 }
 
 func nonNil[T any](s []T) []T {
@@ -175,7 +186,7 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n, errs, pushed, err := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
-	reply(w, map[string]any{"decided": n, "errors": nonNil(errs), "pushed": pushed}, err)
+	reply(w, DecideResult{Decided: n, Errors: nonNil(errs), Pushed: pushed}, err)
 }
 
 func proposalOpts(p propose.Proposal) app.DecideOptions {
@@ -219,7 +230,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 	}
 	pushed, errs := s.finishDecides(ctx, total, errs)
 	s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
-	reply(w, map[string]any{"accepted": total, "errors": nonNil(errs), "pushed": pushed}, nil)
+	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Pushed: pushed}, nil)
 }
 
 func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +257,7 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
 		s.Bus.Publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
 	}
-	reply(w, map[string]any{"decided": n, "errors": nonNil(errs), "pushed": pushed}, err)
+	reply(w, DecideResult{Decided: n, Errors: nonNil(errs), Pushed: pushed}, err)
 }
 
 func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
@@ -266,17 +277,17 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
-	reply(w, map[string]int{"rejected": n}, nil)
+	reply(w, RejectResult{Rejected: n}, nil)
 }
 
 func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	ss, err := s.Queue.Sessions(r.Context())
-	reply(w, map[string]any{"sessions": nonNil(ss)}, err)
+	reply(w, SessionsView{Sessions: nonNil(ss)}, err)
 }
 
 func (s *Server) getThreads(w http.ResponseWriter, r *http.Request) {
 	ts, err := s.Queue.Threads(r.Context(), r.URL.Query().Get("session"))
-	reply(w, map[string]any{"threads": nonNil(ts)}, err)
+	reply(w, ThreadsView{Threads: nonNil(ts)}, err)
 }
 
 func (s *Server) postThread(w http.ResponseWriter, r *http.Request) {
@@ -334,7 +345,7 @@ func (s *Server) getMessages(w http.ResponseWriter, r *http.Request) {
 			out = append(out, m)
 		}
 	}
-	reply(w, map[string]any{"messages": nonNil(out), "batch": bid, "drafts": nonNil(drafts)}, err)
+	reply(w, MessagesView{Messages: nonNil(out), Batch: bid, Drafts: nonNil(drafts)}, err)
 }
 
 func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +407,7 @@ func (s *Server) postResend(w http.ResponseWriter, r *http.Request) {
 		s.wake(sess)
 	}
 	s.Bus.Publish(r.Context(), "messages", map[string]any{"ids": in.IDs, "state": deliver.Queued})
-	reply(w, map[string]int{"resent": n}, err)
+	reply(w, ResendResult{Resent: n}, err)
 }
 
 func (s *Server) postEditDraft(w http.ResponseWriter, r *http.Request) {
@@ -471,7 +482,7 @@ func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 		s.wake(t.SessionID)
 	}
 	s.Bus.Publish(ctx, "batch", map[string]any{"batch": in.Batch, "sent": n})
-	reply(w, map[string]int{"sent": n}, nil)
+	reply(w, SendBatchResult{Sent: n}, nil)
 }
 
 func (s *Server) postRelease(w http.ResponseWriter, r *http.Request) {
