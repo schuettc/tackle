@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/schuettc/tools-common/sqlitedb"
@@ -234,5 +233,4 @@ func TestNewerHelper(t *testing.T) {
 	if n, ok := Newer(wrapped2); !ok || n == nil {
 		t.Fatal("wrapped NewerError should match")
 	}
-	_ = strings.Contains("", "")
 }
