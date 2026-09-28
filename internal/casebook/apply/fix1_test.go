@@ -319,3 +319,26 @@ func TestRepoNoHumanPRsPrecondition(t *testing.T) {
 		}
 	})
 }
+
+func TestBranchDeleteWithoutExpectedTipNeverRuns(t *testing.T) {
+	testgit.Env(t)
+	ctx := context.Background()
+	spy := newSpy()
+	cb := casebookRepo(t)
+	r := Runner{Repo: cb, RunGit: spy.run, Now: func() time.Time { return time.Unix(0, 0) }}
+	for _, action := range []string{"branch-delete-local", "branch-delete-remote"} {
+		step := JobStep{
+			Key:          "branch:schuettc/hail@feat/x",
+			Action:       action,
+			Command:      "git -C '/tmp/repo' update-ref -d 'refs/heads/feat/x'",
+			Precondition: "branch-tip-unchanged-and-landed",
+		}
+		res, _ := r.RunStep(ctx, step, Env{RunGit: spy.run})
+		if res.State != StepFailed || !strings.Contains(res.Detail, "no expected tip") {
+			t.Fatalf("%s: %+v, want failed with no expected tip", action, res)
+		}
+	}
+	if len(spy.calls) != 0 {
+		t.Errorf("no git should have run; ran %v", spy.calls)
+	}
+}

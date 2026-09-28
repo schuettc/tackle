@@ -62,6 +62,12 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 	if strings.ContainsAny(step.Command, "\t\n") || strings.ContainsAny(step.Key, "\t\n") {
 		return StepResult{State: StepFailed, Detail: "unsafe path: contains a tab or newline"}, nil
 	}
+	// A branch delete without an expected tip would be unconditional
+	// (`update-ref -d <ref>` with no old value deletes whatever is there), so it
+	// never runs: the compare-and-delete guard depends on the tip.
+	if (step.Action == "branch-delete-local" || step.Action == "branch-delete-remote") && step.ExpectedTip == "" {
+		return StepResult{State: StepFailed, Detail: "no expected tip: refusing an unconditional delete"}, nil
+	}
 	chk, err := Check(ctx, step, env)
 	if err != nil {
 		return StepResult{State: StepFailed, Detail: err.Error()}, nil

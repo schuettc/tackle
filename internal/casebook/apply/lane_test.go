@@ -321,7 +321,7 @@ func TestVerificationMismatchIsDrift(t *testing.T) {
 	if got.Steps[0].State != StepFailed {
 		t.Fatalf("step state = %q, want failed (drift)", got.Steps[0].State)
 	}
-	if got.Steps[0].Detail != "drift" {
+	if got.Steps[0].Detail != DetailDrift {
 		t.Errorf("detail = %q, want drift", got.Steps[0].Detail)
 	}
 	if !branchExists(t, clone, "feat/x") {
