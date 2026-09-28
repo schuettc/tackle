@@ -48,5 +48,23 @@ export function createAgent(base, token) {
     async progress(session, text, n, total) {
       return call('POST', '/api/agent/progress', { session, text, n, total });
     },
+
+    /**
+     * POST /api/agent/propose — create proposals for items.
+     * @param {string} session — the session id
+     * @param {string[]} keys — item keys to propose on
+     * @param {string} disposition — the proposed disposition
+     * @param {string} [note] — optional note
+     * @param {string} [until] — optional until value
+     */
+    async propose(session, keys, disposition, note, until) {
+      return call('POST', '/api/agent/propose', {
+        session,
+        keys,
+        disposition,
+        ...(note ? { note } : {}),
+        ...(until ? { until } : {}),
+      });
+    },
   };
 }

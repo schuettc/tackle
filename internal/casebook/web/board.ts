@@ -28,6 +28,7 @@ import { h, type Selection } from '/_kit/kit.js';
 import type { ItemsView, ItemView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { keyWithoutKind } from './decide-math.ts';
+import { agentFromSource } from './proposals.ts';
 
 // PAGE_SIZE matches the list view's limit.
 const PAGE_SIZE = 200;
@@ -149,9 +150,9 @@ export function makeBoard(
     }
 
     if (it.proposal) {
-      // Proposal disposition shown in agent colour (via `.cb-card-prop`).
+      // Show "<agent> proposes <disposition>" in agent colour.
       const propEl = h('div', { class: 'cb-card-prop' });
-      propEl.textContent = `${it.proposal.disposition} proposed`;
+      propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
       card.append(propEl);
     }
 

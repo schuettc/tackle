@@ -8,16 +8,8 @@
 // The returned element replaces the .kit-read content; it is a plain
 // HTMLElement, not a kit component, so it can be replaced at will.
 
-import { h, facts, card, fold, type Button } from '/_kit/kit.js';
-import type {
-  ItemDetailView,
-  Proposal,
-  Evidence,
-  Event,
-  LogEntry,
-  AcceptResult,
-  RejectResult,
-} from './wire.d.ts';
+import { h, facts, fold } from '/_kit/kit.js';
+import type { ItemDetailView, Evidence, Event, LogEntry } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import {
   openDecideSheet,
@@ -27,6 +19,7 @@ import {
 } from './decide.ts';
 import { keyWithoutKind } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
+import { proposalCard } from './proposals.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
 const BODY_CAP = 600;
@@ -133,55 +126,7 @@ function renderHistory(events: Event[], decisions: LogEntry[]): HTMLElement {
   return section;
 }
 
-// ---- proposal card ----------------------------------------------------------
-
-function renderProposalCard(ctx: Ctx, p: Proposal, key: string): HTMLElement {
-  const stateLabel =
-    p.state === 'pending' ? 'pending proposal' : `proposal · ${p.state}`;
-  const lines: Array<Node | string> = [
-    h(
-      'div',
-      { class: 'cb-proposal-detail' },
-      h('span', { class: 'cb-label' }, 'disposition '),
-      h('strong', null, p.disposition),
-      p.until ? h('span', null, ` until ${fmtDate(p.until)}`) : null,
-      p.note ? h('span', null, ` \u00b7 ${p.note}`) : null,
-    ),
-  ];
-  const bodyEl = h('div', { class: 'cb-proposal-body' }, ...lines);
-  const cardActions: Button[] = [
-    {
-      label: 'accept',
-      fill: true,
-      run() {
-        void ctx.api
-          .post<AcceptResult>('/proposals/accept', { ids: [p.id] })
-          .catch(() => {});
-      },
-    },
-    {
-      label: 'change\u2026',
-      run() {
-        openDecideSheet(ctx, [key], () => {});
-      },
-    },
-    {
-      label: 'reject',
-      danger: true,
-      run() {
-        void ctx.api
-          .post<RejectResult>('/proposals/reject', { ids: [p.id] })
-          .catch(() => {});
-      },
-    },
-  ];
-  return card({
-    edge: 'agent',
-    head: stateLabel,
-    body: bodyEl,
-    actions: cardActions,
-  });
-}
+// proposal card is rendered by proposals.ts (proposalCard)
 
 // ---- decide buttons ---------------------------------------------------------
 
@@ -225,7 +170,11 @@ function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
 
 // ---- public -----------------------------------------------------------------
 
-export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
+export function renderItem(
+  ctx: Ctx,
+  detail: ItemDetailView,
+  onRefresh?: () => void,
+): HTMLElement {
   const it = detail.item;
 
   const el = h('article', { class: 'cb-item' });
@@ -272,8 +221,9 @@ export function renderItem(ctx: Ctx, detail: ItemDetailView): HTMLElement {
   }
 
   // ---- pending proposal card ------------------------------------------------
-  if (it.proposal) {
-    el.append(renderProposalCard(ctx, it.proposal, it.key));
+  const propCard = proposalCard(ctx, detail, onRefresh);
+  if (propCard) {
+    el.append(propCard);
   }
 
   // ---- decide ---------------------------------------------------------------

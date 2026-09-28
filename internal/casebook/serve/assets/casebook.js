@@ -228,11 +228,11 @@ function boot() {
 import {
   list,
   createSelection,
-  h as h5
+  h as h6
 } from "/_kit/kit.js";
 
 // item.ts
-import { h as h3, facts, card, fold } from "/_kit/kit.js";
+import { h as h4, facts, fold } from "/_kit/kit.js";
 
 // decide.ts
 import {
@@ -274,23 +274,23 @@ function dispositionNeedsUntil(vocab, keys, disp) {
   return (vocab.kinds ?? []).filter((k) => selectedKinds.includes(k.kind)).some((k) => (k.needs_until ?? []).includes(disp));
 }
 var DANGER_DISPS = /* @__PURE__ */ new Set(["close", "delete", "archive"]);
-function openDecideSheet(ctx, keys, onDone) {
+function openDecideSheet(ctx, keys, onDone, seed, customPost) {
   void getVocab(ctx).then((vocab) => {
-    openDecideSheetWithVocab(ctx, keys, vocab, onDone);
+    openDecideSheetWithVocab(ctx, keys, vocab, onDone, seed, customPost);
   });
 }
-function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
+function openDecideSheetWithVocab(ctx, keys, vocab, onDone, seed, customPost) {
   const n = keys.length;
   const allowed = allowedForKeys(vocab, keys);
-  let disposition = "";
-  let until = "";
-  let note = "";
+  let disposition = seed?.disposition ?? "";
+  let until = seed?.until ?? "";
+  let note = seed?.note ?? "";
   let submitting = false;
   let sh = null;
   let dryRunTimer = null;
   let lastDryRunError = null;
   const previewEl = h2("p", { class: "cb-sheet-preview" });
-  previewEl.textContent = `${n} item${n === 1 ? "" : "s"}`;
+  previewEl.textContent = disposition ? `${disposition} ${n} item${n === 1 ? "" : "s"}` : `${n} item${n === 1 ? "" : "s"}`;
   function updatePreview() {
     previewEl.textContent = `${disposition || "…"} ${n} item${n === 1 ? "" : "s"}`;
   }
@@ -299,13 +299,16 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
     class: "cb-sheet-input",
     placeholder: (vocab.until_forms ?? []).map((f) => f.syntax).join(", ") || "date(YYYY-MM-DD), inactive(90d) …"
   });
+  if (seed?.until) {
+    untilInputEl.value = seed.until;
+  }
   const untilRow = h2(
     "div",
     { class: "cb-sheet-row" },
     h2("label", { class: "cb-sheet-label" }, "until"),
     untilInputEl
   );
-  untilRow.hidden = true;
+  untilRow.hidden = !seed?.until && !dispositionNeedsUntil(vocab, keys, disposition);
   const errEl = h2("p", { class: "cb-sheet-err" });
   errEl.hidden = true;
   async function runDryRun() {
@@ -345,6 +348,7 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
   });
   const noteInputEl = noteField({
     placeholder: "optional note",
+    value: seed?.note ?? "",
     onCommit(v) {
       note = v;
     }
@@ -357,11 +361,12 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
   );
   const dispContainer = h2("div", { class: "cb-sheet-disps" });
   for (const d of allowed) {
+    const isSeeded = d === disposition;
     const btn = h2(
       "button",
       {
         type: "button",
-        class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : ""),
+        class: "cb-sheet-disp" + (DANGER_DISPS.has(d) ? " cb-sheet-disp--danger" : "") + (isSeeded ? " on" : ""),
         onclick() {
           disposition = d;
           updatePreview();
@@ -414,16 +419,23 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone) {
     submitting = true;
     errEl.hidden = true;
     try {
-      const payload = { keys, disposition };
-      if (until) payload["until"] = until;
-      if (note) payload["note"] = note;
-      const result = await ctx.api.post("/decide", payload);
-      const decidedKeys = result.decided_keys ?? [];
+      let decidedKeys;
+      let errors = [];
+      if (customPost) {
+        decidedKeys = await customPost(disposition, until, note);
+      } else {
+        const payload = { keys, disposition };
+        if (until) payload["until"] = until;
+        if (note) payload["note"] = note;
+        const result = await ctx.api.post("/decide", payload);
+        decidedKeys = result.decided_keys ?? [];
+        errors = result.errors ?? [];
+      }
       if (decidedKeys.length > 0) {
         onDone(decidedKeys);
       }
-      if (result.errors && result.errors.length > 0) {
-        errEl.textContent = result.errors.join("; ");
+      if (errors.length > 0) {
+        errEl.textContent = errors.join("; ");
         errEl.hidden = false;
         submitting = false;
       } else {
@@ -497,6 +509,171 @@ function wireSelection(ctx, listHandle) {
   }
 }
 
+// proposals.ts
+import { card, sheet as sheet2, noteField as noteField2, h as h3 } from "/_kit/kit.js";
+function agentFromSource(source) {
+  const i = source.indexOf(":");
+  return i === -1 ? source : source.slice(0, i);
+}
+function openRejectSheet(ctx, ids, onDone) {
+  let reason = "";
+  let submitting = false;
+  let sh = null;
+  const reasonInput = noteField2({
+    placeholder: "reason (optional)",
+    onCommit(v) {
+      reason = v;
+    }
+  });
+  const errEl = h3("p", { class: "cb-sheet-err" });
+  errEl.hidden = true;
+  const body = h3(
+    "div",
+    { class: "cb-sheet-body" },
+    h3(
+      "div",
+      { class: "cb-sheet-row" },
+      h3("label", { class: "cb-sheet-label" }, "reason"),
+      reasonInput
+    ),
+    errEl
+  );
+  async function doReject() {
+    if (submitting) return;
+    submitting = true;
+    errEl.hidden = true;
+    try {
+      const payload = { ids };
+      if (reason.trim()) payload["reason"] = reason.trim();
+      await ctx.api.post("/proposals/reject", payload);
+      onDone();
+      sh?.close();
+    } catch (err) {
+      errEl.textContent = err instanceof Error ? err.message : "reject failed — try again";
+      errEl.hidden = false;
+      submitting = false;
+    }
+  }
+  sh = sheet2({
+    title: `reject ${ids.length} proposal${ids.length === 1 ? "" : "s"}`,
+    body,
+    actions: [
+      {
+        label: `Reject ${ids.length}`,
+        fill: true,
+        run() {
+          void doReject();
+        }
+      }
+    ],
+    onClose() {
+      sh = null;
+    }
+  });
+}
+function proposalCard(ctx, detail, onDone) {
+  const proposal = detail.item.proposal;
+  if (!proposal || proposal.state !== "pending") return null;
+  const p = proposal;
+  const agent = agentFromSource(p.source);
+  const head = `${agent} proposes · ${p.disposition}`;
+  const lines = [];
+  if (p.note) {
+    const noteEl = h3("p", { class: "cb-proposal-note" });
+    noteEl.textContent = p.note;
+    lines.push(noteEl);
+  }
+  const bodyEl = h3("div", { class: "cb-proposal-body" }, ...lines);
+  function doAccept() {
+    void ctx.api.post("/proposals/accept", { ids: [p.id] }).then(() => {
+      onDone?.();
+    }).catch(() => {
+    });
+  }
+  function doReject() {
+    openRejectSheet(ctx, [p.id], () => {
+      onDone?.();
+    });
+  }
+  const actions = [
+    { label: "accept", fill: true, run: doAccept },
+    {
+      label: "change…",
+      run() {
+        openDecideSheet(
+          ctx,
+          [p.key],
+          () => {
+            onDone?.();
+          },
+          {
+            disposition: p.disposition,
+            until: p.until ?? "",
+            note: p.note ?? ""
+          },
+          async (disp, until, note) => {
+            const result = await ctx.api.post(
+              "/proposals/change",
+              { id: p.id, disposition: disp, until, note }
+            );
+            return result.decided_keys ?? [];
+          }
+        );
+      }
+    },
+    { label: "reject", run: doReject }
+  ];
+  const el = card({ edge: "agent", head, body: bodyEl, actions });
+  el.classList.add("cb-proposal-card");
+  return el;
+}
+function bulkProposalFoot(ctx, onDone) {
+  let _ids = [];
+  let _keys = [];
+  const acceptBtn = h3("button", {
+    class: "kit-btn fill cb-prop-accept",
+    hidden: true,
+    onclick() {
+      if (_ids.length === 0) return;
+      const ids = [..._ids];
+      const keys = [..._keys];
+      void ctx.api.post("/proposals/accept", { ids }).then(() => {
+        onDone(keys);
+      }).catch(() => {
+      });
+    }
+  });
+  acceptBtn.textContent = "accept 0";
+  const rejectBtn = h3("button", {
+    class: "kit-btn cb-prop-reject",
+    hidden: true,
+    onclick() {
+      if (_ids.length === 0) return;
+      const keys = [..._keys];
+      openRejectSheet(ctx, [..._ids], () => {
+        onDone(keys);
+      });
+    }
+  });
+  rejectBtn.textContent = "reject 0…";
+  const el = h3("div", { class: "cb-prop-bulk" }, acceptBtn, rejectBtn);
+  function update(proposalIds, itemKeys) {
+    _ids = proposalIds;
+    _keys = itemKeys;
+    const n = proposalIds.length;
+    if (n === 0) {
+      acceptBtn.hidden = true;
+      rejectBtn.hidden = true;
+    } else {
+      acceptBtn.textContent = `accept ${n}`;
+      rejectBtn.textContent = `reject ${n}…`;
+      acceptBtn.hidden = false;
+      rejectBtn.hidden = false;
+    }
+  }
+  return { el, update };
+}
+
 // item.ts
 var BODY_CAP = 600;
 function fmtDate(s) {
@@ -517,23 +694,23 @@ function fmtShortDate(s) {
   return `${mm}-${dd}`;
 }
 function renderEvidence(evs) {
-  const section = h3("section", { class: "cb-evidence" });
-  section.append(h3("h3", { class: "kit-label" }, "evidence"));
+  const section = h4("section", { class: "cb-evidence" });
+  section.append(h4("h3", { class: "kit-label" }, "evidence"));
   if (evs.length === 0) {
-    section.append(h3("p", { class: "cb-empty" }, "no evidence"));
+    section.append(h4("p", { class: "cb-empty" }, "no evidence"));
     return section;
   }
   for (const ev of evs) {
-    const authorEl = ev.author ? h3("span", { class: "cb-evidence-author" }, ev.author + " ") : null;
-    const time = h3(
+    const authorEl = ev.author ? h4("span", { class: "cb-evidence-author" }, ev.author + " ") : null;
+    const time = h4(
       "span",
       { class: "cb-muted" },
       ` · ${fmtShortDate(ev.created_at)}`
     );
-    const item = h3(
+    const item = h4(
       "div",
       { class: "cb-evidence-item" },
-      h3(
+      h4(
         "p",
         { class: "cb-evidence-meta" },
         ...authorEl ? [authorEl] : [],
@@ -546,84 +723,39 @@ function renderEvidence(evs) {
   return section;
 }
 function renderHistory(events, decisions) {
-  const section = h3("section", { class: "cb-history" });
-  section.append(h3("h3", { class: "kit-label" }, "history"));
+  const section = h4("section", { class: "cb-history" });
+  section.append(h4("h3", { class: "kit-label" }, "history"));
   if (events.length === 0 && decisions.length === 0) {
-    section.append(h3("p", { class: "cb-empty" }, "no history"));
+    section.append(h4("p", { class: "cb-empty" }, "no history"));
     return section;
   }
   for (const entry of decisions) {
     section.append(
-      h3(
+      h4(
         "div",
         { class: "cb-history-item cb-history-decision" },
-        h3("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
-        h3("span", { class: "cb-history-msg" }, entry.Subject)
+        h4("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
+        h4("span", { class: "cb-history-msg" }, entry.Subject)
       )
     );
   }
   for (const ev of events) {
     const label = ev.actions && ev.actions.length > 0 ? ev.actions.map((a) => a.hook ?? "").filter(Boolean).join(", ") : ev.hook ?? ev.src;
     section.append(
-      h3(
+      h4(
         "div",
         { class: "cb-history-item" },
-        h3("span", { class: "cb-history-time" }, fmtShortDate(ev.ts)),
-        h3("span", { class: "cb-history-msg" }, label)
+        h4("span", { class: "cb-history-time" }, fmtShortDate(ev.ts)),
+        h4("span", { class: "cb-history-msg" }, label)
       )
     );
   }
   return section;
 }
-function renderProposalCard(ctx, p, key) {
-  const stateLabel = p.state === "pending" ? "pending proposal" : `proposal · ${p.state}`;
-  const lines = [
-    h3(
-      "div",
-      { class: "cb-proposal-detail" },
-      h3("span", { class: "cb-label" }, "disposition "),
-      h3("strong", null, p.disposition),
-      p.until ? h3("span", null, ` until ${fmtDate(p.until)}`) : null,
-      p.note ? h3("span", null, ` · ${p.note}`) : null
-    )
-  ];
-  const bodyEl = h3("div", { class: "cb-proposal-body" }, ...lines);
-  const cardActions = [
-    {
-      label: "accept",
-      fill: true,
-      run() {
-        void ctx.api.post("/proposals/accept", { ids: [p.id] }).catch(() => {
-        });
-      }
-    },
-    {
-      label: "change…",
-      run() {
-        openDecideSheet(ctx, [key], () => {
-        });
-      }
-    },
-    {
-      label: "reject",
-      danger: true,
-      run() {
-        void ctx.api.post("/proposals/reject", { ids: [p.id] }).catch(() => {
-        });
-      }
-    }
-  ];
-  return card({
-    edge: "agent",
-    head: stateLabel,
-    body: bodyEl,
-    actions: cardActions
-  });
-}
 function renderDecideSection(ctx, key, kind) {
-  const section = h3("section", { class: "cb-decide" });
-  section.append(h3("h3", { class: "kit-label" }, "decide"));
-  const dispRow = h3("div", { class: "cb-decide-btns" });
+  const section = h4("section", { class: "cb-decide" });
+  section.append(h4("h3", { class: "kit-label" }, "decide"));
+  const dispRow = h4("div", { class: "cb-decide-btns" });
   section.append(dispRow);
   void getVocab(ctx).then((vocab) => {
     const vocabKind = (vocab.kinds ?? []).find((k) => k.kind === kind);
@@ -632,7 +764,7 @@ function renderDecideSection(ctx, key, kind) {
     for (const d of kindAllowed) {
       const label = needsUntilSet.has(d) ? `${d}…` : d;
       dispRow.append(
-        h3(
+        h4(
           "button",
           {
             type: "button",
@@ -649,14 +781,14 @@ function renderDecideSection(ctx, key, kind) {
   });
   return section;
 }
-function renderItem(ctx, detail) {
+function renderItem(ctx, detail, onRefresh) {
   const it = detail.item;
-  const el = h3("article", { class: "cb-item" });
+  const el = h4("article", { class: "cb-item" });
   const displayKey = keyWithoutKind(it.key);
   const kickerParts = [it.kind, displayKey, it.relation].filter(Boolean).join(" · ");
-  el.append(h3("p", { class: "cb-kicker kit-kick" }, kickerParts));
+  el.append(h4("p", { class: "cb-kicker kit-kick" }, kickerParts));
   el.append(
-    h3("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
+    h4("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
   );
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
@@ -672,24 +804,25 @@ function renderItem(ctx, detail) {
   if (it.body) {
     const excerpt = it.body.slice(0, BODY_CAP);
     const rest = it.body.slice(BODY_CAP);
-    const bodyWrap = h3("div", { class: "cb-body" });
-    bodyWrap.append(h3("p", null, excerpt));
+    const bodyWrap = h4("div", { class: "cb-body" });
+    bodyWrap.append(h4("p", null, excerpt));
     if (rest) {
-      bodyWrap.append(fold("read more", h3("p", null, rest)));
+      bodyWrap.append(fold("read more", h4("p", null, rest)));
     }
     el.append(bodyWrap);
   }
-  if (it.proposal) {
-    el.append(renderProposalCard(ctx, it.proposal, it.key));
+  const propCard = proposalCard(ctx, detail, onRefresh);
+  if (propCard) {
+    el.append(propCard);
   }
   el.append(renderDecideSection(ctx, it.key, it.kind));
   el.append(renderEvidence(detail.evidence ?? []));
   el.append(renderHistory(detail.history ?? [], detail.decisions ?? []));
-  return h3("div", { class: "kit-doc" }, el);
+  return h4("div", { class: "kit-doc" }, el);
 }
 
 // board.ts
-import { h as h4 } from "/_kit/kit.js";
+import { h as h5 } from "/_kit/kit.js";
 var PAGE_SIZE = 200;
 var LANES = [
   { id: "waiting", label: "waiting on you" },
@@ -706,36 +839,36 @@ function ageOf(it) {
   return `${days}d`;
 }
 function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
-  const el = h4("div", { class: "cb-board" });
+  const el = h5("div", { class: "cb-board" });
   const laneState = new Map(
     LANES.map(({ id }) => [id, { items: [], total: 0 }])
   );
   const laneRowsEl = /* @__PURE__ */ new Map();
   const laneMoreEl = /* @__PURE__ */ new Map();
   for (const { id, label } of LANES) {
-    const headEl = h4("div", { class: "cb-lane-head" });
+    const headEl = h5("div", { class: "cb-lane-head" });
     headEl.textContent = label;
-    const rowsEl = h4("div", { class: "cb-lane-rows" });
+    const rowsEl = h5("div", { class: "cb-lane-rows" });
     laneRowsEl.set(id, rowsEl);
-    const moreEl = h4("button", { class: "cb-lane-more", hidden: true });
+    const moreEl = h5("button", { class: "cb-lane-more", hidden: true });
     moreEl.textContent = "show more";
     moreEl.addEventListener("click", () => {
       void loadMore(id);
     });
     laneMoreEl.set(id, moreEl);
     el.append(
-      h4("div", { class: "cb-lane", "data-lane": id }, headEl, rowsEl, moreEl)
+      h5("div", { class: "cb-lane", "data-lane": id }, headEl, rowsEl, moreEl)
     );
   }
   function buildCard(it, laneId) {
     const selected = sel.has(it.key);
-    const box = h4("span", { class: "kit-box" + (selected ? " on" : "") });
-    const kk = h4("span", { class: "cb-card-kk" });
+    const box = h5("span", { class: "kit-box" + (selected ? " on" : "") });
+    const kk = h5("span", { class: "cb-card-kk" });
     const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
-    const titleEl = h4("div", { class: "cb-card-title" });
+    const titleEl = h5("div", { class: "cb-card-title" });
     titleEl.textContent = it.title ?? displayKey;
-    const card2 = h4(
+    const card2 = h5(
       "div",
       {
         // Use .kit-card for background/border/radius from the kit;
@@ -744,18 +877,18 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
         tabindex: "0",
         "data-id": it.key
       },
-      h4("div", { class: "kit-card-head" }, box, kk),
+      h5("div", { class: "kit-card-head" }, box, kk),
       titleEl
     );
     const age = ageOf(it);
     if (age) {
-      const ageEl = h4("div", { class: "cb-card-age" });
+      const ageEl = h5("div", { class: "cb-card-age" });
       ageEl.textContent = age;
       card2.append(ageEl);
     }
     if (it.proposal) {
-      const propEl = h4("div", { class: "cb-card-prop" });
-      propEl.textContent = `${it.proposal.disposition} proposed`;
+      const propEl = h5("div", { class: "cb-card-prop" });
+      propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
       card2.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {
@@ -946,34 +1079,36 @@ function ageOf2(it) {
   return `${days}d`;
 }
 function makeAttention(ctx) {
-  const readEl = h5("div", { class: "kit-read" });
+  const readEl = h6("div", { class: "kit-read" });
   let offset = 0;
   let totalItems = 0;
   let loadedItems = [];
   const filters = emptyFilters();
   let loading = false;
   let footEl = null;
+  let propFoot = null;
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
+  let currentOpenKey = null;
   const viewCounts = {};
   let boardHandle = null;
   function renderReadEmpty() {
-    const nameEl = h5(
+    const nameEl = h6(
       "p",
       { class: "cb-read-empty-section kit-label" },
       "attention"
     );
-    const countEl = h5(
+    const countEl = h6(
       "p",
       { class: "cb-read-empty-count" },
       `${totalItemsForView} items`
     );
-    const promptEl = h5(
+    const promptEl = h6(
       "p",
       { class: "cb-read-empty-prompt" },
       "Select an item to see it here."
     );
-    return h5("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
+    return h6("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
   }
   function updateReadEmptyCount() {
     const countEl = readEl.querySelector(".cb-read-empty-count");
@@ -982,16 +1117,17 @@ function makeAttention(ctx) {
     }
   }
   function showReadEmpty() {
+    currentOpenKey = null;
     readEl.replaceChildren(renderReadEmpty());
   }
   showReadEmpty();
   function buildFoot() {
-    const selCount = h5(
+    const selCount = h6(
       "span",
       { class: "cb-sel-count", hidden: true },
       "0 selected"
     );
-    const selAllBtn = h5(
+    const selAllBtn = h6(
       "button",
       {
         class: "cb-sel-all",
@@ -1001,12 +1137,16 @@ function makeAttention(ctx) {
       },
       "select all 0 in view"
     );
-    footEl = h5(
+    propFoot = bulkProposalFoot(ctx, (keys) => {
+      selection.deselect(keys);
+      void reload();
+    });
+    footEl = h6(
       "div",
       { class: "cb-foot" },
       selCount,
       selAllBtn,
-      h5(
+      h6(
         "button",
         {
           class: "cb-foot-more",
@@ -1017,9 +1157,24 @@ function makeAttention(ctx) {
           }
         },
         `show ${PAGE_SIZE2} more`
-      )
+      ),
+      propFoot.el
     );
     return footEl;
+  }
+  function updateProposalBulk(selectedIds) {
+    if (!propFoot) return;
+    if (filters.view !== "proposed") {
+      propFoot.update([], []);
+      return;
+    }
+    const withProps = loadedItems.filter(
+      (it) => it.proposal && it.proposal.state === "pending" && selectedIds.includes(it.key)
+    );
+    propFoot.update(
+      withProps.map((it) => it.proposal.id),
+      withProps.map((it) => it.key)
+    );
   }
   async function selectAllInView() {
     if (boardHandle) {
@@ -1061,7 +1216,7 @@ function makeAttention(ctx) {
       const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf2(it);
-      const proposal = it.proposal ? `${it.proposal.disposition} proposed` : void 0;
+      const proposal = it.proposal ? `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}` : void 0;
       return {
         id: it.key,
         key: kindKey,
@@ -1146,6 +1301,7 @@ function makeAttention(ctx) {
       handle.setItems(loadedItems);
       updateFoot();
       updateReadEmptyCount();
+      updateProposalBulk(selection.ids());
     } catch {
     } finally {
       loading = false;
@@ -1163,6 +1319,7 @@ function makeAttention(ctx) {
       totalItemsForView = data.total;
       handle.setItems(loadedItems);
       updateFoot();
+      updateProposalBulk(selection.ids());
     } catch {
     } finally {
       loading = false;
@@ -1187,9 +1344,12 @@ function makeAttention(ctx) {
     footEl.hidden = false;
   }
   async function openDetail(key) {
+    currentOpenKey = key;
     try {
       const detail = await ctx.api.get("/item", { key });
-      const el = renderItem(ctx, detail);
+      const el = renderItem(ctx, detail, () => {
+        void openDetail(key);
+      });
       readEl.replaceChildren(el);
     } catch {
     }
@@ -1215,6 +1375,46 @@ function makeAttention(ctx) {
   }
   void reload();
   wireSelection(ctx, handle);
+  selection.onChange((ids) => {
+    updateProposalBulk(ids);
+  });
+  try {
+    ctx.keys.register({
+      keys: "a",
+      label: "accept proposal",
+      group: "page",
+      run() {
+        if (!currentOpenKey) return;
+        const it = loadedItems.find((x) => x.key === currentOpenKey);
+        if (!it?.proposal || it.proposal.state !== "pending") return;
+        void ctx.api.post("/proposals/accept", { ids: [it.proposal.id] }).then(() => {
+          selection.deselect([currentOpenKey]);
+          void openDetail(currentOpenKey);
+          void reload();
+        }).catch(() => {
+        });
+      }
+    });
+  } catch {
+  }
+  try {
+    ctx.keys.register({
+      keys: "r",
+      label: "reject proposal",
+      group: "page",
+      run() {
+        if (!currentOpenKey) return;
+        const it = loadedItems.find((x) => x.key === currentOpenKey);
+        if (!it?.proposal || it.proposal.state !== "pending") return;
+        openRejectSheet(ctx, [it.proposal.id], () => {
+          selection.deselect([currentOpenKey]);
+          void openDetail(currentOpenKey);
+          void reload();
+        });
+      }
+    });
+  } catch {
+  }
   if (typeof handle.focusSearch === "function") {
     const focusFn = handle.focusSearch.bind(handle);
     try {
@@ -1301,6 +1501,7 @@ function makeAttention(ctx) {
     if (VIEWS.some((v) => v.id === view) && view !== "board") {
       filters.view = view;
       handle.setChips("view", viewChips(filters.view));
+      updateProposalBulk(selection.ids());
       showReadEmpty();
       void reload();
     } else if (sub) {
@@ -1337,6 +1538,19 @@ function makeAttention(ctx) {
           void reload();
         }
       } else if (type === "proposals") {
+        const propPayload = data;
+        const propIds = propPayload?.ids ?? [];
+        const propState = propPayload?.state ?? "";
+        if (propState === "accepted" || propState === "rejected" || propState === "changed") {
+          const propIdSet = new Set(propIds);
+          const affectedKeys = loadedItems.filter((it) => it.proposal && propIdSet.has(it.proposal.id)).map((it) => it.key);
+          if (affectedKeys.length > 0) {
+            selection.deselect(affectedKeys);
+          }
+          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
+            void openDetail(currentOpenKey);
+          }
+        }
         void ctx.api.get("/summary").then((s) => applyCounts(s.counts)).catch(() => {
         });
         if (boardHandle) {

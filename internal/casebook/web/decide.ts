@@ -80,14 +80,20 @@ export const DANGER_DISPS = new Set(['close', 'delete', 'archive']);
  *
  * On success, calls onDone(keys) with the keys that were decided.
  * Esc or a backdrop click closes the sheet without deciding.
+ *
+ * Optional `seed` pre-populates disposition/until/note (used by change…).
+ * Optional `customPost` replaces the default /api/decide POST (also used by
+ * change… to post to /api/proposals/change instead).
  */
 export function openDecideSheet(
   ctx: Ctx,
   keys: string[],
   onDone: (decided: string[]) => void,
+  seed?: { disposition?: string; until?: string; note?: string },
+  customPost?: (disp: string, until: string, note: string) => Promise<string[]>,
 ): void {
   void getVocab(ctx).then((vocab) => {
-    openDecideSheetWithVocab(ctx, keys, vocab, onDone);
+    openDecideSheetWithVocab(ctx, keys, vocab, onDone, seed, customPost);
   });
 }
 
@@ -96,13 +102,15 @@ function openDecideSheetWithVocab(
   keys: string[],
   vocab: DecisionVocabView,
   onDone: (decided: string[]) => void,
+  seed?: { disposition?: string; until?: string; note?: string },
+  customPost?: (disp: string, until: string, note: string) => Promise<string[]>,
 ): void {
   const n = keys.length;
   const allowed = allowedForKeys(vocab, keys);
 
-  let disposition = '';
-  let until = '';
-  let note = '';
+  let disposition = seed?.disposition ?? '';
+  let until = seed?.until ?? '';
+  let note = seed?.note ?? '';
   let submitting = false;
   let sh: SheetHandle | null = null;
   let dryRunTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,7 +119,10 @@ function openDecideSheetWithVocab(
   // ---- preview ---------------------------------------------------------------
 
   const previewEl = h('p', { class: 'cb-sheet-preview' });
-  previewEl.textContent = `${n} item${n === 1 ? '' : 's'}`;
+  // Seed the preview text with the seeded disposition if provided.
+  previewEl.textContent = disposition
+    ? `${disposition} ${n} item${n === 1 ? '' : 's'}`
+    : `${n} item${n === 1 ? '' : 's'}`;
 
   function updatePreview(): void {
     previewEl.textContent = `${disposition || '\u2026'} ${n} item${n === 1 ? '' : 's'}`;
@@ -126,6 +137,10 @@ function openDecideSheetWithVocab(
       (vocab.until_forms ?? []).map((f) => f.syntax).join(', ') ||
       'date(YYYY-MM-DD), inactive(90d) \u2026',
   }) as HTMLInputElement;
+  // Seed the until field if a seed value was provided.
+  if (seed?.until) {
+    untilInputEl.value = seed.until;
+  }
 
   const untilRow = h(
     'div',
@@ -133,7 +148,9 @@ function openDecideSheetWithVocab(
     h('label', { class: 'cb-sheet-label' }, 'until'),
     untilInputEl,
   );
-  untilRow.hidden = true;
+  // Show the until row if the seed has a value or if the seeded disposition needs it.
+  untilRow.hidden =
+    !seed?.until && !dispositionNeedsUntil(vocab, keys, disposition);
 
   // ---- error display ---------------------------------------------------------
 
@@ -184,6 +201,7 @@ function openDecideSheetWithVocab(
 
   const noteInputEl = noteField({
     placeholder: 'optional note',
+    value: seed?.note ?? '',
     onCommit(v: string) {
       note = v;
     },
@@ -200,13 +218,15 @@ function openDecideSheetWithVocab(
   const dispContainer = h('div', { class: 'cb-sheet-disps' });
 
   for (const d of allowed) {
+    const isSeeded = d === disposition;
     const btn = h(
       'button',
       {
         type: 'button',
         class:
           'cb-sheet-disp' +
-          (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : ''),
+          (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : '') +
+          (isSeeded ? ' on' : ''),
         onclick() {
           disposition = d;
           updatePreview();
@@ -267,16 +287,24 @@ function openDecideSheetWithVocab(
     submitting = true;
     errEl.hidden = true;
     try {
-      const payload: Record<string, unknown> = { keys, disposition };
-      if (until) payload['until'] = until;
-      if (note) payload['note'] = note;
-      const result = await ctx.api.post<DecideResult>('/decide', payload);
-      const decidedKeys = result.decided_keys ?? [];
+      let decidedKeys: string[];
+      let errors: string[] = [];
+      if (customPost) {
+        // Custom post (e.g. /proposals/change): caller owns the endpoint.
+        decidedKeys = await customPost(disposition, until, note);
+      } else {
+        const payload: Record<string, unknown> = { keys, disposition };
+        if (until) payload['until'] = until;
+        if (note) payload['note'] = note;
+        const result = await ctx.api.post<DecideResult>('/decide', payload);
+        decidedKeys = result.decided_keys ?? [];
+        errors = result.errors ?? [];
+      }
       if (decidedKeys.length > 0) {
         onDone(decidedKeys);
       }
-      if (result.errors && result.errors.length > 0) {
-        errEl.textContent = result.errors.join('; ');
+      if (errors.length > 0) {
+        errEl.textContent = errors.join('; ');
         errEl.hidden = false;
         submitting = false;
       } else {

@@ -26,6 +26,12 @@ import { renderItem } from './item.ts';
 import { wireSelection } from './decide.ts';
 import { keyWithoutKind } from './decide-math.ts';
 import { makeBoard } from './board.ts';
+import {
+  agentFromSource,
+  bulkProposalFoot,
+  openRejectSheet,
+  type BulkProposalFoot,
+} from './proposals.ts';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
@@ -115,8 +121,12 @@ export function makeAttention(ctx: Ctx): Section {
   const filters = emptyFilters();
   let loading = false;
   let footEl: HTMLElement | null = null;
+  let propFoot: BulkProposalFoot | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let totalItemsForView = 0; // updated after every load; used by select-all
+  // currentOpenKey is the key of the item currently shown in the reading column;
+  // used by the 'a' and 'r' key bindings.
+  let currentOpenKey: string | null = null;
   const viewCounts: Record<string, number> = {}; // last known counts per view chip id
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
@@ -156,6 +166,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   // Show the empty reading-column state (replaces any open item detail).
   function showReadEmpty(): void {
+    currentOpenKey = null;
     readEl.replaceChildren(renderReadEmpty());
   }
 
@@ -182,6 +193,12 @@ export function makeAttention(ctx: Ctx): Section {
       'select all 0 in view',
     );
 
+    // Bulk proposal buttons (only visible in the 'proposed' view).
+    propFoot = bulkProposalFoot(ctx, (keys: string[]) => {
+      selection.deselect(keys);
+      void reload();
+    });
+
     footEl = h(
       'div',
       { class: 'cb-foot' },
@@ -198,8 +215,32 @@ export function makeAttention(ctx: Ctx): Section {
         },
         `show ${PAGE_SIZE} more`,
       ),
+      propFoot.el,
     );
     return footEl;
+  }
+
+  /**
+   * updateProposalBulk recalculates which selected items have pending proposals
+   * and updates the bulk accept/reject button labels and visibility.
+   * Only shown when filters.view === 'proposed'.
+   */
+  function updateProposalBulk(selectedIds: string[]): void {
+    if (!propFoot) return;
+    if (filters.view !== 'proposed') {
+      propFoot.update([], []);
+      return;
+    }
+    const withProps = loadedItems.filter(
+      (it) =>
+        it.proposal &&
+        it.proposal.state === 'pending' &&
+        selectedIds.includes(it.key),
+    );
+    propFoot.update(
+      withProps.map((it) => it.proposal!.id),
+      withProps.map((it) => it.key),
+    );
   }
 
   // selectAllInView fetches every id in the current view and calls selectAll()
@@ -251,7 +292,7 @@ export function makeAttention(ctx: Ctx): Section {
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf(it);
       const proposal = it.proposal
-        ? `${it.proposal.disposition} proposed`
+        ? `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`
         : undefined;
       return {
         id: it.key,
@@ -352,6 +393,7 @@ export function makeAttention(ctx: Ctx): Section {
       handle.setItems(loadedItems);
       updateFoot();
       updateReadEmptyCount();
+      updateProposalBulk(selection.ids());
     } catch {
       // non-fatal; leave the list as-is
     } finally {
@@ -371,6 +413,7 @@ export function makeAttention(ctx: Ctx): Section {
       totalItemsForView = data.total;
       handle.setItems(loadedItems);
       updateFoot();
+      updateProposalBulk(selection.ids());
     } catch {
       // non-fatal
     } finally {
@@ -405,9 +448,13 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   async function openDetail(key: string): Promise<void> {
+    currentOpenKey = key;
     try {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
-      const el = renderItem(ctx, detail);
+      const el = renderItem(ctx, detail, () => {
+        // Re-render after accept/reject/change from the proposal card.
+        void openDetail(key);
+      });
       readEl.replaceChildren(el);
     } catch {
       // non-fatal; leave the reading column
@@ -446,6 +493,55 @@ export function makeAttention(ctx: Ctx): Section {
 
   // Wire selection → primary button and foot count (Task 4).
   wireSelection(ctx, handle);
+
+  // Also update proposal bulk buttons when selection changes.
+  selection.onChange((ids) => {
+    updateProposalBulk(ids);
+  });
+
+  // Register 'a' and 'r' keys to accept/reject the open item's proposal.
+  try {
+    ctx.keys.register({
+      keys: 'a',
+      label: 'accept proposal',
+      group: 'page',
+      run() {
+        if (!currentOpenKey) return;
+        const it = loadedItems.find((x) => x.key === currentOpenKey);
+        if (!it?.proposal || it.proposal.state !== 'pending') return;
+        void ctx.api
+          .post('/proposals/accept', { ids: [it.proposal.id] })
+          .then(() => {
+            selection.deselect([currentOpenKey!]);
+            void openDetail(currentOpenKey!);
+            void reload();
+          })
+          .catch(() => {});
+      },
+    });
+  } catch {
+    // already registered
+  }
+
+  try {
+    ctx.keys.register({
+      keys: 'r',
+      label: 'reject proposal',
+      group: 'page',
+      run() {
+        if (!currentOpenKey) return;
+        const it = loadedItems.find((x) => x.key === currentOpenKey);
+        if (!it?.proposal || it.proposal.state !== 'pending') return;
+        openRejectSheet(ctx, [it.proposal.id], () => {
+          selection.deselect([currentOpenKey!]);
+          void openDetail(currentOpenKey!);
+          void reload();
+        });
+      },
+    });
+  } catch {
+    // already registered
+  }
 
   // Register / to focus the search field (kit v0.11.0).
   // createKeys() in app.ts is called before sections are created, so we
@@ -576,6 +672,8 @@ export function makeAttention(ctx: Ctx): Section {
       // Known view chip: switch to it.
       filters.view = view;
       handle.setChips('view', viewChips(filters.view));
+      // Reset proposal bulk foot when leaving/entering proposed view.
+      updateProposalBulk(selection.ids());
       showReadEmpty();
       void reload();
     } else if (sub) {
@@ -626,9 +724,37 @@ export function makeAttention(ctx: Ctx): Section {
           void reload();
         }
       } else if (type === 'proposals') {
-        // A proposals event is emitted by the agent without a follow-up index,
-        // so re-fetch the summary to update view-chip counts (particularly the
-        // "proposed" chip).
+        // proposals event is emitted by accept/reject/change or by the agent.
+        // Payload shape: {ids: number[], state: string, source?: string}.
+        const propPayload = data as {
+          ids?: number[];
+          state?: string;
+          source?: string;
+        };
+        const propIds = propPayload?.ids ?? [];
+        const propState = propPayload?.state ?? '';
+
+        // When proposals are settled (accepted, rejected, changed), deselect
+        // the affected item keys so the selection count stays correct.
+        if (
+          propState === 'accepted' ||
+          propState === 'rejected' ||
+          propState === 'changed'
+        ) {
+          const propIdSet = new Set(propIds);
+          const affectedKeys = loadedItems
+            .filter((it) => it.proposal && propIdSet.has(it.proposal.id))
+            .map((it) => it.key);
+          if (affectedKeys.length > 0) {
+            selection.deselect(affectedKeys);
+          }
+          // Re-render the open item if it was affected.
+          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
+            void openDetail(currentOpenKey);
+          }
+        }
+
+        // Re-fetch summary to update view-chip counts (particularly 'proposed').
         void ctx.api
           .get<SummaryView>('/summary')
           .then((s) => applyCounts(s.counts))
