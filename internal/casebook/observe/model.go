@@ -29,20 +29,20 @@ type RepoObs struct {
 
 // PRObs is one pull request or issue.
 type PRObs struct {
-	Repo                   string    `json:"repo"`
-	Number                 int       `json:"number"`
-	Title                  string    `json:"title,omitempty"`
-	Author                 string    `json:"author,omitempty"`
-	AuthorIsBot            bool      `json:"author_is_bot,omitempty"` // true when GitHub __typename == "Bot"
-	State                  string    `json:"state,omitempty"`         // OPEN, CLOSED, MERGED
-	Draft                  bool      `json:"draft,omitempty"`
-	CreatedAt              time.Time `json:"created_at,omitzero"`
-	UpdatedAt              time.Time `json:"updated_at,omitzero"`
-	LastCommentAuthor      string    `json:"last_comment_author,omitempty"`
-	LastCommentAt          time.Time `json:"last_comment_at,omitzero"`
-	URL                    string    `json:"url,omitempty"`
-	Labels                 []string  `json:"labels,omitempty"`
-	Body                   string    `json:"body,omitempty"` // first 600 chars of GitHub bodyText
+	Repo              string    `json:"repo"`
+	Number            int       `json:"number"`
+	Title             string    `json:"title,omitempty"`
+	Author            string    `json:"author,omitempty"`
+	AuthorIsBot       bool      `json:"author_is_bot,omitempty"` // true when GitHub __typename == "Bot"
+	State             string    `json:"state,omitempty"`         // OPEN, CLOSED, MERGED
+	Draft             bool      `json:"draft,omitempty"`
+	CreatedAt         time.Time `json:"created_at,omitzero"`
+	UpdatedAt         time.Time `json:"updated_at,omitzero"`
+	LastCommentAuthor string    `json:"last_comment_author,omitempty"`
+	LastCommentAt     time.Time `json:"last_comment_at,omitzero"`
+	URL               string    `json:"url,omitempty"`
+	Labels            []string  `json:"labels,omitempty"`
+	Body              string    `json:"body,omitempty"` // first 600 chars of GitHub bodyText
 }
 
 // Owner is one account's or org's observation. A failed or blocked fetch
