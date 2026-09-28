@@ -359,3 +359,17 @@ func TestNoTypescriptSkips(t *testing.T) {
 		t.Errorf("Reason = %q, want %q", res.Skipped[0].Reason, want)
 	}
 }
+
+// TestTsTidySkipsImportSharingALine: two imports on one line; deleting
+// the unused one's line would delete the used one too (I-3).
+func TestTsTidySkipsImportSharingALine(t *testing.T) {
+	requireTS(t)
+	src := "import { a } from \"./a\"; import { b } from \"./b\";\n\ntest(\"x\", () => {\n  b();\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}

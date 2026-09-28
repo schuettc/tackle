@@ -35,6 +35,17 @@ func TidyGo(src []byte) ([]byte, []string, error) {
 	return tidyGoFallback(src)
 }
 
+// goTidyFallsBack reports whether TidyGo uses the go/ast fallback (no
+// goimports on PATH), which keeps imports whose package name it can't
+// know; apply then hints at installing goimports when the tests fail.
+func goTidyFallsBack() bool {
+	if forceGoTidyFallback {
+		return true
+	}
+	_, err := exec.LookPath("goimports")
+	return err != nil
+}
+
 func tidyGoImports(binPath string, src []byte) ([]byte, []string, error) {
 	cmd := exec.Command(binPath)
 	cmd.Env = envWithoutKey()
@@ -152,6 +163,12 @@ func tidyGoFallback(src []byte) ([]byte, []string, error) {
 	for _, imp := range f.Imports {
 		name := importLocalName(imp)
 		if name == "_" || name == "." {
+			continue
+		}
+		// Unaliased, the package name is only known when the last path
+		// element is a plain identifier ("yaml.v3", "go-colorable" are
+		// not): keep the import; verify catches it if it really is unused.
+		if imp.Name == nil && !token.IsIdentifier(name) {
 			continue
 		}
 		if !used[name] {

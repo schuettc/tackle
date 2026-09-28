@@ -124,9 +124,22 @@ def tidy_source(data):
     actions = {}
     removed = []
 
+    # Lines holding more than one top-level statement (`import os; import
+    # sys`): the line-based edit below would take the neighbour with it,
+    # so an import on such a line is left alone, like a commented one.
+    stmt_count = {}
+    for n in tree.body:
+        for l in range(n.lineno, n.end_lineno + 1):
+            stmt_count[l] = stmt_count.get(l, 0) + 1
+    shared_lines = {l for l, c in stmt_count.items() if c > 1}
+
     # Only tree.body (module-level statements), never ast.walk(tree): an
     # import nested inside any block is never touched.
     for n in tree.body:
+        if isinstance(n, (ast.Import, ast.ImportFrom)) and any(
+            l in shared_lines for l in range(n.lineno, n.end_lineno + 1)
+        ):
+            continue
         if isinstance(n, ast.ImportFrom):
             if n.module == "__future__" or any(a.name == "*" for a in n.names):
                 continue

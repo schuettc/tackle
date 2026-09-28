@@ -268,7 +268,19 @@ func Run(ctx context.Context, opt Options) (out Outcome, err error) {
 		return out, exitf(2, "test command could not start after removal (%s: %s); rolled back (snapshot: %s)",
 			r.Command, strings.TrimSpace(r.OutputTail), snap)
 	}
-	return out, exitf(1, "tests failed after removal (%s); rolled back (snapshot: %s)", failedCommand(out.After), snap)
+	return out, exitf(1, "tests failed after removal (%s); rolled back (snapshot: %s)%s", failedCommand(out.After), snap, goimportsHint(edits))
+}
+
+// goimportsHint is appended to a failed after-run when a Go file was
+// tidied without goimports: an import the fallback had to keep may be
+// the cause.
+func goimportsHint(edits []fileEdit) string {
+	for _, e := range edits {
+		if e.lang == "go" && goTidyFallsBack() {
+			return "; goimports is not on PATH, so unused imports may remain -- install it (go install golang.org/x/tools/cmd/goimports@latest) and retry"
+		}
+	}
+	return ""
 }
 
 // dedupeTargets drops repeated ids (e.g. `--ids X --ids X`): removing the

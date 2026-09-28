@@ -743,3 +743,44 @@ func TestApplySnapshotNotice(t *testing.T) {
 		t.Errorf("notice = %q, want the snapshot %q", notice.String(), out.Snapshot)
 	}
 }
+
+// TestApplyGoFallbackHint: without goimports, an import the fallback had
+// to keep ("go-util" is not an identifier) breaks the build; the rollback
+// message says to install goimports (I-3).
+func TestApplyGoFallbackHint(t *testing.T) {
+	forceGoTidyFallback = true
+	defer func() { forceGoTidyFallback = false }()
+	src := `package calc
+
+import (
+	"testing"
+
+	"example.com/fixture/go-util"
+)
+
+func TestA(t *testing.T) {}
+
+func TestUtil(t *testing.T) {
+	if util.X() != 1 {
+		t.Fatal("bad")
+	}
+}
+`
+	root := goProject(t, map[string]string{
+		"go-util/u.go": "package util\n\nfunc X() int { return 1 }\n",
+		"calc.go":      calcGo, "calc_test.go": src,
+	})
+	fixtureFile(t, root, ".cull.toml", "test_command = \"go test ./...\"\n", 0o644)
+	writeReport(t, root, []string{"calc_test.go"}, "TestUtil")
+
+	_, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "go test ./..."})
+	if code := exitCode(err); code != 1 {
+		t.Fatalf("exit %d, want 1: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "goimports") {
+		t.Errorf("err = %v; want a hint to install goimports", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != src {
+		t.Errorf("not restored:\n%s", got)
+	}
+}

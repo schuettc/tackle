@@ -447,3 +447,17 @@ func TestNoPython3Skips(t *testing.T) {
 		}
 	}
 }
+
+// TestPyTidySkipsImportSharingALine: `import os; import sys` shares one
+// line; deleting os's line would delete sys too, so neither is touched (I-3).
+func TestPyTidySkipsImportSharingALine(t *testing.T) {
+	requirePython3(t)
+	src := "import os; import sys\n\n\ndef test_x():\n    assert sys.argv\n"
+	out, removed, err := Tidy(t.TempDir(), "tests/test_x.py", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}

@@ -350,12 +350,27 @@ function tidySource(src, relpath) {
   const actions = new Map(); // startLine (0-indexed) -> {endLine, kind, text}
   const removed = [];
 
+  // Lines holding more than one top-level statement (`import {a} from
+  // "a"; import {b} from "b";`): the line-based edit below would take the
+  // neighbour with it, so an import on such a line is left alone.
+  const stmtCount = new Map();
+  for (const st of sf.statements) {
+    const s = sf.getLineAndCharacterOfPosition(st.getStart(sf, false)).line;
+    const e = sf.getLineAndCharacterOfPosition(st.getEnd()).line;
+    for (let l = s; l <= e; l++) stmtCount.set(l, (stmtCount.get(l) || 0) + 1);
+  }
+
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st)) continue;
     if (!st.importClause) continue; // side-effect import: always kept
 
     const startLine = sf.getLineAndCharacterOfPosition(st.getStart(sf, false)).line;
     const endLine = sf.getLineAndCharacterOfPosition(st.getEnd()).line;
+    let sharesLine = false;
+    for (let l = startLine; l <= endLine; l++) {
+      if (stmtCount.get(l) > 1) sharesLine = true;
+    }
+    if (sharesLine) continue;
     let hasComment = false;
     for (let l = startLine; l <= endLine; l++) {
       if (commentLines.has(l)) {

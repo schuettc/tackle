@@ -137,3 +137,36 @@ func TestTidyGoImportsEnvHasNoKey(t *testing.T) {
 		t.Fatalf("goimports env lost PATH:\n%s", env)
 	}
 }
+
+// TestTidyGoFallbackKeepsNonIdentifierPaths: the go/ast fallback cannot
+// know the package name behind "yaml.v3" or "go-colorable", so it keeps
+// those imports (I-3). A plain-identifier import that is unused still goes.
+func TestTidyGoFallbackKeepsNonIdentifierPaths(t *testing.T) {
+	forceGoTidyFallback = true
+	defer func() { forceGoTidyFallback = false }()
+	src := `package a
+
+import (
+	"os"
+
+	"github.com/mattn/go-colorable"
+	"gopkg.in/yaml.v3"
+)
+
+func run() {
+	_, _ = yaml.Marshal(colorable.NewColorableStdout())
+}
+`
+	out, removed, err := TidyGo([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0] != "os" {
+		t.Errorf("removed = %v, want [os]", removed)
+	}
+	for _, imp := range []string{`"gopkg.in/yaml.v3"`, `"github.com/mattn/go-colorable"`} {
+		if !strings.Contains(string(out), imp) {
+			t.Errorf("output dropped used import %s:\n%s", imp, out)
+		}
+	}
+}
