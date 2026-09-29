@@ -80,7 +80,7 @@ func Init(ctx context.Context, o InitOptions, gh observe.Runner) (InitResult, er
 			out, gerr := gh.Gh(ctx, "api", "user", "--jq", ".login")
 			user = strings.TrimSpace(string(out))
 			if gerr != nil || user == "" {
-				return InitResult{}, fmt.Errorf("could not read your GitHub login from gh (%v); pass --user", gerr)
+				return InitResult{}, fmt.Errorf("could not read your GitHub login from gh (%w); pass --user", gerr)
 			}
 		}
 		remote := o.Remote
@@ -244,7 +244,7 @@ func (a *App) Events() ([]journal.Event, error) {
 				out = append(out, ev)
 			}
 		}
-		fh.Close()
+		_ = fh.Close()
 	}
 	return out, nil
 }

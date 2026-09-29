@@ -26,7 +26,7 @@ func TestCacheRoundTrip(t *testing.T) {
 	if err != nil || back.Owners["acme"].Repos[0].Archived != true || back.Version != CacheVersion {
 		t.Fatalf("%+v %v", back, err)
 	}
-	os.WriteFile(p, []byte(`{"version":99}`), 0o600)
+	_ = os.WriteFile(p, []byte(`{"version":99}`), 0o600)
 	if g, err := LoadGitHub(p); err != nil || len(g.Owners) != 0 {
 		t.Fatalf("newer cache not discarded: %+v %v", g, err)
 	}

@@ -447,7 +447,7 @@ func (s *Store) List(ctx context.Context) ([]Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var jobs []Job
 	for rows.Next() {
@@ -480,7 +480,7 @@ func (s *Store) Steps(ctx context.Context, jobID int64) ([]JobStep, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var steps []JobStep
 	for rows.Next() {
@@ -790,7 +790,7 @@ func (s *Store) NeedsYouFor(ctx context.Context, jobID int64) ([]NeedsYou, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanNeedsYouRows(rows)
 }
 
@@ -802,7 +802,7 @@ func (s *Store) OpenNeedsYouAll(ctx context.Context) ([]NeedsYou, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	return scanNeedsYouRows(rows)
 }
 

@@ -11,22 +11,6 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/apply"
 )
 
-// stalePlan builds a plan with agent-lane steps only.
-func stalePlan() apply.Plan {
-	return apply.Plan{
-		BuiltAt: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC),
-		Head:    "deadbeef",
-		Steps: []apply.Step{
-			{
-				Key:     "repo:schuettc/hail",
-				Action:  "repo-archive",
-				Lane:    apply.LaneAgent,
-				Command: "gh repo archive schuettc/hail",
-			},
-		},
-	}
-}
-
 // TestPlanEndpointRefusesStale verifies that POST /api/apply/plan returns 409
 // when the index observation is older than one sync interval. The error message
 // must name a sync and must not contain any command for Court to run.

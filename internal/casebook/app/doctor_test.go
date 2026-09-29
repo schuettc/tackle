@@ -17,7 +17,7 @@ func TestDoctor(t *testing.T) {
 	}
 	g, _ := observe.LoadGitHub(config.CachePath())
 	g.Owners["acme"] = &observe.Owner{Login: "Acme", Reachable: false, Stale: true, Reason: "SAML SSO: gh's token is not authorized for this org"}
-	observe.SaveGitHub(config.CachePath(), g)
+	_ = observe.SaveGitHub(config.CachePath(), g)
 	h := hooks.Options{Dir: filepath.Join(t.TempDir(), "hooks"), StatePath: filepath.Join(t.TempDir(), "hooks.json"), Binary: "/nonexistent/casebook"}
 	checks := r.app.Doctor(ctx, h, "/nonexistent/casebook")
 	byName := map[string]Check{}

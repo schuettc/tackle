@@ -146,7 +146,7 @@ func TestCtrlSSavesLayout(t *testing.T) {
 func TestCtrlXForgetsSaved(t *testing.T) {
 	m, f := newSavedModel(t, savedFixture())
 	m = press(m, "ctrl+x")
-	m = press(m, "ctrl+x") // confirm on x/a (not running)
+	press(m, "ctrl+x") // confirm on x/a (not running)
 	if !slices.Equal(f.forgot, []string{"x/a"}) || len(f.killed) != 0 {
 		t.Fatalf("forgot=%v killed=%v; want forget only", f.forgot, f.killed)
 	}

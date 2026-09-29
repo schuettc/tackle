@@ -17,15 +17,15 @@ func ShellSplit(s string) ([]string, error) {
 	inWord := false
 	for i := 0; i < len(s); {
 		c := s[i]
-		switch {
-		case c == ' ' || c == '\t':
+		switch c {
+		case ' ', '\t':
 			if inWord {
 				words = append(words, string(cur))
 				cur = cur[:0]
 				inWord = false
 			}
 			i++
-		case c == '\'':
+		case '\'':
 			inWord = true
 			i++
 			for i < len(s) && s[i] != '\'' {
@@ -36,7 +36,7 @@ func ShellSplit(s string) ([]string, error) {
 				return nil, fmt.Errorf("unterminated single quote in %q", s)
 			}
 			i++ // closing quote
-		case c == '"':
+		case '"':
 			inWord = true
 			i++
 			for i < len(s) && s[i] != '"' {
@@ -74,37 +74,37 @@ func gitCommand(cmd string) (dir string, args []string, err error) {
 
 // parseLocalDelete parses the compare-and-delete local command
 // "git -C <dir> update-ref -d refs/heads/<branch> <tip>".
-func parseLocalDelete(cmd string) (dir, branch, tip string, err error) {
+func parseLocalDelete(cmd string) (dir, branch string, err error) {
 	d, args, err := gitCommand(cmd)
 	if err != nil {
-		return "", "", "", err
+		return "", "", err
 	}
 	if len(args) != 4 || args[0] != "update-ref" || args[1] != "-d" {
-		return "", "", "", fmt.Errorf("not a local-delete command: %q", cmd)
+		return "", "", fmt.Errorf("not a local-delete command: %q", cmd)
 	}
 	ref := args[2]
 	if !strings.HasPrefix(ref, "refs/heads/") {
-		return "", "", "", fmt.Errorf("not a branch ref: %q", ref)
+		return "", "", fmt.Errorf("not a branch ref: %q", ref)
 	}
-	return d, strings.TrimPrefix(ref, "refs/heads/"), args[3], nil
+	return d, strings.TrimPrefix(ref, "refs/heads/"), nil
 }
 
 // parseRemoteDelete parses the compare-and-delete remote command
 // "git -C <dir> push --force-with-lease=refs/heads/<branch>:<tip> <remote> :refs/heads/<branch>".
-func parseRemoteDelete(cmd string) (dir, remote, branch, tip string, err error) {
+func parseRemoteDelete(cmd string) (dir, remote, branch string, err error) {
 	d, args, err := gitCommand(cmd)
 	if err != nil {
-		return "", "", "", "", err
+		return "", "", "", err
 	}
 	if len(args) != 4 || args[0] != "push" || !strings.HasPrefix(args[1], "--force-with-lease=refs/heads/") {
-		return "", "", "", "", fmt.Errorf("not a remote-delete command: %q", cmd)
+		return "", "", "", fmt.Errorf("not a remote-delete command: %q", cmd)
 	}
 	lease := strings.TrimPrefix(args[1], "--force-with-lease=refs/heads/")
-	b, tp, ok := strings.Cut(lease, ":")
+	b, _, ok := strings.Cut(lease, ":")
 	if !ok {
-		return "", "", "", "", fmt.Errorf("malformed force-with-lease: %q", args[1])
+		return "", "", "", fmt.Errorf("malformed force-with-lease: %q", args[1])
 	}
-	return d, args[2], b, tp, nil
+	return d, args[2], b, nil
 }
 
 // parseWorktreeRemove parses "git -C <dir> worktree remove <path>".

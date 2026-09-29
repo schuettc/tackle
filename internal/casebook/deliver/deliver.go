@@ -175,7 +175,7 @@ func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Session
 	for rows.Next() {
 		var s Session
@@ -210,7 +210,7 @@ func (q *Queue) Threads(ctx context.Context, session string) ([]Thread, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Thread
 	for rows.Next() {
 		var t Thread
@@ -257,7 +257,7 @@ func (q *Queue) messages(ctx context.Context, where string, args ...any) ([]Mess
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []Message
 	for rows.Next() {
 		m, err := scanMessage(rows)
@@ -730,7 +730,7 @@ func (q *Queue) Interrupt(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {

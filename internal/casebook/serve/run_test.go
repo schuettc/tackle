@@ -38,13 +38,17 @@ func TestRunAdvertStopAndInterrupt(t *testing.T) {
 	}
 	// Header auth works for the channel; no token is refused.
 	req, _ := http.NewRequest("GET", adv.Base+"/api/summary", nil)
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusUnauthorized {
+	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no token: %d", resp.StatusCode)
 	}
+	_ = resp.Body.Close()
 	req.Header.Set(localweb.TokenHeader, adv.Token)
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusOK {
+	resp, _ = http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("token: %d", resp.StatusCode)
 	}
+	_ = resp.Body.Close()
 	if err := Run(context.Background(), r.App, Options{}); err == nil {
 		t.Fatal("second serve started")
 	}
@@ -61,7 +65,7 @@ func TestRunAdvertStopAndInterrupt(t *testing.T) {
 
 func TestStaleAdvertIsNotRunning(t *testing.T) {
 	apptest.New(t)
-	writeAdvert(Advert{PID: 999999, Base: "http://127.0.0.1:1"})
+	_ = writeAdvert(Advert{PID: 999999, Base: "http://127.0.0.1:1"})
 	if _, err := Running(); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("got %v", err)
 	}
@@ -108,7 +112,7 @@ func call(t *testing.T, adv Advert, method, path string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
@@ -171,7 +175,7 @@ func callBody(t *testing.T, adv Advert, path, body string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 

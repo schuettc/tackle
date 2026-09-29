@@ -58,7 +58,6 @@ func EvaluateActive(ctx context.Context, active []Rule, res engine.Result, now t
 			// Keep the pending map current so later rules in this same pass
 			// see newly created proposals and do not double-propose the same item.
 			for _, p := range ps {
-				p := p
 				pending[p.Key] = p
 			}
 		}

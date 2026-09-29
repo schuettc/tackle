@@ -17,11 +17,6 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/item"
 )
 
-func jsonString(v any) (string, error) {
-	b, err := json.Marshal(v)
-	return string(b), err
-}
-
 // source names a session as a proposer or author: "<harness>:<id>".
 func source(sess deliver.Session) string {
 	h := sess.Harness
@@ -54,7 +49,7 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.Touch(r.Context(), deliver.Session{ID: in.ID, Harness: in.Harness, Label: in.Label, CWD: in.CWD, PID: in.PID})
 	if err == nil {
-		s.Bus.Publish(r.Context(), "sessions", map[string]string{"id": in.ID})
+		_, _ = s.Bus.Publish(r.Context(), "sessions", map[string]string{"id": in.ID})
 	}
 	reply(w, nil, err)
 }
@@ -138,7 +133,7 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 			// deliver.Queue.Next). Handing d to the HTTP response is the
 			// moment the agent receives them; the delivery stays in-flight
 			// until the agent settles or Court intervenes.
-			s.Bus.Publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
+			_, _ = s.Bus.Publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
 			reply(w, WaitView{Delivery: d, Text: text}, nil)
 			return
 		}
@@ -178,7 +173,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	s.Bus.Publish(ctx, "messages", map[string]any{"ids": touched, "state": in.State, "session": in.Session, "reply": in.Text != ""})
+	_, _ = s.Bus.Publish(ctx, "messages", map[string]any{"ids": touched, "state": in.State, "session": in.Session, "reply": in.Text != ""})
 	s.wake(in.Session)
 	settled := touched
 	if settled == nil {
@@ -218,7 +213,7 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		for _, p := range ps {
 			ids = append(ids, p.ID)
 		}
-		s.Bus.Publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
+		_, _ = s.Bus.Publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
 	}
 	reply(w, ProposeResult{Proposed: len(ps), Proposals: nonNil(ps), Errors: nonNil(msgs)}, nil)
 }
@@ -244,7 +239,7 @@ func (s *Server) agentEvidence(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	s.Bus.Publish(ctx, "evidence", e)
+	_, _ = s.Bus.Publish(ctx, "evidence", e)
 	reply(w, e, nil)
 }
 
@@ -266,7 +261,7 @@ func (s *Server) agentProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Props.SetProgress(ctx, in.Session, in.Text, in.N, in.Total)
 	if err == nil {
-		s.Bus.Publish(ctx, "progress", p)
+		_, _ = s.Bus.Publish(ctx, "progress", p)
 	}
 	// SetProgress now surfaces progress_log insert errors; reply returns them
 	// to the agent's progress tool so the caller sees the failure.
@@ -377,7 +372,7 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	if result.Delivery != nil {
 		ev["delivery"] = *result.Delivery
 	}
-	s.Bus.Publish(ctx, "settled", ev)
+	_, _ = s.Bus.Publish(ctx, "settled", ev)
 	s.wake(in.Session)
 	// Prune the waiter: the turn is over. The next agentWait creates a fresh
 	// channel, so the map stays bounded to sessions that are actively waiting.
@@ -527,14 +522,14 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepRunning})
+		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepRunning})
 
 	case "reported":
 		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepReported, ""); err != nil {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepReported})
+		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepReported})
 		// Verify the outcome with a fresh gh read.
 		obs := apply.ObserveGh(ctx, step, s.App.Gh)
 		verState := apply.Verify(step, obs)
@@ -544,7 +539,7 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 				detail = apply.DetailDrift
 			}
 			if err := s.Apply.SetStepState(ctx, step.ID, verState, detail); err == nil {
-				s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
+				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
 			}
 		}
 		// Check whether the job has reached a terminal state after this report.
@@ -557,8 +552,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepPaused})
-		s.Bus.Publish(ctx, "needs_you", ny)
+		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepPaused})
+		_, _ = s.Bus.Publish(ctx, "needs_you", ny)
 
 	case "failed":
 		// Fix 2: atomic step state + card.
@@ -567,8 +562,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
-		s.Bus.Publish(ctx, "needs_you", ny)
+		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
+		_, _ = s.Bus.Publish(ctx, "needs_you", ny)
 		// A failed step with an open card does not immediately end the job, but
 		// trigger Settle so it can detect completion if all other steps are done.
 		s.settleJob(ctx, job.ID)
@@ -619,7 +614,7 @@ func (s *Server) agentJobAsk(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	s.Bus.Publish(ctx, "needs_you", ny)
+	_, _ = s.Bus.Publish(ctx, "needs_you", ny)
 	reply(w, JobAskResult{NeedsYou: ny}, nil)
 }
 

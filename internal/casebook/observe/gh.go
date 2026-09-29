@@ -3,6 +3,7 @@ package observe
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,7 +42,8 @@ func (ExecRunner) Gh(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		code := -1
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			code = ee.ExitCode()
 		}
 		if errb.Len() == 0 {

@@ -64,7 +64,7 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 	}
 	chk, err := Check(ctx, step, env)
 	if err != nil {
-		return StepResult{State: StepFailed, Detail: err.Error()}, nil
+		return StepResult{State: StepFailed, Detail: err.Error()}, nil //nolint:nilerr // step failure → StepResult.Detail, not a program error
 	}
 	if !chk.OK && !chk.Done {
 		return StepResult{State: StepSkipped, Detail: chk.Reason}, nil
@@ -82,7 +82,7 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 		if rec, has := RestoreFor(step, chk); has {
 			committed, err := r.Repo.AppendRestore(ctx, r.now().UTC().Format("2006-01-02"), rec)
 			if err != nil {
-				return StepResult{State: StepFailed, Detail: "restore record commit failed: " + err.Error()}, nil
+				return StepResult{State: StepFailed, Detail: "restore record commit failed: " + err.Error()}, nil //nolint:nilerr // step failure → StepResult.Detail, not a program error
 			}
 			if !committed {
 				return StepResult{State: StepFailed, Detail: "restore record was not committed"}, nil
@@ -91,10 +91,10 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 		}
 		dir, args, err := gitCommand(step.Command)
 		if err != nil {
-			return StepResult{State: StepFailed, Detail: err.Error()}, nil
+			return StepResult{State: StepFailed, Detail: err.Error()}, nil //nolint:nilerr // step failure → StepResult.Detail, not a program error
 		}
 		if _, err := r.RunGit(ctx, dir, args...); err != nil {
-			return StepResult{State: StepFailed, Detail: "command failed: " + err.Error()}, nil
+			return StepResult{State: StepFailed, Detail: "command failed: " + err.Error()}, nil //nolint:nilerr // step failure → StepResult.Detail, not a program error
 		}
 	}
 	return StepResult{State: StepReported, Restore: restoreCmd}, nil
@@ -105,14 +105,14 @@ func (r Runner) RunStep(ctx context.Context, step JobStep, env Env) (StepResult,
 func (r Runner) Observe(ctx context.Context, step JobStep) item.Observed {
 	switch step.Action {
 	case "branch-delete-local":
-		dir, branch, _, err := parseLocalDelete(step.Command)
+		dir, branch, err := parseLocalDelete(step.Command)
 		if err != nil {
 			return item.Observed{}
 		}
 		_, err = r.RunGit(ctx, dir, "rev-parse", "--verify", "refs/heads/"+branch)
 		return item.Observed{Known: true, Exists: err == nil}
 	case "branch-delete-remote":
-		dir, remote, branch, _, err := parseRemoteDelete(step.Command)
+		dir, remote, branch, err := parseRemoteDelete(step.Command)
 		if err != nil {
 			return item.Observed{}
 		}

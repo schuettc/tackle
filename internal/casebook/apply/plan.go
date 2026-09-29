@@ -128,7 +128,7 @@ func Build(items []engine.Item, snap observe.Snapshot, now, builtAt time.Time, s
 		if it.Status != item.StatusToApply || it.Decision == nil {
 			continue
 		}
-		plan.Steps = append(plan.Steps, stepsForItem(it, snap.Machine, now, sl)...)
+		plan.Steps = append(plan.Steps, stepsForItem(it, snap.Machine, sl)...)
 	}
 
 	return plan, nil
@@ -208,10 +208,10 @@ func (sl snapLookup) identityRemote(clonePaths []string, repo string) (remoteNam
 }
 
 // stepsForItem dispatches to the kind-specific builder.
-func stepsForItem(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
+func stepsForItem(it engine.Item, machine string, sl snapLookup) []Step {
 	switch it.Kind {
 	case item.KindBranch:
-		return branchSteps(it, machine, now, sl)
+		return branchSteps(it, machine, sl)
 	case item.KindWorktree:
 		return worktreeSteps(it, machine, sl)
 	case item.KindRepo:
@@ -253,7 +253,7 @@ func machineClones(it engine.Item, machine string) []string {
 // remote's tip live, requires it to equal ExpectedTip, and requires that commit
 // to be landed. Omitted when no clone on this machine has a matching remote, or
 // the branch has no live upstream.
-func branchSteps(it engine.Item, machine string, now time.Time, sl snapLookup) []Step {
+func branchSteps(it engine.Item, machine string, sl snapLookup) []Step {
 	if it.Decision.Disposition != item.Delete {
 		return nil
 	}
