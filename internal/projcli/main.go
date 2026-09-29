@@ -71,6 +71,8 @@ func Dispatch(args []string, out, errw io.Writer) int {
 	switch args[0] {
 	case "__autojoin-project":
 		return cmdAutojoinProject()
+	case "__snapshot":
+		return cmdSnapshot(args[1:])
 	// list/current/new/sidebar now flow through Dispatch (which parses their
 	// flags, calls Run, and maps UsageError/ExitError to the right exit code)
 	// instead of the bare-project fallback below — a name match here MUST
@@ -140,6 +142,20 @@ func cmdAutojoinProject() int {
 		return 1
 	}
 	fmt.Println(name)
+	return 0
+}
+
+// cmdSnapshot is the hidden `proj __snapshot --socket <name>` the tmux hooks
+// run (see proj.InstallHooks). It always exits 0 and prints nothing: it runs
+// from run-shell -b, where any output or failure would only surface as noise
+// in the operator's pane.
+func cmdSnapshot(args []string) int {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--socket" {
+			_ = proj.Snapshot(args[i+1])
+			break
+		}
+	}
 	return 0
 }
 
