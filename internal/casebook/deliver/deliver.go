@@ -40,11 +40,11 @@ const (
 
 // Delivery states.
 const (
-	InFlight        = "inflight"
-	Done            = "done"
-	Released        = "released"
-	Moved           = "moved"
-	Stopped         = "interrupted"
+	InFlight          = "inflight"
+	Done              = "done"
+	Released          = "released"
+	Moved             = "moved"
+	Stopped           = "interrupted"
 	DefaultStuckAfter = 10 * time.Minute
 )
 
@@ -139,8 +139,8 @@ type Delivery struct {
 
 // Queue is the delivery store over the working-state database.
 type Queue struct {
-	DB         *db.DB
-	Now        func() time.Time
+	DB  *db.DB
+	Now func() time.Time
 	// StuckAfter overrides the default 10-minute stuck threshold. Zero means use
 	// DefaultStuckAfter. Set to a shorter duration in tests.
 	StuckAfter time.Duration

@@ -388,7 +388,7 @@ func TestStuckReleaseMoveInterrupt(t *testing.T) {
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "hello", false)
 	d, _ := q.Next(ctx, "s1")
-	c.add(StuckAfter + time.Second)
+	c.add(DefaultStuckAfter + time.Second)
 	if got, _ := q.Delivery(ctx, d.ID); !got.Stuck {
 		t.Fatal("not stuck")
 	}
@@ -446,7 +446,7 @@ func TestSettledRefreshesTouchedAtWhenShown(t *testing.T) {
 	sentAt := d.TouchedAt
 
 	// Advance clock past StuckAfter; the delivery would be Stuck.
-	c.add(StuckAfter + 5*time.Minute)
+	c.add(DefaultStuckAfter + 5*time.Minute)
 	// Confirm it looks stuck at this point.
 	if got, _ := q.Delivery(ctx, d.ID); !got.Stuck {
 		t.Fatal("delivery should be Stuck before being shown")

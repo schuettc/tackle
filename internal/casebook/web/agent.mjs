@@ -28,7 +28,8 @@ export function createAgent(base, token) {
     /** POST /api/agent/presence */
     async presence(session, label, cwd) {
       return call('POST', '/api/agent/presence', {
-        session,
+        id: session,
+        harness: 'pi',
         label,
         cwd,
         pid: process.pid,
@@ -65,6 +66,95 @@ export function createAgent(base, token) {
         ...(note ? { note } : {}),
         ...(until ? { until } : {}),
       });
+    },
+
+    /**
+     * POST /api/threads — create a new thread for a session.
+     * @param {string} session — the session id
+     * @param {string} name — the thread name
+     */
+    async newThread(session, name) {
+      return call('POST', '/api/threads', { session, name });
+    },
+
+    /**
+     * POST /api/messages — post a message to a thread (as Court).
+     * @param {number} thread — thread id
+     * @param {string} body — message body
+     * @param {object} [attached] — optional attached data
+     */
+    async postMessage(thread, body, attached) {
+      return call('POST', '/api/messages', {
+        thread,
+        body,
+        attached: attached ?? {},
+        batch: false,
+      });
+    },
+
+    /**
+     * GET /api/agent/wait — long-poll to pick up a delivery (with short timeout).
+     * @param {string} session
+     * @returns {object|null} the delivery view or null (204)
+     */
+    async wait(session) {
+      const resp = await fetch(
+        `${base}/api/agent/wait?session=${encodeURIComponent(session)}&timeout=3`,
+        {
+          headers: { 'X-Local-Token': token },
+        },
+      );
+      if (resp.status === 204) return null;
+      const text = await resp.text();
+      return text ? JSON.parse(text) : null;
+    },
+
+    /**
+     * POST /api/agent/reply — settle messages.
+     * @param {string} session
+     * @param {number[]} ids — message ids
+     * @param {string} state — 'answered' | 'declined' | 'failed'
+     * @param {string} [text]
+     */
+    async reply(session, ids, state, text) {
+      return call('POST', '/api/agent/reply', {
+        session,
+        ids,
+        state,
+        text: text ?? '',
+      });
+    },
+
+    /**
+     * GET /api/session/delivery — get the current in-flight delivery for a session.
+     * @param {string} session
+     */
+    async getDelivery(session) {
+      const resp = await fetch(
+        `${base}/api/session/delivery?session=${encodeURIComponent(session)}`,
+        {
+          headers: { 'X-Local-Token': token },
+        },
+      );
+      const text = await resp.text();
+      return text ? JSON.parse(text) : null;
+    },
+
+    /**
+     * POST /api/deliveries/release — release a stuck delivery.
+     * @param {number} id — delivery id
+     */
+    async releaseDelivery(id) {
+      return call('POST', '/api/deliveries/release', { id });
+    },
+
+    /**
+     * POST /api/deliveries/move — move a delivery to another session.
+     * @param {number} id — delivery id
+     * @param {string} session — target session id
+     */
+    async moveDelivery(id, session) {
+      return call('POST', '/api/deliveries/move', { id, session });
     },
   };
 }

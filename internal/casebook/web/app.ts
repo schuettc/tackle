@@ -50,6 +50,10 @@ export interface Section {
 
 export interface DockHandle {
   el: HTMLElement;
+  setAttached(a: import('./wire.d.ts').Attached): void;
+  focusComposer(): void;
+  currentThread(): number;
+  currentSession(): string;
 }
 
 // ---- section + dock registry ------------------------------------------------

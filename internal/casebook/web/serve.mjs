@@ -134,6 +134,10 @@ export async function startServe() {
       HOME: home,
       // Disables browser opening via the test seam in cli/workbench.go.
       CASEBOOK_NO_BROWSER: '1',
+      // Short stuck threshold so probes can test stuck delivery UI without
+      // waiting 10 minutes. Tests that need this wait 3+ seconds after
+      // picking up a delivery.
+      CASEBOOK_STUCK_AFTER: '2s',
     },
     stdio: 'pipe',
   });

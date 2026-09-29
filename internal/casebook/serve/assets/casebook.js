@@ -54,6 +54,9 @@ var dockMakers = [];
 function registerSection(make) {
   sectionMakers.push(make);
 }
+function registerDock(make) {
+  dockMakers.push(make);
+}
 var liveListeners = /* @__PURE__ */ new Map();
 function onLiveEvent(type, cb) {
   let list2 = liveListeners.get(type);
@@ -885,7 +888,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
     const titleEl = h5("div", { class: "cb-card-title" });
     titleEl.textContent = it.title ?? displayKey;
-    const card2 = h5(
+    const card3 = h5(
       "div",
       {
         // Use .kit-card for background/border/radius from the kit;
@@ -901,19 +904,19 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     if (age) {
       const ageEl = h5("div", { class: "cb-card-age" });
       ageEl.textContent = age;
-      card2.append(ageEl);
+      card3.append(ageEl);
     }
     if (it.proposal) {
       const propEl = h5("div", { class: "cb-card-prop" });
       propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
-      card2.append(propEl);
+      card3.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {
       e.stopPropagation();
       onOpen?.(it.key, laneId);
       ctx.route.go("item", it.key);
     });
-    card2.addEventListener("click", (e) => {
+    card3.addEventListener("click", (e) => {
       const state = laneState.get(laneId);
       const orderedIds = state?.items.map((i) => i.key) ?? [];
       if (e.shiftKey) {
@@ -927,14 +930,14 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
         sel.toggle(it.key);
       }
     });
-    card2.addEventListener("keydown", (e) => {
+    card3.addEventListener("keydown", (e) => {
       if (e.key === "o" || e.key === "Enter") {
         e.preventDefault();
         onOpen?.(it.key, laneId);
         ctx.route.go("item", it.key);
       }
     });
-    return card2;
+    return card3;
   }
   function repaintLane(laneId) {
     const rowsEl = laneRowsEl.get(laneId);
@@ -956,12 +959,12 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
       if (!rowsEl) continue;
       const state = laneState.get(laneId);
       const cards = rowsEl.querySelectorAll(".kit-card");
-      cards.forEach((card2, i) => {
+      cards.forEach((card3, i) => {
         const it = state.items[i];
         if (!it) return;
         const selected = sel.has(it.key);
-        card2.classList.toggle("on", selected);
-        card2.querySelector(".kit-box")?.classList.toggle("on", selected);
+        card3.classList.toggle("on", selected);
+        card3.querySelector(".kit-box")?.classList.toggle("on", selected);
       });
     }
   }
@@ -1585,6 +1588,566 @@ function makeAttention(ctx) {
   };
 }
 
+// dock.ts
+import { h as h7, card as card2 } from "/_kit/kit.js";
+var STALE_MS = 6e4;
+function ageMs(ts) {
+  return Date.now() - new Date(ts).getTime();
+}
+function fmtAge(ts) {
+  const ms = ageMs(ts);
+  const s = Math.floor(ms / 1e3);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h8 = Math.floor(m / 60);
+  if (h8 < 24) return `${h8}h`;
+  const d = Math.floor(h8 / 24);
+  if (d < 30) return `${d}d`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}M`;
+  return `${Math.floor(mo / 12)}y`;
+}
+function stateColor(state) {
+  switch (state) {
+    case "queued":
+      return "var(--kit-wait)";
+    case "working":
+      return "var(--kit-agent)";
+    case "answered":
+      return "var(--kit-ok)";
+    case "failed":
+      return "var(--kit-danger)";
+    default:
+      return "var(--kit-muted)";
+  }
+}
+function stateLabel(msg) {
+  const base = msg.state;
+  if (base === "answered") {
+    const n = msg.attached?.keys?.length ?? 0;
+    if (n > 0) return `${base} · ${pluralize(n, "item")}`;
+  }
+  return base;
+}
+function sessionLabel(s) {
+  if (s.label) return s.label;
+  const harness = s.harness || "agent";
+  const cwd = s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? s.cwd : "";
+  return cwd ? `${harness} · ${cwd}` : harness;
+}
+function isStale(s) {
+  return ageMs(s.last_seen) > STALE_MS;
+}
+function renderAgentBody(msg) {
+  const wrap = h7("div", { class: "cb-dock-body" });
+  const bodyP = h7("p", { class: "cb-dock-bodytext" });
+  bodyP.textContent = msg.body;
+  wrap.append(bodyP);
+  const { attached } = msg;
+  if (attached) {
+    const links = [];
+    if (attached.keys && attached.keys.length > 0) {
+      const shown = attached.keys.slice(0, 5);
+      for (const k of shown) {
+        const a = h7("a", {
+          class: "cb-dock-link",
+          href: "#",
+          onclick(e) {
+            e.preventDefault();
+            go("item", encodeURIComponent(k));
+          }
+        });
+        a.textContent = keyWithoutKind(k);
+        links.push(a);
+      }
+      if (attached.keys.length > 5) {
+        links.push(
+          h7(
+            "span",
+            { class: "cb-dock-link-more" },
+            `+${attached.keys.length - 5} more`
+          )
+        );
+      }
+    }
+    if (attached.open) {
+      const k = attached.open;
+      const a = h7("a", {
+        class: "cb-dock-link",
+        href: "#",
+        onclick(e) {
+          e.preventDefault();
+          go("item", encodeURIComponent(k));
+        }
+      });
+      a.textContent = keyWithoutKind(k);
+      links.push(a);
+    }
+    if (attached.rule) {
+      const id = attached.rule;
+      const a = h7("a", {
+        class: "cb-dock-link",
+        href: "#",
+        onclick(e) {
+          e.preventDefault();
+          go("rules", encodeURIComponent(id));
+        }
+      });
+      a.textContent = id;
+      links.push(a);
+    }
+    if (attached.job) {
+      const id = attached.job;
+      const a = h7("a", {
+        class: "cb-dock-link",
+        href: "#",
+        onclick(e) {
+          e.preventDefault();
+          go("apply", encodeURIComponent(id));
+        }
+      });
+      a.textContent = `job ${id}`;
+      links.push(a);
+    }
+    if (links.length > 0) {
+      const linkRow = h7("div", { class: "cb-dock-links" }, ...links);
+      wrap.append(linkRow);
+    }
+  }
+  return wrap;
+}
+function renderMsgCard(msg, delivery, sessions, ctx) {
+  const isAgent = msg.author !== "court";
+  const authorLabel = isAgent ? "PI" : "YOU";
+  const age = fmtAge(msg.created_at);
+  const headEl = h7(
+    "div",
+    { class: "cb-dock-ch" },
+    h7(
+      "span",
+      {
+        class: isAgent ? "cb-dock-ch-name cb-dock-ch-agent" : "cb-dock-ch-name"
+      },
+      authorLabel
+    ),
+    h7("span", { class: "cb-dock-ch-age" }, age)
+  );
+  let bodyContent;
+  if (isAgent) {
+    bodyContent = renderAgentBody(msg);
+  } else {
+    const bodyEl = h7("div", { class: "cb-dock-body" });
+    const bodyP = h7("p", { class: "cb-dock-bodytext" });
+    bodyP.textContent = msg.body;
+    bodyEl.append(bodyP);
+    bodyContent = bodyEl;
+  }
+  let stateEl = null;
+  if (!isAgent && msg.state && msg.state !== "queued" || !isAgent && msg.state === "queued") {
+    const validStates = [
+      "queued",
+      "delivered",
+      "received",
+      "working",
+      "answered",
+      "declined",
+      "failed",
+      "unanswered",
+      "interrupted"
+    ];
+    if (validStates.includes(msg.state)) {
+      stateEl = h7("div", {
+        class: "cb-dock-state",
+        "data-state": msg.state,
+        style: `color:${stateColor(msg.state)}`
+      });
+      stateEl.textContent = stateLabel(msg);
+    }
+  }
+  const fullBody = h7(
+    "div",
+    { class: "cb-dock-card-body" },
+    headEl,
+    bodyContent
+  );
+  if (stateEl) fullBody.append(stateEl);
+  const isStuckDelivery = !isAgent && delivery?.stuck === true && msg.delivery_id === delivery.id;
+  if (isStuckDelivery && delivery) {
+    const d = delivery;
+    const releaseBtn = h7("button", {
+      class: "cb-dock-action",
+      "data-action": "release",
+      onclick() {
+        void releaseDelivery(ctx, d.id);
+      }
+    });
+    releaseBtn.textContent = "release";
+    const otherSessions = sessions.filter((s) => s.id !== d.session_id);
+    const moveBtn = h7("button", {
+      class: "cb-dock-action cb-dock-action--danger",
+      "data-action": "move",
+      onclick() {
+        void openMoveSheet(ctx, d, otherSessions);
+      }
+    });
+    moveBtn.textContent = "move to another session";
+    fullBody.append(h7("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
+  }
+  const el = card2({
+    edge: isAgent ? "agent" : "signal",
+    body: fullBody
+  });
+  el.classList.add("cb-dock-card");
+  if (isAgent) el.classList.add("cb-dock-card--agent");
+  else el.classList.add("cb-dock-card--you");
+  return el;
+}
+async function releaseDelivery(ctx, id) {
+  try {
+    await ctx.api.post("/deliveries/release", { id });
+  } catch (err) {
+    console.error("[dock] release delivery:", err);
+  }
+}
+async function moveDelivery(ctx, id, sessionId) {
+  try {
+    await ctx.api.post("/deliveries/move", { id, session: sessionId });
+  } catch (err) {
+    console.error("[dock] move delivery:", err);
+  }
+}
+function openMoveSheet(ctx, delivery, targets) {
+  const items = targets.map((s) => {
+    const el = h7("button", { class: "cb-dock-pick-item" });
+    el.textContent = sessionLabel(s);
+    el.onclick = () => {
+      void moveDelivery(ctx, delivery.id, s.id);
+      sheet3.close();
+    };
+    return el;
+  });
+  if (items.length === 0) {
+    const noOther = h7(
+      "p",
+      { class: "cb-dock-pick-empty" },
+      "no other sessions"
+    );
+    items.push(noOther);
+  }
+  const content = h7("div", { class: "cb-dock-pick-list" }, ...items);
+  const sheet3 = {
+    el: h7("div", { class: "cb-dock-pick-sheet" }, content),
+    close() {
+      this.el.remove();
+    }
+  };
+  document.body.append(sheet3.el);
+  function onKey(e) {
+    if (e.key === "Escape") {
+      sheet3.close();
+      document.removeEventListener("keydown", onKey);
+    }
+  }
+  document.addEventListener("keydown", onKey);
+  return Promise.resolve();
+}
+function buildSessionPicker(sessions, currentId, onSelect) {
+  const items = sessions.map((s) => {
+    const busy = s.busy ? " · busy" : " · idle";
+    const stale = isStale(s) ? " · left" : "";
+    const label = sessionLabel(s) + busy + stale;
+    const el = h7("button", {
+      class: "cb-dock-pick-item" + (s.id === currentId ? " cb-dock-pick-item--on" : "")
+    });
+    el.textContent = label;
+    el.onclick = () => {
+      onSelect(s.id);
+      picker.remove();
+    };
+    return el;
+  });
+  const picker = h7(
+    "div",
+    { class: "cb-dock-picker", role: "listbox" },
+    ...items
+  );
+  function onKey(e) {
+    if (e.key === "Escape") {
+      picker.remove();
+      document.removeEventListener("keydown", onKey);
+    }
+  }
+  document.addEventListener("keydown", onKey);
+  function onClick(e) {
+    if (!picker.contains(e.target)) {
+      picker.remove();
+      document.removeEventListener("click", onClick);
+    }
+  }
+  setTimeout(() => document.addEventListener("click", onClick), 0);
+  return picker;
+}
+function makeDock(ctx) {
+  let sessions = [];
+  let currentSessionId = "";
+  let threads = [];
+  let currentThreadId = 0;
+  let messages = [];
+  let currentDelivery = null;
+  let lastUsedSessionId = "";
+  const sessionDot = h7("span", { class: "cb-dock-dot" });
+  const sessionLabelEl = h7("span", { class: "cb-dock-session-label" });
+  const sessionPickerBtn = h7("button", {
+    class: "cb-dock-agent-btn",
+    "aria-label": "pick agent session",
+    onclick(e) {
+      e.stopPropagation();
+      if (!sessions.length) return;
+      const p = buildSessionPicker(sessions, currentSessionId, (id) => {
+        lastUsedSessionId = id;
+        void switchSession(id);
+      });
+      const btn = e.currentTarget;
+      const rect = btn.getBoundingClientRect();
+      p.style.top = `${rect.bottom + 4}px`;
+      p.style.right = `${window.innerWidth - rect.right}px`;
+      document.body.append(p);
+    }
+  });
+  sessionPickerBtn.textContent = "AGENT ▾";
+  const sessionHeader = h7(
+    "div",
+    { class: "cb-dock-header" },
+    h7("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
+    sessionPickerBtn
+  );
+  const threadChips = h7("div", { class: "cb-dock-threads" });
+  const messageArea = h7("div", {
+    class: "cb-dock-messages",
+    "data-testid": "dock-messages"
+  });
+  const rail = h7("div", { class: "cb-dock-inner" });
+  rail.append(sessionHeader, threadChips, messageArea);
+  function renderHeader() {
+    const sess = sessions.find((s) => s.id === currentSessionId);
+    if (!sess) {
+      sessionDot.style.background = "var(--kit-muted)";
+      sessionLabelEl.textContent = "no session";
+      sessionHeader.removeAttribute("data-left");
+      return;
+    }
+    const stale = isStale(sess);
+    sessionDot.style.background = "var(--kit-agent)";
+    if (stale) {
+      const cwd = sess.cwd ? sess.cwd.split("/").filter(Boolean).pop() ?? sess.cwd : "";
+      const harness = sess.harness || "agent";
+      const leftLabel = cwd ? `${harness} · ${cwd} left` : `${harness} left`;
+      const queuedPart = sess.queued > 0 ? ` · ${pluralize(sess.queued, "queued")}` : "";
+      sessionLabelEl.textContent = "";
+      sessionLabelEl.append(
+        leftLabel + queuedPart,
+        // " · move to…" as a button link.
+        h7(
+          "button",
+          {
+            class: "cb-dock-move-link",
+            "data-testid": "dock-move-link",
+            onclick(e) {
+              e.stopPropagation();
+              const others = sessions.filter((s) => s.id !== sess.id);
+              void openMoveSheet(ctx, currentDelivery, others);
+            }
+          },
+          " · move to…"
+        )
+      );
+      sessionHeader.setAttribute("data-left", "1");
+    } else {
+      sessionLabelEl.textContent = sessionLabel(sess);
+      sessionHeader.removeAttribute("data-left");
+    }
+  }
+  function renderThreadChips() {
+    threadChips.innerHTML = "";
+    for (const t of threads) {
+      const chip = h7("button", {
+        class: "kit-chip" + (t.id === currentThreadId ? " on" : ""),
+        "data-thread": String(t.id),
+        onclick() {
+          void switchThread(t.id);
+        }
+      });
+      chip.textContent = t.name;
+      threadChips.append(chip);
+    }
+    const addChip = h7("button", {
+      class: "kit-chip cb-dock-add",
+      "data-testid": "dock-add-thread",
+      onclick() {
+        void newThread();
+      }
+    });
+    addChip.textContent = "+";
+    threadChips.append(addChip);
+  }
+  function renderMessages() {
+    messageArea.innerHTML = "";
+    if (messages.length === 0) {
+      const empty = h7("p", { class: "cb-dock-empty" }, "no messages");
+      messageArea.append(empty);
+      return;
+    }
+    for (const msg of messages) {
+      const el = renderMsgCard(msg, currentDelivery, sessions, ctx);
+      messageArea.append(el);
+    }
+    messageArea.scrollTop = messageArea.scrollHeight;
+  }
+  async function loadSessions() {
+    try {
+      const sv = await ctx.api.get("/sessions");
+      sessions = sv.sessions ?? [];
+      if (!currentSessionId && sessions.length > 0) {
+        currentSessionId = lastUsedSessionId ? sessions.find((s) => s.id === lastUsedSessionId)?.id ?? sessions[0].id : sessions[0].id;
+        await loadThreads();
+      } else {
+        renderHeader();
+      }
+      renderHeader();
+    } catch (err) {
+      console.error("[dock] loadSessions:", err);
+    }
+  }
+  async function loadThreads() {
+    if (!currentSessionId) return;
+    try {
+      const tv = await ctx.api.get("/threads", {
+        session: currentSessionId
+      });
+      threads = tv.threads ?? [];
+      if (!currentThreadId && threads.length > 0) {
+        currentThreadId = threads[0].id;
+      }
+      renderThreadChips();
+      await loadMessages();
+      await loadDelivery();
+    } catch (err) {
+      console.error("[dock] loadThreads:", err);
+    }
+  }
+  async function loadMessages() {
+    if (!currentThreadId) {
+      messages = [];
+      renderMessages();
+      return;
+    }
+    try {
+      const mv = await ctx.api.get("/messages", {
+        thread: String(currentThreadId)
+      });
+      messages = mv.messages ?? [];
+      renderMessages();
+    } catch (err) {
+      console.error("[dock] loadMessages:", err);
+    }
+  }
+  async function loadDelivery() {
+    if (!currentSessionId) return;
+    try {
+      const dv = await ctx.api.get("/session/delivery", {
+        session: currentSessionId
+      });
+      currentDelivery = dv.delivery ?? null;
+      renderMessages();
+    } catch (err) {
+      console.error("[dock] loadDelivery:", err);
+    }
+  }
+  async function switchSession(id) {
+    currentSessionId = id;
+    currentThreadId = 0;
+    threads = [];
+    messages = [];
+    currentDelivery = null;
+    renderHeader();
+    renderThreadChips();
+    renderMessages();
+    await loadThreads();
+  }
+  async function switchThread(id) {
+    currentThreadId = id;
+    messages = [];
+    currentDelivery = null;
+    renderThreadChips();
+    renderMessages();
+    await loadMessages();
+    await loadDelivery();
+  }
+  async function newThread() {
+    const sessId = lastUsedSessionId || currentSessionId;
+    if (!sessId) return;
+    try {
+      const t = await ctx.api.post("/threads", {
+        session: sessId,
+        name: "thread"
+      });
+      threads = [...threads, t];
+      currentThreadId = t.id;
+      messages = [];
+      currentDelivery = null;
+      renderThreadChips();
+      renderMessages();
+    } catch (err) {
+      console.error("[dock] newThread:", err);
+    }
+  }
+  ctx.on("sessions", () => {
+    void loadSessions();
+  });
+  ctx.on("thread", (data) => {
+    void loadThreads();
+    void data;
+  });
+  ctx.on("message", (data) => {
+    const d = data;
+    const tid = d.thread_id ?? d.thread;
+    if (tid === currentThreadId) {
+      void loadMessages();
+    }
+  });
+  ctx.on("messages", (data) => {
+    const d = data;
+    if (!d.ids) return;
+    const msgIds = new Set(d.ids);
+    if (messages.some((m) => msgIds.has(m.id))) {
+      void loadMessages();
+      void loadDelivery();
+    }
+  });
+  ctx.on("delivery", (data) => {
+    const d = data;
+    if (!d.session || d.session === currentSessionId) {
+      void loadDelivery();
+    }
+  });
+  void loadSessions();
+  return {
+    el: rail,
+    setAttached() {
+    },
+    focusComposer() {
+    },
+    currentThread() {
+      return currentThreadId;
+    },
+    currentSession() {
+      return currentSessionId;
+    }
+  };
+}
+
 // entry.ts
 registerSection(makeAttention);
+registerDock(makeDock);
 boot();
