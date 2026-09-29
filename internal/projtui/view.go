@@ -202,15 +202,16 @@ func (m Model) listPane(width int) string {
 	var b strings.Builder
 
 	// Filter / input line.
-	if m.inputKind != inputNone {
+	switch {
+	case m.inputKind != inputNone:
 		label := "new work: "
 		if m.inputKind == inputAddRoot {
 			label = "add root: "
 		}
 		b.WriteString(hintStyle.Render(label) + m.input.View() + "\n")
-	} else if m.filter != "" {
+	case m.filter != "":
 		b.WriteString(dimStyle.Render("/"+m.filter) + "\n")
-	} else {
+	default:
 		b.WriteString(dimStyle.Render("type to filter") + "\n")
 	}
 	b.WriteString("\n")

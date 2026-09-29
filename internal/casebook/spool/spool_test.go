@@ -76,8 +76,8 @@ func TestDrainCountsBadLinesAndFileModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, _ := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
-	f.WriteString("{not json\n")
-	f.Close()
+	_, _ = f.WriteString("{not json\n")
+	_ = f.Close()
 	fi, _ := os.Stat(dir)
 	if fi.Mode().Perm() != 0o700 {
 		t.Errorf("spool dir mode %v", fi.Mode().Perm())

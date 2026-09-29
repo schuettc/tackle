@@ -62,10 +62,10 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		return rep, err
 	}
 	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lf.Close()
+		_ = lf.Close()
 		return rep, ErrSyncBusy
 	}
-	defer func() { syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); lf.Close() }() //nolint:errcheck
+	defer func() { syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); lf.Close() }() //nolint:errcheck,gosec // best-effort unlock/close on the lock file
 	if !o.NoPush {
 		if err := a.remoteSync(ctx, &rep); err != nil {
 			return rep, err

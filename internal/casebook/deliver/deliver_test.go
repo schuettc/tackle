@@ -28,7 +28,7 @@ func newQueue(t *testing.T) (*Queue, *clock) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	c := &clock{t: time.Date(2026, 9, 27, 9, 40, 0, 0, time.UTC)}
 	q := New(d)
 	q.Now = c.now
@@ -146,8 +146,8 @@ func TestSettledEndsTurnAndMarksUnanswered(t *testing.T) {
 	m1 := post(t, q, th, "one", false)
 	m2 := post(t, q, th, "two", false)
 	d, _ := q.Next(ctx, "s1")
-	q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "")
-	q.Reply(ctx, "s1", []int64{m2.ID}, Working, "")
+	_, _, _ = q.Reply(ctx, "s1", []int64{m1.ID}, Answered, "")
+	_, _, _ = q.Reply(ctx, "s1", []int64{m2.ID}, Working, "")
 	// Pass the delivery id so Settled knows it was shown (updated from old unconditional call).
 	ended, err := q.Settled(ctx, "s1", []int64{d.ID})
 	if err != nil || ended == nil || ended.State != Done {
@@ -177,7 +177,7 @@ func TestSettledLeavesUnshownDeliveryInFlight(t *testing.T) {
 	q, _ := newQueue(t)
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "one", false)
-	q.Next(ctx, "s1") // delivery is now inflight
+	_, _ = q.Next(ctx, "s1") // delivery is now inflight
 
 	// Settle without showing the delivery id → must stay in flight.
 	ended, err := q.Settled(ctx, "s1", nil)
@@ -230,7 +230,7 @@ func TestReplyImpliesShownThenSettledEnds(t *testing.T) {
 	q, _ := newQueue(t)
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "one", false)
-	q.Next(ctx, "s1")
+	_, _ = q.Next(ctx, "s1")
 
 	// Reply to the message → delivery is now implicitly shown.
 	if _, _, err := q.Reply(ctx, "s1", []int64{m.ID}, Working, ""); err != nil {
@@ -250,7 +250,7 @@ func TestReplyImpliesShownThenSettledEnds(t *testing.T) {
 // belonging to another session does not affect that session's delivery.
 func TestSettledIgnoresOtherSessionsShownIDs(t *testing.T) {
 	q, _ := newQueue(t)
-	q.Touch(ctx, Session{ID: "s2"})
+	_ = q.Touch(ctx, Session{ID: "s2"})
 	th1 := thread(t, q, "s1")
 	th2 := thread(t, q, "s2")
 	_ = post(t, q, th1, "for s1", false)
@@ -280,13 +280,13 @@ func TestSettledIgnoresOtherSessionsShownIDs(t *testing.T) {
 
 func TestReplyRejectsOtherSessionsAndBadStates(t *testing.T) {
 	q, _ := newQueue(t)
-	q.Touch(ctx, Session{ID: "s2"})
+	_ = q.Touch(ctx, Session{ID: "s2"})
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "hi", false)
 	if _, _, err := q.Reply(ctx, "s1", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("reply to undelivered: %v", err)
 	}
-	q.Next(ctx, "s1")
+	_, _ = q.Next(ctx, "s1")
 	if _, _, err := q.Reply(ctx, "s2", []int64{m.ID}, Answered, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("other session: %v", err)
 	}
@@ -384,7 +384,7 @@ func TestLateReplyToUnanswered(t *testing.T) {
 
 func TestStuckReleaseMoveInterrupt(t *testing.T) {
 	q, c := newQueue(t)
-	q.Touch(ctx, Session{ID: "s2"})
+	_ = q.Touch(ctx, Session{ID: "s2"})
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "hello", false)
 	d, _ := q.Next(ctx, "s1")
@@ -481,24 +481,24 @@ func TestRenderGolden(t *testing.T) {
 	q, c := newQueue(t)
 	th := thread(t, q, "s1")
 	first := post(t, q, th, "propose decisions for the 40 chime PRs", false)
-	q.Next(ctx, "s1")
+	_, _ = q.Next(ctx, "s1")
 	c.add(time.Minute)
 	m1, _ := q.Post(ctx, th.ID, "Merge these if CI is green.", Attached{Keys: []string{
 		"pr:recreational-spreadsheeting/bettor-help-platform#670", "pr:recreational-spreadsheeting/bettor-help-platform#671",
 		"pr:recreational-spreadsheeting/bettor-help-platform#672", "pr:recreational-spreadsheeting/bettor-help-platform#673"}}, false)
 	c.add(3 * time.Minute)
-	q.Post(ctx, th.ID, "Make this rule skip anything touching packages/infra.", Attached{Rule: "dependabot-minor"}, true)
-	q.Post(ctx, th.ID, "Actually skip #673, it's a major bump.", Attached{}, true)
+	_, _ = q.Post(ctx, th.ID, "Make this rule skip anything touching packages/infra.", Attached{Rule: "dependabot-minor"}, true)
+	_, _ = q.Post(ctx, th.ID, "Actually skip #673, it's a major bump.", Attached{}, true)
 	bid, _, _ := q.DraftBatch(ctx, th.ID)
 	c.add(2 * time.Minute)
-	q.SendBatch(ctx, bid)
-	q.Reply(ctx, "s1", []int64{first.ID}, Answered, "done")
+	_, _ = q.SendBatch(ctx, bid)
+	_, _, _ = q.Reply(ctx, "s1", []int64{first.ID}, Answered, "done")
 	d, _ := q.Next(ctx, "s1")
 	prev, _ := q.Previous(ctx, "s1", d.ID)
 	got := Render(*d, prev.Messages[0].Body, "Court accepted 31 of your 40 proposals and changed 9 to keep.", time.UTC)
 	golden := filepath.Join("testdata", "delivery.golden")
 	if *update {
-		os.WriteFile(golden, []byte(got), 0o644)
+		_ = os.WriteFile(golden, []byte(got), 0o644)
 	}
 	want, err := os.ReadFile(golden)
 	if err != nil {

@@ -227,7 +227,7 @@ type Event struct {
 // real saves.
 func WriteEvent(path string, res Result) error {
 	if path == "" || res.Err != nil {
-		return nil
+		return nil //nolint:nilerr // no event to write when the capture itself errored (documented no-op)
 	}
 	if res.Action != Added && res.Action != Updated {
 		return nil

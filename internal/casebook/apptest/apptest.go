@@ -90,7 +90,7 @@ func New(t testing.TB) *Rig {
 	r := &Rig{Remote: testgit.NewBare(t), Now: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}
 	r.Root, _ = filepath.EvalSymlinks(t.TempDir())
 	clone := filepath.Join(r.Root, "hail")
-	os.MkdirAll(clone, 0o755)
+	_ = os.MkdirAll(clone, 0o755)
 	testgit.Git(t, clone, "init", "-q", "-b", "main")
 	c1 := testgit.Commit(t, clone, "a", "1")
 	testgit.Git(t, clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")

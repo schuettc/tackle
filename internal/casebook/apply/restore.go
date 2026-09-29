@@ -18,7 +18,7 @@ import (
 func RestoreFor(step JobStep, chk Checked) (store.RestoreRecord, bool) {
 	switch step.Action {
 	case "branch-delete-local":
-		dir, branch, _, err := parseLocalDelete(step.Command)
+		dir, branch, err := parseLocalDelete(step.Command)
 		if err != nil {
 			return store.RestoreRecord{}, false
 		}
@@ -29,7 +29,7 @@ func RestoreFor(step JobStep, chk Checked) (store.RestoreRecord, bool) {
 			RestoreCommand: fmt.Sprintf("git -C %s branch %s %s", shellQuote(dir), shellQuote(branch), chk.Tip),
 		}, true
 	case "branch-delete-remote":
-		dir, remote, branch, _, err := parseRemoteDelete(step.Command)
+		dir, remote, branch, err := parseRemoteDelete(step.Command)
 		if err != nil {
 			return store.RestoreRecord{}, false
 		}

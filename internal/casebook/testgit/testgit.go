@@ -29,7 +29,7 @@ func Env(t testing.TB) {
 	for _, k := range []string{"CLAUDE_CODE_SESSION_ID", "AGENT_SESSION_ID", "AGENT_SESSION_CHILD",
 		"CASEBOOK_INTERNAL", "CASEBOOK_DISABLE", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
 		t.Setenv(k, "")
-		os.Unsetenv(k)
+		_ = os.Unsetenv(k)
 	}
 }
 

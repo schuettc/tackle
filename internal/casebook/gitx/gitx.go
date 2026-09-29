@@ -5,6 +5,7 @@ package gitx
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -31,7 +32,8 @@ func Run(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
 		code := -1
-		if ee, ok := err.(*exec.ExitError); ok {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			code = ee.ExitCode()
 		}
 		return strings.TrimRight(out.String(), "\n"), &Error{Args: args, Stderr: errb.String(), Code: code}

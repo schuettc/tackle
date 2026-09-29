@@ -19,7 +19,7 @@ func TestFreshDatabaseMigratesToVersion2(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	v, err := d.Version(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -63,17 +63,17 @@ func TestAdoptsAP1aVersion1Database(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.ExecContext(ctx, schemaV1); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		t.Fatal(err)
 	}
 	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		t.Fatal(err)
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	sdb.Close()
+	_ = sdb.Close()
 	_ = os.Chmod(path, 0o600)
 
 	// Now Open() it: no error, migrates 1->2, existing sessions table intact.
@@ -81,7 +81,7 @@ func TestAdoptsAP1aVersion1Database(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open after P1a: %v", err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	v, err := d.Version(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -108,8 +108,8 @@ func TestNewerDatabaseIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdb.SetMaxOpenConns(1)
-	sdb.ExecContext(ctx, "PRAGMA user_version = 3")
-	sdb.Close()
+	_, _ = sdb.ExecContext(ctx, "PRAGMA user_version = 3")
+	_ = sdb.Close()
 
 	_, err = Open(ctx, path)
 	if err == nil {
@@ -125,7 +125,7 @@ func TestSecondInflightDeliveryIsRefusedByTheDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	// Seed a session
 	if _, err := d.ExecContext(ctx, `INSERT INTO sessions(id, first_seen, last_seen) VALUES ('sess1', 1, 1)`); err != nil {
 		t.Fatal(err)
@@ -150,8 +150,8 @@ func TestUnversionedDatabaseWithTablesIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	sdb.SetMaxOpenConns(1)
-	sdb.ExecContext(ctx, "CREATE TABLE foo (id INTEGER PRIMARY KEY)")
-	sdb.Close()
+	_, _ = sdb.ExecContext(ctx, "CREATE TABLE foo (id INTEGER PRIMARY KEY)")
+	_ = sdb.Close()
 
 	_, err = Open(ctx, path)
 	if err == nil {
@@ -184,11 +184,11 @@ func TestOpenMigratesAndReopens(t *testing.T) {
 		}
 	}
 	var mode string
-	d.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode)
+	_ = d.QueryRowContext(ctx, "PRAGMA journal_mode").Scan(&mode)
 	if mode != "wal" {
 		t.Errorf("journal_mode %q", mode)
 	}
-	d.Close()
+	_ = d.Close()
 	fi, _ := os.Stat(p)
 	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v", fi.Mode().Perm())
@@ -197,14 +197,14 @@ func TestOpenMigratesAndReopens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d2.Close()
+	_ = d2.Close()
 }
 
 func TestRefusesNewerSchema(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "casebook.db")
 	d, _ := Open(ctx, p)
-	d.ExecContext(ctx, "PRAGMA user_version = 99")
-	d.Close()
+	_, _ = d.ExecContext(ctx, "PRAGMA user_version = 99")
+	_ = d.Close()
 	_, err := Open(ctx, p)
 	if err == nil {
 		t.Fatal("expected error for newer schema")
@@ -216,7 +216,7 @@ func TestRefusesNewerSchema(t *testing.T) {
 
 func TestForeignKeysEnforced(t *testing.T) {
 	d, _ := Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
-	defer d.Close()
+	defer func() { _ = d.Close() }()
 	if _, err := d.ExecContext(ctx, "INSERT INTO threads(session_id, name, created_at) VALUES ('nope', 'x', 1)"); err == nil {
 		t.Fatal("foreign key not enforced")
 	}

@@ -14,10 +14,10 @@ import (
 // rule) when there is one, else the configured user.
 func (a *App) Actor() string {
 	id := harness.FromEnv()
-	switch {
-	case id.SessionID == "":
+	switch id.SessionID {
+	case "":
 		return a.Cfg.User
-	case id.SessionID == id.ClaudeID:
+	case id.ClaudeID:
 		return "claude:" + id.SessionID
 	default:
 		return "pi:" + id.SessionID

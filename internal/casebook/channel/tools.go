@@ -77,7 +77,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
-			return "", fmt.Errorf("bad arguments: %v", err)
+			return "", fmt.Errorf("bad arguments: %w", err)
 		}
 	}
 	needSession := func() error {
@@ -109,7 +109,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		}
 		return "opened the casebook page", nil
 	case "casebook_attention":
-		return ch.attention(ctx, a.View, serve.Query{View: a.View, Kind: a.Kind, Repo: a.Repo, Text: a.Q, Offset: a.Offset, Limit: a.Limit})
+		return ch.attention(ctx, serve.Query{View: a.View, Kind: a.Kind, Repo: a.Repo, Text: a.Q, Offset: a.Offset, Limit: a.Limit})
 	case "casebook_show":
 		return ch.show(ctx, a.Key)
 	case "casebook_history":
@@ -165,7 +165,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			}
 			if len(args) > 0 {
 				if err := json.Unmarshal(args, &rd); err != nil {
-					return "", fmt.Errorf("bad rule_draft arguments: %v", err)
+					return "", fmt.Errorf("bad rule_draft arguments: %w", err)
 				}
 			}
 			// Build match conditions using snake_case json keys (Fix 2: rules structs
@@ -277,7 +277,7 @@ func line(it serve.ItemView) string {
 	return s
 }
 
-func (ch *Channel) attention(ctx context.Context, view string, qy serve.Query) (string, error) {
+func (ch *Channel) attention(ctx context.Context, qy serve.Query) (string, error) {
 	if qy.View == "" {
 		qy.View = serve.ViewAll
 	}

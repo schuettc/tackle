@@ -18,7 +18,7 @@ func openTestDB(t *testing.T) *db.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { d.Close() })
+	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
@@ -686,7 +686,7 @@ func TestRestartRoundTrip(t *testing.T) {
 		}
 		cardID = card.ID
 
-		d.Close()
+		_ = d.Close()
 	}
 
 	// Verify the file exists.
@@ -700,7 +700,7 @@ func TestRestartRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer d.Close()
+		defer func() { _ = d.Close() }()
 		s := NewStore(d)
 
 		job, err := s.Get(ctx, jobID)
@@ -1177,12 +1177,12 @@ func TestPauseStepWithCardIsAtomic(t *testing.T) {
 	}
 
 	// Reopen the DB and verify the step state is still running (rollback).
-	d.Close()
+	_ = d.Close()
 	d2, err := db.Open(ctx, dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d2.Close()
+	defer func() { _ = d2.Close() }()
 	s2 := NewStore(d2)
 	steps, err := s2.Steps(ctx, job.ID)
 	if err != nil {

@@ -81,12 +81,12 @@ func Check(ctx context.Context, step JobStep, env Env) (Checked, error) {
 // refs/heads/<b> in the clone equals the step's ExpectedTip, and that commit is
 // landed. A branch that no longer exists locally is already done.
 func checkBranchLocal(ctx context.Context, step JobStep, env Env) (Checked, error) {
-	dir, branch, _, err := parseLocalDelete(step.Command)
+	dir, branch, err := parseLocalDelete(step.Command)
 	if err != nil {
 		return Checked{}, err
 	}
 	if _, err := os.Stat(dir); err != nil {
-		return Checked{Reason: "clone missing: " + dir}, nil
+		return Checked{Reason: "clone missing: " + dir}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	live, err := env.RunGit(ctx, dir, "rev-parse", "--verify", "refs/heads/"+branch)
 	if err != nil {
@@ -94,7 +94,7 @@ func checkBranchLocal(ctx context.Context, step JobStep, env Env) (Checked, erro
 		// this is really a git repo: a non-repo or corrupt clone is not ok, so a
 		// missing branch there never counts as done (§ non-repo ruling).
 		if _, gd := env.RunGit(ctx, dir, "rev-parse", "--git-dir"); gd != nil {
-			return Checked{Reason: "not a git repo: " + dir}, nil
+			return Checked{Reason: "not a git repo: " + dir}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 		}
 		// The branch is already gone locally: already done, not a failure.
 		return Checked{Done: true}, nil
@@ -114,16 +114,16 @@ func checkBranchLocal(ctx context.Context, step JobStep, env Env) (Checked, erro
 // live tip (read with ls-remote) is landed, and equals ExpectedTip when that is
 // set. An already-absent remote branch is already done.
 func checkBranchRemote(ctx context.Context, step JobStep, env Env) (Checked, error) {
-	dir, remote, branch, _, err := parseRemoteDelete(step.Command)
+	dir, remote, branch, err := parseRemoteDelete(step.Command)
 	if err != nil {
 		return Checked{}, err
 	}
 	if _, err := os.Stat(dir); err != nil {
-		return Checked{Reason: "clone missing: " + dir}, nil
+		return Checked{Reason: "clone missing: " + dir}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	out, err := env.RunGit(ctx, dir, "ls-remote", remote, "refs/heads/"+branch)
 	if err != nil {
-		return Checked{Reason: "ls-remote failed: " + err.Error()}, nil
+		return Checked{Reason: "ls-remote failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	out = strings.TrimSpace(out)
 	if out == "" {
@@ -137,7 +137,7 @@ func checkBranchRemote(ctx context.Context, step JobStep, env Env) (Checked, err
 	// Make sure the object is local before the landed check; fetch it if not.
 	if _, err := env.RunGit(ctx, dir, "cat-file", "-e", liveTip); err != nil {
 		if _, err := env.RunGit(ctx, dir, "fetch", remote, "refs/heads/"+branch); err != nil {
-			return Checked{Reason: "fetch remote tip failed: " + err.Error()}, nil
+			return Checked{Reason: "fetch remote tip failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 		}
 	}
 	landed, reason := isLanded(ctx, env, dir, liveTip, step.Key)
@@ -156,18 +156,18 @@ func checkWorktreeClean(ctx context.Context, step JobStep, env Env) (Checked, er
 		return Checked{}, err
 	}
 	if _, err := os.Stat(path); err != nil {
-		return Checked{Done: true}, nil
+		return Checked{Done: true}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	out, err := env.RunGit(ctx, path, "status", "--porcelain")
 	if err != nil {
-		return Checked{Reason: "status failed: " + err.Error()}, nil
+		return Checked{Reason: "status failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	if strings.TrimSpace(out) != "" {
 		return Checked{Reason: "worktree not clean"}, nil
 	}
 	list, err := env.RunGit(ctx, dir, "worktree", "list", "--porcelain")
 	if err != nil {
-		return Checked{Reason: "worktree list failed: " + err.Error()}, nil
+		return Checked{Reason: "worktree list failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	if worktreeLocked(list, resolvePath(path)) {
 		return Checked{Reason: "worktree is locked"}, nil
@@ -189,13 +189,13 @@ func checkPRNoActivity(ctx context.Context, step JobStep, env Env) (Checked, err
 	}
 	b, err := env.Gh.Gh(ctx, "pr", "view", fmt.Sprint(k.Number), "-R", k.Repo(), "--json", "updatedAt")
 	if err != nil {
-		return Checked{Reason: "gh pr view failed: " + err.Error()}, nil
+		return Checked{Reason: "gh pr view failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	var v struct {
 		UpdatedAt time.Time `json:"updatedAt"`
 	}
 	if err := json.Unmarshal(b, &v); err != nil {
-		return Checked{Reason: "gh pr view parse: " + err.Error()}, nil
+		return Checked{Reason: "gh pr view parse: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	var decidedAt time.Time
 	if env.Decisions != nil {
@@ -221,7 +221,7 @@ func checkRepoNoHumanPRs(ctx context.Context, step JobStep, env Env) (Checked, e
 	}
 	b, err := env.Gh.Gh(ctx, "pr", "list", "-R", k.Repo(), "--state", "open", "--json", "author")
 	if err != nil {
-		return Checked{Reason: "gh pr list failed: " + err.Error()}, nil
+		return Checked{Reason: "gh pr list failed: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	// `gh pr list --json author` returns author objects carrying `login` and
 	// `is_bot` (no `__typename`); is_bot is the one authoritative bot signal.
@@ -232,7 +232,7 @@ func checkRepoNoHumanPRs(ctx context.Context, step JobStep, env Env) (Checked, e
 		} `json:"author"`
 	}
 	if err := json.Unmarshal(b, &prs); err != nil {
-		return Checked{Reason: "gh pr list parse: " + err.Error()}, nil
+		return Checked{Reason: "gh pr list parse: " + err.Error()}, nil //nolint:nilerr // precondition unmet → Checked.Reason, not a program error
 	}
 	for _, pr := range prs {
 		if !pr.Author.IsBot {

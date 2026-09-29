@@ -153,7 +153,7 @@ func TestNamesAlignAcrossTabs(t *testing.T) {
 	}
 	want := -1
 	for _, r := range rows {
-		col := ansi.StringWidth(plainRow(r)[:strings.Index(plainRow(r), "name")])
+		col := ansi.StringWidth(plainRow(r)[:strings.Index(plainRow(r), "name")]) //nolint:gocritic // "name" is always in the row, so Index is never -1
 		if want < 0 {
 			want = col
 		}

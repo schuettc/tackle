@@ -156,7 +156,7 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobPlanned})
+	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobPlanned})
 
 	reply(w, PlanView{Plan: plan, Groups: plan.Groups(), Job: job}, nil)
 }
@@ -196,7 +196,7 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobApproved})
+	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobApproved})
 
 	// Step 2: Count agent-lane steps and open batch card BEFORE dispatching.
 	var agentCount int
@@ -213,7 +213,7 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, err)
 			return
 		}
-		s.Bus.Publish(ctx, "needs_you", batchCard)
+		_, _ = s.Bus.Publish(ctx, "needs_you", batchCard)
 	}
 
 	// Step 3: Dispatch the agent job ONCE (idempotent via dispatched_at).
@@ -317,7 +317,7 @@ func (s *Server) postJobsPause(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": true})
+	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": true})
 	cards, _ := s.Apply.NeedsYouFor(ctx, in.ID)
 	var open []apply.NeedsYou
 	for _, c := range cards {
@@ -356,7 +356,7 @@ func (s *Server) postJobsResume(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": false})
+	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": false})
 
 	// Relaunch the casebook lane only if the job was actually paused and no lane
 	// is running (the single-flight guard enforces the latter). A resume on a
@@ -517,7 +517,7 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		sent = false
 	}
 
-	s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": step.JobID, "undone": true, "sent": sent})
+	_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": step.JobID, "undone": true, "sent": sent})
 	reply(w, UndoResult{StepID: step.ID, Sent: sent}, nil)
 }
 
@@ -530,7 +530,7 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 	}
 	words, err := apply.ShellSplit(restore)
 	if err != nil || len(words) < 4 {
-		return fmt.Errorf("could not parse restore command %q: %v", restore, err)
+		return fmt.Errorf("could not parse restore command %q: %w", restore, err)
 	}
 	// words[0]="git", words[1]="-C", words[2]=dir, words[3:]= subcommand
 	dir := words[2]
@@ -539,9 +539,9 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 		return err
 	}
 	// Fallback to exec (only reached when runGit is nil, i.e., in degenerate tests).
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, words[3:]...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, words[3:]...)...) //nolint:gosec // restore command is validated (git -C only) and run by design
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }
@@ -625,7 +625,7 @@ func (s *Server) postJobsAnswer(w http.ResponseWriter, r *http.Request) {
 	// This handles skip-batch (agent steps skipped), skip (step skipped or failed
 	// step's card closed), and any other action that may drain remaining work.
 	s.settleJob(ctx, card.JobID)
-	s.Bus.Publish(ctx, "needs_you", card)
+	_, _ = s.Bus.Publish(ctx, "needs_you", card)
 	reply(w, AnswerResult{NeedsYou: card}, nil)
 }
 
@@ -651,7 +651,7 @@ func (s *Server) answerBatch(ctx context.Context, card apply.NeedsYou, job apply
 		for _, st := range job.Steps {
 			if st.Lane == apply.LaneAgent && st.State == apply.StepPending {
 				_ = s.Apply.SetStepState(ctx, st.ID, apply.StepSkipped, "batch skipped")
-				s.Bus.Publish(ctx, "step", map[string]any{"id": st.ID, "job_id": job.ID, "state": apply.StepSkipped})
+				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": st.ID, "job_id": job.ID, "state": apply.StepSkipped})
 			}
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip-batch")
@@ -669,7 +669,7 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 			if err := s.Apply.SetStepText(ctx, card.StepID, text); err != nil {
 				return card, fmt.Errorf("SetStepText: %w", err)
 			}
-			s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "text_set": true})
+			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "text_set": true})
 		}
 		// Send a message to the job's session telling the agent to post exactly
 		// that text and close. Court confirms; casebook never runs gh itself.
@@ -724,7 +724,7 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
 				return card, fmt.Errorf("SetStepState skipped: %w", err)
 			}
-			s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
+			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip")
 	default:
@@ -779,7 +779,7 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 				if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepPending, ""); err != nil {
 					return card, fmt.Errorf("requeue paused step: %w", err)
 				}
-				s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepPending})
+				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepPending})
 				s.startCasebookLane(job)
 			} else if job.Session != "" {
 				body := fmt.Sprintf(
@@ -802,7 +802,7 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
 				return card, fmt.Errorf("skip paused step: %w", err)
 			}
-			s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
+			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip")
 	default:

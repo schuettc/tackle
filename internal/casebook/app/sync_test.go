@@ -78,8 +78,8 @@ func TestSyncEndToEnd(t *testing.T) {
 func TestSyncOfflineCommitsLocallyAndDrains(t *testing.T) {
 	r := newRig(t)
 	moved := r.remote + ".away"
-	os.Rename(r.remote, moved)
-	spool.Append(config.SpoolDir(), journal.Event{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone})
+	_ = os.Rename(r.remote, moved)
+	_ = spool.Append(config.SpoolDir(), journal.Event{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone})
 	rep, err := r.app.Sync(ctx, SyncOptions{NoGitHub: true})
 	if err != nil || !rep.Offline || !rep.Committed || rep.Pushed {
 		t.Fatalf("offline sync %+v %v", rep, err)
@@ -89,7 +89,7 @@ func TestSyncOfflineCommitsLocallyAndDrains(t *testing.T) {
 		t.Error("events left in the spool after a local commit")
 	}
 	b.Close()
-	os.Rename(moved, r.remote)
+	_ = os.Rename(moved, r.remote)
 	rep, err = r.app.Sync(ctx, SyncOptions{NoGitHub: true})
 	if err != nil || !rep.Pushed {
 		t.Fatalf("reconnected sync %+v %v", rep, err)
@@ -98,7 +98,7 @@ func TestSyncOfflineCommitsLocallyAndDrains(t *testing.T) {
 
 func TestSyncKeepsSpoolWhenCommitFails(t *testing.T) {
 	r := newRig(t)
-	spool.Append(config.SpoolDir(), journal.Event{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone})
+	_ = spool.Append(config.SpoolDir(), journal.Event{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone})
 	lock := filepath.Join(r.app.Repo.Dir, ".git", "index.lock")
 	if err := os.WriteFile(lock, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestSyncKeepsSpoolWhenCommitFails(t *testing.T) {
 	if _, err := r.app.Sync(ctx, SyncOptions{NoGitHub: true, NoPush: true}); err == nil {
 		t.Fatal("sync succeeded although git could not commit")
 	}
-	os.Remove(lock)
+	_ = os.Remove(lock)
 	b, _ := spool.Drain(config.SpoolDir())
 	defer b.Close()
 	if len(b.Events) != 1 {
@@ -131,7 +131,7 @@ func TestSyncBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer lf.Close()
+	defer func() { _ = lf.Close() }()
 	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		t.Fatal("could not acquire test lock:", err)
 	}
@@ -149,7 +149,7 @@ func TestSyncBusy(t *testing.T) {
 	b.Close()
 	// Release and confirm sync now succeeds.
 	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	lf.Close()
+	_ = lf.Close()
 	// Re-append the event (Drain consumed it).
 	if err := spool.Append(config.SpoolDir(), ev); err != nil {
 		t.Fatal(err)
