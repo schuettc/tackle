@@ -30,7 +30,12 @@ import {
 } from '/_kit/kit.js';
 import type { DecideResult, DecisionVocabView, ItemView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import { kindFromKey, allowedForKind, allowedForKeys } from './decide-math.ts';
+import {
+  kindFromKey,
+  allowedForKind,
+  allowedForKeys,
+  pluralize,
+} from './decide-math.ts';
 
 // Re-export the pure functions so callers only need one import.
 export { kindFromKey, allowedForKind, allowedForKeys };
@@ -121,11 +126,11 @@ function openDecideSheetWithVocab(
   const previewEl = h('p', { class: 'cb-sheet-preview' });
   // Seed the preview text with the seeded disposition if provided.
   previewEl.textContent = disposition
-    ? `${disposition} ${n} item${n === 1 ? '' : 's'}`
-    : `${n} item${n === 1 ? '' : 's'}`;
+    ? `${disposition} ${pluralize(n, 'item')}`
+    : pluralize(n, 'item');
 
   function updatePreview(): void {
-    previewEl.textContent = `${disposition || '\u2026'} ${n} item${n === 1 ? '' : 's'}`;
+    previewEl.textContent = `${disposition || '\u2026'} ${pluralize(n, 'item')}`;
   }
 
   // ---- until field -----------------------------------------------------------
@@ -321,7 +326,7 @@ function openDecideSheetWithVocab(
   // ---- open the sheet --------------------------------------------------------
 
   sh = sheet({
-    title: `decide ${n} item${n === 1 ? '' : 's'}`,
+    title: `decide ${pluralize(n, 'item')}`,
     body,
     actions: [
       {

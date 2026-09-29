@@ -304,9 +304,9 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone, seed, customPost) {
   let dryRunTimer = null;
   let lastDryRunError = null;
   const previewEl = h2("p", { class: "cb-sheet-preview" });
-  previewEl.textContent = disposition ? `${disposition} ${n} item${n === 1 ? "" : "s"}` : `${n} item${n === 1 ? "" : "s"}`;
+  previewEl.textContent = disposition ? `${disposition} ${pluralize(n, "item")}` : pluralize(n, "item");
   function updatePreview() {
-    previewEl.textContent = `${disposition || "…"} ${n} item${n === 1 ? "" : "s"}`;
+    previewEl.textContent = `${disposition || "…"} ${pluralize(n, "item")}`;
   }
   const untilInputEl = h2("input", {
     type: "text",
@@ -462,7 +462,7 @@ function openDecideSheetWithVocab(ctx, keys, vocab, onDone, seed, customPost) {
     }
   }
   sh = sheet({
-    title: `decide ${n} item${n === 1 ? "" : "s"}`,
+    title: `decide ${pluralize(n, "item")}`,
     body,
     actions: [
       {
@@ -569,7 +569,7 @@ function openRejectSheet(ctx, ids, onDone) {
     }
   }
   sh = sheet2({
-    title: `reject ${ids.length} proposal${ids.length === 1 ? "" : "s"}`,
+    title: `reject ${pluralize(ids.length, "proposal")}`,
     body,
     actions: [
       {

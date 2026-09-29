@@ -2781,7 +2781,11 @@ async function run() {
 
         // Helper: check that every foot control is single-line (no wrapping)
         // and that no two controls overlap horizontally.
-        async function checkFootLayout(view, label) {
+        async function checkFootLayout(
+          view,
+          label,
+          { assertSelAllHidden = false } = {},
+        ) {
           await footPage.evaluate((v) => {
             location.hash = `#/attention/${v}`;
           }, view);
@@ -2801,6 +2805,29 @@ async function run() {
             await footPage.waitForTimeout(30);
           }
           await footPage.waitForTimeout(300);
+
+          // After selecting all rows, the "Select all" button must be hidden.
+          // Only assert for views where this behaviour is expected (opt-in via
+          // assertSelAllHidden): the proposed view hides the button once every
+          // listed item is checked.
+          if (assertSelAllHidden && boxes.length > 0) {
+            const selAllHidden = await footPage.evaluate(() => {
+              const el = document.querySelector('.cb-sel-all');
+              if (!el) return true; // absent → hidden for this view
+              const cs = getComputedStyle(el);
+              return (
+                el.hidden ||
+                cs.display === 'none' ||
+                cs.visibility === 'hidden' ||
+                cs.opacity === '0' ||
+                el.offsetParent === null
+              );
+            });
+            check(
+              `${label}: .cb-sel-all is hidden when all rows are selected`,
+              selAllHidden,
+            );
+          }
 
           // Collect bounding rects of all visible foot controls.
           const footRects = await footPage.evaluate(() => {
@@ -2875,10 +2902,14 @@ async function run() {
           check(`${label}: no foot controls overlap`, noOverlap);
         }
 
-        // Test with a selection in the proposed view.
-        await checkFootLayout('proposed', 'proposed view with selection');
+        // Test with a selection in the proposed view; also verify that the
+        // "Select all" button hides once every listed item is checked.
+        await checkFootLayout('proposed', 'proposed view with selection', {
+          assertSelAllHidden: true,
+        });
 
         // Test with a selection in the new view (no bulk buttons).
+        // The sel-all button doesn't have the same hide logic here.
         await checkFootLayout('new', 'new view with selection');
 
         // Take fix-round-2 screenshots.
@@ -2922,7 +2953,18 @@ async function run() {
         const newRows = await footPage.$$('.kit-row .kit-box');
         if (newRows.length > 0) await newRows[0].click();
         if (newRows.length > 1) await newRows[1].click();
-        await footPage.waitForTimeout(300);
+        // Wait until the selection counter reflects 2 selected items before
+        // capturing the screenshot (the old code just timed out, which meant the
+        // count might not have updated yet).
+        await footPage
+          .waitForFunction(
+            () => {
+              const el = document.querySelector('.cb-sel-count');
+              return el && /\b2\b/.test(el.textContent ?? '');
+            },
+            { timeout: 3000 },
+          )
+          .catch(() => {});
         await footPage.screenshot({ path: '/tmp/t5fix2-new-2sel.png' });
         console.log(
           '  t5fix2 screenshots: /tmp/t5fix2-proposed-1sel.png  /tmp/t5fix2-proposed-allsel.png  /tmp/t5fix2-new-2sel.png',

@@ -15,6 +15,7 @@ import type {
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { openDecideSheet } from './decide.ts';
+import { pluralize } from './decide-math.ts';
 
 // ---- agent name from source -------------------------------------------------
 
@@ -85,7 +86,7 @@ export function openRejectSheet(
   }
 
   sh = sheet({
-    title: `reject ${ids.length} proposal${ids.length === 1 ? '' : 's'}`,
+    title: `reject ${pluralize(ids.length, 'proposal')}`,
     body,
     actions: [
       {
