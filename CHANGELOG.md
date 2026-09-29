@@ -4,6 +4,14 @@ All notable changes to `scratch` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.5] — 2026-09-29
+
+### Changed
+- macOS binaries are signed with the Developer ID and notarized, so a copy
+  downloaded in a browser runs instead of being quarantined by Gatekeeper.
+  Built through the family release actions (`schuettc/tools-actions`); the
+  assets and `/dl` paths are unchanged.
+
 ## [0.5.4] — 2026-09-28
 
 ### Changed
