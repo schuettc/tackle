@@ -462,11 +462,21 @@ func TestTickRefreshPreservesSelection(t *testing.T) {
 	m = sessionsScope(m)
 	m.cursor = 1
 
+	// The tick starts discovery off the update loop; its result is applied
+	// when the message comes back, which re-arms the tick.
 	next, cmd := m.Update(tickMsg{})
 	m = next.(Model)
-
 	if cmd == nil {
-		t.Fatal("tick should re-arm the tick command")
+		t.Fatal("tick should start a background refresh")
+	}
+	msg, ok := cmd().(refreshedMsg)
+	if !ok {
+		t.Fatal("tick's command did not produce a refreshedMsg")
+	}
+	next, cmd = m.Update(msg)
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("applying a tick's refresh should re-arm the tick command")
 	}
 	if m.cursor < 0 || m.cursor >= len(m.visibleRows()) {
 		t.Fatalf("cursor not clamped after refresh: %d of %d", m.cursor, len(m.visibleRows()))

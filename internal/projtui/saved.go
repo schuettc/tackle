@@ -29,6 +29,7 @@ func (m Model) withRecord() Model {
 	m.loadSaved = defaultLoadSaved
 	m.forget = proj.Forget
 	m.saveLayout = func() (int, int, error) { return proj.SaveLayout(proj.CurrentLiveState().Running) }
+	m.prime = proj.PrimeAll
 	return m
 }
 
@@ -71,14 +72,11 @@ func rowsFromSaved(ss []proj.SavedSession) []Row {
 // needsRestore mirrors proj.SavedSession.NeedsRestore for a row.
 func needsRestore(r Row) bool { return !r.Running || !r.Attached }
 
-// reloadSaved re-reads the saved rows, keeping the operator's selection by
-// name: a row seen before keeps its check, a new row that needs restoring
-// starts checked, and a row that needs nothing is not checkable.
-func (m Model) reloadSaved() Model {
-	if m.loadSaved == nil {
-		return m
-	}
-	rows, err := m.loadSaved()
+// applySaved installs freshly loaded saved rows, keeping the operator's
+// selection by name: a row seen before keeps its check, a new row that needs
+// restoring starts checked, and a row that needs nothing is not checkable.
+func (m Model) applySaved(rows []Row, err error) Model {
+	m.savedLoaded = true
 	if err != nil {
 		m.footerHint = err.Error()
 		rows = nil
@@ -103,16 +101,6 @@ func (m Model) applyChecks() Model {
 			}
 		}
 	}
-	return m
-}
-
-// rebuildKeepCursor rebuilds the entrance rows without losing the filter or
-// (clamped) cursor.
-func (m Model) rebuildKeepCursor() Model {
-	filter, cursor := m.filter, m.cursor
-	m = m.rebuildEntrance()
-	m.filter, m.cursor = filter, cursor
-	m.clampCursor()
 	return m
 }
 
@@ -150,9 +138,10 @@ func (m Model) updateSaved(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 			m.footerHint = "save layout: " + err.Error()
 			return m, nil, true
 		}
-		m = m.reloadSaved().rebuildKeepCursor()
 		m.footerHint = fmt.Sprintf("layout saved: %d windows, %d tabs", w, n)
-		return m, nil, true
+		// Regroup by the new layout in the background.
+		m, cmd := m.startRefresh(false)
+		return m, cmd, true
 	}
 	return m, nil, false
 }

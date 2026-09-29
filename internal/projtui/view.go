@@ -178,9 +178,11 @@ func (m Model) emptyMessage() string {
 	case m.filter != "":
 		msg = "no matches — esc to clear the filter"
 	case m.scope == scopeSessions:
-		msg = "no live sessions — tab for saved"
+		msg = "no live sessions (tab for saved)"
+	case m.scope == scopeSaved && !m.savedLoaded:
+		msg = "loading saved sessions…"
 	case m.scope == scopeSaved:
-		msg = "nothing saved yet — sessions are recorded as you use them"
+		msg = "nothing to restore: every saved session is open"
 	case len(m.projects) == 0:
 		msg = "no projects yet — ^a to add a root, ^e to edit roots"
 	default:
@@ -396,7 +398,7 @@ func (m Model) previewPane(width int) string {
 		if r.Running {
 			state = "running"
 		}
-		b.WriteString(agentStyle.Render(r.Agent) + dimStyle.Render(" — "+state) + "\n")
+		b.WriteString(agentStyle.Render(r.Agent) + dimStyle.Render(" · "+state) + "\n")
 		if r.Conversation != "" {
 			b.WriteString(dimStyle.Render(trunc(r.Conversation, width)) + "\n")
 		}

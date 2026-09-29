@@ -115,7 +115,7 @@ func ensureSession(socket, name, dir, agent, launch string, command []string) (c
 		// Only type an agent launch command when no explicit command was given;
 		// with a command the pane already runs it directly.
 		if len(command) == 0 && launch != "" {
-			// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
+			// target "=name:": the trailing colon resolves the active pane on tmux 3.7+.
 			_, _ = runner(socket, "send-keys", "-t", "="+name+":", launch, "Enter")
 		}
 	}
@@ -164,7 +164,7 @@ func CurrentSessionName() string {
 // The command is TYPED into an interactive shell, so the claude() wrapper in
 // ~/dotfiles/config/zsh/04-aliases.zsh still runs: it is what prepends the
 // development-channel flags (galley/muster) to a claude launch. That is why
-// --name here must reach that wrapper as an interactive launch — anything the
+// --name here must reach that wrapper as an interactive launch: anything the
 // wrapper treats as passthrough would arrive channel-less. pi has no wrapper:
 // its channels come from pi packages, so its launch is the binary as typed.
 //

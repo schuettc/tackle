@@ -66,7 +66,11 @@ func TestRestoreEndToEnd(t *testing.T) {
 	// 1. A live session whose agent announced its conversation is recorded.
 	startSandboxServer(t, sock, stubDir)
 	if _, err := proj.EnsureSession(sock, name, dir, "none", "", nil); err != nil {
-		t.Fatal(err)
+		// proj.Run keeps only stdout; re-run the create by hand so a failure
+		// here (seen once, not reproduced) reports tmux's own error.
+		out, _ := exec.Command("tmux", "-L", sock, "new-session", "-d", "-s", name+"-diag").CombinedOutput()
+		ls, _ := exec.Command("tmux", "-L", sock, "ls").CombinedOutput()
+		t.Fatalf("EnsureSession: %v\ndiag new-session: %s\nls: %s", err, out, ls)
 	}
 	if _, err := proj.Run(sock, "set-option", "-t", name, "@harness_session", "idE2E"); err != nil {
 		t.Fatal(err)

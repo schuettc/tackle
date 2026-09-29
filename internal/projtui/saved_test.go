@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -40,6 +41,7 @@ func newSavedModel(t *testing.T, rows []Row) (Model, *savedFakes) {
 	m.kill = func(socket, name string) error { f.killed = append(f.killed, name); return nil }
 	m.saveLayout = func() (int, int, error) { return f.layoutN[0], f.layoutN[1], f.layoutEr }
 	m.refresh = func() (sessions, projects []Row) { return nil, nil }
+	m = refreshNow(t, m)
 	m = press(m, "tab") // folders → sessions
 	m = press(m, "tab") // sessions → saved
 	if m.scope != scopeSaved {
@@ -176,8 +178,7 @@ func TestRefreshKeepsChecks(t *testing.T) {
 	m, f := newSavedModel(t, savedFixture())
 	m = space(m) // uncheck x/a
 	f.rows = append(savedFixture(), Row{Kind: RowSaved, Label: "z/new", Name: "z/new", Socket: "proj-z", Group: "unplaced"})
-	next, _ := m.Update(tickMsg{})
-	m = next.(Model)
+	m = refreshNow(t, m)
 	if m.checked["x/a"] {
 		t.Fatal("refresh re-checked a row the operator unchecked")
 	}
@@ -189,7 +190,7 @@ func TestRefreshKeepsChecks(t *testing.T) {
 func TestSavedEmpty(t *testing.T) {
 	m, _ := newSavedModel(t, nil)
 	m.width, m.height = 100, 30
-	if !strings.Contains(m.View(), "nothing saved yet") {
+	if !strings.Contains(m.View(), "nothing to restore") {
 		t.Fatal("empty saved scope has no guidance")
 	}
 }
@@ -245,5 +246,80 @@ func TestNoTranscriptOnlyWhenNotRunning(t *testing.T) {
 	closed.Running = false
 	if !strings.Contains(plainRow(closed), "(no transcript)") {
 		t.Fatalf("closed row %q missing (no transcript)", plainRow(closed))
+	}
+}
+
+// refreshNow runs one background refresh to completion, as the Bubble Tea
+// runtime would: start it, execute its command, feed the result back.
+func refreshNow(t *testing.T, m Model) Model {
+	t.Helper()
+	m, cmd := m.startRefresh(false)
+	if cmd == nil {
+		t.Fatal("no refresh started")
+	}
+	next, _ := m.Update(cmd())
+	return next.(Model)
+}
+
+func TestTickDoesNotBlockOnDiscovery(t *testing.T) {
+	calls := 0
+	m := newTestModelWithRefresh(nil, func() (s, p []Row) { calls++; return nil, nil })
+	next, cmd := m.Update(tickMsg{})
+	m = next.(Model)
+	if calls != 0 {
+		t.Fatal("tick ran discovery inside Update; it must run in the command")
+	}
+	if !m.refreshing || cmd == nil {
+		t.Fatalf("refreshing=%v cmd=%v; want a refresh in flight", m.refreshing, cmd != nil)
+	}
+	cmd()
+	if calls != 1 {
+		t.Fatalf("discovery ran %d times want 1", calls)
+	}
+}
+
+func TestTickWhileRefreshingSkips(t *testing.T) {
+	orig := refreshInterval
+	t.Cleanup(func() { refreshInterval = orig })
+	refreshInterval = time.Millisecond
+	m := newTestModelWithRefresh(nil, func() (s, p []Row) { return nil, nil })
+	m, _ = m.startRefresh(false) // an action-started refresh is in flight
+	next, cmd := m.Update(tickMsg{})
+	if cmd == nil {
+		t.Fatal("a skipped tick must re-arm itself")
+	}
+	if _, ok := cmd().(tickMsg); !ok {
+		t.Fatal("tick during a refresh started a second discovery")
+	}
+	// The action-started refresh's result must not re-arm a second tick loop.
+	_, cmd = next.(Model).Update(refreshedMsg{})
+	if cmd != nil {
+		t.Fatal("a non-tick refresh result re-armed the tick (duplicate loop)")
+	}
+}
+
+func TestPrimeRunsInBackground(t *testing.T) {
+	primed := 0
+	m := newTestModel(nil)
+	m.prime = func() { primed++ }
+	if cmd := m.Init(); cmd == nil || primed != 0 {
+		t.Fatalf("Init ran prime synchronously (primed=%d) or returned no command", primed)
+	}
+	msg := primeCmd(m.prime)()
+	if _, ok := msg.(primedMsg); !ok || primed != 1 {
+		t.Fatalf("primeCmd: msg=%T primed=%d; want primedMsg and one call", msg, primed)
+	}
+	if _, cmd := m.Update(msg); cmd == nil {
+		t.Fatal("primedMsg should start a refresh so saved rows load")
+	}
+}
+
+func TestSavedScopeShowsLoading(t *testing.T) {
+	m := newTestModel(nil)
+	m.width, m.height = 100, 30
+	m = press(m, "tab")
+	m = press(m, "tab")
+	if !strings.Contains(m.View(), "loading") {
+		t.Fatal("saved scope before the first load should say it is loading")
 	}
 }
