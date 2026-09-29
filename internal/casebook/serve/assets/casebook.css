@@ -279,10 +279,16 @@
 }
 .cb-dock-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 14px 16px 8px;
   flex: none;
+  gap: 2px;
+}
+.cb-dock-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
 }
 .cb-dock-who {
   display: flex;
@@ -292,8 +298,6 @@
   color: var(--kit-fg);
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .cb-dock-dot {
   display: inline-block;
@@ -304,12 +308,18 @@
   flex: none;
 }
 .cb-dock-session-label {
-  display: flex;
-  align-items: center;
-  gap: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+.cb-dock-left-row {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-left: 16px;
 }
 .cb-dock-agent-btn {
   font: 10.5px var(--kit-mono);
@@ -405,13 +415,6 @@
 }
 .cb-dock-action:hover {
   background: var(--kit-signal-soft);
-}
-.cb-dock-action--danger {
-  color: var(--kit-danger);
-  border-color: var(--kit-danger);
-}
-.cb-dock-action--danger:hover {
-  background: rgba(194 42 42 / 0.08);
 }
 .cb-dock-links {
   display: flex;

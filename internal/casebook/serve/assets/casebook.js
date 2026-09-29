@@ -1777,6 +1777,11 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
   if (stateEl) fullBody.append(stateEl);
   const isStuckDelivery = !isAgent && delivery?.stuck === true && msg.delivery_id === delivery.id;
   if (isStuckDelivery && delivery) {
+    if (stateEl) {
+      stateEl.textContent = `delivered · stuck ${fmtAge(delivery.touched_at)}`;
+      stateEl.style.color = "var(--kit-wait)";
+      stateEl.setAttribute("data-state", "stuck");
+    }
     const d = delivery;
     const releaseBtn = h7("button", {
       class: "cb-dock-action",
@@ -1788,7 +1793,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
     releaseBtn.textContent = "release";
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
     const moveBtn = h7("button", {
-      class: "cb-dock-action cb-dock-action--danger",
+      class: "cb-dock-action",
       "data-action": "move",
       onclick() {
         void openMoveSheet(ctx, d, otherSessions);
@@ -1964,11 +1969,18 @@ function makeDock(ctx) {
     }
   });
   sessionPickerBtn.textContent = "AGENT ▾";
+  const leftStatusRow = h7("div", { class: "cb-dock-left-row" });
+  leftStatusRow.hidden = true;
   const sessionHeader = h7(
     "div",
     { class: "cb-dock-header" },
-    h7("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
-    sessionPickerBtn
+    h7(
+      "div",
+      { class: "cb-dock-header-row" },
+      h7("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
+      sessionPickerBtn
+    ),
+    leftStatusRow
   );
   const threadChips = h7("div", { class: "cb-dock-threads" });
   const messageArea = h7("div", {
@@ -1982,37 +1994,32 @@ function makeDock(ctx) {
     if (!sess) {
       sessionDot.style.background = "var(--kit-muted)";
       sessionLabelEl.textContent = "no session";
+      leftStatusRow.hidden = true;
       sessionHeader.removeAttribute("data-left");
       return;
     }
     const stale = !!sess.left;
     sessionDot.style.background = "var(--kit-agent)";
+    sessionLabelEl.textContent = sessionLabel(sess);
     if (stale) {
-      const cwd = sess.cwd ? sess.cwd.split("/").filter(Boolean).pop() ?? sess.cwd : "";
-      const harness = sess.harness || "agent";
-      const leftLabel = cwd ? `${harness} · ${cwd} left` : `${harness} left`;
-      const queuedPart = sess.queued > 0 ? ` · ${pluralize(sess.queued, "queued")}` : "";
-      sessionLabelEl.textContent = "";
-      sessionLabelEl.append(
-        leftLabel + queuedPart,
-        // " · move to…" as a button link.
-        h7(
-          "button",
-          {
-            class: "cb-dock-move-link",
-            "data-testid": "dock-move-link",
-            onclick(e) {
-              e.stopPropagation();
-              const others = sessions.filter((s) => s.id !== sess.id);
-              void openSessionMoveSheet(ctx, sess.id, others);
-            }
-          },
-          " · move to…"
-        )
-      );
+      const queuedPart = sess.queued > 0 ? ` · ${sess.queued} queued` : "";
+      leftStatusRow.textContent = "";
+      const moveLink = h7("button", {
+        class: "cb-dock-move-link",
+        "data-testid": "dock-move-link",
+        onclick(e) {
+          e.stopPropagation();
+          const others = sessions.filter((s) => s.id !== sess.id);
+          void openSessionMoveSheet(ctx, sess.id, others);
+        }
+      });
+      moveLink.textContent = "move to…";
+      leftStatusRow.append(`left${queuedPart} · `, moveLink);
+      leftStatusRow.hidden = false;
       sessionHeader.setAttribute("data-left", "1");
     } else {
-      sessionLabelEl.textContent = sessionLabel(sess);
+      leftStatusRow.hidden = true;
+      leftStatusRow.textContent = "";
       sessionHeader.removeAttribute("data-left");
     }
   }

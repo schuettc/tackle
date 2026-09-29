@@ -239,20 +239,28 @@ async function run() {
 
     // 5. Live pill reads live.
     {
+      let livePillVisible = false;
+      let liveState = '';
       try {
         await page.waitForSelector('.kit-live:not([hidden])', {
           timeout: 5000,
         });
-        const state = await page.$eval(
+        // Assert real visibility via offsetWidth/offsetHeight.
+        const vis = await page.$eval('.kit-live', (el) => {
+          const r = el.getBoundingClientRect();
+          return r.width > 0 && r.height > 0;
+        });
+        livePillVisible = vis;
+        liveState = await page.$eval(
           '.kit-live',
           (el) => el.dataset.state ?? '',
         );
-        check('live pill is visible', true);
-        check('live pill data-state is "live"', state === 'live');
       } catch {
-        check('live pill is visible within 5s', false);
-        check('live pill data-state is "live"', false);
+        livePillVisible = false;
+        liveState = '';
       }
+      check('live pill is visible within 5s', livePillVisible);
+      check('live pill data-state is "live"', liveState === 'live');
     }
     // ---- scenario: attention list and detail --------------------------------
     console.log('\nscenario: attention list and detail');
@@ -3358,22 +3366,32 @@ async function run() {
         }
 
         // 6. YOU card has rust (signal) left edge; agent card has amber edge.
-        //    The kit adds data-edge attribute on the card element.
-        //    After agent replies, we also get an agent card.
-        //    For now check the YOU card edge.
+        //    The agent replies with attached items so we get a PI card with links.
         {
           // First let the agent pick up the delivery.
           const waitResult = await agent.wait(sessId);
           if (waitResult) {
-            // Reply with an agent message so we see PI card.
+            // Reply with attached keys so the PI card has item links.
             await agent.reply(
               sessId,
               [m1.id],
               'answered',
               'Done: 38 close, 2 keep. They are in proposed.',
+              {
+                keys: [
+                  'pr:schuettc/bettor-help-platform#670',
+                  'pr:schuettc/bettor-help-platform#671',
+                ],
+              },
             );
           }
-          await dockPage.waitForTimeout(800);
+          // Wait for the PI card (agent reply) to appear in the dock.
+          await dockPage
+            .waitForSelector(
+              '[data-testid="dock-messages"] .cb-dock-card--agent',
+              { timeout: 5000 },
+            )
+            .catch(() => {});
 
           // Check edge colours of cards via computed style.
           const edges = await dockPage
@@ -3392,16 +3410,13 @@ async function run() {
           const youCards = edges.filter((e) => e.isYou);
           const agentCards = edges.filter((e) => e.isAgent);
           check('YOU card has rust (signal) left edge', youCards.length > 0);
-          // Agent card may not appear if wait timed out — that's OK.
-          if (agentCards.length > 0) {
-            // Just verify both kinds have different colours.
-            check(
-              'YOU and PI edge colours differ',
+          // PI card must now be present (we waited for it above).
+          check(
+            'YOU and PI edge colours differ',
+            agentCards.length > 0 &&
+              youCards.length > 0 &&
               youCards[0].borderLeft !== agentCards[0].borderLeft,
-            );
-          } else {
-            check('YOU and PI edge colours differ', true); // skip — no PI card yet
-          }
+          );
         }
 
         // 7. Delivery state appears on Court's card.
@@ -3437,9 +3452,12 @@ async function run() {
                 })),
             )
             .catch(() => []);
-          // The agent reply has attached keys from the original message's context.
-          // Links appear only if the agent message has attached data.
-          // We test the link behaviour if any links exist.
+          // The agent reply was sent with attached keys (pr:...#670, pr:...#671).
+          // The fixture guarantees links are present; assert they are.
+          check(
+            'agent card has item links (fixture includes attached keys)',
+            agentCardLinks.length > 0,
+          );
           if (agentCardLinks.length > 0) {
             // Click the first link and verify the hash changes.
             await dockPage.click(
@@ -3454,8 +3472,7 @@ async function run() {
                 hash.includes('#/apply/'),
             );
           } else {
-            // No links in this agent message; that's fine (body is plain text).
-            check('an agent card link opens the route', true);
+            check('an agent card link opens the route', false);
           }
         }
 
@@ -3585,6 +3602,15 @@ async function run() {
           deliveryData !== null && deliveryData.delivery !== null,
         );
 
+        // Keep sessId heartbeating so it stays present (not left) while we
+        // wait for the delivery to become stuck. CASEBOOK_LEFT_AFTER=3s;
+        // the stuck wait is ~4.5s total, so without this sessId would go left.
+        const stuckHB = setInterval(() => {
+          agent
+            .presence(sessId, 'pi · stuck-ws', '/home/court/stuck-ws')
+            .catch(() => {});
+        }, 800);
+
         await stuckPage.goto(serveHandle.url, {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
@@ -3611,12 +3637,44 @@ async function run() {
         const dv = await agent.getDelivery(sessId);
         check('delivery is stuck (API)', dv?.delivery?.stuck === true);
 
-        // Take a screenshot showing the dock with a stuck delivery.
+        // Stop heartbeating now that we've confirmed the stuck state.
+        clearInterval(stuckHB);
+
+        // Check: stuck action buttons don't use the danger (red) colour.
+        if (stuckVisible) {
+          const actionColors = await stuckPage
+            .evaluate(() => {
+              const btns = document.querySelectorAll(
+                '.cb-dock-stuck [data-action]',
+              );
+              return Array.from(btns).map((b) => ({
+                action: b.dataset.action,
+                color: getComputedStyle(b).color,
+                border: getComputedStyle(b).borderColor,
+              }));
+            })
+            .catch(() => []);
+          // The danger colour is --kit-danger (red). Check that none of the
+          // stuck buttons have a red computed colour. We check that the
+          // colour is not in the 'rgb(194' range (casebook danger is ~rgb(194,42,42)).
+          const noDanger = actionColors.every(
+            (c) =>
+              !c.color.startsWith('rgb(194') && !c.border.startsWith('rgb(194'),
+          );
+          check(
+            'stuck action buttons do not use the danger colour',
+            noDanger && actionColors.length > 0,
+          );
+        } else {
+          check('stuck action buttons do not use the danger colour', false);
+        }
+
+        // Take a screenshot showing the dock with a stuck delivery (round-2).
         await stuckPage.screenshot({
-          path: '/tmp/t6fix-stuck.png',
+          path: '/tmp/t6fix2-stuck.png',
           fullPage: false,
         });
-        console.log('  screenshot: /tmp/t6fix-stuck.png');
+        console.log('  screenshot: /tmp/t6fix2-stuck.png');
 
         // ---- Click the release button on the page -------------------------
         if (stuckVisible) {
@@ -3792,12 +3850,46 @@ async function run() {
             moveLinkVisible,
           );
 
-          // Take a screenshot showing the left session header.
+          // Geometry check: header text doesn't overflow the rail.
+          // The header row's scrollWidth must not exceed its clientWidth.
+          const headerNoOverflow = await leftPage
+            .evaluate(() => {
+              const headerRow = document.querySelector('.cb-dock-header-row');
+              if (!headerRow) return false;
+              return headerRow.scrollWidth <= headerRow.clientWidth + 2;
+            })
+            .catch(() => false);
+          check(
+            'left header row does not overflow (scrollWidth ≤ clientWidth)',
+            headerNoOverflow,
+          );
+
+          // Geometry check: AGENT ▾ button is not overlapped by the session label.
+          const noOverlap = await leftPage
+            .evaluate(() => {
+              const agentBtn = document.querySelector('.cb-dock-agent-btn');
+              const label = document.querySelector('.cb-dock-session-label');
+              if (!agentBtn || !label) return false;
+              const ar = agentBtn.getBoundingClientRect();
+              const lr = label.getBoundingClientRect();
+              // No overlap: label right must not extend into agent btn left.
+              return lr.right <= ar.left + 4;
+            })
+            .catch(() => false);
+          check('session label does not overlap AGENT ▾ button', noOverlap);
+
+          // Take screenshots showing the left session header (round-1 and round-2).
           await leftPage.screenshot({
             path: '/tmp/t6fix-left.png',
             fullPage: false,
           });
-          console.log('  screenshot: /tmp/t6fix-left.png');
+          await leftPage.screenshot({
+            path: '/tmp/t6fix2-left.png',
+            fullPage: false,
+          });
+          console.log(
+            '  screenshots: /tmp/t6fix-left.png  /tmp/t6fix2-left.png',
+          );
 
           // ---- Click "move to..." on the page ---------------------------------
           await leftPage.click('[data-testid="dock-move-link"]');
@@ -3847,6 +3939,56 @@ async function run() {
         }
       } finally {
         await leftPage.close();
+      }
+    }
+
+    // ---- scenario: silent session goes left without any other activity ----
+    // Verifies that the server publishes a sessions event when a session
+    // crosses the left threshold, so the page learns about it without any
+    // other session sending presence.
+    console.log('\nscenario: silent session goes left (server-pushed event)');
+
+    {
+      const silentPage = await context.newPage();
+      try {
+        await silentPage.setViewportSize({ width: 1600, height: 900 });
+
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        const ts = Date.now();
+        const sId = `probe-silent-${ts}`;
+
+        // Register a lone session. No other session will heartbeat.
+        await agent.presence(
+          sId,
+          'pi \u00b7 silent-ws',
+          '/home/court/silent-ws',
+        );
+        await agent.newThread(sId, 'silent-thread');
+
+        // Navigate to the page (dock picks sId as current).
+        await silentPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await silentPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        // Let the dock finish initial loading.
+        await silentPage.waitForTimeout(1500);
+
+        // Wait for CASEBOOK_LEFT_AFTER=3s to elapse (use 4s to be safe).
+        // The server's watch loop (WatchEvery=5s in production, shorter in tests)
+        // will publish a sessions event when it detects the crossing.
+        // The serve.mjs starts serve with WatchEvery at its default (5s).
+        // We wait up to 10s for the dock to show the left header.
+        const silentLeftVisible = await silentPage
+          .waitForSelector('.cb-dock-header[data-left]', { timeout: 10000 })
+          .then(() => true)
+          .catch(() => false);
+        check(
+          'silent session goes left without any other activity',
+          silentLeftVisible,
+        );
+      } finally {
+        await silentPage.close();
       }
     }
 

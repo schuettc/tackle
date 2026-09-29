@@ -237,6 +237,13 @@ function renderMsgCard(
     !isAgent && delivery?.stuck === true && msg.delivery_id === delivery.id;
 
   if (isStuckDelivery && delivery) {
+    // Show the stuck state in the footer with warning tone.
+    if (stateEl) {
+      stateEl.textContent = `delivered · stuck ${fmtAge(delivery.touched_at)}`;
+      stateEl.style.color = 'var(--kit-wait)';
+      stateEl.setAttribute('data-state', 'stuck');
+    }
+
     const d = delivery;
     const releaseBtn = h('button', {
       class: 'cb-dock-action',
@@ -249,7 +256,7 @@ function renderMsgCard(
 
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
     const moveBtn = h('button', {
-      class: 'cb-dock-action cb-dock-action--danger',
+      class: 'cb-dock-action',
       'data-action': 'move',
       onclick() {
         void openMoveSheet(ctx, d, otherSessions);
@@ -470,7 +477,7 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // ---- DOM elements --------------------------------------------------------
 
-  // Session header row: [● label] [AGENT ▾]
+  // Session header: top row [● label] [AGENT ▾], optional second row for left status.
   const sessionDot = h('span', { class: 'cb-dock-dot' });
   const sessionLabelEl = h('span', { class: 'cb-dock-session-label' });
   const sessionPickerBtn = h('button', {
@@ -492,11 +499,20 @@ export function makeDock(ctx: Ctx): DockHandle {
   });
   sessionPickerBtn.textContent = 'AGENT ▾';
 
+  // leftStatusRow is shown below the top row when the session is left.
+  const leftStatusRow = h('div', { class: 'cb-dock-left-row' });
+  leftStatusRow.hidden = true;
+
   const sessionHeader = h(
     'div',
     { class: 'cb-dock-header' },
-    h('span', { class: 'cb-dock-who' }, sessionDot, sessionLabelEl),
-    sessionPickerBtn,
+    h(
+      'div',
+      { class: 'cb-dock-header-row' },
+      h('span', { class: 'cb-dock-who' }, sessionDot, sessionLabelEl),
+      sessionPickerBtn,
+    ),
+    leftStatusRow,
   );
 
   // Thread chips row.
@@ -519,45 +535,37 @@ export function makeDock(ctx: Ctx): DockHandle {
     if (!sess) {
       sessionDot.style.background = 'var(--kit-muted)';
       sessionLabelEl.textContent = 'no session';
+      leftStatusRow.hidden = true;
       sessionHeader.removeAttribute('data-left');
       return;
     }
 
-    // left is server-computed (spec
-    const stale = !!sess.left; // true when last_seen > LeftAfter threshold
+    // left is server-computed: true when last_seen > LeftAfter threshold.
+    const stale = !!sess.left;
     sessionDot.style.background = 'var(--kit-agent)';
-    if (stale) {
-      // "pi · cwd left · N queued · move to…"
-      const cwd = sess.cwd
-        ? (sess.cwd.split('/').filter(Boolean).pop() ?? sess.cwd)
-        : '';
-      const harness = sess.harness || 'agent';
-      const leftLabel = cwd ? `${harness} · ${cwd} left` : `${harness} left`;
-      const queuedPart =
-        sess.queued > 0 ? ` · ${pluralize(sess.queued, 'queued')}` : '';
+    // Always show the session label on the top row (CSS truncates it).
+    sessionLabelEl.textContent = sessionLabel(sess);
 
-      sessionLabelEl.textContent = '';
-      sessionLabelEl.append(
-        leftLabel + queuedPart,
-        // " · move to…" as a button link.
-        h(
-          'button',
-          {
-            class: 'cb-dock-move-link',
-            'data-testid': 'dock-move-link',
-            onclick(e: Event) {
-              e.stopPropagation();
-              const others = sessions.filter((s) => s.id !== sess.id);
-              // For a left session, move all queued threads to a new session.
-              void openSessionMoveSheet(ctx, sess.id, others);
-            },
-          },
-          ' · move to…',
-        ),
-      );
+    if (stale) {
+      // Second row: "left · N queued · move to…" in muted mono.
+      const queuedPart = sess.queued > 0 ? ` · ${sess.queued} queued` : '';
+      leftStatusRow.textContent = '';
+      const moveLink = h('button', {
+        class: 'cb-dock-move-link',
+        'data-testid': 'dock-move-link',
+        onclick(e: Event) {
+          e.stopPropagation();
+          const others = sessions.filter((s) => s.id !== sess.id);
+          void openSessionMoveSheet(ctx, sess.id, others);
+        },
+      });
+      moveLink.textContent = 'move to…';
+      leftStatusRow.append(`left${queuedPart} · `, moveLink);
+      leftStatusRow.hidden = false;
       sessionHeader.setAttribute('data-left', '1');
     } else {
-      sessionLabelEl.textContent = sessionLabel(sess);
+      leftStatusRow.hidden = true;
+      leftStatusRow.textContent = '';
       sessionHeader.removeAttribute('data-left');
     }
   }

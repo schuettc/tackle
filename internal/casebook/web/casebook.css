@@ -402,10 +402,18 @@
 /* Session header */
 .cb-dock-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   padding: 14px 16px 8px;
   flex: none;
+  gap: 2px;
+}
+
+/* Top row: session dot+label on the left, AGENT \ u25be on the right. */
+.cb-dock-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
 }
 
 .cb-dock-who {
@@ -416,8 +424,6 @@
   color: var(--kit-fg);
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Agent-coloured presence dot */
@@ -431,12 +437,20 @@
 }
 
 .cb-dock-session-label {
-  display: flex;
-  align-items: center;
-  gap: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+/* Second row shown when the session is left: muted mono status line. */
+.cb-dock-left-row {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding-left: 16px;
 }
 
 /* "AGENT ▾" picker button */
@@ -562,14 +576,9 @@
   background: var(--kit-signal-soft);
 }
 
-.cb-dock-action--danger {
-  color: var(--kit-danger);
-  border-color: var(--kit-danger);
-}
-
-.cb-dock-action--danger:hover {
-  background: rgba(194 42 42 / 0.08);
-}
+/* --danger variant removed in round-2: release and move are not destructive.
+   Keep selector commented out so grep-for-danger catches accidental re-adds. */
+/* .cb-dock-action--danger { } */
 
 /* Agent card links: underlined, signal colour */
 .cb-dock-links {

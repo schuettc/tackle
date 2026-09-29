@@ -141,6 +141,8 @@ export async function startServe() {
       // Short left threshold so probes can test left-session UI without
       // waiting 60 seconds for a session to go left.
       CASEBOOK_LEFT_AFTER: '3s',
+      // Short watch interval so the left-crossing check fires quickly.
+      CASEBOOK_WATCH_EVERY: '1s',
     },
     stdio: 'pipe',
   });

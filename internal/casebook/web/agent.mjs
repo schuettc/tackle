@@ -115,13 +115,15 @@ export function createAgent(base, token) {
      * @param {number[]} ids — message ids
      * @param {string} state — 'answered' | 'declined' | 'failed'
      * @param {string} [text]
+     * @param {object} [attached] — optional attached data on the reply message
      */
-    async reply(session, ids, state, text) {
+    async reply(session, ids, state, text, attached) {
       return call('POST', '/api/agent/reply', {
         session,
         ids,
         state,
         text: text ?? '',
+        ...(attached ? { attached } : {}),
       });
     },
 
