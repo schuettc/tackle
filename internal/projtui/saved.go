@@ -42,27 +42,20 @@ func defaultLoadSaved() ([]Row, error) {
 	return rowsFromSaved(proj.SavedSessions(rec, proj.CurrentLiveState(), proj.DefaultTranscripts())), nil
 }
 
-// rowsFromSaved converts saved sessions into rows, labelling the first row
-// of each window group. A session that is open (running with a tab) is not
-// listed: it has nothing to restore, and a row that cannot be selected only
-// makes the view look broken.
+// rowsFromSaved converts saved sessions into rows. A session that is open
+// (running with a tab) is not listed: it has nothing to restore, and a row
+// that cannot be selected only makes the view look broken. Group headers are
+// added by visibleRows.
 func rowsFromSaved(ss []proj.SavedSession) []Row {
 	rows := make([]Row, 0, len(ss))
 	for _, s := range ss {
 		if !s.NeedsRestore() {
 			continue
 		}
-		group := ""
-		if len(rows) == 0 || rows[len(rows)-1].Window != s.Window {
-			group = "unplaced"
-			if s.Window > 0 {
-				group = fmt.Sprintf("window %d", s.Window)
-			}
-		}
 		rows = append(rows, Row{
 			Kind: RowSaved, Label: s.Name, Name: s.Name, Socket: s.Socket,
 			Dir: s.Dir, Agent: s.Agent, Project: s.Project,
-			Window: s.Window, Group: group, Conversation: s.Conversation,
+			Window: s.Window, Conversation: s.Conversation,
 			Running: s.Running, Attached: s.Attached, Transcript: s.Transcript,
 		})
 	}

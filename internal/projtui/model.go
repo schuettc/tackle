@@ -11,6 +11,7 @@
 package projtui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -88,6 +89,7 @@ const (
 	RowProject                // a project with no live session (entrance only)
 	RowNewWork                // synthetic "+ new work…" (project view, TOP)
 	RowSaved                  // a remembered session (saved scope)
+	RowHeader                 // a saved-scope window group label (not selectable)
 )
 
 // Row is one selectable line. Sessions carry Socket/Name for jumping; projects
@@ -105,10 +107,9 @@ type Row struct {
 	Unread         int
 	ActionRequired int
 
-	// Saved-scope fields (RowSaved only). Group is the layout label shown on
-	// the first row of each window group ("window N" / "unplaced").
+	// Saved-scope fields (RowSaved only). Window is the saved Ghostty window
+	// (0 = unplaced); visibleRows turns changes of it into header rows.
 	Window       int
-	Group        string
 	Conversation string
 	Running      bool
 	Attached     bool
@@ -214,6 +215,13 @@ type Model struct {
 	prime      func()
 	refreshing bool
 
+	// offset is the main list's scroll position and modelOffset the model
+	// overlay's; each moves only when its cursor crosses an edge.
+	// sessionsLoaded is false until the first background scan lands.
+	offset         int
+	modelOffset    int
+	sessionsLoaded bool
+
 	Result Result
 }
 
@@ -226,17 +234,18 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool, model
 		models = func(string) []string { return nil }
 	}
 	m := Model{
-		sessions:      sessions,
-		projects:      projects,
-		agentChoices:  agentChoicesFrom(defaultAgent),
-		sidebarChoice: sidebar,
-		models:        models,
-		refresh:       defaultRefresh,
-		kill:          proj.KillSession,
-		saveDefault:   proj.SaveDefaultModel,
-		checked:       map[string]bool{},
-		forget:        func(string) error { return nil },
-		help:          newHelp(),
+		sessions:       sessions,
+		projects:       projects,
+		agentChoices:   agentChoicesFrom(defaultAgent),
+		sidebarChoice:  sidebar,
+		models:         models,
+		refresh:        defaultRefresh,
+		kill:           proj.KillSession,
+		saveDefault:    proj.SaveDefaultModel,
+		checked:        map[string]bool{},
+		sessionsLoaded: true,
+		forget:         func(string) error { return nil },
+		help:           newHelp(),
 	}
 	m = m.reseedModels()
 	return m.rebuildEntrance()
@@ -276,6 +285,9 @@ func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row)
 	return sessions, projects
 }
 
+// liveSessions scans every proj server; a seam so tests never touch tmux.
+var liveSessions = proj.LiveSessions
+
 // defaultRefresh re-runs discovery via the real proj package and converts the
 // results into rows. On a roots load error it returns no rows.
 func defaultRefresh() (sessions, projects []Row) {
@@ -283,7 +295,7 @@ func defaultRefresh() (sessions, projects []Row) {
 	if err != nil {
 		return nil, nil
 	}
-	return buildRows(roots, proj.LiveSessions())
+	return buildRows(roots, liveSessions())
 }
 
 // New loads roots, config and live sessions, builds the entrance rows, and
@@ -296,8 +308,12 @@ func New() (Model, error) {
 	}
 	cfg := proj.LoadConfig()
 
-	sessions, projects := buildRows(roots, proj.LiveSessions())
+	// Folders come from the roots file alone, so the first frame draws at
+	// once; the tmux scan (about a second across many servers) runs in the
+	// background from Init and fills in the sessions.
+	sessions, projects := buildRows(roots, nil)
 	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
+	m.sessionsLoaded = false
 	m.defaultModel = cfg.DefaultModel
 	if cfg.DefaultModel != "" {
 		m = m.selectModel(cfg.DefaultModel)
@@ -321,8 +337,12 @@ func NewFor(project, agent string) (Model, error) {
 	}
 	cfg := proj.LoadConfig()
 
-	sessions, projects := buildRows(roots, proj.LiveSessions())
+	// Folders come from the roots file alone, so the first frame draws at
+	// once; the tmux scan (about a second across many servers) runs in the
+	// background from Init and fills in the sessions.
+	sessions, projects := buildRows(roots, nil)
 	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
+	m.sessionsLoaded = false
 	m.defaultModel = cfg.DefaultModel
 	if agent != "" {
 		m = m.selectAgent(agent)
@@ -377,11 +397,17 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// Init starts the first discovery at once (its result arms the live-refresh
+// tick) and, in the real picker, the background prime.
 func (m Model) Init() tea.Cmd {
-	if m.prime == nil {
-		return tickCmd()
+	first := tickCmd()
+	if m.refresh != nil || m.loadSaved != nil {
+		first = refreshCmd(m.refresh, m.loadSaved, true)
 	}
-	return tea.Batch(tickCmd(), primeCmd(m.prime))
+	if m.prime == nil {
+		return first
+	}
+	return tea.Batch(first, primeCmd(m.prime))
 }
 
 // primeCmd runs prime off the update loop and reports when it is done.
@@ -400,8 +426,12 @@ func (m Model) startRefresh(fromTick bool) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.refreshing = true
-	refresh, load := m.refresh, m.loadSaved
-	return m, func() tea.Msg {
+	return m, refreshCmd(m.refresh, m.loadSaved, fromTick)
+}
+
+// refreshCmd runs discovery off the update loop.
+func refreshCmd(refresh func() (sessions, projects []Row), load func() ([]Row, error), fromTick bool) tea.Cmd {
+	return func() tea.Msg {
 		msg := refreshedMsg{fromTick: fromTick}
 		if refresh != nil {
 			msg.live = true
@@ -420,6 +450,7 @@ func (m Model) applyRefreshed(msg refreshedMsg) (tea.Model, tea.Cmd) {
 	m.refreshing = false
 	if msg.live {
 		m.sessions, m.projects = msg.sessions, msg.projects
+		m.sessionsLoaded = true
 	}
 	if msg.saved {
 		m = m.applySaved(msg.savedRows, msg.savedErr)
@@ -438,6 +469,7 @@ func (m Model) rebuildEntrance() Model {
 	m.project = ""
 	m.filter = ""
 	m.cursor = 0
+	m.offset = 0
 	switch m.scope {
 	case scopeSessions:
 		m.rows = append([]Row(nil), m.sessions...)
@@ -446,6 +478,7 @@ func (m Model) rebuildEntrance() Model {
 	default:
 		m.rows = append([]Row(nil), m.projects...)
 	}
+	m.clampCursor() // off a leading group header
 	return m
 }
 
@@ -456,6 +489,7 @@ func (m Model) drillInto(project string) Model {
 	m.project = project
 	m.filter = ""
 	m.cursor = 0
+	m.offset = 0
 	rows := []Row{
 		{Kind: RowNewWork, Label: "+ new work…", Project: project},
 	}
@@ -470,21 +504,45 @@ func (m Model) drillInto(project string) Model {
 
 // visibleRows applies the fuzzy substring filter. The synthetic specials
 // (new work) are always visible so "+ new work…" stays at the top.
+// In the saved scope a header row precedes each window group that still has
+// a visible row, so a filter never leaves an empty group's label behind.
 func (m Model) visibleRows() []Row {
-	if m.filter == "" {
-		return m.rows
+	rows := m.rows
+	if m.filter != "" {
+		rows = nil
+		for _, r := range m.rows {
+			if r.Kind == RowNewWork || fuzzyMatch(m.filter, r.Label) {
+				rows = append(rows, r)
+			}
+		}
+	}
+	if m.view != viewEntrance || m.scope != scopeSaved {
+		return rows
 	}
 	var out []Row
-	for _, r := range m.rows {
-		if r.Kind == RowNewWork {
-			out = append(out, r)
-			continue
+	for i, r := range rows {
+		if i == 0 || rows[i-1].Window != r.Window {
+			label := "unplaced"
+			if r.Window > 0 {
+				label = fmt.Sprintf("window %d", r.Window)
+			}
+			out = append(out, Row{Kind: RowHeader, Label: label, Window: r.Window})
 		}
-		if fuzzyMatch(m.filter, r.Label) {
-			out = append(out, r)
-		}
+		out = append(out, r)
 	}
 	return out
+}
+
+// move steps the cursor by delta (±1), skipping group headers; at either end
+// it stays put.
+func (m *Model) move(delta int) {
+	vis := m.visibleRows()
+	for i := m.cursor + delta; i >= 0 && i < len(vis); i += delta {
+		if vis[i].Kind != RowHeader {
+			m.cursor = i
+			return
+		}
+	}
 }
 
 func (m Model) agentChoice() string {
@@ -501,7 +559,17 @@ func (m Model) modelChoice() string {
 	return m.modelChoices[m.modelIndex%len(m.modelChoices)]
 }
 
+// Update handles msg, then scrolls the list only as far as needed to keep the
+// cursor on screen.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if nm, ok := next.(Model); ok {
+		return nm.followCursor(), cmd
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -523,13 +591,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m.move(-1)
 		case tea.MouseButtonWheelDown:
-			if m.cursor < len(m.visibleRows())-1 {
-				m.cursor++
-			}
+			m.move(1)
 		}
 		return m, nil
 
@@ -722,14 +786,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.help.ShowAll = !m.help.ShowAll
 		return m, nil
 	case "up", "ctrl+p":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.move(-1)
 		return m, nil
 	case "down", "ctrl+n":
-		if m.cursor < len(m.visibleRows())-1 {
-			m.cursor++
-		}
+		m.move(1)
 		return m, nil
 	case "enter":
 		return m.activate()
@@ -825,9 +885,14 @@ func (m Model) reloadRoots() Model {
 }
 
 // rebuildPreserving rebuilds the ACTIVE view from the current rows,
-// preserving view/filter/project and clamping the cursor.
+// preserving view/filter/project/scroll. The cursor stays on the same row by
+// identity; if that row is gone it keeps its position (clamped).
 func (m Model) rebuildPreserving() Model {
-	view, filter, cursor, project := m.view, m.filter, m.cursor, m.project
+	view, filter, cursor, project, offset := m.view, m.filter, m.cursor, m.project, m.offset
+	selected := ""
+	if vis := m.visibleRows(); cursor < len(vis) {
+		selected = rowKey(vis[cursor])
+	}
 	if view == viewProject {
 		m = m.drillInto(project)
 	} else {
@@ -836,9 +901,27 @@ func (m Model) rebuildPreserving() Model {
 	m.view = view
 	m.filter = filter
 	m.project = project
+	m.offset = offset
 	m.cursor = cursor
+	if selected != "" {
+		for i, r := range m.visibleRows() {
+			if rowKey(r) == selected {
+				m.cursor = i
+				break
+			}
+		}
+	}
 	m.clampCursor()
 	return m
+}
+
+// rowKey identifies a row across refreshes.
+func rowKey(r Row) string {
+	name := r.Name
+	if name == "" {
+		name = r.Label
+	}
+	return fmt.Sprint(int(r.Kind), "\x1f", name)
 }
 
 // reap kills the highlighted session. The first ^x arms a confirmation; a
@@ -931,12 +1014,28 @@ func editorFields() []string {
 }
 
 func (m *Model) clampCursor() {
-	n := len(m.visibleRows())
+	vis := m.visibleRows()
+	n := len(vis)
 	if m.cursor >= n {
 		m.cursor = n - 1
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
+	}
+	// Never rest on a group header: the next row down, else the next up.
+	if n > 0 && vis[m.cursor].Kind == RowHeader {
+		for i := m.cursor; i < n; i++ {
+			if vis[i].Kind != RowHeader {
+				m.cursor = i
+				return
+			}
+		}
+		for i := m.cursor; i >= 0; i-- {
+			if vis[i].Kind != RowHeader {
+				m.cursor = i
+				return
+			}
+		}
 	}
 }
 

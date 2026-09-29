@@ -4,6 +4,21 @@ All notable changes to `scratch` and `proj` are documented here (proj entries ar
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [proj 0.6.1] - 2026-09-29
+
+### Changed
+- The picker's layout is fixed: the footer is pinned to the bottom two lines
+  (a message line, then the keys, with `tab` and `?` right-aligned), the list
+  and preview keep a constant height, and `?` shows the key list inside the
+  preview frame instead of growing the footer.
+- The list scrolls only when the cursor reaches its top or bottom edge, and
+  the highlight stays on its session when a refresh adds rows above it.
+- One row layout on every tab: a status cell (`▸` folder, `●` session, `[x]`
+  saved) then the name, so names line up. The title shows all three tabs with
+  the current one highlighted; saved window groups are header lines.
+- The first frame draws at once (folders need no tmux scan); sessions and
+  saved show "loading…" until the background scan lands.
+
 ## [proj 0.6.0] - 2026-09-29
 
 ### Added
