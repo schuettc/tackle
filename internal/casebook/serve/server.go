@@ -167,8 +167,14 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 			q.LeftAfter = d
 		}
 	}
+	watchEvery := 5 * time.Second
+	if we := os.Getenv("CASEBOOK_WATCH_EVERY"); we != "" {
+		if d, err := time.ParseDuration(we); err == nil && d > 0 {
+			watchEvery = d
+		}
+	}
 	s := &Server{App: a, DB: d, Queue: q, Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
-		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
+		Now: time.Now, Wait: 60 * time.Second, WatchEvery: watchEvery, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
 	// Record the serve lifetime context now so lanes started during New (a
 	// restart resume) are cancelled when serve stops. Run passes the same
 	// cancelable context and re-records it alongside s.stop.
@@ -414,12 +420,58 @@ func (s *Server) rebuild(ctx context.Context) error {
 	return nil
 }
 
+// checkLeftCrossings detects sessions that have just crossed the left-threshold
+// in either direction and publishes one "sessions" event per crossing.
+// knownLeft is caller-owned state (a map from session ID to its last-known
+// left flag); it is mutated in place. Returns true when an event was emitted.
+// Called on each watch tick so no second polling system is needed.
+func (s *Server) checkLeftCrossings(ctx context.Context, knownLeft map[string]bool) bool {
+	sessions, err := s.Queue.Sessions(ctx)
+	if err != nil {
+		return false
+	}
+	currentLeft := make(map[string]bool, len(sessions))
+	for _, sess := range sessions {
+		currentLeft[sess.ID] = sess.Left
+	}
+	changed := false
+	for id, wasLeft := range knownLeft {
+		if _, exists := currentLeft[id]; !exists || currentLeft[id] != wasLeft {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		for id, isLeft := range currentLeft {
+			if _, seen := knownLeft[id]; !seen {
+				// New session — only matters if it's already left.
+				if isLeft {
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	// Rebuild knownLeft to match current state.
+	for k := range knownLeft {
+		delete(knownLeft, k)
+	}
+	for k, v := range currentLeft {
+		knownLeft[k] = v
+	}
+	if changed {
+		s.publish(ctx, "sessions", map[string]any{})
+	}
+	return changed
+}
+
 // watch rebuilds whenever the casebook repo's HEAD moves (a sync or a CLI
 // decision elsewhere), and trims the event log daily.
 func (s *Server) watch(ctx context.Context) {
 	t := time.NewTicker(s.WatchEvery)
 	defer t.Stop()
 	lastTrim := time.Now()
+	knownLeft := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -430,6 +482,7 @@ func (s *Server) watch(ctx context.Context) {
 					fmt.Fprintf(os.Stderr, "casebook serve: rebuild: %v\n", err)
 				}
 			}
+			s.checkLeftCrossings(ctx, knownLeft)
 			if time.Since(lastTrim) > 24*time.Hour {
 				_ = s.Bus.Trim(ctx, 7*24*time.Hour)
 				if err := s.Props.TrimProgressLog(ctx); err != nil {

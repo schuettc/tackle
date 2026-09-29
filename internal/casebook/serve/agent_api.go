@@ -151,10 +151,11 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Session string  `json:"session"`
-		IDs     []int64 `json:"ids"`
-		State   string  `json:"state"`
-		Text    string  `json:"text"`
+		Session  string           `json:"session"`
+		IDs      []int64          `json:"ids"`
+		State    string           `json:"state"`
+		Text     string           `json:"text"`
+		Attached deliver.Attached `json:"attached"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -165,7 +166,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text)
+	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text, in.Attached)
 	if err != nil {
 		if errors.Is(err, deliver.ErrNotFound) {
 			reply(w, nil, httpError{code: http.StatusNotFound, msg: err.Error()})

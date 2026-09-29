@@ -572,7 +572,14 @@ type SkippedMessage struct {
 //
 // Late replies (to unanswered or interrupted messages from this session) are
 // accepted when state is a final state (answered, declined, failed).
-func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string) ([]int64, []SkippedMessage, error) {
+// Reply settles messages and optionally posts an agent reply text. The optional
+// replyAttached argument (at most one) sets attached items on the reply message;
+// callers that omit it get the existing behaviour (no attached).
+func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string, replyAttached ...Attached) ([]int64, []SkippedMessage, error) {
+	var att Attached
+	if len(replyAttached) > 0 {
+		att = replyAttached[0]
+	}
 	switch state {
 	case Received, Working, Answered, Declined, Failed:
 	default:
@@ -631,8 +638,13 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 			}
 		}
 		if text != "" && thread != 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, reply_to, state, created_at) VALUES (?, ?, ?, ?, 'reply', ?)`,
-				thread, session, text, ids[0], now); err != nil {
+			attJSON := ""
+			if !att.Empty() {
+				b, _ := json.Marshal(att)
+				attJSON = string(b)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, attached, reply_to, state, created_at) VALUES (?, ?, ?, ?, ?, 'reply', ?)`,
+				thread, session, text, attJSON, ids[0], now); err != nil {
 				return err
 			}
 		}
