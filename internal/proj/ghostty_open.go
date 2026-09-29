@@ -3,6 +3,8 @@ package proj
 import (
 	"fmt"
 	"io"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -36,11 +38,24 @@ var hasClient = func(socket, name string) bool {
 // checks per tab, as tmux-reopen did).
 var attachPoll = 500 * time.Millisecond
 
+// tmuxBin resolves tmux to an absolute path from proj's own PATH. Ghostty
+// runs a surface command as `bash --noprofile --norc -c …`, whose PATH lacks
+// Homebrew's bin, so a bare `tmux` there is "not found". Falls back to the
+// bare name when proj itself cannot find tmux. A seam for tests.
+var tmuxBin = func() string {
+	if p, err := exec.LookPath("tmux"); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+	}
+	return "tmux"
+}
+
 // attachCommand is what each Ghostty surface runs: attach to exactly this
-// session on its own server. quoteTarget keeps the `=` exact-match prefix
-// inside quotes, because Ghostty runs the command through the login shell.
+// session on its own server. Every word is quoted for that bash -c;
+// quoteTarget keeps the `=` exact-match prefix inside the quotes.
 func attachCommand(s SavedSession) string {
-	return "tmux -L " + s.Socket + " attach -t " + quoteTarget(s.Name)
+	return shellQuote(tmuxBin()) + " -L " + shellQuote(s.Socket) + " attach -t " + quoteTarget(s.Name)
 }
 
 // GhosttyOpen opens each group as one Ghostty window, its first session in

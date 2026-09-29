@@ -16,8 +16,9 @@ type scriptCall struct {
 func fakeGhostty(t *testing.T, attached bool) *[]scriptCall {
 	t.Helper()
 	var calls []scriptCall
-	origScript, origClient, origWait := osascript, hasClient, attachPoll
-	t.Cleanup(func() { osascript, hasClient, attachPoll = origScript, origClient, origWait })
+	origScript, origClient, origWait, origTmux := osascript, hasClient, attachPoll, tmuxBin
+	t.Cleanup(func() { osascript, hasClient, attachPoll, tmuxBin = origScript, origClient, origWait, origTmux })
+	tmuxBin = func() string { return "/opt/homebrew/bin/tmux" }
 	attachPoll = 0
 	hasClient = func(socket, name string) bool { return attached }
 	osascript = func(script string, args ...string) (string, error) {
@@ -46,7 +47,9 @@ func TestGhosttyOpenScript(t *testing.T) {
 	if !strings.Contains(got[0].script, "new window") || !strings.Contains(got[1].script, "new tab in") || !strings.Contains(got[2].script, "new window") {
 		t.Fatalf("scripts in wrong order: %+v", got)
 	}
-	if got[0].args[0] != "tmux -L proj-a attach -t '=a/1'" {
+	// Ghostty runs the command in a bare `bash --noprofile --norc`, so tmux
+	// must be named by absolute path: Homebrew's bin is not on that PATH.
+	if got[0].args[0] != "'/opt/homebrew/bin/tmux' -L 'proj-a' attach -t '=a/1'" {
 		t.Fatalf("attach command = %q", got[0].args[0])
 	}
 	if got[1].args[1] != "win-1" {
@@ -70,5 +73,12 @@ func TestGhosttyOpenReportsNoAttach(t *testing.T) {
 	}
 	if len(*calls) != 2 {
 		t.Fatalf("stopped after a failed attach: %d calls", len(*calls))
+	}
+}
+
+func TestTmuxBinIsAbsolute(t *testing.T) {
+	requireTmux(t)
+	if p := tmuxBin(); !strings.HasPrefix(p, "/") {
+		t.Fatalf("tmuxBin() = %q; want an absolute path", p)
 	}
 }
