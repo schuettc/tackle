@@ -83,12 +83,15 @@ type Row struct {
 	ActionRequired int
 }
 
-// Result is what the user chose. Kind is "" (cancel), "jump", or "new".
+// Result is what the user chose. Kind is "" (cancel), "jump", "new", or
+// "restore" (Names; Name set too means jump to it instead of rebuilding
+// Ghostty windows).
 //   - jump: Socket+Name identify the session to attach/switch to.
 //   - new:  Project+Work (Work=="" means the home session, name==project) plus
 //     the chosen Agent and Sidebar; the caller runs EnsureSession then Goto.
 type Result struct {
 	Kind    string
+	Names   []string // restore: the saved sessions to bring back, in saved order
 	Project string
 	Work    string
 	Agent   string

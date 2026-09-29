@@ -162,6 +162,9 @@ func cmdSnapshot(args []string) int {
 // runPicker builds the Bubble Tea model, runs it, and executes the user's
 // Result: "new" → EnsureSession then Goto; "jump" → Goto.
 func runPicker(project, agent string) int {
+	// Record every live server (and hook it) before the picker reads the
+	// record, so sessions from before this proj are restorable immediately.
+	proj.PrimeAll()
 	m, err := projtui.NewFor(project, agent)
 	if err != nil {
 		if errors.Is(err, proj.ErrNoRoots) {
@@ -202,6 +205,8 @@ func runPicker(project, agent string) int {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
 		}
+	case "restore":
+		return runRestore(res.Names, res.Name, os.Stdout)
 	}
 	return 0
 }
