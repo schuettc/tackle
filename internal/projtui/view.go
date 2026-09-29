@@ -109,8 +109,11 @@ func (m Model) layout(iw int) (listW, previewW int, showPreview bool) {
 func (m Model) titleBar(width int) string {
 	label := " proj "
 	info := "· folders "
-	if m.scope == scopeSessions {
+	switch m.scope {
+	case scopeSessions:
 		info = "· sessions "
+	case scopeSaved:
+		info = "· saved "
 	}
 	if m.view == viewProject {
 		info = "· " + m.project + " "
@@ -175,7 +178,9 @@ func (m Model) emptyMessage() string {
 	case m.filter != "":
 		msg = "no matches — esc to clear the filter"
 	case m.scope == scopeSessions:
-		msg = "no live sessions — tab for folders"
+		msg = "no live sessions — tab for saved"
+	case m.scope == scopeSaved:
+		msg = "nothing saved yet — sessions are recorded as you use them"
 	case len(m.projects) == 0:
 		msg = "no projects yet — ^a to add a root, ^e to edit roots"
 	default:
@@ -279,9 +284,37 @@ func plainRow(r Row) string {
 		return s
 	case RowProject:
 		return "○ " + r.Label
+	case RowSaved:
+		return savedRowText(r)
 	default:
 		return r.Label
 	}
+}
+
+// savedRowText is a saved row: the window-group label (first row of each
+// group only), the restore checkbox (only on rows restoring would change),
+// ● running / ○ saved, the name, the agent, and a note when the saved
+// conversation's transcript is gone (it would restore as a fresh session).
+func savedRowText(r Row) string {
+	box := "   "
+	if needsRestore(r) {
+		box = "[ ]"
+		if r.Checked {
+			box = "[x]"
+		}
+	}
+	dot := "○"
+	if r.Running {
+		dot = "●"
+	}
+	s := fmt.Sprintf("%-9s %s %s %s", r.Group, box, dot, r.Label)
+	if r.Agent != "" {
+		s += "  " + r.Agent
+	}
+	if r.Conversation != "" && !r.Transcript {
+		s += "  (no transcript)"
+	}
+	return s
 }
 
 // renderRow formats a single row. The selected row is a full-width highlight
@@ -311,6 +344,8 @@ func (m Model) renderRow(r Row, selected bool, width int) string {
 		line = dot + " " + r.Label + meta + attentionMarkers(r)
 	case RowProject:
 		line = dimStyle.Render("○") + " " + r.Label
+	case RowSaved:
+		line = savedRowText(r)
 	default: // RowNewWork
 		line = r.Label
 	}
@@ -354,6 +389,16 @@ func (m Model) previewPane(width int) string {
 	b.WriteString(dimStyle.Render(strings.Repeat("─", width)) + "\n")
 	b.WriteString(previewStyle.Render(trunc(name, width)) + "\n")
 
+	if r.Kind == RowSaved {
+		state := "saved"
+		if r.Running {
+			state = "running"
+		}
+		b.WriteString(agentStyle.Render(r.Agent) + dimStyle.Render(" — "+state) + "\n")
+		if r.Conversation != "" {
+			b.WriteString(dimStyle.Render(trunc(r.Conversation, width)) + "\n")
+		}
+	}
 	if r.Kind == RowSession {
 		if r.Agent != "" {
 			state := r.State
@@ -436,6 +481,16 @@ func bind(k, desc string) key.Binding {
 // Agent/sidebar are new-session settings and appear only in the new-work input,
 // never while browsing or jumping to an existing session.
 func (m Model) shortHelp() []key.Binding {
+	if m.view == viewEntrance && m.scope == scopeSaved {
+		return []key.Binding{
+			bind("space", "toggle"),
+			bind("^r", "restore"),
+			bind("↵", "restore one"),
+			bind("^s", "save layout"),
+			bind("^x", "forget"),
+			bind("tab", otherScopeLabel(m.scope)),
+		}
+	}
 	if m.view == viewEntrance {
 		return []key.Binding{
 			bind("↵", "open"),
@@ -504,10 +559,14 @@ func dotColor(state string) lipgloss.Color {
 
 // otherScopeLabel names the scope tab will switch TO (an action label).
 func otherScopeLabel(s entranceScope) string {
-	if s == scopeSessions {
+	switch nextScope(s) {
+	case scopeSessions:
+		return "sessions"
+	case scopeSaved:
+		return "saved"
+	default:
 		return "folders"
 	}
-	return "sessions"
 }
 
 func onOff(b bool) string {

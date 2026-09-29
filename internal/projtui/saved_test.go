@@ -1,0 +1,212 @@
+package projtui
+
+import (
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// savedFixture is a, b, c across one layout window and the unplaced group:
+// a is not running, b is running with a tab, c is running with no tab.
+func savedFixture() []Row {
+	return []Row{
+		{Kind: RowSaved, Label: "x/a", Name: "x/a", Socket: "proj-x", Agent: "pi", Window: 1, Group: "window 1", Conversation: "id-a", Transcript: true},
+		{Kind: RowSaved, Label: "x/b", Name: "x/b", Socket: "proj-x", Agent: "claude", Window: 1, Running: true, Attached: true, Conversation: "id-b", Transcript: true},
+		{Kind: RowSaved, Label: "y/c", Name: "y/c", Socket: "proj-y", Agent: "pi", Window: 0, Group: "unplaced", Running: true, Conversation: "gone"},
+	}
+}
+
+type savedFakes struct {
+	rows     []Row
+	forgot   []string
+	killed   []string
+	layoutN  [2]int
+	layoutEr error
+}
+
+// newSavedModel builds an entrance model already on the saved scope, backed
+// by fakes for every saved-scope side effect.
+func newSavedModel(t *testing.T, rows []Row) (Model, *savedFakes) {
+	t.Helper()
+	f := &savedFakes{rows: rows}
+	m := newTestModel(nil)
+	m.loadSaved = func() ([]Row, error) { return f.rows, nil }
+	m.forget = func(name string) error { f.forgot = append(f.forgot, name); return nil }
+	m.kill = func(socket, name string) error { f.killed = append(f.killed, name); return nil }
+	m.saveLayout = func() (int, int, error) { return f.layoutN[0], f.layoutN[1], f.layoutEr }
+	m.refresh = func() (sessions, projects []Row) { return nil, nil }
+	m = press(m, "tab") // folders → sessions
+	m = press(m, "tab") // sessions → saved
+	if m.scope != scopeSaved {
+		t.Fatalf("scope = %v want saved", m.scope)
+	}
+	return m, f
+}
+
+func pressKey(m Model, k tea.KeyType) Model {
+	next, _ := m.Update(tea.KeyMsg{Type: k})
+	return next.(Model)
+}
+
+func space(m Model) Model { return pressKey(m, tea.KeySpace) }
+
+func TestTabCyclesThreeScopes(t *testing.T) {
+	m := newTestModel(nil)
+	m.width, m.height = 100, 30
+	want := []entranceScope{scopeSessions, scopeSaved, scopeFolders}
+	for _, w := range want {
+		m = press(m, "tab")
+		if m.scope != w {
+			t.Fatalf("scope = %v want %v", m.scope, w)
+		}
+		if w == scopeSaved && !strings.Contains(m.View(), "· saved") {
+			t.Fatal("title does not name the saved scope")
+		}
+	}
+}
+
+func TestSavedDefaultChecks(t *testing.T) {
+	m, _ := newSavedModel(t, savedFixture())
+	if !m.checked["x/a"] || !m.checked["y/c"] {
+		t.Fatalf("needs-restore rows not checked: %v", m.checked)
+	}
+	if _, ok := m.checked["x/b"]; ok {
+		t.Fatalf("running+attached row is checkable: %v", m.checked)
+	}
+}
+
+func TestSpaceToggles(t *testing.T) {
+	m, _ := newSavedModel(t, savedFixture())
+	m = space(m)
+	if m.checked["x/a"] {
+		t.Fatal("space did not uncheck the highlighted row")
+	}
+	m = space(m)
+	if !m.checked["x/a"] || m.filter != "" {
+		t.Fatalf("space did not recheck (checked=%v filter=%q)", m.checked["x/a"], m.filter)
+	}
+	// Outside the saved scope, space is still a filter character.
+	s := sessionsScope(newTestModel(nil))
+	if s = space(s); s.filter != " " {
+		t.Fatalf("sessions scope filter = %q want a space", s.filter)
+	}
+}
+
+func TestCtrlRRestoresChecked(t *testing.T) {
+	m, _ := newSavedModel(t, savedFixture())
+	m = space(m) // uncheck x/a
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = next.(Model)
+	if cmd == nil || m.Result.Kind != "restore" || !slices.Equal(m.Result.Names, []string{"y/c"}) || m.Result.Name != "" {
+		t.Fatalf("result = %+v (quit=%v)", m.Result, cmd != nil)
+	}
+
+	m, _ = newSavedModel(t, savedFixture())
+	m = space(m)
+	m = press(m, "down")
+	m = press(m, "down")
+	m = space(m) // uncheck y/c too
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	m = next.(Model)
+	if cmd != nil || m.Result.Kind != "" || !strings.Contains(m.footerHint, "nothing checked") {
+		t.Fatalf("empty ^r: result=%+v hint=%q", m.Result, m.footerHint)
+	}
+}
+
+func TestEnterRestoresOne(t *testing.T) {
+	m, _ := newSavedModel(t, savedFixture())
+	m = press(m, "enter")
+	want := Result{Kind: "restore", Names: []string{"x/a"}, Name: "x/a", Socket: "proj-x"}
+	if m.Result.Kind != want.Kind || !slices.Equal(m.Result.Names, want.Names) || m.Result.Name != want.Name || m.Result.Socket != want.Socket {
+		t.Fatalf("result = %+v want %+v", m.Result, want)
+	}
+}
+
+func TestCtrlSSavesLayout(t *testing.T) {
+	m, f := newSavedModel(t, savedFixture())
+	f.layoutN = [2]int{2, 5}
+	m = pressKey(m, tea.KeyCtrlS)
+	if m.footerHint != "layout saved: 2 windows, 5 tabs" {
+		t.Fatalf("hint = %q", m.footerHint)
+	}
+	f.layoutEr = errors.New("Ghostty is not running")
+	m = pressKey(m, tea.KeyCtrlS)
+	if m.footerHint != "save layout: Ghostty is not running" {
+		t.Fatalf("hint = %q", m.footerHint)
+	}
+}
+
+func TestCtrlXForgetsSaved(t *testing.T) {
+	m, f := newSavedModel(t, savedFixture())
+	m = press(m, "ctrl+x")
+	m = press(m, "ctrl+x") // confirm on x/a (not running)
+	if !slices.Equal(f.forgot, []string{"x/a"}) || len(f.killed) != 0 {
+		t.Fatalf("forgot=%v killed=%v; want forget only", f.forgot, f.killed)
+	}
+
+	m, f = newSavedModel(t, savedFixture())
+	m = press(m, "down") // x/b, running
+	m = press(m, "ctrl+x")
+	m = press(m, "ctrl+x")
+	if !slices.Equal(f.killed, []string{"x/b"}) || !slices.Equal(f.forgot, []string{"x/b"}) {
+		t.Fatalf("forgot=%v killed=%v; want both for a running row", f.forgot, f.killed)
+	}
+	_ = m
+}
+
+func TestReapForgetsInSessionsScope(t *testing.T) {
+	m := sessionsScope(newTestModel([]Row{{Kind: RowSession, Label: "x/a", Name: "x/a", Socket: "proj-x"}}))
+	var forgot []string
+	m.kill = func(socket, name string) error { return nil }
+	m.forget = func(name string) error { forgot = append(forgot, name); return nil }
+	m.refresh = nil // no real tmux discovery after the reap
+	m = press(m, "ctrl+x")
+	m = press(m, "ctrl+x")
+	if !slices.Equal(forgot, []string{"x/a"}) {
+		t.Fatalf("reap did not forget: %v", forgot)
+	}
+}
+
+func TestRefreshKeepsChecks(t *testing.T) {
+	m, f := newSavedModel(t, savedFixture())
+	m = space(m) // uncheck x/a
+	f.rows = append(savedFixture(), Row{Kind: RowSaved, Label: "z/new", Name: "z/new", Socket: "proj-z", Group: "unplaced"})
+	next, _ := m.Update(tickMsg{})
+	m = next.(Model)
+	if m.checked["x/a"] {
+		t.Fatal("refresh re-checked a row the operator unchecked")
+	}
+	if !m.checked["z/new"] {
+		t.Fatal("a newly saved row was not checked by default")
+	}
+}
+
+func TestSavedEmpty(t *testing.T) {
+	m, _ := newSavedModel(t, nil)
+	m.width, m.height = 100, 30
+	if !strings.Contains(m.View(), "nothing saved yet") {
+		t.Fatal("empty saved scope has no guidance")
+	}
+}
+
+func TestSavedRowRender(t *testing.T) {
+	m, _ := newSavedModel(t, savedFixture())
+	rows := m.visibleRows()
+	first := plainRow(rows[0])
+	for _, want := range []string{"window 1", "[x]", "○", "x/a", "pi"} {
+		if !strings.Contains(first, want) {
+			t.Errorf("row %q missing %q", first, want)
+		}
+	}
+	second := plainRow(rows[1])
+	if strings.Contains(second, "window 1") || strings.Contains(second, "[") || !strings.Contains(second, "●") {
+		t.Errorf("attached row %q: want no group label repeat, no box, ●", second)
+	}
+	third := plainRow(rows[2])
+	if !strings.Contains(third, "unplaced") || !strings.Contains(third, "(no transcript)") {
+		t.Errorf("row %q missing unplaced/(no transcript)", third)
+	}
+}

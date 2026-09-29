@@ -50,12 +50,14 @@ const (
 )
 
 // entranceScope selects what the entrance view lists: folders (projects, the
-// default launcher view) or live sessions. Toggled with tab at the entrance.
+// default launcher view), live sessions, or saved sessions (the restore
+// view). tab cycles through them at the entrance.
 type entranceScope int
 
 const (
 	scopeFolders entranceScope = iota
 	scopeSessions
+	scopeSaved
 )
 
 // RowKind tags a row so the renderer and enter-handler know how to treat it.
@@ -65,6 +67,7 @@ const (
 	RowSession RowKind = iota // a live tmux session
 	RowProject                // a project with no live session (entrance only)
 	RowNewWork                // synthetic "+ new work…" (project view, TOP)
+	RowSaved                  // a remembered session (saved scope)
 )
 
 // Row is one selectable line. Sessions carry Socket/Name for jumping; projects
@@ -81,6 +84,16 @@ type Row struct {
 	Project        string
 	Unread         int
 	ActionRequired int
+
+	// Saved-scope fields (RowSaved only). Group is the layout label shown on
+	// the first row of each window group ("window N" / "unplaced").
+	Window       int
+	Group        string
+	Conversation string
+	Running      bool
+	Attached     bool
+	Transcript   bool
+	Checked      bool
 }
 
 // Result is what the user chose. Kind is "" (cancel), "jump", "new", or
@@ -164,6 +177,16 @@ type Model struct {
 	kill        func(socket, name string) error
 	reapConfirm string
 
+	// saved is the saved scope's rows, checked the restore selection by name
+	// (present = seen; false = the operator unchecked it). loadSaved, forget
+	// and saveLayout are seams: newModel leaves them inert so tests never read
+	// or write the real record; New/NewFor wire the real ones.
+	saved      []Row
+	checked    map[string]bool
+	loadSaved  func() ([]Row, error)
+	forget     func(name string) error
+	saveLayout func() (windows, tabs int, err error)
+
 	Result Result
 }
 
@@ -184,6 +207,8 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool, model
 		refresh:       defaultRefresh,
 		kill:          proj.KillSession,
 		saveDefault:   proj.SaveDefaultModel,
+		checked:       map[string]bool{},
+		forget:        func(string) error { return nil },
 		help:          newHelp(),
 	}
 	m = m.reseedModels()
@@ -245,7 +270,7 @@ func New() (Model, error) {
 	cfg := proj.LoadConfig()
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
-	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
 	m.defaultModel = cfg.DefaultModel
 	if cfg.DefaultModel != "" {
 		m = m.selectModel(cfg.DefaultModel)
@@ -270,7 +295,7 @@ func NewFor(project, agent string) (Model, error) {
 	cfg := proj.LoadConfig()
 
 	sessions, projects := buildRows(roots, proj.LiveSessions())
-	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
 	m.defaultModel = cfg.DefaultModel
 	if agent != "" {
 		m = m.selectAgent(agent)
@@ -334,9 +359,12 @@ func (m Model) rebuildEntrance() Model {
 	m.project = ""
 	m.filter = ""
 	m.cursor = 0
-	if m.scope == scopeSessions {
+	switch m.scope {
+	case scopeSessions:
 		m.rows = append([]Row(nil), m.sessions...)
-	} else {
+	case scopeSaved:
+		m.rows = append([]Row(nil), m.saved...)
+	default:
 		m.rows = append([]Row(nil), m.projects...)
 	}
 	return m
@@ -578,17 +606,21 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.footerHint = ""
 		return m, nil
 	}
+	if m.view == viewEntrance && m.scope == scopeSaved {
+		if next, cmd, ok := m.updateSaved(msg); ok {
+			return next, cmd
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "tab":
-		// tab toggles the entrance scope; agent/sidebar are new-session settings
+		// tab cycles the entrance scope; agent/sidebar are new-session settings
 		// and live in the new-work input, not the browse view.
 		if m.view == viewEntrance {
-			if m.scope == scopeFolders {
-				m.scope = scopeSessions
-			} else {
-				m.scope = scopeFolders
+			m.scope = nextScope(m.scope)
+			if m.scope == scopeSaved {
+				m = m.reloadSaved()
 			}
 			return m.rebuildEntrance(), nil
 		}
@@ -656,6 +688,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case RowProject:
 		return m.drillInto(row.Label), nil
+	case RowSaved:
+		m.Result = Result{Kind: "restore", Names: []string{row.Name}, Name: row.Name, Socket: row.Socket}
+		return m, tea.Quit
 	case RowNewWork:
 		ti := textinput.New()
 		ti.Placeholder = "work name"
@@ -709,6 +744,9 @@ func (m Model) refreshRows() Model {
 		return m
 	}
 	m.sessions, m.projects = m.refresh()
+	if m.scope == scopeSaved {
+		m = m.reloadSaved()
+	}
 	view, filter, cursor, project := m.view, m.filter, m.cursor, m.project
 	if view == viewProject {
 		m = m.drillInto(project)
@@ -732,30 +770,48 @@ func (m Model) reap() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	row := vis[m.cursor]
-	if row.Kind != RowSession {
+	if row.Kind != RowSession && row.Kind != RowSaved {
 		m.reapConfirm = ""
 		m.footerHint = "nothing to reap here"
 		return m, nil
 	}
-	if row.Name == proj.CurrentSessionName() {
+	// A saved session that is not running has nothing to kill: ^x forgets it.
+	live := row.Kind == RowSession || row.Running
+	if live && row.Name == proj.CurrentSessionName() {
 		m.reapConfirm = ""
 		m.footerHint = "can't reap the session you're in"
 		return m, nil
 	}
+	verb := "reap"
+	if !live {
+		verb = "forget"
+	}
 	if m.reapConfirm != row.Name {
 		m.reapConfirm = row.Name
-		m.footerHint = "reap " + row.Name + "? ^x to confirm · any key cancels"
+		m.footerHint = verb + " " + row.Name + "? ^x to confirm · any key cancels"
 		return m, nil
 	}
 	m.reapConfirm = ""
-	if m.kill != nil {
+	if live && m.kill != nil {
 		if err := m.kill(row.Socket, row.Name); err != nil {
 			m.footerHint = "reap: " + err.Error()
 			return m, nil
 		}
 	}
+	// Reaping is the one way a session leaves the saved record (a plain tmux
+	// kill or a reboot keeps it restorable).
+	if err := m.forget(row.Name); err != nil {
+		m.footerHint = "forget: " + err.Error()
+		return m, nil
+	}
 	m = m.refreshRows()
-	m.footerHint = "reaped " + row.Name
+	if m.scope == scopeSaved {
+		m = m.reloadSaved().rebuildKeepCursor()
+	}
+	m.footerHint = verb + "ed " + row.Name
+	if !live {
+		m.footerHint = "forgot " + row.Name
+	}
 	return m, nil
 }
 
