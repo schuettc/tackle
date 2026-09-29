@@ -138,6 +138,9 @@ export async function startServe() {
       // waiting 10 minutes. Tests that need this wait 3+ seconds after
       // picking up a delivery.
       CASEBOOK_STUCK_AFTER: '2s',
+      // Short left threshold so probes can test left-session UI without
+      // waiting 60 seconds for a session to go left.
+      CASEBOOK_LEFT_AFTER: '3s',
     },
     stdio: 'pipe',
   });

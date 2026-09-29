@@ -156,5 +156,15 @@ export function createAgent(base, token) {
     async moveDelivery(id, session) {
       return call('POST', '/api/deliveries/move', { id, session });
     },
+
+    /**
+     * POST /api/sessions/move — move all threads from a left session to another.
+     * Used when a left session has queued messages and no in-flight delivery.
+     * @param {string} from — source session id
+     * @param {string} to — target session id
+     */
+    async moveSession(from, to) {
+      return call('POST', '/api/sessions/move', { session: from, target: to });
+    },
   };
 }

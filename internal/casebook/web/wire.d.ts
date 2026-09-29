@@ -288,6 +288,7 @@ export interface Session {
   looked_at?: string;
   busy: boolean;
   queued: number;
+  left?: boolean;
 }
 
 export interface Delivery {

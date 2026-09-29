@@ -1384,6 +1384,9 @@ function makeAttention(ctx) {
   }
   function applyCounts(counts) {
     if (!counts) return;
+    for (const v of VIEWS) {
+      if (v.id !== "board") viewCounts[v.id] = 0;
+    }
     Object.assign(viewCounts, counts);
     handle.setChips("view", viewChips(filters.view));
   }
@@ -1590,14 +1593,15 @@ function makeAttention(ctx) {
 
 // dock.ts
 import { h as h7, card as card2 } from "/_kit/kit.js";
-var STALE_MS = 6e4;
+
+// time-utils.ts
 function ageMs(ts) {
   return Date.now() - new Date(ts).getTime();
 }
 function fmtAge(ts) {
   const ms = ageMs(ts);
   const s = Math.floor(ms / 1e3);
-  if (s < 60) return `${s}s`;
+  if (s < 60) return "now";
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
   const h8 = Math.floor(m / 60);
@@ -1605,9 +1609,11 @@ function fmtAge(ts) {
   const d = Math.floor(h8 / 24);
   if (d < 30) return `${d}d`;
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}M`;
+  if (mo < 12) return `${mo}mo`;
   return `${Math.floor(mo / 12)}y`;
 }
+
+// dock.ts
 function stateColor(state) {
   switch (state) {
     case "queued":
@@ -1635,9 +1641,6 @@ function sessionLabel(s) {
   const harness = s.harness || "agent";
   const cwd = s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? s.cwd : "";
   return cwd ? `${harness} · ${cwd}` : harness;
-}
-function isStale(s) {
-  return ageMs(s.last_seen) > STALE_MS;
 }
 function renderAgentBody(msg) {
   const wrap = h7("div", { class: "cb-dock-body" });
@@ -1744,7 +1747,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
     bodyContent = bodyEl;
   }
   let stateEl = null;
-  if (!isAgent && msg.state && msg.state !== "queued" || !isAgent && msg.state === "queued") {
+  if (!isAgent && msg.state) {
     const validStates = [
       "queued",
       "delivered",
@@ -1852,10 +1855,55 @@ function openMoveSheet(ctx, delivery, targets) {
   document.addEventListener("keydown", onKey);
   return Promise.resolve();
 }
+async function moveSession(ctx, fromSession, toSession) {
+  try {
+    await ctx.api.post("/sessions/move", {
+      session: fromSession,
+      target: toSession
+    });
+  } catch (err) {
+    console.error("[dock] move session:", err);
+  }
+}
+function openSessionMoveSheet(ctx, fromSession, targets) {
+  const items = targets.map((s) => {
+    const el = h7("button", { class: "cb-dock-pick-item" });
+    el.textContent = sessionLabel(s);
+    el.onclick = () => {
+      void moveSession(ctx, fromSession, s.id);
+      sheet3.close();
+    };
+    return el;
+  });
+  if (items.length === 0) {
+    const noOther = h7(
+      "p",
+      { class: "cb-dock-pick-empty" },
+      "no other sessions"
+    );
+    items.push(noOther);
+  }
+  const content = h7("div", { class: "cb-dock-pick-list" }, ...items);
+  const sheet3 = {
+    el: h7("div", { class: "cb-dock-pick-sheet" }, content),
+    close() {
+      this.el.remove();
+    }
+  };
+  document.body.append(sheet3.el);
+  function onKey(e) {
+    if (e.key === "Escape") {
+      sheet3.close();
+      document.removeEventListener("keydown", onKey);
+    }
+  }
+  document.addEventListener("keydown", onKey);
+  return Promise.resolve();
+}
 function buildSessionPicker(sessions, currentId, onSelect) {
   const items = sessions.map((s) => {
     const busy = s.busy ? " · busy" : " · idle";
-    const stale = isStale(s) ? " · left" : "";
+    const stale = s.left ? " · left" : "";
     const label = sessionLabel(s) + busy + stale;
     const el = h7("button", {
       class: "cb-dock-pick-item" + (s.id === currentId ? " cb-dock-pick-item--on" : "")
@@ -1937,7 +1985,7 @@ function makeDock(ctx) {
       sessionHeader.removeAttribute("data-left");
       return;
     }
-    const stale = isStale(sess);
+    const stale = !!sess.left;
     sessionDot.style.background = "var(--kit-agent)";
     if (stale) {
       const cwd = sess.cwd ? sess.cwd.split("/").filter(Boolean).pop() ?? sess.cwd : "";
@@ -1956,7 +2004,7 @@ function makeDock(ctx) {
             onclick(e) {
               e.stopPropagation();
               const others = sessions.filter((s) => s.id !== sess.id);
-              void openMoveSheet(ctx, currentDelivery, others);
+              void openSessionMoveSheet(ctx, sess.id, others);
             }
           },
           " · move to…"
@@ -2013,6 +2061,7 @@ function makeDock(ctx) {
         await loadThreads();
       } else {
         renderHeader();
+        await loadDelivery();
       }
       renderHeader();
     } catch (err) {
@@ -2127,8 +2176,9 @@ function makeDock(ctx) {
   });
   ctx.on("delivery", (data) => {
     const d = data;
-    if (!d.session || d.session === currentSessionId) {
-      void loadDelivery();
+    const isOurs = !d.session || d.session === currentSessionId || d.from === currentSessionId || d.id !== void 0 && currentDelivery?.id === d.id;
+    if (isOurs) {
+      void loadMessages().then(() => loadDelivery());
     }
   });
   void loadSessions();

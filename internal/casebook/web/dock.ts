@@ -25,32 +25,8 @@ import type {
 } from './wire.d.ts';
 import type { Ctx, DockHandle } from './app.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
+import { fmtAge } from './time-utils.ts';
 import { go } from './router.ts';
-
-// ---- stale session threshold (60 s) ----------------------------------------
-
-const STALE_MS = 60_000;
-
-// ---- age formatting ---------------------------------------------------------
-
-function ageMs(ts: string): number {
-  return Date.now() - new Date(ts).getTime();
-}
-
-function fmtAge(ts: string): string {
-  const ms = ageMs(ts);
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 30) return `${d}d`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}M`;
-  return `${Math.floor(mo / 12)}y`;
-}
 
 // ---- delivery state display -------------------------------------------------
 
@@ -89,10 +65,6 @@ function sessionLabel(s: Session): string {
   const harness = s.harness || 'agent';
   const cwd = s.cwd ? (s.cwd.split('/').filter(Boolean).pop() ?? s.cwd) : '';
   return cwd ? `${harness} · ${cwd}` : harness;
-}
-
-function isStale(s: Session): boolean {
-  return ageMs(s.last_seen) > STALE_MS;
 }
 
 // ---- agent card link rendering ----------------------------------------------
@@ -227,10 +199,7 @@ function renderMsgCard(
 
   // Delivery-state footer for Court's cards.
   let stateEl: HTMLElement | null = null;
-  if (
-    (!isAgent && msg.state && msg.state !== 'queued') ||
-    (!isAgent && msg.state === 'queued')
-  ) {
+  if (!isAgent && msg.state) {
     // Show state for all non-draft states.
     const validStates = [
       'queued',
@@ -372,6 +341,69 @@ function openMoveSheet(
   return Promise.resolve();
 }
 
+// Move all threads (and queued messages) from a left session to a target.
+async function moveSession(
+  ctx: Ctx,
+  fromSession: string,
+  toSession: string,
+): Promise<void> {
+  try {
+    await ctx.api.post('/sessions/move', {
+      session: fromSession,
+      target: toSession,
+    });
+  } catch (err) {
+    console.error('[dock] move session:', err);
+  }
+}
+
+// Sheet for moving a left session\'s queued work to another session.
+function openSessionMoveSheet(
+  ctx: Ctx,
+  fromSession: string,
+  targets: Session[],
+): Promise<void> {
+  const items = targets.map((s) => {
+    const el = h('button', { class: 'cb-dock-pick-item' });
+    el.textContent = sessionLabel(s);
+    el.onclick = () => {
+      void moveSession(ctx, fromSession, s.id);
+      sheet.close();
+    };
+    return el;
+  });
+
+  if (items.length === 0) {
+    const noOther = h(
+      'p',
+      { class: 'cb-dock-pick-empty' },
+      'no other sessions',
+    );
+    items.push(noOther);
+  }
+
+  const content = h('div', { class: 'cb-dock-pick-list' }, ...items);
+
+  const sheet = {
+    el: h('div', { class: 'cb-dock-pick-sheet' }, content),
+    close() {
+      this.el.remove();
+    },
+  };
+
+  document.body.append(sheet.el);
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      sheet.close();
+      document.removeEventListener('keydown', onKey);
+    }
+  }
+  document.addEventListener('keydown', onKey);
+
+  return Promise.resolve();
+}
+
 // ---- session picker ---------------------------------------------------------
 
 function buildSessionPicker(
@@ -381,7 +413,7 @@ function buildSessionPicker(
 ): HTMLElement {
   const items = sessions.map((s) => {
     const busy = s.busy ? ' · busy' : ' · idle';
-    const stale = isStale(s) ? ' · left' : '';
+    const stale = s.left ? ' · left' : '';
     const label = sessionLabel(s) + busy + stale;
     const el = h('button', {
       class:
@@ -491,7 +523,8 @@ export function makeDock(ctx: Ctx): DockHandle {
       return;
     }
 
-    const stale = isStale(sess);
+    // left is server-computed (spec
+    const stale = !!sess.left; // true when last_seen > LeftAfter threshold
     sessionDot.style.background = 'var(--kit-agent)';
     if (stale) {
       // "pi · cwd left · N queued · move to…"
@@ -515,7 +548,8 @@ export function makeDock(ctx: Ctx): DockHandle {
             onclick(e: Event) {
               e.stopPropagation();
               const others = sessions.filter((s) => s.id !== sess.id);
-              void openMoveSheet(ctx, currentDelivery!, others);
+              // For a left session, move all queued threads to a new session.
+              void openSessionMoveSheet(ctx, sess.id, others);
             },
           },
           ' · move to…',
@@ -581,8 +615,10 @@ export function makeDock(ctx: Ctx): DockHandle {
           : sessions[0].id;
         await loadThreads();
       } else {
-        // Refresh the session data for the current one.
+        // Refresh the session data for the current one, including the delivery
+        // so the dock detects stuck state and the left flag without a reload.
         renderHeader();
+        await loadDelivery();
       }
       renderHeader();
     } catch (err) {
@@ -712,10 +748,20 @@ export function makeDock(ctx: Ctx): DockHandle {
   });
 
   ctx.on('delivery', (data: unknown) => {
-    // Delivery state changed — reload delivery for current session.
-    const d = data as { session?: string; id?: number };
-    if (!d.session || d.session === currentSessionId) {
-      void loadDelivery();
+    // Delivery state changed — reload both messages and delivery for current
+    // session. Messages must be reloaded too because the delivery event can
+    // set delivery_id on messages (when the agent picks up a delivery) which
+    // the isStuckDelivery check depends on.
+    // Also check 'from': a moved delivery has session=target but from=source;
+    // the source dock must refresh to remove its stuck buttons.
+    const d = data as { session?: string; from?: string; id?: number };
+    const isOurs =
+      !d.session ||
+      d.session === currentSessionId ||
+      d.from === currentSessionId ||
+      (d.id !== undefined && currentDelivery?.id === d.id);
+    if (isOurs) {
+      void loadMessages().then(() => loadDelivery());
     }
   });
 

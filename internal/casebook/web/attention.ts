@@ -481,10 +481,15 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // Update view chip counts from SummaryView (or from the index live event).
-  // Stores counts so every subsequent setChips call can include them.
+  // Resets every known view to 0 first so views that drop to zero items do
+  // not retain a stale count. The server omits zero-count views from event
+  // payloads, so Object.assign alone would leave stale counts in place.
   function applyCounts(counts: Record<string, number> | null): void {
     if (!counts) return;
-    // Merge into local store; only update keys that are present in the payload.
+    // Zero all API-backed views before merging ("board" is UI-only — no count).
+    for (const v of VIEWS) {
+      if (v.id !== 'board') viewCounts[v.id] = 0;
+    }
     Object.assign(viewCounts, counts);
     handle.setChips('view', viewChips(filters.view));
   }

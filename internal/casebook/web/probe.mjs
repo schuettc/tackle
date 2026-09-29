@@ -74,6 +74,42 @@ process.on('exit', () => {
   cleanup();
 });
 
+// chipCountsMatchLists checks that every attention view chip count shown in
+// the DOM matches the API total for that view. Runs with the page settled.
+async function chipCountsMatchLists(pg, base, token, label) {
+  // Let the page settle after the last action.
+  await pg.waitForTimeout(500);
+  const views = ['waiting', 'new', 'due', 'proposed'];
+  let allMatch = true;
+  for (const view of views) {
+    // Read the count from the chip label. The kit renders chip counts in a
+    // .kit-n span inside [data-id="<view>"].
+    const chipCount = await pg
+      .evaluate((v) => {
+        const chip = document.querySelector(`.kit-chip[data-id="${v}"]`);
+        if (!chip) return null;
+        const n = chip.querySelector('.kit-n');
+        return n ? parseInt(n.textContent ?? '0', 10) : 0;
+      }, view)
+      .catch(() => null);
+    if (chipCount === null) continue; // chip not visible
+    // Fetch the API total for the view.
+    const resp = await fetch(`${base}/api/items?view=${view}&limit=1`, {
+      headers: { 'X-Local-Token': token },
+    }).catch(() => null);
+    if (!resp) continue;
+    const data = await resp.json().catch(() => ({}));
+    const apiTotal = data.total ?? 0;
+    if (chipCount !== apiTotal) {
+      console.error(
+        `  [chip invariant] "${view}": chip=${chipCount} api=${apiTotal}`,
+      );
+      allMatch = false;
+    }
+  }
+  check(`${label}: view chip counts match list totals`, allMatch);
+}
+
 async function run() {
   const browser = await findChrome();
   if (!browser) {
@@ -3519,6 +3555,7 @@ async function run() {
     }
 
     // ---- scenario: stuck delivery offers release and move ------------------
+    // Drives the dock from the page: clicks release and move buttons.
     console.log('\nscenario: stuck delivery offers release and move');
 
     {
@@ -3529,19 +3566,15 @@ async function run() {
         // serve was started with CASEBOOK_STUCK_AFTER=2s so deliveries
         // become stuck after 2 seconds of no activity.
         const agent = createAgent(serveHandle.base, serveHandle.token);
-        const sessId = `probe-stuck-${Date.now()}`;
-        const sessId2 = `probe-stuck-other-${Date.now()}`;
-        // Register a second session for "move to".
-        await agent.presence(
-          sessId2,
-          'pi · other-session',
-          '/home/court/other',
-        );
-        await agent.presence(
-          sessId,
-          'pi · tools-workspace',
-          '/home/court/tools-workspace',
-        );
+        const ts = Date.now();
+        const sessId = `probe-stuck-${ts}`;
+        const sessId2 = `probe-stuck-other-${ts}`;
+
+        // Register sessId2 first (target for move).
+        await agent.presence(sessId2, 'pi · other', '/home/court/other');
+        await agent.newThread(sessId2, 'target');
+        // Register sessId last so it is most-recently-seen → dock shows it.
+        await agent.presence(sessId, 'pi · stuck-ws', '/home/court/stuck-ws');
         const thread = await agent.newThread(sessId, 'stuck-test');
         await agent.postMessage(thread.id, 'This message will get stuck.');
 
@@ -3557,50 +3590,122 @@ async function run() {
           timeout: 15000,
         });
         await stuckPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        // Wait for the dock to load the session (initial loadSessions → loadDelivery).
         await stuckPage.waitForTimeout(2000);
 
         // Wait for the delivery to become stuck (CASEBOOK_STUCK_AFTER=2s).
         await stuckPage.waitForTimeout(2500);
 
-        // Force a delivery refresh by waiting for the dock to re-render.
-        // Triggering a sessions event by refreshing presence.
-        await agent.presence(
-          sessId,
-          'pi · tools-workspace',
-          '/home/court/tools-workspace',
-        );
-        await stuckPage.waitForTimeout(1000);
+        // Trigger dock refresh: a sessions event causes loadSessions → loadDelivery.
+        // Send presence for sessId2 (not sessId, so sessId's last_seen stays old).
+        await agent.presence(sessId2, 'pi · other', '/home/court/other');
+        // The dock now re-fetches and sees delivery.stuck=true.
+        // Wait for the stuck buttons to appear.
+        const stuckVisible = await stuckPage
+          .waitForSelector('.cb-dock-stuck', { timeout: 8000 })
+          .then(() => true)
+          .catch(() => false);
+        check('stuck delivery shows release and move buttons', stuckVisible);
 
-        // Check release and move buttons via direct API calls.
+        // Also verify via API that the delivery is indeed stuck.
         const dv = await agent.getDelivery(sessId);
-        check('delivery is stuck', dv?.delivery?.stuck === true);
+        check('delivery is stuck (API)', dv?.delivery?.stuck === true);
 
-        if (dv?.delivery?.id) {
-          // Release works: should return 200.
-          try {
-            await agent.releaseDelivery(dv.delivery.id);
-            check('release endpoint returns 200', true);
-          } catch (err) {
-            check('release endpoint returns 200', false);
-            console.error('  release error:', err.message);
-          }
+        // Take a screenshot showing the dock with a stuck delivery.
+        await stuckPage.screenshot({
+          path: '/tmp/t6fix-stuck.png',
+          fullPage: false,
+        });
+        console.log('  screenshot: /tmp/t6fix-stuck.png');
+
+        // ---- Click the release button on the page -------------------------
+        if (stuckVisible) {
+          await stuckPage.click('[data-action="release"]');
+          // Wait for the stuck div to disappear (delivery released).
+          await stuckPage
+            .waitForFunction(() => !document.querySelector('.cb-dock-stuck'), {
+              timeout: 6000,
+            })
+            .catch(() => {});
+          const stillStuck = await stuckPage
+            .$('.cb-dock-stuck')
+            .catch(() => null);
+          check(
+            'clicking release removes the stuck buttons from the dock',
+            stillStuck === null,
+          );
         } else {
-          check('release endpoint returns 200', true); // no delivery to release
+          check(
+            'clicking release removes the stuck buttons from the dock',
+            false,
+          );
         }
 
-        // Post another message and pick it up for the move test.
+        // ---- Post a new message and create another stuck delivery ----------
         await agent.postMessage(thread.id, 'message for move test');
         const mv = await agent.wait(sessId);
-        if (mv?.delivery?.id) {
-          try {
-            await agent.moveDelivery(mv.delivery.id, sessId2);
-            check('move delivery to another session works', true);
-          } catch (err) {
-            check('move delivery to another session works', false);
-            console.error('  move error:', err.message);
+        check(
+          'second delivery exists for move test',
+          mv !== null && mv.delivery !== null,
+        );
+
+        // Wait for this delivery to become stuck.
+        await stuckPage.waitForTimeout(2500);
+        // Trigger dock refresh.
+        await agent.presence(sessId2, 'pi · other', '/home/court/other');
+        const stuckVisible2 = await stuckPage
+          .waitForSelector('.cb-dock-stuck', { timeout: 8000 })
+          .then(() => true)
+          .catch(() => false);
+        check('second stuck delivery shows move button', stuckVisible2);
+
+        // ---- Click "move to another session" on the page ------------------
+        if (stuckVisible2) {
+          await stuckPage.click('[data-action="move"]');
+          // The move sheet appears — click the target session.
+          await stuckPage.waitForTimeout(400);
+          const sheetItems = await stuckPage.$$(
+            '.cb-dock-pick-sheet .cb-dock-pick-item',
+          );
+          check('move sheet shows sessions', sheetItems.length > 0);
+
+          if (sheetItems.length > 0) {
+            // Click the first item in the sheet (sessId2).
+            await sheetItems[0].click();
+            await stuckPage.waitForTimeout(800);
+            // After moving, the delivery is no longer on sessId.
+            // The dock should no longer show stuck buttons for sessId.
+            const movedAwayOk = await stuckPage
+              .$('.cb-dock-stuck')
+              .then((el) => el === null)
+              .catch(() => true);
+            check(
+              'moving delivery removes stuck buttons from the dock',
+              movedAwayOk,
+            );
+            // MoveDelivery requeues messages to sessId2. Verify sessId2 now
+            // has queued messages (deliverable on next agent.wait for sessId2).
+            const afterMoveSess = await fetch(
+              `${serveHandle.base}/api/sessions`,
+              { headers: { 'X-Local-Token': serveHandle.token } },
+            )
+              .then((r) => r.json())
+              .catch(() => ({ sessions: [] }));
+            const s2q =
+              (afterMoveSess.sessions ?? []).find((s) => s.id === sessId2)
+                ?.queued ?? 0;
+            check(
+              'delivery moved to target session (API): messages queued on target',
+              s2q > 0,
+            );
+          } else {
+            check('moving delivery removes stuck buttons from the dock', false);
+            check('delivery moved to target session (API)', false);
           }
         } else {
-          check('move delivery to another session works', true); // no delivery to move
+          check('move sheet shows sessions', false);
+          check('moving delivery removes stuck buttons from the dock', false);
+          check('delivery moved to target session (API)', false);
         }
       } finally {
         await stuckPage.close();
@@ -3608,6 +3713,8 @@ async function run() {
     }
 
     // ---- scenario: a left session shows the queued count and move ----------
+    // serve started with CASEBOOK_LEFT_AFTER=3s so sessions go left quickly.
+    // Drives the left-session "move to..." from the page.
     console.log('\nscenario: a left session shows the queued count and move');
 
     {
@@ -3615,22 +3722,25 @@ async function run() {
       try {
         await leftPage.setViewportSize({ width: 1600, height: 900 });
 
-        // Register a session and post queued messages, then don't refresh presence.
-        // The dock checks last_seen > STALE_MS (60s) on the page.
-        // We verify the queued count is correct in the session data and the move
-        // button is accessible via the API.
         const agent = createAgent(serveHandle.base, serveHandle.token);
-        const sessId = `probe-left-${Date.now()}`;
+        const ts = Date.now();
+        const sessId = `probe-left-${ts}`;
+        const sessId2 = `probe-left-target-${ts}`;
+
+        // Register sessId2 first (target), then sessId last so it is
+        // most-recently-seen => dock picks it as the current session.
         await agent.presence(
-          sessId,
-          'pi · tools-workspace',
-          '/home/court/tools-workspace',
+          sessId2,
+          'pi · left-target',
+          '/home/court/left-target',
         );
+        await agent.newThread(sessId2, 'target');
+        await agent.presence(sessId, 'pi · left-ws', '/home/court/left-ws');
         const thread = await agent.newThread(sessId, 'left-test');
         await agent.postMessage(thread.id, 'first queued message');
         await agent.postMessage(thread.id, 'second queued message');
 
-        // Verify server-side queued count via sessions API.
+        // Verify server-side queued count is 2.
         const sessResp = await fetch(`${serveHandle.base}/api/sessions`, {
           headers: { 'X-Local-Token': serveHandle.token },
         });
@@ -3638,13 +3748,7 @@ async function run() {
         const thisSess = (sessData.sessions ?? []).find((s) => s.id === sessId);
         check('queued count is 2 in sessions API', thisSess?.queued === 2);
 
-        // Move to another session works (API-level test).
-        const sessId2 = `probe-left-target-${Date.now()}`;
-        await agent.presence(sessId2, 'pi · other', '/home/court/other');
-        const anotherThread = await agent.newThread(sessId2, 'target');
-        void anotherThread;
-
-        // Navigate to page — dock loads and shows the session.
+        // Navigate to page: dock picks sessId as current (most recently seen).
         await leftPage.goto(serveHandle.url, {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
@@ -3652,28 +3756,127 @@ async function run() {
         await leftPage.waitForSelector('.kit-bar', { timeout: 8000 });
         await leftPage.waitForTimeout(1500);
 
-        // Verify the dock shows a session (any session from the list).
-        const headerVisible = await leftPage
-          .$eval('.cb-dock-header', (el) => el.offsetWidth > 0)
-          .catch(() => false);
-        check('dock header is visible', headerVisible);
+        // Wait 3.5s for sessId to go left (CASEBOOK_LEFT_AFTER=3s).
+        await leftPage.waitForTimeout(3500);
 
-        // Verify the move-to-another-session API endpoint works when a
-        // delivery exists for the left session. Post and pick up.
-        await agent.postMessage(thread.id, 'message to move');
-        const mv = await agent.wait(sessId);
-        if (mv?.delivery?.id) {
-          try {
-            await agent.moveDelivery(mv.delivery.id, sessId2);
-            check('move queued delivery from left session works', true);
-          } catch (err) {
-            check('move queued delivery from left session works', false);
+        // Trigger dock refresh: send presence for sessId2 (NOT sessId, so
+        // sessId's last_seen stays old => remains left).
+        await agent.presence(
+          sessId2,
+          'pi · left-target',
+          '/home/court/left-target',
+        );
+        // The sessions event causes loadSessions => left=true for sessId.
+        // Wait for [data-left] on the dock header.
+        const leftHeaderVisible = await leftPage
+          .waitForSelector('.cb-dock-header[data-left]', { timeout: 8000 })
+          .then(() => true)
+          .catch(() => false);
+        check('left session header appears (data-left)', leftHeaderVisible);
+
+        if (leftHeaderVisible) {
+          // Visibility assertion: header text shows queued count.
+          const headerText = await leftPage
+            .$eval('.cb-dock-header', (el) => el.textContent ?? '')
+            .catch(() => '');
+          check(
+            'left header shows queued count',
+            headerText.includes('queued') || headerText.includes('2'),
+          );
+          // "move to..." link is visible.
+          const moveLinkVisible = await leftPage
+            .$eval('[data-testid="dock-move-link"]', (el) => el.offsetWidth > 0)
+            .catch(() => false);
+          check(
+            '"move to..." link is visible on left session header',
+            moveLinkVisible,
+          );
+
+          // Take a screenshot showing the left session header.
+          await leftPage.screenshot({
+            path: '/tmp/t6fix-left.png',
+            fullPage: false,
+          });
+          console.log('  screenshot: /tmp/t6fix-left.png');
+
+          // ---- Click "move to..." on the page ---------------------------------
+          await leftPage.click('[data-testid="dock-move-link"]');
+          await leftPage.waitForTimeout(400);
+          // The session move sheet appears with target sessions.
+          const sheetItems = await leftPage.$$(
+            '.cb-dock-pick-sheet .cb-dock-pick-item',
+          );
+          check(
+            'left-session move sheet shows sessions',
+            sheetItems.length > 0,
+          );
+
+          if (sheetItems.length > 0) {
+            // Click the first target session.
+            await sheetItems[0].click();
+            await leftPage.waitForTimeout(1000);
+            // Verify via API: sessId has 0 queued, sessId2 has 2.
+            const afterResp = await fetch(`${serveHandle.base}/api/sessions`, {
+              headers: { 'X-Local-Token': serveHandle.token },
+            });
+            const afterData = await afterResp.json();
+            const s1After = (afterData.sessions ?? []).find(
+              (s) => s.id === sessId,
+            );
+            const s2After = (afterData.sessions ?? []).find(
+              (s) => s.id === sessId2,
+            );
+            check(
+              'after move: left session has 0 queued messages',
+              (s1After?.queued ?? 0) === 0,
+            );
+            check(
+              'after move: target session has 2 queued messages',
+              (s2After?.queued ?? 0) === 2,
+            );
+          } else {
+            check('after move: left session has 0 queued messages', false);
+            check('after move: target session has 2 queued messages', false);
           }
         } else {
-          check('move queued delivery from left session works', true);
+          check('left header shows queued count', false);
+          check('"move to..." link is visible on left session header', false);
+          check('left-session move sheet shows sessions', false);
+          check('after move: left session has 0 queued messages', false);
+          check('after move: target session has 2 queued messages', false);
         }
       } finally {
         await leftPage.close();
+      }
+    }
+
+    // ---- invariant: chip counts after dock scenarios ----------------------
+    // Run this after the dock scenarios (stuck delivery + left session) to
+    // catch any stale counts introduced by those scenarios.
+    {
+      const chipInvPage = await context.newPage();
+      try {
+        await chipInvPage.setViewportSize({ width: 1600, height: 900 });
+        await chipInvPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await chipInvPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        await chipInvPage.evaluate(() => {
+          location.hash = '#/attention/waiting';
+        });
+        await chipInvPage.waitForFunction(() =>
+          location.hash.includes('#/attention'),
+        );
+        await chipInvPage.waitForTimeout(1000);
+        await chipCountsMatchLists(
+          chipInvPage,
+          serveHandle.base,
+          serveHandle.token,
+          'after-dock-scenarios',
+        );
+      } finally {
+        await chipInvPage.close();
       }
     }
 
@@ -3719,12 +3922,18 @@ async function run() {
           .catch(() => []);
         check('session picker shows sessions', pickerItems.length > 0);
 
-        // Click the session-b entry if present.
-        const bItem = await pickPage
-          .$('.cb-dock-pick-item:has-text("session-b")')
-          .catch(() => null);
-        if (bItem) {
-          await bItem.click();
+        // Click the session-b entry: find the item whose text contains 'session-b'.
+        // Use evaluate to avoid :has-text which is Playwright-specific.
+        const bItemIdx = await pickPage.evaluate((label) => {
+          const items = document.querySelectorAll('.cb-dock-pick-item');
+          for (let i = 0; i < items.length; i++) {
+            if ((items[i].textContent ?? '').includes(label)) return i;
+          }
+          return -1;
+        }, 'session-b');
+        const pickerAll = await pickPage.$$('.cb-dock-pick-item');
+        if (bItemIdx >= 0 && pickerAll[bItemIdx]) {
+          await pickerAll[bItemIdx].click();
           await pickPage.waitForTimeout(600);
           // After switching, the header should reflect session B.
           const headerText = await pickPage
@@ -3732,7 +3941,8 @@ async function run() {
             .catch(() => '');
           check(
             'switching session updates the header',
-            headerText.includes('session-b') || headerText.includes('b'),
+            headerText.includes('session-b') ||
+              headerText.includes('session-b'.split('-').pop()),
           );
           // Now click + to create a new thread; it should go to session B.
           await pickPage
@@ -3750,8 +3960,10 @@ async function run() {
             chips.length > 1, // more than just the + chip
           );
         } else {
-          check('switching session updates the header', true); // picker item not found via :has-text
-          check('new thread chip appears after +', true);
+          // Picker did not find sessB — this means the test environment is
+          // different from expected. Fail both checks with a clear message.
+          check('switching session updates the header', false);
+          check('new thread chip appears after +', false);
         }
       } finally {
         await pickPage.close();
@@ -4161,6 +4373,38 @@ async function run() {
         );
       } finally {
         await fid2Page.close();
+      }
+    }
+
+    // ---- invariant: chip counts must equal list totals ---------------------
+    // Run this at the end of all scenarios with the page settled, on a fresh
+    // page so no dock-scenario fixture data affects the attention view counts.
+    console.log('\ninvariant: view chip counts match list totals');
+    {
+      const invPage = await context.newPage();
+      try {
+        await invPage.setViewportSize({ width: 1600, height: 900 });
+        await invPage.goto(serveHandle.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await invPage.waitForSelector('.kit-bar', { timeout: 8000 });
+        // Navigate to attention to ensure chips are rendered.
+        await invPage.evaluate(() => {
+          location.hash = '#/attention/waiting';
+        });
+        await invPage.waitForFunction(() =>
+          location.hash.includes('#/attention'),
+        );
+        await invPage.waitForTimeout(1000);
+        await chipCountsMatchLists(
+          invPage,
+          serveHandle.base,
+          serveHandle.token,
+          'end-of-probe',
+        );
+      } finally {
+        await invPage.close();
       }
     }
   } catch (err) {
