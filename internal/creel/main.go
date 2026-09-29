@@ -8,6 +8,7 @@
 package creel
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -129,6 +130,9 @@ func finish(stderr io.Writer, statusFile, eventFile string, res Result) int {
 	_ = WriteEvent(eventFile, res)
 
 	switch {
+	case errors.Is(res.Err, ErrDestOutsideCwd):
+		_, _ = fmt.Fprintln(stderr, "creel: "+destOutsideCwdHelp)
+		return 1
 	case res.Err != nil:
 		_, _ = fmt.Fprintf(stderr, "creel: %v\n", res.Err)
 		return 1

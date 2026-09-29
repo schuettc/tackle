@@ -186,6 +186,10 @@ func runExec(cwd string, argv []string, stdout, stderr io.Writer) int { //nolint
 		return 2
 	}
 	dest, err := ResolveDest(cwd, e.dest)
+	if errors.Is(err, ErrDestOutsideCwd) {
+		_, _ = fmt.Fprintln(stderr, "creel exec: "+destOutsideCwdHelp)
+		return 2
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2

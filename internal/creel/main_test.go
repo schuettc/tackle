@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +134,31 @@ func TestFinishWritesEventOnSaveNotOnCancel(t *testing.T) {
 	finish(&errbuf, "", cancelEvt, Result{Action: Cancelled, Name: "K", Dest: "/p/.env"})
 	if _, err := os.Stat(cancelEvt); !os.IsNotExist(err) {
 		t.Fatalf("cancel wrote an event file, want none (err=%v)", err)
+	}
+}
+
+// An arg-provided dest outside cwd must fail fast, before the TUI opens a TTY:
+// a harness (or a headless run) gets the refusal and its token immediately,
+// rather than a TTY error, and the stderr line says what to do.
+func TestRunRejectsDestOutsideCwdBeforeTUI(t *testing.T) {
+	dir := t.TempDir()
+	status := filepath.Join(dir, "status")
+	var out, errbuf bytes.Buffer
+	code := run(dir, []string{"KEY", "--dest", "../../elsewhere/secrets", "--status-file", status}, &out, &errbuf)
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; stderr=%s", code, errbuf.String())
+	}
+	b, err := os.ReadFile(status)
+	if err != nil {
+		t.Fatalf("status not written: %v", err)
+	}
+	if got := strings.TrimSpace(string(b)); got != "error:dest-outside-cwd" {
+		t.Fatalf("status = %q, want error:dest-outside-cwd", got)
+	}
+	if !strings.Contains(errbuf.String(), "inside the working directory") {
+		t.Errorf("stderr does not explain the rule: %q", errbuf.String())
+	}
+	if strings.Contains(errbuf.String(), "TTY") {
+		t.Errorf("it reached the TUI: %q", errbuf.String())
 	}
 }
