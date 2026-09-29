@@ -1778,13 +1778,17 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
   const isStuckDelivery = !isAgent && delivery?.stuck === true && msg.delivery_id === delivery.id;
   if (isStuckDelivery && delivery) {
     if (stateEl) {
-      stateEl.textContent = `delivered · stuck ${fmtAge(delivery.touched_at)}`;
-      stateEl.style.color = "var(--kit-wait)";
+      const ageText = fmtAge(delivery.touched_at);
+      const ageStr = ageText === "now" ? "just now" : `${ageText} ago`;
+      stateEl.textContent = "";
       stateEl.setAttribute("data-state", "stuck");
+      const stuckBold = h7("strong", { style: "font-weight:600" });
+      stuckBold.textContent = "stuck";
+      stateEl.append(`delivered ${ageStr} · `, stuckBold);
     }
     const d = delivery;
     const releaseBtn = h7("button", {
-      class: "cb-dock-action",
+      class: "kit-btn",
       "data-action": "release",
       onclick() {
         void releaseDelivery(ctx, d.id);
@@ -1793,7 +1797,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
     releaseBtn.textContent = "release";
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
     const moveBtn = h7("button", {
-      class: "cb-dock-action",
+      class: "kit-btn",
       "data-action": "move",
       onclick() {
         void openMoveSheet(ctx, d, otherSessions);
@@ -1999,10 +2003,9 @@ function makeDock(ctx) {
       return;
     }
     const stale = !!sess.left;
-    sessionDot.style.background = "var(--kit-agent)";
+    sessionDot.style.removeProperty("background");
     sessionLabelEl.textContent = sessionLabel(sess);
     if (stale) {
-      const queuedPart = sess.queued > 0 ? ` · ${sess.queued} queued` : "";
       leftStatusRow.textContent = "";
       const moveLink = h7("button", {
         class: "cb-dock-move-link",
@@ -2014,7 +2017,14 @@ function makeDock(ctx) {
         }
       });
       moveLink.textContent = "move to…";
-      leftStatusRow.append(`left${queuedPart} · `, moveLink);
+      const parts = [h7("span", {}, "left")];
+      if (sess.queued > 0) {
+        parts.push(h7("span", { class: "cb-dock-sep" }, "·"));
+        parts.push(h7("span", {}, `${sess.queued} queued`));
+      }
+      parts.push(h7("span", { class: "cb-dock-sep" }, "·"));
+      parts.push(moveLink);
+      leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
       sessionHeader.setAttribute("data-left", "1");
     } else {

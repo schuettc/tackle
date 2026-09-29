@@ -432,8 +432,14 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--kit-agent);
+  background: var(--kit-agent); /* present session: agent colour */
   flex: none;
+}
+
+/* Finding 3: a left session's dot is muted; the CSS drives both states so
+   the dock removes the unconditional inline --kit-agent background. */
+.cb-dock-header[data-left] .cb-dock-dot {
+  background: var(--kit-muted);
 }
 
 .cb-dock-session-label {
@@ -443,13 +449,15 @@
   min-width: 0;
 }
 
-/* Second row shown when the session is left: muted mono status line. */
+/* Second row shown when the session is left: muted mono status line.
+   Finding 4: use flex gap so each child ("left", "·", "N queued", "·",
+   "move to…") has even spacing between them. */
 .cb-dock-left-row {
   font: 12px var(--kit-mono);
   color: var(--kit-muted);
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 6px; /* was 0; now provides even spacing between · and link */
   padding-left: 16px;
 }
 
@@ -562,22 +570,14 @@
   margin-top: 6px;
 }
 
-.cb-dock-action {
-  font: 12px var(--kit-mono);
-  color: var(--kit-signal);
-  background: transparent;
-  border: 1px solid var(--kit-signal);
-  border-radius: 5px;
-  padding: 2px 10px;
-  cursor: pointer;
-}
+/* Stuck delivery action buttons (release / move) use the kit's neutral
+   outlined button class (kit-btn), the same as the DECIDE buttons, so one
+   colour means one thing: signal = "you", not admin actions.
+   Finding 5: removed the --kit-signal border/colour that was here.
+   Tombstone kept so grep-for-signal catches accidental re-adds. */
+/* .cb-dock-action { border-color: var(--kit-signal); } */
 
-.cb-dock-action:hover {
-  background: var(--kit-signal-soft);
-}
-
-/* --danger variant removed in round-2: release and move are not destructive.
-   Keep selector commented out so grep-for-danger catches accidental re-adds. */
+/* --danger variant removed in round-2: release and move are not destructive. */
 /* .cb-dock-action--danger { } */
 
 /* Agent card links: underlined, signal colour */

@@ -237,16 +237,27 @@ function renderMsgCard(
     !isAgent && delivery?.stuck === true && msg.delivery_id === delivery.id;
 
   if (isStuckDelivery && delivery) {
-    // Show the stuck state in the footer with warning tone.
+    // Show the stuck state in the footer.
+    // Colour: the muted state colour (delivery state is 'delivered' → muted by
+    // stateColor; we do NOT override with --kit-wait so it stays muted).
+    // Text: "delivered <age> ago · <strong>stuck</strong>"
+    //   or  "delivered just now · <strong>stuck</strong>" when age < 1 minute.
+    // (fmtAge returns 'now' for < 60 s; we map that to 'just now' for readability.)
     if (stateEl) {
-      stateEl.textContent = `delivered · stuck ${fmtAge(delivery.touched_at)}`;
-      stateEl.style.color = 'var(--kit-wait)';
+      const ageText = fmtAge(delivery.touched_at);
+      const ageStr = ageText === 'now' ? 'just now' : `${ageText} ago`;
+      stateEl.textContent = '';
       stateEl.setAttribute('data-state', 'stuck');
+      const stuckBold = h('strong', { style: 'font-weight:600' });
+      stuckBold.textContent = 'stuck';
+      stateEl.append(`delivered ${ageStr} \u00b7 `, stuckBold);
     }
 
     const d = delivery;
+    // Use kit-btn (neutral outlined) — the same class as the DECIDE buttons —
+    // so one colour means one thing (signal = you, not admin actions).
     const releaseBtn = h('button', {
-      class: 'cb-dock-action',
+      class: 'kit-btn',
       'data-action': 'release',
       onclick() {
         void releaseDelivery(ctx, d.id);
@@ -256,7 +267,7 @@ function renderMsgCard(
 
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
     const moveBtn = h('button', {
-      class: 'cb-dock-action',
+      class: 'kit-btn',
       'data-action': 'move',
       onclick() {
         void openMoveSheet(ctx, d, otherSessions);
@@ -542,13 +553,17 @@ export function makeDock(ctx: Ctx): DockHandle {
 
     // left is server-computed: true when last_seen > LeftAfter threshold.
     const stale = !!sess.left;
-    sessionDot.style.background = 'var(--kit-agent)';
+    // Let CSS drive the dot colour for both states (finding 3):
+    //   .cb-dock-dot               { background: var(--kit-agent) }  // present
+    //   .cb-dock-header[data-left] .cb-dock-dot { background: var(--kit-muted) } // left
+    // Clear any prior inline style so the CSS cascade applies cleanly.
+    sessionDot.style.removeProperty('background');
     // Always show the session label on the top row (CSS truncates it).
     sessionLabelEl.textContent = sessionLabel(sess);
 
     if (stale) {
-      // Second row: "left · N queued · move to…" in muted mono.
-      const queuedPart = sess.queued > 0 ? ` · ${sess.queued} queued` : '';
+      // Second row: "left · N queued · move to…" with flex-gap spacing (finding 4).
+      // Build as separate span/button children so the CSS gap gives even spacing.
       leftStatusRow.textContent = '';
       const moveLink = h('button', {
         class: 'cb-dock-move-link',
@@ -560,7 +575,14 @@ export function makeDock(ctx: Ctx): DockHandle {
         },
       });
       moveLink.textContent = 'move to…';
-      leftStatusRow.append(`left${queuedPart} · `, moveLink);
+      const parts: Node[] = [h('span', {}, 'left')];
+      if (sess.queued > 0) {
+        parts.push(h('span', { class: 'cb-dock-sep' }, '·'));
+        parts.push(h('span', {}, `${sess.queued} queued`));
+      }
+      parts.push(h('span', { class: 'cb-dock-sep' }, '·'));
+      parts.push(moveLink);
+      leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
       sessionHeader.setAttribute('data-left', '1');
     } else {

@@ -3640,41 +3640,146 @@ async function run() {
         // Stop heartbeating now that we've confirmed the stuck state.
         clearInterval(stuckHB);
 
-        // Check: stuck action buttons don't use the danger (red) colour.
+        // ---- Finding 2: stuck footer colour and text ----------------------
+        // The stuck footer uses the muted colour (not --kit-wait/blue), and
+        // the text reads "delivered <age> ago · <bold>stuck</bold>" or
+        // "delivered just now · <bold>stuck</bold>" for sub-minute ages.
         if (stuckVisible) {
-          const actionColors = await stuckPage
+          const footerInfo = await stuckPage
             .evaluate(() => {
-              const btns = document.querySelectorAll(
+              const footer = document.querySelector('[data-state="stuck"]');
+              if (!footer) return null;
+              return {
+                text: footer.textContent ?? '',
+                color: getComputedStyle(footer).color,
+              };
+            })
+            .catch(() => null);
+
+          // Resolve --kit-wait and --kit-muted for comparison.
+          const cssColors = await stuckPage
+            .evaluate(() => {
+              function resolveVar(v) {
+                const el = document.createElement('div');
+                el.style.cssText = `border-left: 1px solid ${v}; position: absolute; visibility: hidden;`;
+                document.body.appendChild(el);
+                const c = getComputedStyle(el).borderLeftColor;
+                el.remove();
+                return c;
+              }
+              return {
+                wait: resolveVar('var(--kit-wait)'),
+                muted: resolveVar('var(--kit-muted)'),
+              };
+            })
+            .catch(() => ({ wait: '', muted: '' }));
+
+          const footerText = footerInfo?.text ?? '';
+          // Matches "delivered 5m ago · stuck" or "delivered just now · stuck"
+          const textOk =
+            /^delivered .+ · stuck$/.test(footerText.trim()) ||
+            footerText.trim() === 'delivered just now · stuck';
+          check('stuck footer text matches "delivered ... · stuck"', textOk);
+
+          // The stuck footer must NOT be the wait (blue) colour — it is muted.
+          const colorOk =
+            !!footerInfo?.color &&
+            footerInfo.color !== cssColors.wait &&
+            footerInfo.color === cssColors.muted;
+          check('stuck footer colour is muted (not wait/blue)', colorOk);
+
+          // ---- Finding 3: present session dot has agent colour ----------------
+          const dotInfo = await stuckPage
+            .evaluate(() => {
+              function resolveVar(v) {
+                const el = document.createElement('div');
+                el.style.cssText = `background: ${v}; position: absolute; visibility: hidden;`;
+                document.body.appendChild(el);
+                const c = getComputedStyle(el).backgroundColor;
+                el.remove();
+                return c;
+              }
+              const dot = document.querySelector('.cb-dock-dot');
+              return {
+                dotBg: dot ? getComputedStyle(dot).backgroundColor : '',
+                agentColor: resolveVar('var(--kit-agent)'),
+                mutedColor: resolveVar('var(--kit-muted)'),
+              };
+            })
+            .catch(() => ({ dotBg: '', agentColor: '', mutedColor: '' }));
+          // In the stuck scenario the session is heartbeating (not left), so
+          // the dot should be the agent colour.
+          check(
+            'present session dot has agent computed colour',
+            !!dotInfo.dotBg &&
+              dotInfo.dotBg === dotInfo.agentColor &&
+              dotInfo.dotBg !== dotInfo.mutedColor,
+          );
+
+          // ---- Finding 5: action buttons use kit-btn neutral, not signal ------
+          const btnInfo = await stuckPage
+            .evaluate(() => {
+              function resolveBorder(v) {
+                const el = document.createElement('div');
+                el.style.cssText = `border-left: 1px solid ${v}; position: absolute; visibility: hidden;`;
+                document.body.appendChild(el);
+                const c = getComputedStyle(el).borderLeftColor;
+                el.remove();
+                return c;
+              }
+              const btn = document.querySelector(
                 '.cb-dock-stuck [data-action]',
               );
-              return Array.from(btns).map((b) => ({
-                action: b.dataset.action,
-                color: getComputedStyle(b).color,
-                border: getComputedStyle(b).borderColor,
-              }));
+              return {
+                border: btn ? getComputedStyle(btn).borderLeftColor : '',
+                kitLine: resolveBorder('var(--kit-line)'),
+                kitSignal: resolveBorder('var(--kit-signal)'),
+                kitDanger: resolveBorder('var(--kit-danger)'),
+              };
             })
-            .catch(() => []);
-          // The danger colour is --kit-danger (red). Check that none of the
-          // stuck buttons have a red computed colour. We check that the
-          // colour is not in the 'rgb(194' range (casebook danger is ~rgb(194,42,42)).
-          const noDanger = actionColors.every(
-            (c) =>
-              !c.color.startsWith('rgb(194') && !c.border.startsWith('rgb(194'),
+            .catch(() => ({
+              border: '',
+              kitLine: '',
+              kitSignal: '',
+              kitDanger: '',
+            }));
+
+          check(
+            'stuck action buttons border equals kit-line (neutral, like DECIDE)',
+            !!btnInfo.border && btnInfo.border === btnInfo.kitLine,
           );
           check(
-            'stuck action buttons do not use the danger colour',
-            noDanger && actionColors.length > 0,
+            'stuck action buttons border is not the signal colour',
+            !!btnInfo.border && btnInfo.border !== btnInfo.kitSignal,
+          );
+          check(
+            'stuck action buttons border is not the danger colour',
+            !!btnInfo.border && btnInfo.border !== btnInfo.kitDanger,
           );
         } else {
-          check('stuck action buttons do not use the danger colour', false);
+          check('stuck footer text matches "delivered ... · stuck"', false);
+          check('stuck footer colour is muted (not wait/blue)', false);
+          check('present session dot has agent computed colour', false);
+          check(
+            'stuck action buttons border equals kit-line (neutral, like DECIDE)',
+            false,
+          );
+          check('stuck action buttons border is not the signal colour', false);
+          check('stuck action buttons border is not the danger colour', false);
         }
 
-        // Take a screenshot showing the dock with a stuck delivery (round-2).
+        // Take screenshots showing the dock with a stuck delivery.
         await stuckPage.screenshot({
           path: '/tmp/t6fix2-stuck.png',
           fullPage: false,
         });
-        console.log('  screenshot: /tmp/t6fix2-stuck.png');
+        await stuckPage.screenshot({
+          path: '/tmp/t6fix3-stuck.png',
+          fullPage: false,
+        });
+        console.log(
+          '  screenshots: /tmp/t6fix2-stuck.png  /tmp/t6fix3-stuck.png',
+        );
 
         // ---- Click the release button on the page -------------------------
         if (stuckVisible) {
@@ -3878,7 +3983,53 @@ async function run() {
             .catch(() => false);
           check('session label does not overlap AGENT ▾ button', noOverlap);
 
-          // Take screenshots showing the left session header (round-1 and round-2).
+          // ---- Finding 3: left session dot is muted -------------------------
+          const dotColors = await leftPage
+            .evaluate(() => {
+              function resolveBg(v) {
+                const el = document.createElement('div');
+                el.style.cssText = `background: ${v}; position: absolute; visibility: hidden;`;
+                document.body.appendChild(el);
+                const c = getComputedStyle(el).backgroundColor;
+                el.remove();
+                return c;
+              }
+              const dot = document.querySelector('.cb-dock-dot');
+              return {
+                dotBg: dot ? getComputedStyle(dot).backgroundColor : '',
+                mutedColor: resolveBg('var(--kit-muted)'),
+                agentColor: resolveBg('var(--kit-agent)'),
+              };
+            })
+            .catch(() => ({ dotBg: '', mutedColor: '', agentColor: '' }));
+          check(
+            'left session dot has muted computed colour',
+            !!dotColors.dotBg &&
+              dotColors.dotBg === dotColors.mutedColor &&
+              dotColors.dotBg !== dotColors.agentColor,
+          );
+
+          // ---- Finding 4: gap > 0 between "·" separator and move link --------
+          const gapOk = await leftPage
+            .evaluate(() => {
+              const row = document.querySelector('.cb-dock-left-row');
+              const moveLink = row?.querySelector(
+                '[data-testid="dock-move-link"]',
+              );
+              if (!row || !moveLink) return false;
+              const children = Array.from(row.children);
+              const moveLinkIdx = children.indexOf(moveLink);
+              if (moveLinkIdx < 1) return false;
+              const sep = children[moveLinkIdx - 1];
+              if (!sep) return false;
+              const sepRect = sep.getBoundingClientRect();
+              const linkRect = moveLink.getBoundingClientRect();
+              return linkRect.left - sepRect.right > 0;
+            })
+            .catch(() => false);
+          check('gap between “·” separator and move link is > 0 px', gapOk);
+
+          // Take screenshots showing the left session header.
           await leftPage.screenshot({
             path: '/tmp/t6fix-left.png',
             fullPage: false,
@@ -3887,8 +4038,12 @@ async function run() {
             path: '/tmp/t6fix2-left.png',
             fullPage: false,
           });
+          await leftPage.screenshot({
+            path: '/tmp/t6fix3-left.png',
+            fullPage: false,
+          });
           console.log(
-            '  screenshots: /tmp/t6fix-left.png  /tmp/t6fix2-left.png',
+            '  screenshots: /tmp/t6fix-left.png  /tmp/t6fix2-left.png  /tmp/t6fix3-left.png',
           );
 
           // ---- Click "move to..." on the page ---------------------------------
@@ -3933,6 +4088,13 @@ async function run() {
         } else {
           check('left header shows queued count', false);
           check('"move to..." link is visible on left session header', false);
+          check(
+            'left header row does not overflow (scrollWidth ≤ clientWidth)',
+            false,
+          );
+          check('session label does not overlap AGENT ▾ button', false);
+          check('left session dot has muted computed colour', false);
+          check('gap between "·" separator and move link is > 0 px', false);
           check('left-session move sheet shows sessions', false);
           check('after move: left session has 0 queued messages', false);
           check('after move: target session has 2 queued messages', false);
