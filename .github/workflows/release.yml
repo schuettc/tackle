@@ -28,10 +28,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - id: rel
-        uses: schuettc/tools-actions/release-version@v0.2.2
+        uses: schuettc/tools-actions/release-version@v0.10.0
         with:
           mode: prefixed-tag
-      - uses: schuettc/tools-actions/go-release@v0.2.2
+      - uses: schuettc/tools-actions/go-release@v0.10.0
         with:
           binaries: ${{ steps.rel.outputs.tool }}=./cmd/${{ steps.rel.outputs.tool }}
           # One shared version package for every tool in the monorepo.
