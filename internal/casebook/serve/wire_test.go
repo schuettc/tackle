@@ -74,6 +74,7 @@ var wireRoots = []any{
 	NeedsYouView{},
 	AnswerResult{},
 	UndoResult{},
+	SessionProgressView{},
 }
 
 const wirePath = "../web/wire.d.ts"

@@ -204,6 +204,10 @@ export interface UndoResult {
   sent: boolean;
 }
 
+export interface SessionProgressView {
+  progress: Progress | null;
+}
+
 export interface ItemView {
   key: string;
   kind: string;
@@ -422,6 +426,15 @@ export interface Job {
   finished_at?: string;
   dispatched_at?: string;
   steps: JobStep[] | null;
+}
+
+export interface Progress {
+  session_id: string;
+  text: string;
+  n?: number;
+  total?: number;
+  started_at: string;
+  updated_at: string;
 }
 
 export interface Decision {

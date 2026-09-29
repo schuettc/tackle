@@ -545,6 +545,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/drafts/remove", s.postRemoveDraft)
 	m.HandleFunc("POST /api/batches/reorder", s.postReorder)
 	m.HandleFunc("POST /api/batches/send", s.postSendBatch)
+	m.HandleFunc("GET /api/session/progress", s.getSessionProgress)
 	m.HandleFunc("GET /api/session/delivery", s.getSessionDelivery)
 	m.HandleFunc("POST /api/deliveries/release", s.postRelease)
 	m.HandleFunc("POST /api/deliveries/move", s.postMoveDelivery)

@@ -274,6 +274,12 @@ type NeedsYouView struct {
 	Cards []apply.NeedsYou `json:"cards"`
 }
 
+// SessionProgressView is the response body of GET /api/session/progress.
+// Progress is nil when the session has no live progress line.
+type SessionProgressView struct {
+	Progress *propose.Progress `json:"progress"`
+}
+
 // AnswerResult is the response body of POST /api/jobs/answer.
 type AnswerResult struct {
 	NeedsYou apply.NeedsYou `json:"needs_you"`
