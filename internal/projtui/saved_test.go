@@ -16,9 +16,9 @@ import (
 // a is not running, b is running with a tab, c is running with no tab.
 func savedFixture() []Row {
 	return []Row{
-		{Kind: RowSaved, Label: "x/a", Name: "x/a", Socket: "proj-x", Agent: "pi", Window: 1, Group: "window 1", Conversation: "id-a", Transcript: true},
+		{Kind: RowSaved, Label: "x/a", Name: "x/a", Socket: "proj-x", Agent: "pi", Window: 1, Conversation: "id-a", Transcript: true},
 		{Kind: RowSaved, Label: "x/b", Name: "x/b", Socket: "proj-x", Agent: "claude", Window: 1, Running: true, Attached: true, Conversation: "id-b", Transcript: true},
-		{Kind: RowSaved, Label: "y/c", Name: "y/c", Socket: "proj-y", Agent: "pi", Window: 0, Group: "unplaced", Running: true, Conversation: "gone"},
+		{Kind: RowSaved, Label: "y/c", Name: "y/c", Socket: "proj-y", Agent: "pi", Window: 0, Running: true, Conversation: "gone"},
 	}
 }
 
@@ -177,7 +177,7 @@ func TestReapForgetsInSessionsScope(t *testing.T) {
 func TestRefreshKeepsChecks(t *testing.T) {
 	m, f := newSavedModel(t, savedFixture())
 	m = space(m) // uncheck x/a
-	f.rows = append(savedFixture(), Row{Kind: RowSaved, Label: "z/new", Name: "z/new", Socket: "proj-z", Group: "unplaced"})
+	f.rows = append(savedFixture(), Row{Kind: RowSaved, Label: "z/new", Name: "z/new", Socket: "proj-z"})
 	m = refreshNow(t, m)
 	if m.checked["x/a"] {
 		t.Fatal("refresh re-checked a row the operator unchecked")
@@ -198,21 +198,26 @@ func TestSavedEmpty(t *testing.T) {
 func TestSavedRowRender(t *testing.T) {
 	m, _ := newSavedModel(t, savedFixture())
 	rows := m.visibleRows()
-	first := plainRow(rows[0])
-	for _, want := range []string{"window 1", "[x]", "○", "x/a", "pi"} {
+	if rows[0].Kind != RowHeader || rows[0].Label != "window 1" {
+		t.Fatalf("first row %+v; want the window 1 header", rows[0])
+	}
+	first := plainRow(rows[1])
+	for _, want := range []string{"[x]", "x/a", "pi·saved"} {
 		if !strings.Contains(first, want) {
 			t.Errorf("row %q missing %q", first, want)
 		}
 	}
-	second := plainRow(rows[1])
-	if strings.Contains(second, "window 1") || strings.Contains(second, "[") || !strings.Contains(second, "●") {
-		t.Errorf("attached row %q: want no group label repeat, no box, ●", second)
+	// x/b is open (running with a tab): no checkbox.
+	if second := plainRow(rows[2]); strings.Contains(second, "[") {
+		t.Errorf("open row %q has a checkbox", second)
 	}
-	// y/c is running (no tab): labelled unplaced, and not flagged
-	// (no transcript) because a running agent may not have written it yet.
-	third := plainRow(rows[2])
-	if !strings.Contains(third, "unplaced") || strings.Contains(third, "(no transcript)") {
-		t.Errorf("row %q: want unplaced and no (no transcript)", third)
+	if rows[3].Kind != RowHeader || rows[3].Label != "unplaced" {
+		t.Fatalf("row 3 %+v; want the unplaced header", rows[3])
+	}
+	// y/c is running (no tab): not flagged (no transcript), because a running
+	// agent may not have written its file yet.
+	if third := plainRow(rows[4]); !strings.Contains(third, "pi·detached") || strings.Contains(third, "(no transcript)") {
+		t.Errorf("row %q: want pi·detached and no (no transcript)", third)
 	}
 }
 
@@ -223,15 +228,12 @@ func TestRowsFromSavedHidesOpenSessions(t *testing.T) {
 		{Name: "b/detached", Window: 2, Running: true},
 		{Name: "c/open", Window: 0, Running: true, Attached: true},
 	}
-	rows := rowsFromSaved(ss)
 	var got []string
-	for _, r := range rows {
-		got = append(got, r.Name+"|"+r.Group)
+	for _, r := range rowsFromSaved(ss) {
+		got = append(got, r.Name)
 	}
-	// An open session has nothing to restore, so it is not listed; the group
-	// label moves to the first row that is.
-	want := []string{"a/closed|window 1", "b/detached|window 2"}
-	if !slices.Equal(got, want) {
+	// An open session has nothing to restore, so it is not listed.
+	if want := []string{"a/closed", "b/detached"}; !slices.Equal(got, want) {
 		t.Fatalf("rows = %v want %v", got, want)
 	}
 }
