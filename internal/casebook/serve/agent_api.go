@@ -459,12 +459,8 @@ func (s *Server) postWorkedMessage(ctx context.Context, sessionID string, thID i
 		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage PostWorked: %v\n", err)
 		return
 	}
-	if _, err := s.Bus.Publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID}); err != nil {
-		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish messages: %v\n", err)
-	}
-	if _, err := s.Bus.Publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID}); err != nil {
-		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish thread: %v\n", err)
-	}
+	s.publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID})
+	s.publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID})
 }
 
 // jobForSession validates that the job exists and is owned by the given

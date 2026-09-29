@@ -47,6 +47,9 @@ type Server struct {
 	Index  *Index
 	Now    func() time.Time
 	Runner apply.Runner // for the casebook lane (nil: no-op runner)
+	// Log receives serve's non-fatal error lines (nil: os.Stderr); tests
+	// capture it.
+	Log io.Writer
 
 	// Wait is the long-poll timeout cap and WatchEvery the HEAD poll; tests
 	// shorten them.
@@ -198,7 +201,11 @@ func (s *Server) laneCtx() context.Context {
 // than failing the enclosing request.
 func (s *Server) publish(ctx context.Context, kind string, payload any) {
 	if _, err := s.Bus.Publish(ctx, kind, payload); err != nil {
-		fmt.Fprintf(os.Stderr, "casebook serve: publish %s: %v\n", kind, err)
+		w := s.Log
+		if w == nil {
+			w = os.Stderr
+		}
+		_, _ = fmt.Fprintf(w, "casebook serve: publish %s: %v\n", kind, err)
 	}
 }
 
@@ -387,12 +394,11 @@ func (s *Server) rebuild(ctx context.Context) error {
 	s.Index.set(res, head, now)
 
 	pending, _ := s.Props.Pending(ctx)
-	if _, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()}); err != nil {
-		return err
-	}
+	// The index is set: announcing it can no longer fail the rebuild (a
+	// caller would report an error for a change that happened).
+	s.publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()})
 	if proposed > 0 {
-		_, err := s.Bus.Publish(ctx, "rules", map[string]int{"proposed": proposed})
-		return err
+		s.publish(ctx, "rules", map[string]int{"proposed": proposed})
 	}
 	return nil
 }

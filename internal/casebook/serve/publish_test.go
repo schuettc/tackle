@@ -1,7 +1,9 @@
 package serve
 
 import (
+	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/casebook/bus"
@@ -29,6 +31,8 @@ func TestPublishFailureDoesNotFailRequest(t *testing.T) {
 	if err := badDB.Close(); err != nil {
 		t.Fatal(err)
 	}
+	var log bytes.Buffer
+	r.s.Log = &log
 
 	// POST /api/agent/presence: Queue.Touch succeeds (main DB is fine), then
 	// s.publish("sessions", …) hits the dead Bus.  The handler must still
@@ -38,5 +42,33 @@ func TestPublishFailureDoesNotFailRequest(t *testing.T) {
 		map[string]string{"id": "probe-publish-fail"}, &out)
 	if code != 200 {
 		t.Fatalf("expected 200 after publish failure, got %d", code)
+	}
+	if !strings.Contains(log.String(), "casebook serve: publish sessions:") {
+		t.Fatalf("publish failure not logged; log = %q", log.String())
+	}
+}
+
+// TestRebuildPublishFailureDoesNotFailActivate: activating a rule commits it
+// and rebuilds the index; a failed announcement afterwards must not turn the
+// committed activation into an error reply.
+func TestRebuildPublishFailureDoesNotFailActivate(t *testing.T) {
+	r, _ := newRuleRig(t)
+	badDB, err := db.Open(ctx, filepath.Join(t.TempDir(), "bad.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.s.Bus = bus.New(badDB)
+	if err := badDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	r.s.Log = &log
+
+	var detail RuleDetailView
+	if code := r.do(t, "POST", "/api/rules/activate", map[string]any{"id": "kind-repo"}, &detail); code != 200 {
+		t.Fatalf("activate after publish failure: want 200, got %d", code)
+	}
+	if !strings.Contains(log.String(), "casebook serve: publish index:") {
+		t.Fatalf("index publish failure not logged; log = %q", log.String())
 	}
 }

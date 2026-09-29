@@ -148,7 +148,7 @@ func TestSyncBusy(t *testing.T) {
 	}
 	b.Close()
 	// Release and confirm sync now succeeds.
-	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	_ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
 	_ = lf.Close()
 	// Re-append the event (Drain consumed it).
 	if err := spool.Append(config.SpoolDir(), ev); err != nil {

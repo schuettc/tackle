@@ -65,7 +65,7 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		_ = lf.Close() // already returning ErrSyncBusy; close error not actionable
 		return rep, ErrSyncBusy
 	}
-	defer func() { syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); lf.Close() }() //nolint:errcheck
+	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); _ = lf.Close() }()
 	if !o.NoPush {
 		if err := a.remoteSync(ctx, &rep); err != nil {
 			return rep, err
