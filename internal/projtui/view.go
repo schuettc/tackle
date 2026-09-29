@@ -293,8 +293,8 @@ func plainRow(r Row) string {
 
 // savedRowText is a saved row: the window-group label (first row of each
 // group only), the restore checkbox (only on rows restoring would change),
-// ● running / ○ saved, the name, the agent, and a note when the saved
-// conversation's transcript is gone (it would restore as a fresh session).
+// ● running / ○ saved, the name, the agent, and a note when a closed
+// session's conversation transcript is gone (it would restore fresh).
 func savedRowText(r Row) string {
 	box := "   "
 	if needsRestore(r) {
@@ -311,7 +311,9 @@ func savedRowText(r Row) string {
 	if r.Agent != "" {
 		s += "  " + r.Agent
 	}
-	if r.Conversation != "" && !r.Transcript {
+	// Only for a session that is not running: a running pi can hold an id
+	// whose file it has not written yet.
+	if r.Conversation != "" && !r.Transcript && !r.Running {
 		s += "  (no transcript)"
 	}
 	return s

@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/schuettc/tackle/internal/proj"
 )
 
 // savedFixture is a, b, c across one layout window and the unplaced group:
@@ -205,8 +207,43 @@ func TestSavedRowRender(t *testing.T) {
 	if strings.Contains(second, "window 1") || strings.Contains(second, "[") || !strings.Contains(second, "●") {
 		t.Errorf("attached row %q: want no group label repeat, no box, ●", second)
 	}
+	// y/c is running (no tab): labelled unplaced, and not flagged
+	// (no transcript) because a running agent may not have written it yet.
 	third := plainRow(rows[2])
-	if !strings.Contains(third, "unplaced") || !strings.Contains(third, "(no transcript)") {
-		t.Errorf("row %q missing unplaced/(no transcript)", third)
+	if !strings.Contains(third, "unplaced") || strings.Contains(third, "(no transcript)") {
+		t.Errorf("row %q: want unplaced and no (no transcript)", third)
+	}
+}
+
+func TestRowsFromSavedHidesOpenSessions(t *testing.T) {
+	ss := []proj.SavedSession{
+		{Name: "a/open", Window: 1, Running: true, Attached: true},
+		{Name: "a/closed", Window: 1},
+		{Name: "b/detached", Window: 2, Running: true},
+		{Name: "c/open", Window: 0, Running: true, Attached: true},
+	}
+	rows := rowsFromSaved(ss)
+	var got []string
+	for _, r := range rows {
+		got = append(got, r.Name+"|"+r.Group)
+	}
+	// An open session has nothing to restore, so it is not listed; the group
+	// label moves to the first row that is.
+	want := []string{"a/closed|window 1", "b/detached|window 2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("rows = %v want %v", got, want)
+	}
+}
+
+func TestNoTranscriptOnlyWhenNotRunning(t *testing.T) {
+	// A freshly started pi has an id but has not written its file yet.
+	running := Row{Kind: RowSaved, Label: "a/1", Running: true, Conversation: "id", Transcript: false}
+	if strings.Contains(plainRow(running), "no transcript") {
+		t.Fatalf("running row %q flagged (no transcript)", plainRow(running))
+	}
+	closed := running
+	closed.Running = false
+	if !strings.Contains(plainRow(closed), "(no transcript)") {
+		t.Fatalf("closed row %q missing (no transcript)", plainRow(closed))
 	}
 }
