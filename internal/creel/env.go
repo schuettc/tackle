@@ -43,6 +43,14 @@ func ValidName(s string) bool {
 	return true
 }
 
+// ErrDestOutsideCwd is ResolveDest's refusal. Its text is the harness status
+// token ("error:dest-outside-cwd") that pi-creel matches on, so it must not change.
+var ErrDestOutsideCwd = errors.New("dest-outside-cwd")
+
+// destOutsideCwdHelp is what a person reads when ResolveDest refuses.
+const destOutsideCwdHelp = "--dest must be inside the working directory, so a secret only lands where " +
+	"this project keeps its files; use a path under it, e.g. .env or .worktrees/<name>/.env"
+
 // ResolveDest resolves dest against cwd and rejects any path that escapes cwd.
 // An empty dest defaults to ".env". The returned path is absolute and cleaned.
 func ResolveDest(cwd, dest string) (string, error) {
@@ -59,7 +67,7 @@ func ResolveDest(cwd, dest string) (string, error) {
 		return "", err
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errors.New("dest-outside-cwd")
+		return "", ErrDestOutsideCwd
 	}
 	return p, nil
 }
