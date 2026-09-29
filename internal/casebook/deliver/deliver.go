@@ -222,17 +222,46 @@ func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 }
 
 // MoveSession atomically moves all threads (and their queued messages) from
-// session `from` to session `to`. Returns the number of threads moved.
-// Messages stay in their threads, so they are deliverable to the new session.
-func (q *Queue) MoveSession(ctx context.Context, from, to string) (int, error) {
-	res, err := q.DB.ExecContext(ctx,
-		"UPDATE threads SET session_id = ? WHERE session_id = ?",
-		to, from)
+// session `from` to session `to`. Returns the number of threads moved and,
+// if an in-flight delivery on `from` was rescued, its ID (0 if none).
+//
+// When an in-flight delivery exists on `from`, MoveSession marks it 'moved'
+// and requeues its unsettled messages — the same approach MoveDelivery uses —
+// so the target session receives them in order on its next turn.
+func (q *Queue) MoveSession(ctx context.Context, from, to string) (threads int, movedDeliveryID int64, err error) {
+	now := ms(q.Now())
+	err = q.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Rescue any in-flight delivery on `from`.
+		var did int64
+		qErr := tx.QueryRowContext(ctx, "SELECT id FROM deliveries WHERE session_id = ? AND state = 'inflight'", from).Scan(&did)
+		if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+			return qErr
+		}
+		if did != 0 {
+			// Mark the delivery moved (same as MoveDelivery).
+			if _, err := tx.ExecContext(ctx, "UPDATE deliveries SET state = 'moved', finished_at = ? WHERE id = ?", now, did); err != nil {
+				return err
+			}
+			// Requeue its unsettled court messages so they reach the target.
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, queued_at = ?, settled_at = 0
+				WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, now, did); err != nil {
+				return err
+			}
+			movedDeliveryID = did
+		}
+		// Move all threads from `from` to `to`.
+		res, err := tx.ExecContext(ctx, "UPDATE threads SET session_id = ? WHERE session_id = ?", to, from)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		threads = int(n)
+		return nil
+	})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	return threads, movedDeliveryID, nil
 }
 
 // NewThread starts a thread with a session.

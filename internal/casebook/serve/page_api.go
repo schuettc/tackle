@@ -383,7 +383,7 @@ func (s *Server) postMoveSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	n, err := s.Queue.MoveSession(ctx, in.Session, in.Target)
+	n, movedID, err := s.Queue.MoveSession(ctx, in.Session, in.Target)
 	if err != nil {
 		reply(w, nil, err)
 		return
@@ -393,6 +393,12 @@ func (s *Server) postMoveSession(w http.ResponseWriter, r *http.Request) {
 		s.publish(ctx, "sessions", map[string]string{"moved_from": in.Session, "moved_to": in.Target})
 		// Wake the target session's long-poll so it picks up the new threads.
 		s.wake(in.Target)
+	}
+	if movedID > 0 {
+		// An in-flight delivery was rescued: publish a delivery event so the
+		// source session's dock removes its stuck buttons (same as MoveDelivery).
+		s.publish(ctx, "delivery", map[string]any{"id": movedID, "state": deliver.Moved, "session": in.Target, "from": in.Session})
+		s.wake(in.Session)
 	}
 	reply(w, map[string]int{"moved": n}, nil)
 }
