@@ -30,12 +30,16 @@ func HookCommand(exe, socket string) string {
 // test binary, and a hook pointing there would re-run the suite on every
 // option change.
 func InstallHooks(socket string) {
-	exe, err := os.Executable()
+	exe, err := executable()
 	if err != nil || filepath.Base(exe) != "proj" {
 		return
 	}
 	installHooksExe(socket, exe)
 }
+
+// executable resolves the running binary; a seam so tests can present one
+// named proj.
+var executable = os.Executable
 
 func installHooksExe(socket, exe string) {
 	for _, ev := range hookEvents {

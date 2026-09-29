@@ -64,6 +64,25 @@ var newSessionHome = func(socket, name string) error {
 // A reused session is left untouched: neither command nor agent is re-applied,
 // so proj never clobbers a pane the user is working in.
 func EnsureSession(socket, name, dir, agent, model string, command []string) (created bool, err error) {
+	return ensureSession(socket, name, dir, agent, agentLaunchCmd(agent, name, model), command)
+}
+
+// RestoreSession is EnsureSession for a remembered session: when it creates
+// the session it resumes the saved conversation (pi --session / claude
+// --resume) instead of starting a new one, falling back to a fresh launch
+// when there is no conversation to resume. An existing session is left
+// untouched, exactly as EnsureSession leaves it.
+func RestoreSession(socket, name, dir, agent, conversation string) (created bool, err error) {
+	launch := resumeLaunchCmd(agent, conversation)
+	if launch == "" {
+		launch = agentLaunchCmd(agent, name, "")
+	}
+	return ensureSession(socket, name, dir, agent, launch, nil)
+}
+
+// ensureSession is the shared create path; launch is the command typed into
+// the pane when no explicit command is given ("" types nothing).
+func ensureSession(socket, name, dir, agent, launch string, command []string) (created bool, err error) {
 	if _, err := runner(socket, "has-session", "-t", "="+name); err == nil {
 		return false, nil // exists → reuse
 	}
@@ -95,13 +114,13 @@ func EnsureSession(socket, name, dir, agent, model string, command []string) (cr
 		_, _ = runner(socket, "set-option", "-t", name, AgentOption(), agent)
 		// Only type an agent launch command when no explicit command was given;
 		// with a command the pane already runs it directly.
-		if len(command) == 0 {
-			if cmd := agentLaunchCmd(agent, name, model); cmd != "" {
-				// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
-				_, _ = runner(socket, "send-keys", "-t", "="+name+":", cmd, "Enter")
-			}
+		if len(command) == 0 && launch != "" {
+			// target "=name:" — trailing colon resolves the active pane on tmux 3.7+.
+			_, _ = runner(socket, "send-keys", "-t", "="+name+":", launch, "Enter")
 		}
 	}
+	// Every server proj creates sessions on keeps the record current.
+	InstallHooks(socket)
 	return true, nil
 }
 
@@ -142,11 +161,12 @@ func CurrentSessionName() string {
 // omits the flag so the agent falls back to its own default. cursor and none
 // ignore it.
 //
-// The command is TYPED into an interactive shell, so the claude()/pi wrappers
-// in ~/dotfiles/config/zsh/04-aliases.zsh still run: they are what prepend the
-// development-channel flags (galley/muster) to this launch. That is why --name
-// here must reach that wrapper as an interactive launch — anything the wrapper
-// treats as passthrough would arrive channel-less.
+// The command is TYPED into an interactive shell, so the claude() wrapper in
+// ~/dotfiles/config/zsh/04-aliases.zsh still runs: it is what prepends the
+// development-channel flags (galley/muster) to a claude launch. That is why
+// --name here must reach that wrapper as an interactive launch — anything the
+// wrapper treats as passthrough would arrive channel-less. pi has no wrapper:
+// its channels come from pi packages, so its launch is the binary as typed.
 //
 // The session name is quoted the same way zsh's ${(qq)n} does, guarding names
 // with shell metacharacters when typed into the pane.
@@ -176,6 +196,27 @@ func agentLaunchCmd(agent, name, model string) string {
 	default:
 		return ""
 	}
+}
+
+// resumeLaunchCmd returns the shell command that reopens conversation in
+// agent, or "" when there is nothing to resume (no id, an agent proj cannot
+// resume, or the binary is absent). No --name: both agents restore the name
+// stored with the conversation, and pi's CLI --name would rewrite it.
+func resumeLaunchCmd(agent, conversation string) string {
+	if conversation == "" {
+		return ""
+	}
+	switch agent {
+	case "pi":
+		if hasBin("pi") {
+			return "pi --session " + shellQuote(conversation)
+		}
+	case "claude":
+		if hasBin("claude") {
+			return "claude --resume " + shellQuote(conversation)
+		}
+	}
+	return ""
 }
 
 // hasBin reports whether bin is resolvable on $PATH.

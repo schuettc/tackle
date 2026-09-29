@@ -122,3 +122,69 @@ func findAgentOption(calls []recordedCall) *recordedCall {
 	}
 	return nil
 }
+
+func sendKeysText(calls []recordedCall) string {
+	if sk := find(calls, "send-keys"); sk != nil && len(sk.args) >= 4 {
+		return sk.args[3]
+	}
+	return ""
+}
+
+func TestRestoreSessionTypesResume(t *testing.T) {
+	stubBins(t, "pi", "claude")
+	calls := withFakeRun(t)
+	created, err := RestoreSession("proj-x", "x/w", "/tmp/dir", "pi", "id1")
+	if err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if got := sendKeysText(*calls); got != "pi --session 'id1'" {
+		t.Fatalf("typed %q want pi --session 'id1'", got)
+	}
+	if opt := findAgentOption(*calls); opt == nil || opt.args[len(opt.args)-1] != "pi" {
+		t.Fatalf("@proj_agent not set to pi; calls=%v", *calls)
+	}
+
+	calls = withFakeRun(t)
+	if _, err := RestoreSession("proj-x", "x/w", "/tmp/dir", "pi", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := sendKeysText(*calls); got != "pi --name 'x/w'" {
+		t.Fatalf("no conversation: typed %q want a fresh pi --name 'x/w'", got)
+	}
+}
+
+func TestRestoreSessionReuseLeavesPane(t *testing.T) {
+	var calls []recordedCall
+	orig := runner
+	t.Cleanup(func() { runner = orig })
+	runner = func(socket string, args ...string) (string, error) {
+		calls = append(calls, recordedCall{socket, args})
+		return "", nil // has-session succeeds: the session exists
+	}
+	created, err := RestoreSession("proj-x", "x/w", "/tmp/dir", "pi", "id1")
+	if err != nil || created {
+		t.Fatalf("created=%v err=%v; want false,nil", created, err)
+	}
+	if find(calls, "send-keys") != nil || find(calls, "respawn-pane") != nil {
+		t.Fatalf("existing session was touched: %v", calls)
+	}
+}
+
+func TestEnsureSessionInstallsHooks(t *testing.T) {
+	calls := withFakeRun(t)
+	orig := executable
+	t.Cleanup(func() { executable = orig })
+	executable = func() (string, error) { return "/x/proj", nil }
+	if _, err := EnsureSession("proj-x", "x/w", "/tmp/dir", "none", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	var hooks []string
+	for _, c := range *calls {
+		if len(c.args) >= 3 && c.args[0] == "set-hook" {
+			hooks = append(hooks, c.args[2])
+		}
+	}
+	if !slices.Contains(hooks, "session-created[80]") || !slices.Contains(hooks, "after-set-option[80]") {
+		t.Fatalf("hooks installed = %v", hooks)
+	}
+}
