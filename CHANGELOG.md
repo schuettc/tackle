@@ -1,8 +1,28 @@
 # Changelog
 
-All notable changes to `scratch` are documented here. The format follows
+All notable changes to `scratch` and `proj` are documented here (proj entries are headed `proj`; older proj releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [proj 0.6.0] - 2026-09-29
+
+### Added
+- Restore after a reboot. proj records every work session it sees (name,
+  directory, agent, and the pi / Claude Code conversation it holds) in
+  `~/.local/state/proj/sessions.json`, kept current by tmux hooks it installs
+  on its servers. The record only grows; `^x` (reap) is the one removal path.
+- A **saved** scope in the picker (`tab` cycles folders, sessions, saved). It
+  lists sessions that need restoring, grouped by Ghostty window: `space`
+  toggles, `^r` restores the checked ones and rebuilds their Ghostty windows
+  and tabs, `enter` restores one and jumps to it, `^s` saves the Ghostty
+  layout, `^x` forgets.
+- Restored agents reopen their conversation (`pi --session <id>` /
+  `claude --resume <id>`); a missing transcript starts fresh under the same
+  name.
+
+### Changed
+- The picker's discovery runs in the background, so keys no longer wait on
+  tmux while it refreshes.
 
 ## [0.5.5] — 2026-09-29
 
