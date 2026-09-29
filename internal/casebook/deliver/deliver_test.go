@@ -531,3 +531,106 @@ func TestRenderSingleMessageSettleIt(t *testing.T) {
 		t.Errorf("single-message render must not say \"Settle each\"; got:\n%s", got)
 	}
 }
+
+// TestLeftThresholdClock verifies that Sessions() marks a session left when
+// its last_seen is older than LeftAfter, using a controllable clock.
+func TestLeftThresholdClock(t *testing.T) {
+	q, c := newQueue(t) // s1 attached at c.t
+
+	// Immediately: s1 should NOT be left (0s since last_seen < 60s default).
+	q.LeftAfter = 100 * time.Millisecond
+	ss, err := q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if s.ID == "s1" && s.Left {
+			t.Error("s1 should not be left immediately after attach")
+		}
+	}
+
+	// Advance clock past the threshold.
+	c.add(200 * time.Millisecond)
+
+	ss, err = q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, s := range ss {
+		if s.ID == "s1" {
+			found = true
+			if !s.Left {
+				t.Error("s1 should be left after threshold passed")
+			}
+		}
+	}
+	if !found {
+		t.Error("s1 not in sessions")
+	}
+
+	// Re-touch (simulate a heartbeat).
+	if err := q.Touch(ctx, Session{ID: "s1", Harness: "pi", Label: "l", CWD: "/w", PID: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// After re-touch, s1 should not be left (last_seen = now = c.t).
+	ss, err = q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if s.ID == "s1" && s.Left {
+			t.Error("s1 should not be left after re-heartbeat")
+		}
+	}
+}
+
+// TestMoveSessionDeliver verifies that MoveSession moves all threads so queued
+// messages become deliverable to the target session.
+func TestMoveSessionDeliver(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+
+	// Post two queued messages on s1.
+	post(t, q, th, "first", false)
+	post(t, q, th, "second", false)
+
+	// Register s2.
+	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move s1's threads to s2.
+	n, err := q.MoveSession(ctx, "s1", "s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("moved %d threads, want 1", n)
+	}
+
+	// s1 should have 0 queued; s2 should have 2.
+	ss, _ := q.Sessions(ctx)
+	for _, s := range ss {
+		switch s.ID {
+		case "s1":
+			if s.Queued != 0 {
+				t.Errorf("s1 queued after move: %d want 0", s.Queued)
+			}
+		case "s2":
+			if s.Queued != 2 {
+				t.Errorf("s2 queued after move: %d want 2", s.Queued)
+			}
+		}
+	}
+
+	// s2 can pick them up.
+	d, err := q.Next(ctx, "s2")
+	if err != nil || d == nil {
+		t.Fatalf("Next s2: %v %v", d, err)
+	}
+	if len(d.Messages) != 2 {
+		t.Errorf("s2 delivery: got %d messages, want 2", len(d.Messages))
+	}
+}

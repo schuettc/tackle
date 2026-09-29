@@ -162,6 +162,11 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 			q.StuckAfter = d
 		}
 	}
+	if la := os.Getenv("CASEBOOK_LEFT_AFTER"); la != "" {
+		if d, err := time.ParseDuration(la); err == nil && d > 0 {
+			q.LeftAfter = d
+		}
+	}
 	s := &Server{App: a, DB: d, Queue: q, Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
 		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
 	// Record the serve lifetime context now so lanes started during New (a
@@ -476,6 +481,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/proposals/change", s.postChange)
 	m.HandleFunc("POST /api/proposals/reject", s.postReject)
 	m.HandleFunc("GET /api/sessions", s.getSessions)
+	m.HandleFunc("POST /api/sessions/move", s.postMoveSession)
 	m.HandleFunc("GET /api/threads", s.getThreads)
 	m.HandleFunc("POST /api/threads", s.postThread)
 	m.HandleFunc("POST /api/threads/move", s.postMoveThread)

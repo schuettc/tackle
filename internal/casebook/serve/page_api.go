@@ -365,6 +365,38 @@ func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	reply(w, SessionsView{Sessions: nonNil(ss)}, err)
 }
 
+// postMoveSession atomically moves all threads (and their queued messages) from
+// a left session to a target session. Used by the dock's "move to..." action on
+// a left session (spec §2.1). No delivery is needed; the messages remain queued
+// and become deliverable to the target session on its next turn.
+func (s *Server) postMoveSession(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Session string `json:"session"`
+		Target  string `json:"target"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if in.Session == "" || in.Target == "" {
+		reply(w, nil, bad("session and target required"))
+		return
+	}
+	ctx := r.Context()
+	n, err := s.Queue.MoveSession(ctx, in.Session, in.Target)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if n > 0 {
+		// Publish a sessions event so the page dock refreshes.
+		s.publish(ctx, "sessions", map[string]string{"moved_from": in.Session, "moved_to": in.Target})
+		// Wake the target session's long-poll so it picks up the new threads.
+		s.wake(in.Target)
+	}
+	reply(w, map[string]int{"moved": n}, nil)
+}
+
 // getSessionDelivery returns the current in-flight delivery for a session,
 // or a DeliveryView with a null delivery when there is none.
 func (s *Server) getSessionDelivery(w http.ResponseWriter, r *http.Request) {
@@ -620,7 +652,9 @@ func (s *Server) postMoveDelivery(w http.ResponseWriter, r *http.Request) {
 		err = s.Queue.MoveDelivery(ctx, in.ID, in.Session)
 	}
 	if err == nil {
-		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
+		// Include the source session ("from") so the dock knows to refresh even
+		// when watching the source, not the target.
+		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session, "from": d.SessionID})
 		s.wake(d.SessionID) // parity with postRelease: wake the old session
 		s.wake(in.Session)
 	}
