@@ -243,8 +243,10 @@ func (q *Queue) MoveSession(ctx context.Context, from, to string) (threads int, 
 				return err
 			}
 			// Requeue its unsettled court messages so they reach the target.
-			if _, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, queued_at = ?, settled_at = 0
-				WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, now, did); err != nil {
+			// queued_at is kept: the rescued messages were sent first, so they
+			// stay first in the target's delivery.
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, settled_at = 0
+				WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, did); err != nil {
 				return err
 			}
 			movedDeliveryID = did
@@ -803,8 +805,9 @@ func (q *Queue) MoveDelivery(ctx context.Context, id int64, session string) erro
 		if _, err := tx.ExecContext(ctx, `UPDATE threads SET session_id = ? WHERE id IN (SELECT thread_id FROM messages WHERE delivery_id = ?)`, session, id); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, queued_at = ?, settled_at = 0
-			WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, now, id)
+		// queued_at is kept, so moved messages keep their place in line.
+		_, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, settled_at = 0
+			WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, id)
 		return err
 	})
 }

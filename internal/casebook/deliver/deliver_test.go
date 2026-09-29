@@ -641,12 +641,14 @@ func TestMoveSessionDeliver(t *testing.T) {
 // ALL of them (in-flight + any subsequently queued) with nothing left inflight
 // on the source and no duplicates.
 func TestMoveSessionWithInflight(t *testing.T) {
-	q, _ := newQueue(t)
+	q, c := newQueue(t)
 	th := thread(t, q, "s1")
 
 	// Post two messages that will become inflight.
 	post(t, q, th, "first in delivery", false)
+	c.add(time.Second)
 	post(t, q, th, "second in delivery", false)
+	c.add(time.Second)
 
 	// Register s2.
 	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
@@ -664,8 +666,11 @@ func TestMoveSessionWithInflight(t *testing.T) {
 	deliveryID := d.ID
 
 	// Post one more queued message (arrives after the delivery started).
+	c.add(time.Second)
 	post(t, q, th, "queued after delivery", false)
+	c.add(time.Second)
 
+	c.add(time.Minute)
 	// Move s1's session to s2 — this must rescue the in-flight delivery.
 	threads, movedID, err := q.MoveSession(ctx, "s1", "s2")
 	if err != nil {
@@ -710,5 +715,47 @@ func TestMoveSessionWithInflight(t *testing.T) {
 			t.Errorf("duplicate message id %d in s2 delivery", m.ID)
 		}
 		seen[m.ID] = true
+	}
+	// The rescued messages were sent first, so they stay first.
+	var got []string
+	for _, m := range d2.Messages {
+		got = append(got, m.Body)
+	}
+	want := []string{"first in delivery", "second in delivery", "queued after delivery"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("s2 delivery order = %q, want %q", got, want)
+	}
+}
+
+// TestMoveDeliveryKeepsOrder: messages rescued from a stuck delivery were sent
+// before anything queued since, so the target receives them first.
+func TestMoveDeliveryKeepsOrder(t *testing.T) {
+	q, c := newQueue(t)
+	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	th := thread(t, q, "s1")
+	post(t, q, th, "sent first", false)
+	c.add(time.Second)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next s1: %v %v", d, err)
+	}
+	c.add(time.Second)
+	post(t, q, th, "sent later", false)
+	c.add(time.Minute)
+	if err := q.MoveDelivery(ctx, d.ID, "s2"); err != nil {
+		t.Fatal(err)
+	}
+	d2, err := q.Next(ctx, "s2")
+	if err != nil || d2 == nil {
+		t.Fatalf("Next s2: %v %v", d2, err)
+	}
+	var got []string
+	for _, m := range d2.Messages {
+		got = append(got, m.Body)
+	}
+	if want := "sent first|sent later"; strings.Join(got, "|") != want {
+		t.Fatalf("s2 delivery order = %q, want %s", got, want)
 	}
 }
