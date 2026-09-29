@@ -70,6 +70,12 @@ type ThreadsView struct {
 	Threads []deliver.Thread `json:"threads"`
 }
 
+// DeliveryView is the response body of GET /api/session/delivery.
+// Delivery is null when there is no in-flight delivery for the session.
+type DeliveryView struct {
+	Delivery *deliver.Delivery `json:"delivery"`
+}
+
 // WorkedView is the progress history from a completed turn, carried on a
 // 'worked' message. It matches deliver.WorkedView.
 type WorkedView = deliver.WorkedView

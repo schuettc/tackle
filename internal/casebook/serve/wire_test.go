@@ -46,6 +46,7 @@ var wireRoots = []any{
 	AcceptResult{},
 	RejectResult{},
 	SessionsView{},
+	DeliveryView{},
 	ThreadsView{},
 	MessagesView{},
 	SendBatchResult{},

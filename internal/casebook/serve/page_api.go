@@ -365,6 +365,23 @@ func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	reply(w, SessionsView{Sessions: nonNil(ss)}, err)
 }
 
+// getSessionDelivery returns the current in-flight delivery for a session,
+// or a DeliveryView with a null delivery when there is none.
+func (s *Server) getSessionDelivery(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	sid := r.URL.Query().Get("session")
+	if sid == "" {
+		reply(w, nil, bad("session required"))
+		return
+	}
+	d, err := s.Queue.Inflight(ctx, sid)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	reply(w, DeliveryView{Delivery: d}, nil)
+}
+
 func (s *Server) getThreads(w http.ResponseWriter, r *http.Request) {
 	ts, err := s.Queue.Threads(r.Context(), r.URL.Query().Get("session"))
 	reply(w, ThreadsView{Threads: nonNil(ts)}, err)

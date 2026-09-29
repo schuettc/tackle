@@ -156,7 +156,13 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 // New wires a server over an opened app and database. It marks deliveries a
 // previous serve left in flight as interrupted and builds the index.
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
-	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
+	q := deliver.New(d)
+	if sa := os.Getenv("CASEBOOK_STUCK_AFTER"); sa != "" {
+		if d, err := time.ParseDuration(sa); err == nil && d > 0 {
+			q.StuckAfter = d
+		}
+	}
+	s := &Server{App: a, DB: d, Queue: q, Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
 		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
 	// Record the serve lifetime context now so lanes started during New (a
 	// restart resume) are cancelled when serve stops. Run passes the same
@@ -480,6 +486,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/drafts/remove", s.postRemoveDraft)
 	m.HandleFunc("POST /api/batches/reorder", s.postReorder)
 	m.HandleFunc("POST /api/batches/send", s.postSendBatch)
+	m.HandleFunc("GET /api/session/delivery", s.getSessionDelivery)
 	m.HandleFunc("POST /api/deliveries/release", s.postRelease)
 	m.HandleFunc("POST /api/deliveries/move", s.postMoveDelivery)
 	m.HandleFunc("POST /api/stop", s.postStop)

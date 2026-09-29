@@ -40,12 +40,12 @@ const (
 
 // Delivery states.
 const (
-	InFlight   = "inflight"
-	Done       = "done"
-	Released   = "released"
-	Moved      = "moved"
-	Stopped    = "interrupted"
-	StuckAfter = 10 * time.Minute
+	InFlight        = "inflight"
+	Done            = "done"
+	Released        = "released"
+	Moved           = "moved"
+	Stopped         = "interrupted"
+	DefaultStuckAfter = 10 * time.Minute
 )
 
 // ErrNotFound means an id doesn't exist (or isn't the caller's).
@@ -61,7 +61,8 @@ type Session struct {
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 	LookedAt  time.Time `json:"looked_at,omitzero"`
-	Busy      bool      `json:"busy"` // a delivery is in flight
+	Busy      bool      `json:"busy"`   // a delivery is in flight
+	Queued    int       `json:"queued"` // count of queued (unsent) messages
 }
 
 // Thread is a conversation with one session.
@@ -138,8 +139,19 @@ type Delivery struct {
 
 // Queue is the delivery store over the working-state database.
 type Queue struct {
-	DB  *db.DB
-	Now func() time.Time
+	DB         *db.DB
+	Now        func() time.Time
+	// StuckAfter overrides the default 10-minute stuck threshold. Zero means use
+	// DefaultStuckAfter. Set to a shorter duration in tests.
+	StuckAfter time.Duration
+}
+
+// stuckAfter returns the effective stuck threshold for this queue.
+func (q *Queue) stuckAfter() time.Duration {
+	if q.StuckAfter > 0 {
+		return q.StuckAfter
+	}
+	return DefaultStuckAfter
 }
 
 // New returns a queue over d.
@@ -171,7 +183,9 @@ func (q *Queue) Touch(ctx context.Context, s Session) error {
 // Sessions lists every known session, most recently seen first.
 func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 	rows, err := q.DB.QueryContext(ctx, `SELECT s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at,
-		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight') FROM sessions s ORDER BY s.last_seen DESC`)
+		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight'),
+		COALESCE((SELECT count(*) FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.session_id = s.id AND m.state = 'queued'), 0)
+		FROM sessions s ORDER BY s.last_seen DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +194,7 @@ func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 	for rows.Next() {
 		var s Session
 		var fs, ls, la int64
-		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy); err != nil {
+		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy, &s.Queued); err != nil {
 			return nil, err
 		}
 		s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
@@ -452,7 +466,7 @@ func (q *Queue) Delivery(ctx context.Context, id int64) (Delivery, error) {
 		return d, err
 	}
 	d.SentAt, d.TouchedAt, d.FinishedAt, d.ShownAt = tm(sent), tm(touched), tm(fin), tm(shown)
-	d.Stuck = d.State == InFlight && q.Now().Sub(d.TouchedAt) > StuckAfter
+	d.Stuck = d.State == InFlight && q.Now().Sub(d.TouchedAt) > q.stuckAfter()
 	d.Messages, err = q.messages(ctx, "delivery_id = ? AND author = 'court' ORDER BY queued_at, COALESCE(batch_id, 0), batch_pos, id", id)
 	return d, err
 }

@@ -62,6 +62,10 @@ export interface SessionsView {
   sessions: Session[] | null;
 }
 
+export interface DeliveryView {
+  delivery: Delivery | null;
+}
+
 export interface ThreadsView {
   threads: Thread[] | null;
 }
@@ -283,6 +287,19 @@ export interface Session {
   last_seen: string;
   looked_at?: string;
   busy: boolean;
+  queued: number;
+}
+
+export interface Delivery {
+  id: number;
+  session_id: string;
+  state: string;
+  sent_at: string;
+  touched_at: string;
+  finished_at?: string;
+  shown_at?: string;
+  stuck: boolean;
+  messages: Message[] | null;
 }
 
 export interface Thread {
@@ -323,18 +340,6 @@ export interface Message {
   created_at: string;
   queued_at?: string;
   settled_at?: string;
-}
-
-export interface Delivery {
-  id: number;
-  session_id: string;
-  state: string;
-  sent_at: string;
-  touched_at: string;
-  finished_at?: string;
-  shown_at?: string;
-  stuck: boolean;
-  messages: Message[] | null;
 }
 
 export interface SkippedMessage {
