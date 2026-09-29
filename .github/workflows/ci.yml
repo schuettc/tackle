@@ -1,0 +1,35 @@
+# .tools family standard: identical in every family repo except the branch
+# list and the gate's OS list. The same checks `just verify` runs locally.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  gate:
+    strategy:
+      matrix:
+        # tackle's tools target macOS and its tests exercise macOS behaviour.
+        os: [macos-26]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v4.0.0
+      - run: just prepare
+      - uses: schuettc/tools-actions/go-ci@v0.10.0
+        with:
+          setup-go: "false"
+  extra:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v4.0.0
+      - run: just verify-extra
