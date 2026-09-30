@@ -12,6 +12,7 @@ package serve
 
 import (
 	"encoding/xml"
+	"errors"
 	"io"
 	"sort"
 	"strings"
@@ -58,7 +59,7 @@ func extractShapeElems(data []byte) ([]shapeElem, error) {
 	var elems []shapeElem
 	for {
 		tok, err := dec.Token()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
