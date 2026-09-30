@@ -480,6 +480,7 @@ export interface Attached {
   open?: string;
   rule?: string;
   job?: string;
+  section?: string;
 }
 
 export interface WorkedView {

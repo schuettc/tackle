@@ -79,6 +79,9 @@ func describe(a Attached) string {
 	if a.Job != "" {
 		parts = append(parts, "job "+a.Job)
 	}
+	if a.Section != "" && len(parts) == 0 {
+		parts = append(parts, a.Section)
+	}
 	return strings.Join(parts, " · ")
 }
 

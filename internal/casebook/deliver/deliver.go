@@ -82,11 +82,14 @@ type Attached struct {
 	Open string   `json:"open,omitempty"` // the open item
 	Rule string   `json:"rule,omitempty"`
 	Job  string   `json:"job,omitempty"`
+	// Section is the page section Court asked from when nothing in it is
+	// open ("rules": asking the agent to draft one).
+	Section string `json:"section,omitempty"`
 }
 
 // Empty reports whether nothing is attached.
 func (a Attached) Empty() bool {
-	return len(a.Keys) == 0 && a.Open == "" && a.Rule == "" && a.Job == ""
+	return len(a.Keys) == 0 && a.Open == "" && a.Rule == "" && a.Job == "" && a.Section == ""
 }
 
 // WorkedView is the progress history carried by a 'worked' message. It holds
