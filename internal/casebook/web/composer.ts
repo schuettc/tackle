@@ -191,6 +191,21 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     return t.id;
   }
 
+  // withoutSent removes the sent text from what the field holds now. Court
+  // may have typed before it, after it, or both; the two sides meet with one
+  // run of whitespace between them (or none, at the start or end). If he
+  // edited inside the sent text it is no longer there as sent; what he made
+  // of it is his, and it stays.
+  function withoutSent(now: string, sent: string): string {
+    const at = now.indexOf(sent);
+    if (at < 0) return now;
+    const before = now.slice(0, at);
+    const after = now.slice(at + sent.length);
+    if (!before.trim()) return after.replace(/^\s+/, '');
+    if (/\s$/.test(before)) return before + after.replace(/^\s+/, '');
+    return before + after;
+  }
+
   async function send(batch: boolean): Promise<void> {
     const sent = input.value;
     const body = sent.trim();
@@ -209,12 +224,10 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         attached: effective(),
         batch,
       });
-      // Clear only what was sent: text typed while the send was in flight
-      // stays in the field.
-      const now = input.value;
-      if (now.startsWith(sent)) {
-        input.value = now.slice(sent.length).replace(/^\s+/, '');
-      }
+      // Clear only what was sent, wherever it now sits: text typed while the
+      // send was in flight (before it or after it) stays in the field, and
+      // the sent text never does, so it cannot be sent twice.
+      input.value = withoutSent(input.value, sent);
       fit();
       override = null;
       renderAttached();

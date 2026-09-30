@@ -1829,6 +1829,15 @@ function makeComposer(ctx, dock) {
     dock.threadCreated(t);
     return t.id;
   }
+  function withoutSent(now, sent) {
+    const at2 = now.indexOf(sent);
+    if (at2 < 0) return now;
+    const before = now.slice(0, at2);
+    const after = now.slice(at2 + sent.length);
+    if (!before.trim()) return after.replace(/^\s+/, "");
+    if (/\s$/.test(before)) return before + after.replace(/^\s+/, "");
+    return before + after;
+  }
   async function send(batch) {
     const sent = input.value;
     const body = sent.trim();
@@ -1847,10 +1856,7 @@ function makeComposer(ctx, dock) {
         attached: effective(),
         batch
       });
-      const now = input.value;
-      if (now.startsWith(sent)) {
-        input.value = now.slice(sent.length).replace(/^\s+/, "");
-      }
+      input.value = withoutSent(input.value, sent);
       fit();
       override = null;
       renderAttached();

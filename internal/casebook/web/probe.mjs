@@ -438,6 +438,60 @@ async function composerScenariosOn(context, serveHandle) {
         (d3?.delivery?.messages ?? []).map((m) => m.body),
         ['first part'],
       );
+
+      // Court edits the START of the field (and its end) during a send: the
+      // sent text is removed wherever it now sits, what he typed stays, and
+      // sending again sends only that, never the first message twice.
+      // Settle the delivery first, so the next one comes.
+      const settle = (d) =>
+        fx.agent.reply(
+          fx.sid,
+          (d?.delivery?.messages ?? []).map((m) => m.id),
+          'answered',
+        );
+      await settle(d3);
+      await pg.click('[data-testid="composer-input"]');
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.press('Backspace');
+      await pg.route('**/api/messages', hold);
+      await compose(pg, 'second part');
+      const typeAt = async (where, text) => {
+        await pg.evaluate((w) => {
+          const el = document.querySelector('[data-testid="composer-input"]');
+          const at = w === 'start' ? 0 : el.value.length;
+          el.focus();
+          el.setSelectionRange(at, at);
+        }, where);
+        await pg.keyboard.type(text);
+      };
+      await typeAt('start', 'A ');
+      await typeAt('end', ' B');
+      const edited = await until(
+        pg,
+        () =>
+          document.querySelector('[data-testid="composer-input"]').value ===
+          'A B',
+      );
+      check(
+        'text typed before and after the sent text during a send stays; the sent text is removed wherever it sits',
+        edited,
+      );
+      await pg.unroute('**/api/messages', hold);
+      const d4 = await fx.agent.wait(fx.sid);
+      checkList(
+        'the agent receives the sent text once',
+        (d4?.delivery?.messages ?? []).map((m) => m.body),
+        ['second part'],
+      );
+      await settle(d4);
+      await pg.click('[data-testid="composer-input"]');
+      await pg.keyboard.press('Enter');
+      const d5 = await fx.agent.wait(fx.sid);
+      checkList(
+        'sending again sends only what Court typed, not the first message twice',
+        (d5?.delivery?.messages ?? []).map((m) => m.body),
+        ['A B'],
+      );
     } finally {
       await pg.close();
     }
