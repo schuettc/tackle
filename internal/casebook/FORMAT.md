@@ -121,7 +121,7 @@ Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `
 
 ### Field vocabulary
 
-The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`.
+The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`; bool values are `true` or `false`; count values are whole numbers, 0 or more. Anything else is a validation error.
 
 | Field | Type | Allowed values / notes |
 |---|---|---|
@@ -146,8 +146,8 @@ The `field` in each `[[match]]` condition must be one of the following. Operator
 | `worktree` | enum | `dirty` \| `clean` \| `none` |
 | `archived` | bool | repo is archived on GitHub |
 | `fork` | bool | repo is a fork |
-| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` |
-| `open-issues` | count | number of open issues |
+| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` with a whole number, 0 or more |
+| `open-issues` | count | number of open issues; same operators and values as `open-prs` |
 | `has-decision` | bool | item has a recorded decision |
 | `policy-hit` | text | policy rule name, e.g. `outgoing-stale` |
 

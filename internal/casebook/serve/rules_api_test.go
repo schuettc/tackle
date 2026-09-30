@@ -145,6 +145,30 @@ func TestPreviewRejectsInvalidRegex(t *testing.T) {
 	}
 }
 
+// TestPreviewRejectsBadCountAndDuration: a count comparison with a value
+// that isn't a number, and a duration outside <n>h/<n>d/<n>w, are 400s that
+// name the condition, never an empty preview that reads as "0 matches".
+func TestPreviewRejectsBadCountAndDuration(t *testing.T) {
+	r := newRig(t)
+	for _, c := range []map[string]any{
+		{"field": "open-prs", "op": "gt", "value": "lots"},
+		{"field": "age", "op": "older-than", "value": "7x"},
+	} {
+		var out map[string]any
+		code := r.do(t, "POST", "/api/rules/preview", map[string]any{
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}, c},
+			"propose": map[string]any{"disposition": "archive"},
+		}, &out)
+		if code != 400 {
+			t.Errorf("%v: want 400, got %d (%v)", c, code, out)
+			continue
+		}
+		if msg, _ := out["error"].(string); !strings.HasPrefix(msg, "condition 1: ") {
+			t.Errorf("%v: error %q does not name condition 1", c, msg)
+		}
+	}
+}
+
 func TestVocabularyEndpointListsFields(t *testing.T) {
 	r := newRig(t)
 

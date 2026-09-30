@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
@@ -127,6 +128,8 @@ func splitIn(v string) []string {
 //   - enum fields with "is" or "is-not" must use a known enum value.
 //   - enum fields with "in" or "not-in" must use comma-separated known values.
 //   - "matches" values are compiled as regular expressions.
+//   - count fields need a non-negative whole number; bool fields "true" or
+//     "false".
 func ValidateCondition(c Condition) error {
 	f, ok := vocabIndex[c.Field]
 	if !ok {
@@ -135,6 +138,18 @@ func ValidateCondition(c Condition) error {
 	if !slices.Contains(f.Ops, c.Op) {
 		return fmt.Errorf("field %q does not support operator %q (allowed: %s)",
 			c.Field, c.Op, strings.Join(f.Ops, ", "))
+	}
+
+	switch f.Type {
+	case FieldTypeCount:
+		if n, err := strconv.Atoi(strings.TrimSpace(c.Value)); err != nil || n < 0 {
+			return fmt.Errorf("field %q op %q: value %q is not a count (a whole number, 0 or more)",
+				c.Field, c.Op, c.Value)
+		}
+	case FieldTypeBool:
+		if c.Value != "true" && c.Value != "false" {
+			return fmt.Errorf("field %q: value %q is not allowed (allowed: true, false)", c.Field, c.Value)
+		}
 	}
 
 	switch c.Op {
