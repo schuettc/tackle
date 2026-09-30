@@ -24,8 +24,8 @@ func init() {
 	extract.Register(New)
 }
 
-// defaultMaxContext matches goext's maxCtx.
-const defaultMaxContext = 24000
+// defaultMaxContext is the budget used when the caller passes 0.
+const defaultMaxContext = cases.DefaultMaxContextBytes
 
 type golangExtractor struct{}
 

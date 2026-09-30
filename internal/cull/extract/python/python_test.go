@@ -142,7 +142,7 @@ func TestExtractHonorsMaxContext(t *testing.T) {
 	requirePython3(t)
 	// test_add's single callee ("add") source is 51 bytes; a budget of
 	// 10 must truncate it away and mark the case Truncated, unlike the
-	// default-24000 case in TestPlainFunctionParity where it fits whole.
+	// default-budget case in TestPlainFunctionParity where it fits whole.
 	res := extractAll(t, testdataDir, 10)
 	tc := caseByID(t, res, "py:tests/test_calc.py:test_add")
 	if !tc.Truncated {

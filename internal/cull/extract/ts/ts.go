@@ -30,7 +30,7 @@ func init() {
 }
 
 // defaultMaxContext matches tsext.cjs's MAX_CTX.
-const defaultMaxContext = 24000
+const defaultMaxContext = cases.DefaultMaxContextBytes
 
 type tsExtractor struct{}
 
