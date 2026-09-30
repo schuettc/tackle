@@ -13,7 +13,7 @@
 //   workedFold      — a settled turn's `worked for Xm Ys`, folded into the
 //                     thread; it opens to the progress line's history.
 
-import { h, card, fold } from '/_kit/kit.js';
+import { h, card, fold, noteField } from '/_kit/kit.js';
 import type { Ctx } from './app.ts';
 import type { Message, MessagesView, MessageView, Progress } from './wire.d.ts';
 import { pluralize } from './decide-math.ts';
@@ -124,39 +124,35 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
     return row;
   }
 
-  // editDraft swaps the text for an input: ↵ or leaving commits, Esc reverts.
+  // editDraft swaps the text for the kit's noteField: ↵ or leaving commits a
+  // changed value, Esc reverts and leaves. The row comes back either way.
   function editDraft(d: Message, text: HTMLElement): void {
-    const field = h('input', {
-      class: 'kit-note cb-batch-edit',
+    const field = noteField({
       value: d.body,
-      'aria-label': 'edit draft',
-    }) as HTMLInputElement;
-    let done = false;
-    const finish = (commit: boolean): void => {
-      if (done) return;
-      done = true;
-      const body = field.value.trim();
-      if (commit && body && body !== d.body) {
-        d.body = body;
-        void ctx.api
-          .post('/drafts/edit', { id: d.id, body })
-          .catch((err: unknown) => {
-            console.error('[batch] edit:', err);
-            void reload();
-          });
-      }
-      render();
-    };
-    field.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        finish(true);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        finish(false);
-      }
+      onCommit(v: string) {
+        const body = v.trim();
+        if (body && body !== d.body) {
+          d.body = body;
+          void ctx.api
+            .post('/drafts/edit', { id: d.id, body })
+            .catch((err: unknown) => {
+              console.error('[batch] edit:', err);
+              void reload();
+            });
+        }
+        render();
+      },
     });
-    field.addEventListener('blur', () => finish(true));
+    field.classList.add('cb-batch-edit');
+    field.setAttribute('aria-label', 'edit draft');
+    // Leaving without a change (Esc, or a blur with nothing changed) doesn't
+    // commit, so the row is restored here.
+    field.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Escape') render();
+    });
+    field.addEventListener('blur', () => {
+      if (field.isConnected) render();
+    });
     text.replaceWith(field);
     field.focus();
     field.select();

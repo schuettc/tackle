@@ -639,6 +639,7 @@
 .cb-comp-attached:focus-within {
   white-space: normal;
   overflow-wrap: anywhere;
+  overflow: visible;
 }
 .cb-comp-input {
   display: block;
@@ -655,6 +656,10 @@
 }
 .cb-comp-input:focus-visible {
   outline: none;
+}
+.cb-comp:has(.cb-comp-input:focus-visible) {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: -1px;
 }
 .cb-comp-foot {
   display: flex;

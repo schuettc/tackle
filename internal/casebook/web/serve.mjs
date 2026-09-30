@@ -38,8 +38,11 @@ if (!SERVE_ARGS.includes('--no-open')) {
 
 // Find the casebook binary: CASEBOOK_BIN env var (CI pre-builds and sets
 // this), or rebuild from source so the binary always embeds the latest assets.
+// A probe that starts more than one serve builds the binary once.
+let builtBinary = '';
 function findBinary() {
   if (process.env.CASEBOOK_BIN) return process.env.CASEBOOK_BIN;
+  if (builtBinary) return builtBinary;
   const built = join(repoRoot, 'bin', 'casebook');
   // Always rebuild: the probe tests the current source, and the binary embeds
   // internal/casebook/serve/assets/ which was just rewritten by build:js/css.
@@ -48,6 +51,7 @@ function findBinary() {
     cwd: repoRoot,
     stdio: 'inherit',
   });
+  builtBinary = built;
   return built;
 }
 
@@ -56,9 +60,14 @@ function findBinary() {
 //   data/repo.bundle   – git bundle of the casebook-data repo
 //   cache/github.json  – GitHub observation cache (may be empty)
 // Config is written fresh so paths are correct for this machine.
-function setupHome() {
+//
+// seedRepos adds repos (the cache's repo shape: {repo, prs, issues, …}) to the
+// fixture's GitHub cache, so a scenario can own Attention items no other
+// scenario touches.
+let homes = 0;
+function setupHome(seedRepos = []) {
   const fixture = join(here, 'testdata', 'home');
-  const home = join(tmpdir(), `casebook-probe-${process.pid}`);
+  const home = join(tmpdir(), `casebook-probe-${process.pid}-${homes++}`);
 
   mkdirSync(join(home, 'config'), { recursive: true });
   mkdirSync(join(home, 'data'), { recursive: true });
@@ -75,6 +84,15 @@ function setupHome() {
   const srcCache = join(fixture, 'cache', 'github.json');
   if (existsSync(srcCache)) {
     cpSync(srcCache, join(home, 'state', 'github.json'));
+  }
+  if (seedRepos.length) {
+    const cachePath = join(home, 'state', 'github.json');
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8'));
+    cache.owners.schuettc.repos.push(...seedRepos);
+    for (const r of seedRepos) {
+      cache.merged_prs[r.repo] = { fetched: true, at: cache.authored_at };
+    }
+    writeFileSync(cachePath, JSON.stringify(cache, null, 2));
   }
 
   // Write a minimal config.toml. casebook_repo is left blank so it defaults
@@ -122,9 +140,9 @@ function waitForAdvert(advertPath, timeoutMs = 10000) {
  * Always uses --no-open and CASEBOOK_NO_BROWSER=1 so no browser tab opens.
  * Returns { url, base, token, stop } where stop() kills the serve process.
  */
-export async function startServe() {
+export async function startServe(opts = {}) {
   const bin = findBinary();
-  const home = setupHome();
+  const home = setupHome(opts.seedRepos);
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
   const proc = spawn(bin, SERVE_ARGS, {

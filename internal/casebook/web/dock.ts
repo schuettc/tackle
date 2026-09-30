@@ -785,9 +785,15 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // updateSessionParts refreshes what depends on the current session's row:
   // the waiting strip's count and the agent's name in the composer.
+  //
+  // The strip describes messages held behind a running turn, so it shows
+  // only while serve says the session is busy (a delivery in flight) and
+  // present. A left session's queued work is Task 6's header (left · N
+  // queued · move to…); an idle session's queue has no turn to wait for.
   function updateSessionParts() {
     const sess = sessions.find((s) => s.id === currentSessionId);
-    waitStrip.setQueued(sess?.queued ?? 0);
+    const turn = !!sess && sess.busy && !sess.left;
+    waitStrip.setQueued(turn ? sess.queued : 0);
     composer.setAgent(sess?.harness ?? '');
   }
 

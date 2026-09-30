@@ -189,8 +189,7 @@ function boot() {
     poll: "/api/state",
     onEvent(e) {
       emitLive(e.type, e.data);
-      const sec = sections.get(currentRoute.section);
-      if (sec) sec.onLive(e.type, e.data);
+      for (const sec of sections.values()) sec.onLive(e.type, e.data);
     },
     onStatus(s) {
       handle.setLive(s);
@@ -205,7 +204,13 @@ function boot() {
       const active = id === sectionId;
       sec.list.hidden = !active;
       sec.read.hidden = !active;
-      if (active) sec.show(r.sub);
+      if (!active) sec.hide();
+    }
+    const activeSec = sections.get(sectionId);
+    if (activeSec) {
+      activeSec.show(r.sub);
+    } else {
+      ctx.setAttached({});
     }
   });
   void api.get("/summary").then((s) => {
@@ -1143,7 +1148,9 @@ function makeAttention(ctx) {
       countEl.textContent = pluralize(totalItemsForView, "item");
     }
   }
+  let active = false;
   function feedAttached() {
+    if (!active) return;
     const ids = selection.ids();
     if (ids.length > 0) ctx.setAttached({ keys: ids });
     else if (currentOpenKey) ctx.setAttached({ open: currentOpenKey });
@@ -1521,6 +1528,7 @@ function makeAttention(ctx) {
     if (kitFoot) kitFoot.hidden = false;
   }
   function show(sub) {
+    active = true;
     feedAttached();
     if (sub === "board") {
       const urlQ2 = getUrlQ();
@@ -1557,6 +1565,9 @@ function makeAttention(ctx) {
     list: handle.el,
     read: readEl,
     show,
+    hide() {
+      active = false;
+    },
     onLive(type, data) {
       if (type === "index") {
         const s = data;
@@ -1631,21 +1642,14 @@ function fmtAge(ts) {
 }
 
 // thread.ts
+function at(m) {
+  const ts = m.author === "court" ? m.queued_at ?? m.created_at : m.created_at;
+  return Date.parse(ts);
+}
 function threadOrder(ms) {
-  const out = [];
-  const placed = /* @__PURE__ */ new Set();
-  for (const m of ms) {
-    if (!m.batch_id) {
-      out.push(m);
-      continue;
-    }
-    if (placed.has(m.batch_id)) continue;
-    placed.add(m.batch_id);
-    out.push(
-      ...ms.filter((x) => x.batch_id === m.batch_id).sort((a, b) => (a.batch_pos ?? 0) - (b.batch_pos ?? 0))
-    );
-  }
-  return out;
+  return [...ms].sort(
+    (a, b) => at(a) - at(b) || (a.batch_id ?? 0) - (b.batch_id ?? 0) || (a.batch_pos ?? 0) - (b.batch_pos ?? 0) || a.id - b.id
+  );
 }
 
 // composer.ts
@@ -1820,7 +1824,8 @@ function makeComposer(ctx, dock) {
     return t.id;
   }
   async function send(batch) {
-    const body = input.value.trim();
+    const sent = input.value;
+    const body = sent.trim();
     if (!body || sending) return;
     sending = true;
     note.textContent = "";
@@ -1836,7 +1841,10 @@ function makeComposer(ctx, dock) {
         attached: effective(),
         batch
       });
-      input.value = "";
+      const now = input.value;
+      if (now.startsWith(sent)) {
+        input.value = now.slice(sent.length).replace(/^\s+/, "");
+      }
       fit();
       override = null;
       renderAttached();
@@ -1868,7 +1876,7 @@ function makeComposer(ctx, dock) {
 }
 
 // progress.ts
-import { h as h8, card as card2, fold as fold2 } from "/_kit/kit.js";
+import { h as h8, card as card2, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
 function makeBatchTray(ctx) {
   let thread = 0;
   let batch = 0;
@@ -1957,35 +1965,28 @@ function makeBatchTray(ctx) {
     return row;
   }
   function editDraft(d, text) {
-    const field = h8("input", {
-      class: "kit-note cb-batch-edit",
+    const field = noteField3({
       value: d.body,
-      "aria-label": "edit draft"
-    });
-    let done = false;
-    const finish = (commit) => {
-      if (done) return;
-      done = true;
-      const body = field.value.trim();
-      if (commit && body && body !== d.body) {
-        d.body = body;
-        void ctx.api.post("/drafts/edit", { id: d.id, body }).catch((err) => {
-          console.error("[batch] edit:", err);
-          void reload();
-        });
+      onCommit(v) {
+        const body = v.trim();
+        if (body && body !== d.body) {
+          d.body = body;
+          void ctx.api.post("/drafts/edit", { id: d.id, body }).catch((err) => {
+            console.error("[batch] edit:", err);
+            void reload();
+          });
+        }
+        render();
       }
-      render();
-    };
+    });
+    field.classList.add("cb-batch-edit");
+    field.setAttribute("aria-label", "edit draft");
     field.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        finish(true);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        finish(false);
-      }
+      if (e.key === "Escape") render();
     });
-    field.addEventListener("blur", () => finish(true));
+    field.addEventListener("blur", () => {
+      if (field.isConnected) render();
+    });
     text.replaceWith(field);
     field.focus();
     field.select();
@@ -2068,7 +2069,7 @@ function countText(n, total) {
 }
 function makeProgressLine() {
   let prog = null;
-  let at = 0;
+  let at2 = 0;
   const text = h8("span", { class: "cb-prog-text" });
   const age = h8("span", { class: "cb-prog-age" });
   const fill = h8("span", { class: "cb-prog-fill" });
@@ -2089,7 +2090,7 @@ function makeProgressLine() {
   function render() {
     el.hidden = !prog;
     if (!prog) return;
-    const since = Date.now() - at;
+    const since = Date.now() - at2;
     text.textContent = prog.text + countText(prog.n, prog.total);
     const quiet = since >= NO_PROGRESS_MS;
     el.toggleAttribute("data-quiet", quiet);
@@ -2107,7 +2108,7 @@ function makeProgressLine() {
     el,
     set(p, when) {
       prog = p;
-      at = when;
+      at2 = when;
       render();
     },
     clear() {
@@ -2731,7 +2732,8 @@ function makeDock(ctx) {
   }
   function updateSessionParts() {
     const sess = sessions.find((s) => s.id === currentSessionId);
-    waitStrip.setQueued(sess?.queued ?? 0);
+    const turn = !!sess && sess.busy && !sess.left;
+    waitStrip.setQueued(turn ? sess.queued : 0);
     composer.setAgent(sess?.harness ?? "");
   }
   async function switchSession(id) {

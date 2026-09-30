@@ -166,7 +166,13 @@ export function makeAttention(ctx: Ctx): Section {
 
   // feedAttached tells the composer what goes with the next message: the
   // selection's keys, or the open item when nothing is selected.
+  //
+  // Only while Attention is the active section: a live decided/proposals
+  // event can change the selection while another section is shown, and that
+  // section's context (a rule, a job) must not be overwritten.
+  let active = false;
   function feedAttached(): void {
+    if (!active) return;
     const ids = selection.ids();
     if (ids.length > 0) ctx.setAttached({ keys: ids });
     else if (currentOpenKey) ctx.setAttached({ open: currentOpenKey });
@@ -671,7 +677,8 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- show(sub) -- router hook --------------------------------------------
 
   function show(sub: string): void {
-    // Coming back from another section: the composer shows Attention's context.
+    // Becoming active: the composer shows Attention's selection or open item.
+    active = true;
     feedAttached();
     if (sub === 'board') {
       // Restore search text from URL so getBoardFilters() picks it up.
@@ -722,6 +729,9 @@ export function makeAttention(ctx: Ctx): Section {
     list: handle.el,
     read: readEl,
     show,
+    hide() {
+      active = false;
+    },
     onLive(type: string, data: unknown) {
       if (type === 'index') {
         // One reload per index event: apply counts from the event payload and

@@ -866,6 +866,8 @@
 .cb-comp-attached:focus-within {
   white-space: normal;
   overflow-wrap: anywhere;
+  /* Don't clip the value's focus ring. */
+  overflow: visible;
 }
 
 .cb-comp-input {
@@ -883,8 +885,16 @@
   color: var(--kit-muted);
 }
 
+/* Keyboard focus draws the kit's 1px signal ring (kit.css :focus-visible).
+ * The message field has no border of its own, so the ring goes on the
+ * composer around it; the attached value keeps the kit's ring on itself. */
 .cb-comp-input:focus-visible {
   outline: none;
+}
+
+.cb-comp:has(.cb-comp-input:focus-visible) {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: -1px;
 }
 
 .cb-comp-foot {

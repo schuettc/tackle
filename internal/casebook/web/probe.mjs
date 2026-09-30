@@ -60,6 +60,10 @@ function cleanup() {
     _serveHandle.stop();
     _serveHandle = null;
   }
+  if (_composerServe) {
+    _composerServe.stop();
+    _composerServe = null;
+  }
 }
 
 process.on('SIGTERM', () => {
@@ -145,14 +149,86 @@ function workedText(ms) {
 }
 
 // dockFixture creates a session with one thread; each scenario owns its own.
+// present() keeps the session from going left (serve's left threshold is 3s
+// in the probe) by re-announcing it every second; it returns the stop.
 async function dockFixture(serveHandle, name, harness = 'pi') {
   const agent = createAgent(serveHandle.base, serveHandle.token);
   const sid = `probe-t7-${name}-${Date.now()}`;
   const label = `${harness} \u00b7 ${name}`;
-  await agent.presence(sid, label, `/home/court/${name}`, harness);
+  const cwd = `/home/court/${name}`;
+  await agent.presence(sid, label, cwd, harness);
   const thread = await agent.newThread(sid, name);
-  return { agent, sid, label, thread };
+  const present = () => {
+    const t = setInterval(() => {
+      void agent.presence(sid, label, cwd, harness);
+    }, 1000);
+    return () => clearInterval(t);
+  };
+  return { agent, sid, label, thread, present };
 }
+
+// listDiff compares two arrays of strings element by element: '' when they
+// match, else where they first differ.
+function listDiff(got, want) {
+  for (let i = 0; i < Math.max(got.length, want.length); i++) {
+    if (got[i] !== want[i]) {
+      return `at ${i}: got ${JSON.stringify(got[i])}, want ${JSON.stringify(want[i])}`;
+    }
+  }
+  return '';
+}
+
+// sameList is listDiff as a boolean, for polling.
+const sameList = (got, want) => listDiff(got, want) === '';
+
+// checkList checks that got equals want, element by element.
+function checkList(label, got, want) {
+  const d = listDiff(got, want);
+  check(d ? `${label} — ${d}` : label, d === '');
+}
+
+// The Task 7 serve's own Attention items: repos added to the fixture's GitHub
+// cache (serve.mjs seedRepos), so the attached-line scenarios select and
+// decide items no other scenario touches. Human authors and no reply from
+// Court put them in "waiting on you", like the fixture's hail items.
+function seedRepo(name, prs, issues) {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${name}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-0${i + 1}T00:00:00Z`,
+    updated_at: `2026-09-0${i + 1}T00:00:00Z`,
+  });
+  return {
+    repo: `schuettc/${name}`,
+    pushed_at: '2026-09-20T00:00:00Z',
+    default_branch: 'main',
+    prs: prs.map(item),
+    issues: issues.map(item),
+  };
+}
+const T7_SEED = [
+  seedRepo(
+    't7-attached',
+    [
+      [670, 'bump the minor-and-patch group', 'dana'],
+      [671, 'bump eslint-plugin-simple-import-sort to 14', 'dana'],
+      [672, 'bump the minor-and-patch group (5 updates)', 'erin'],
+      [673, 'bump vitest from 4.1.10 to 5.0.0', 'erin'],
+    ],
+    [[9, 'flaky upload test', 'hank']],
+  ),
+  seedRepo(
+    't7-hidden',
+    [
+      [11, 'retry the webhook', 'ivy'],
+      [12, 'drop the old flag', 'ivy'],
+    ],
+    [],
+  ),
+];
 
 // openDock opens the page (at an optional hash) and waits until the dock
 // shows the fixture's session with its thread loaded.
@@ -160,7 +236,8 @@ async function openDock(context, serveHandle, fx, opts = {}) {
   const pg = await context.newPage();
   await pg.setViewportSize({ width: 1600, height: 900 });
   if (opts.clock) await pg.clock.install({ time: Date.now() });
-  await pg.goto(serveHandle.url + (opts.hash ?? ''), {
+  // opts.search adds query parameters (e.g. the Attention search, q=…).
+  await pg.goto(serveHandle.url + (opts.search ?? '') + (opts.hash ?? ''), {
     waitUntil: 'domcontentloaded',
     timeout: 15000,
   });
@@ -218,9 +295,22 @@ async function draftBodies(agent, thread) {
   return (mv.drafts ?? []).map((m) => m.body);
 }
 
-const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+// composerScenarios starts its own serve, seeded with T7_SEED, so its
+// fixture (sessions, threads and Attention items) is its own and it can run
+// at any point in the probe.
+let _composerServe = null;
+async function composerScenarios(context) {
+  const serveHandle = await startServe({ seedRepos: T7_SEED });
+  _composerServe = serveHandle;
+  try {
+    await composerScenariosOn(context, serveHandle);
+  } finally {
+    serveHandle.stop();
+    _composerServe = null;
+  }
+}
 
-async function composerScenarios(context, serveHandle) {
+async function composerScenariosOn(context, serveHandle) {
   // ---- scenario: ↵ sends, ⌘↵ adds to the batch ----------------------------
   console.log('\nscenario: the composer — ↵ sends, ⌘↵ adds to the batch');
   {
@@ -272,13 +362,12 @@ async function composerScenarios(context, serveHandle) {
         ),
       );
       const d1 = await fx.agent.wait(fx.sid);
-      const got1 = (d1?.delivery?.messages ?? []).map((m) => [
-        m.body,
-        m.batch_id ?? 0,
-      ]);
-      check(
-        `↵: the agent receives the message unbatched (${JSON.stringify(got1)})`,
-        same(got1, [['send this now', 0]]),
+      checkList(
+        '↵: the agent receives the message, unbatched',
+        (d1?.delivery?.messages ?? []).map(
+          (m) => `${m.body}|batch ${m.batch_id ?? 'none'}`,
+        ),
+        ['send this now|batch none'],
       );
       await fx.agent.settled(fx.sid, [d1.delivery.id]);
 
@@ -311,12 +400,40 @@ async function composerScenarios(context, serveHandle) {
       );
       check(
         '⌘↵: serve holds it as a draft',
-        same(await draftBodies(fx.agent, fx.thread.id), [
+        sameList(await draftBodies(fx.agent, fx.thread.id), [
           'hold this for later',
         ]),
       );
       const d2 = await fx.agent.wait(fx.sid);
       check('⌘↵: nothing is delivered to the agent', d2 === null);
+
+      // Text typed while a send is in flight survives it. The page's POST is
+      // held for 800 ms so there's time to type during it.
+      const hold = async (route) => {
+        if (route.request().method() === 'POST') {
+          await new Promise((r) => setTimeout(r, 800));
+        }
+        await route.continue();
+      };
+      await pg.route('**/api/messages', hold);
+      await compose(pg, 'first part');
+      await pg.keyboard.type(' and the next thought');
+      check(
+        'text typed during a send stays; only what was sent is cleared',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-input"]').value ===
+            'and the next thought',
+        ),
+      );
+      await pg.unroute('**/api/messages', hold);
+      const d3 = await fx.agent.wait(fx.sid);
+      checkList(
+        'the agent receives only what was sent',
+        (d3?.delivery?.messages ?? []).map((m) => m.body),
+        ['first part'],
+      );
     } finally {
       await pg.close();
     }
@@ -410,10 +527,11 @@ async function composerScenarios(context, serveHandle) {
         head.send === 'send 3' && head.sendFilled,
       );
       check('the tray is a dashed card', head.border === 'dashed');
-      check(
-        'the tray lists the drafts in order',
-        same(await trayTexts(pg), ['alpha', 'bravo', 'charlie']),
-      );
+      checkList('the tray lists the drafts in order', await trayTexts(pg), [
+        'alpha',
+        'bravo',
+        'charlie',
+      ]);
 
       // Edit bravo.
       await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
@@ -432,7 +550,7 @@ async function composerScenarios(context, serveHandle) {
       check(
         'edit: serve holds the edited text',
         await eventually(async () =>
-          same(await draftBodies(fx.agent, fx.thread.id), [
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
             'alpha',
             'bravo, edited',
             'charlie',
@@ -462,7 +580,7 @@ async function composerScenarios(context, serveHandle) {
       check(
         'reorder: serve holds the new order',
         await eventually(async () =>
-          same(await draftBodies(fx.agent, fx.thread.id), [
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
             'charlie',
             'alpha',
             'bravo, edited',
@@ -487,7 +605,7 @@ async function composerScenarios(context, serveHandle) {
       check(
         'remove: serve drops the draft',
         await eventually(async () =>
-          same(await draftBodies(fx.agent, fx.thread.id), [
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
             'charlie',
             'bravo, edited',
           ]),
@@ -506,29 +624,28 @@ async function composerScenarios(context, serveHandle) {
       check(
         'send N: the drafts become queued cards, in order',
         await until(pg, () => {
-          const cards = [...document.querySelectorAll('.cb-dock-card')].map(
-            (c) => [
-              c.querySelector('.cb-dock-bodytext')?.textContent,
-              c.querySelector('.cb-dock-state')?.dataset.state,
-            ],
-          );
+          const want = [
+            ['charlie', 'queued'],
+            ['bravo, edited', 'queued'],
+          ];
+          const cards = [...document.querySelectorAll('.cb-dock-card')];
           return (
-            JSON.stringify(cards) ===
-            JSON.stringify([
-              ['charlie', 'queued'],
-              ['bravo, edited', 'queued'],
-            ])
+            cards.length === want.length &&
+            cards.every(
+              (c, i) =>
+                c.querySelector('.cb-dock-bodytext')?.textContent ===
+                  want[i][0] &&
+                c.querySelector('.cb-dock-state')?.dataset.state === want[i][1],
+            )
           );
         }),
       );
       const d = await fx.agent.wait(fx.sid);
       const msgs = d?.delivery?.messages ?? [];
-      check(
-        `send N: the agent receives the batch in its order, edited, without the removed draft (${JSON.stringify(msgs.map((m) => m.body))})`,
-        same(
-          msgs.map((m) => m.body),
-          ['charlie', 'bravo, edited'],
-        ),
+      checkList(
+        'send N: the agent receives the batch in its order, edited, without the removed draft',
+        msgs.map((m) => m.body),
+        ['charlie', 'bravo, edited'],
       );
       check(
         'send N: the batch arrives as one unit (one delivery, one batch id)',
@@ -548,10 +665,55 @@ async function composerScenarios(context, serveHandle) {
     }
   }
 
+  // ---- scenario: the thread shows cards in delivery order -----------------
+  console.log(
+    '\nscenario: a batch sent after a later ↵ message shows where serve delivers it',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'order');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      // alpha is drafted first, "now" is sent second, then the batch goes.
+      await compose(pg, 'alpha, drafted first', 'Meta+Enter');
+      await until(
+        pg,
+        () => document.querySelectorAll('.cb-batch-draft').length === 1,
+      );
+      await compose(pg, 'now, sent second');
+      await until(pg, () =>
+        [...document.querySelectorAll('.cb-dock-bodytext')].some(
+          (e) => e.textContent === 'now, sent second',
+        ),
+      );
+      await pg.click('[data-testid="batch-send"]');
+      await until(
+        pg,
+        () => document.querySelectorAll('.cb-dock-card').length === 2,
+      );
+      const shown = await pg.$$eval('.cb-dock-card .cb-dock-bodytext', (els) =>
+        els.map((e) => e.textContent),
+      );
+      const d = await fx.agent.wait(fx.sid);
+      const got = (d?.delivery?.messages ?? []).map((m) => m.body);
+      checkList('the agent receives "now" before the batch', got, [
+        'now, sent second',
+        'alpha, drafted first',
+      ]);
+      checkList(
+        'the thread shows the cards in the order the agent receives them',
+        shown,
+        got,
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
   // ---- scenario: the queued message waits for the turn --------------------
   console.log('\nscenario: the queued message waits for the turn');
   {
     const fx = await dockFixture(serveHandle, 'queued');
+    const stopPresent = fx.present();
     await fx.agent.postMessage(fx.thread.id, 'first, starts the turn');
     const d1 = await fx.agent.wait(fx.sid);
     const pg = await openDock(context, serveHandle, fx);
@@ -604,12 +766,10 @@ async function composerScenarios(context, serveHandle) {
       );
       await fx.agent.settled(fx.sid, [d1.delivery.id]);
       const d2 = await fx.agent.wait(fx.sid);
-      check(
+      checkList(
         'at the end of the turn both go out together, in order',
-        same(
-          (d2?.delivery?.messages ?? []).map((m) => m.body),
-          ['while you work, one', 'while you work, two'],
-        ),
+        (d2?.delivery?.messages ?? []).map((m) => m.body),
+        ['while you work, one', 'while you work, two'],
       );
       check(
         'the waiting strip leaves once they are delivered',
@@ -619,6 +779,99 @@ async function composerScenarios(context, serveHandle) {
         ),
       );
     } finally {
+      stopPresent();
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the waiting strip only during a turn -----------------------
+  console.log(
+    '\nscenario: the waiting strip shows only while the session is busy and present',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'idle');
+    const stopPresent = fx.present();
+    let present = true;
+    // Queued while idle: the agent isn't waiting, so nothing is in flight.
+    await fx.agent.postMessage(fx.thread.id, 'queued while idle, one');
+    await fx.agent.postMessage(fx.thread.id, 'queued while idle, two');
+    const pg = await openDock(context, serveHandle, fx);
+    const strip = () =>
+      pg.$eval('[data-testid="waiting-strip"]', (e) => ({
+        hidden: e.hidden || e.offsetHeight === 0,
+        text: e.textContent,
+      }));
+    try {
+      await until(
+        pg,
+        () =>
+          [...document.querySelectorAll('.cb-dock-state')].filter(
+            (e) => e.dataset.state === 'queued',
+          ).length === 2,
+      );
+      const sv = await (
+        await fetch(`${serveHandle.base}/api/sessions`, {
+          headers: { 'X-Local-Token': serveHandle.token },
+        })
+      ).json();
+      const row = sv.sessions.find((x) => x.id === fx.sid);
+      check(
+        `serve: the idle session has 2 queued and is not busy (queued ${row.queued}, busy ${row.busy})`,
+        row.queued === 2 && !row.busy,
+      );
+      const idle = await strip();
+      check(
+        `an idle session with queued messages shows no waiting strip (${idle.hidden ? 'hidden' : idle.text})`,
+        idle.hidden,
+      );
+
+      // A turn starts: both go out; a third message waits for its end.
+      const d = await fx.agent.wait(fx.sid);
+      await fx.agent.postMessage(fx.thread.id, 'while you work');
+      check(
+        'once the session is busy, the strip reads "waiting · 1 queued …"',
+        await until(
+          pg,
+          () => {
+            const e = document.querySelector('[data-testid="waiting-strip"]');
+            return (
+              !e.hidden &&
+              e.textContent ===
+                'waiting \u00b7 1 queued for the end of this turn'
+            );
+          },
+          undefined,
+          8000,
+        ),
+      );
+
+      // The session goes left mid-turn (it stops announcing itself).
+      stopPresent();
+      present = false;
+      check(
+        "a left session shows Task 6's header: left · 1 queued · move to…",
+        await until(
+          pg,
+          () => {
+            const r = document.querySelector('.cb-dock-left-row');
+            return (
+              !!r &&
+              !r.hidden &&
+              r.textContent.replace(/\s+/g, '') === 'left·1queued·moveto\u2026'
+            );
+          },
+          undefined,
+          10000,
+        ),
+      );
+      const left = await strip();
+      check(
+        `a left session shows no waiting strip (${left.hidden ? 'hidden' : left.text})`,
+        left.hidden,
+      );
+      void d;
+    } finally {
+      if (present) stopPresent();
       await pg.close();
     }
   }
@@ -823,16 +1076,17 @@ async function composerScenarios(context, serveHandle) {
           })),
       );
       check(
-        `it expands to the line's history, in order (${JSON.stringify(hist.map((h) => h.text))})`,
-        hist.every((h) => h.shown) &&
-          same(
-            hist.map((h) => h.text),
-            [
-              'reading the 4 PRs',
-              'checking CI on #671 \u00b7 1 of 2',
-              'checking CI on #672 \u00b7 2 of 2',
-            ],
-          ),
+        'the opened history is visible',
+        hist.length > 0 && hist.every((h) => h.shown),
+      );
+      checkList(
+        "it expands to the line's history, in order",
+        hist.map((h) => h.text),
+        [
+          'reading the 4 PRs',
+          'checking CI on #671 \u00b7 1 of 2',
+          'checking CI on #672 \u00b7 2 of 2',
+        ],
       );
     } finally {
       await pg.close();
@@ -843,9 +1097,12 @@ async function composerScenarios(context, serveHandle) {
   console.log(
     '\nscenario: the attached line reflects the selection, the open item and editing it',
   );
-  {
+  attachedScenario: {
+    // The scenario's own items: T7_SEED's schuettc/t7-attached (4 PRs and an
+    // issue), shown alone through the Attention search.
     const fx = await dockFixture(serveHandle, 'attached');
     const pg = await openDock(context, serveHandle, fx, {
+      search: '&q=t7-attached',
       hash: '#/attention/waiting',
     });
     const value = () =>
@@ -862,18 +1119,22 @@ async function composerScenarios(context, serveHandle) {
       return m?.attached ?? null;
     };
     try {
-      await pg.waitForSelector('.kit-row .kit-box');
+      const resp = await fetch(
+        `${serveHandle.base}/api/items?view=waiting&q=t7-attached&limit=200`,
+        { headers: { 'X-Local-Token': serveHandle.token } },
+      );
+      const items = (await resp.json()).items ?? [];
+      await until(
+        pg,
+        (n) => document.querySelectorAll('.kit-row .kit-box').length === n,
+        items.length,
+      );
       check(
         'nothing selected or open: "attached: nothing"',
         (await value()).text === 'nothing',
       );
 
       // Pick four rows of one kind from the rendered list.
-      const resp = await fetch(
-        `${serveHandle.base}/api/items?view=waiting&limit=200`,
-        { headers: { 'X-Local-Token': serveHandle.token } },
-      );
-      const items = (await resp.json()).items ?? [];
       const titles = await pg.$$eval('.kit-row .kit-title', (els) =>
         els.map((e) => e.textContent),
       );
@@ -881,22 +1142,30 @@ async function composerScenarios(context, serveHandle) {
       items.forEach((it, i) => (byKind[it.kind] ??= []).push(i));
       const [kind, idx] = Object.entries(byKind).sort(
         (a, b) => b[1].length - a[1].length,
-      )[0];
+      )[0] ?? ['none', []];
       // Four of one kind, then a fifth row of another kind.
       const extra = items.findIndex((it) => it.kind !== kind);
       const pick = [...idx.slice(0, 4), extra];
-      const keys = pick.map((i) => items[i].key);
-      check(
-        `the picked rows are serve's items (4 of ${kind}, then a ${items[extra]?.kind})`,
+      const keys = pick.map((i) => items[i]?.key);
+      // The guard: without its seeded items the scenario can't run; say why.
+      const seeded =
+        items.length === 5 &&
+        kind === 'pr' &&
         idx.length >= 4 &&
-          extra >= 0 &&
-          pick.every(
-            (i) =>
-              titles[i] ===
-              (items[i].title ||
-                items[i].key.slice(items[i].key.indexOf(':') + 1)),
-          ),
+        extra >= 0 &&
+        pick.every(
+          (i) =>
+            titles[i] ===
+            (items[i].title ||
+              items[i].key.slice(items[i].key.indexOf(':') + 1)),
+        );
+      check(
+        seeded
+          ? 'the rows are the seeded t7-attached items (4 PRs, then an issue)'
+          : `the rows are the seeded t7-attached items — got ${items.length} items (${kind} ×${idx.length}); T7_SEED in probe.mjs, seeded through startServe({seedRepos}), should give 4 PRs and 1 issue`,
+        seeded,
       );
+      if (!seeded) break attachedScenario;
       const plural = kind === 'branch' ? 'branches' : `${kind}s`;
       const boxes = await pg.$$('.kit-row .kit-box');
       for (const i of pick.slice(0, 4)) await boxes[i].click();
@@ -917,9 +1186,10 @@ async function composerScenarios(context, serveHandle) {
         v.color === (await cssColor(pg, 'var(--kit-signal)')),
       );
       const a1 = await sendAndReceive('merge these if CI is green');
-      check(
-        `the agent receives the 4 selected keys (${JSON.stringify(a1)})`,
-        same([...(a1?.keys ?? [])].sort(), keys.slice(0, 4).sort()),
+      checkList(
+        'the agent receives the 4 selected keys',
+        [...(a1?.keys ?? [])].sort(),
+        keys.slice(0, 4).sort(),
       );
 
       // Edit: keep only the first two keys. Headless Chrome withholds focus
@@ -930,9 +1200,10 @@ async function composerScenarios(context, serveHandle) {
         e.dispatchEvent(new FocusEvent('focus')),
       );
       const editForm = await pg.$eval(attachedSel, (e) => e.textContent);
-      check(
+      checkList(
         'editing shows the attached keys themselves',
-        same(editForm.split(' ').sort(), keys.slice(0, 4).sort()),
+        editForm.split(' ').sort(),
+        keys.slice(0, 4).sort(),
       );
       await pg.keyboard.press('ControlOrMeta+a');
       await pg.keyboard.type(`${keys[0]} ${keys[1]}`);
@@ -949,10 +1220,10 @@ async function composerScenarios(context, serveHandle) {
         (await value()).text === want2,
       );
       const a2 = await sendAndReceive('just these two');
-      check(
-        `the agent receives the edited attachment (${JSON.stringify(a2)})`,
-        same(a2?.keys, [keys[0], keys[1]]),
-      );
+      checkList('the agent receives the edited attachment', a2?.keys ?? [], [
+        keys[0],
+        keys[1],
+      ]);
       // The fifth row is another kind: the count says items.
       const want5 = '5 items selected';
       check(
@@ -1049,6 +1320,34 @@ async function composerScenarios(context, serveHandle) {
         '. focuses the composer (and types nothing)',
         f.id === 'composer-input' && f.value === '',
       );
+      const signal = await cssColor(pg, 'var(--kit-signal)');
+      const ring = (sel) =>
+        pg.$eval(sel, (e) => {
+          const cs = getComputedStyle(e);
+          return `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor}`;
+        });
+      const compRing = await ring('[data-testid="composer"]');
+      check(
+        `keyboard focus in the input rings the composer in 1px signal (${compRing})`,
+        compRing === `solid 1px ${signal}`,
+      );
+      // ⇧⇥ moves keyboard focus back to the attached value.
+      await pg.keyboard.press('Shift+Tab');
+      const onValue = await pg.evaluate(
+        () =>
+          document.activeElement?.getAttribute('data-testid') ===
+          'composer-attached',
+      );
+      const valueRing = await ring('[data-testid="composer-attached"]');
+      const clip = await pg.$eval(
+        '.cb-comp-attached',
+        (e) => getComputedStyle(e).overflow,
+      );
+      check(
+        `keyboard focus on the attached value draws the 1px signal ring, unclipped (${valueRing}, overflow ${clip})`,
+        onValue && valueRing === `solid 1px ${signal}` && clip === 'visible',
+      );
+      await pg.keyboard.press('Escape');
       await pg.evaluate(() => document.activeElement?.blur());
       await pg.keyboard.press('?');
       const help = await pg.$eval('.kit-sheet', (e) => e.textContent);
@@ -1068,6 +1367,7 @@ async function composerScenarios(context, serveHandle) {
   );
   {
     const fx = await dockFixture(serveHandle, 'tools-workspace');
+    const stopPresent = fx.present();
     const { agent, sid, thread } = fx;
     await agent.postMessage(
       thread.id,
@@ -1105,18 +1405,25 @@ async function composerScenarios(context, serveHandle) {
     });
     try {
       await pg.waitForSelector('.kit-row .kit-box');
-      const boxes = await pg.$$('.kit-row .kit-box');
-      for (const b of boxes.slice(0, 4)) await b.click();
-      await until(
-        pg,
-        () =>
-          !document.querySelector('[data-testid="batch-tray"]').hidden &&
-          !document.querySelector('[data-testid="progress-line"]').hidden &&
-          !document.querySelector('[data-testid="waiting-strip"]').hidden &&
-          /^4 .* selected$/.test(
+      // The mock's "4 prs selected": the seeded t7-attached PRs.
+      const rows = await pg.$$('.kit-row');
+      for (const row of rows) {
+        const kicker = await row.$eval('.kit-kicker', (e) => e.textContent);
+        if (/^pr .*t7-attached#67\d$/.test(kicker)) {
+          await (await row.$('.kit-box')).click();
+        }
+      }
+      check(
+        'the rail shows the batch, the progress line, the waiting strip and "4 prs selected"',
+        await until(
+          pg,
+          () =>
+            !document.querySelector('[data-testid="batch-tray"]').hidden &&
+            !document.querySelector('[data-testid="progress-line"]').hidden &&
+            !document.querySelector('[data-testid="waiting-strip"]').hidden &&
             document.querySelector('[data-testid="composer-attached"]')
-              .textContent,
-          ),
+              .textContent === '4 prs selected',
+        ),
       );
       const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
       for (const theme of ['light', 'dark']) {
@@ -1138,6 +1445,109 @@ async function composerScenarios(context, serveHandle) {
         await pg.screenshot({ path: `/tmp/t7-${theme}.png` });
       }
       console.log('  screenshots: /tmp/t7-light.png  /tmp/t7-dark.png');
+    } finally {
+      stopPresent();
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: only the active section sets the attached context --------
+  // Last: it decides one of its seeded items, which leaves a decision queued
+  // for sync (the bar's status), and the screenshots come before it.
+  console.log(
+    '\nscenario: a hidden Attention does not change the attached line',
+  );
+  hiddenScenario: {
+    // Its own items: T7_SEED's schuettc/t7-hidden (2 PRs); one is decided.
+    const fx = await dockFixture(serveHandle, 'hidden');
+    const pg = await openDock(context, serveHandle, fx, {
+      search: '&q=t7-hidden',
+      hash: '#/attention/waiting',
+    });
+    const attached = () =>
+      pg.$eval('[data-testid="composer-attached"]', (e) => e.textContent);
+    try {
+      const resp = await fetch(
+        `${serveHandle.base}/api/items?view=waiting&q=t7-hidden&limit=200`,
+        { headers: { 'X-Local-Token': serveHandle.token } },
+      );
+      const keys = ((await resp.json()).items ?? []).map((it) => it.key);
+      const listed =
+        keys.length === 2 &&
+        (await until(
+          pg,
+          () => document.querySelectorAll('.kit-row .kit-box').length === 2,
+        ));
+      check(
+        listed
+          ? 'the seeded t7-hidden items are listed'
+          : `the seeded t7-hidden items are listed — got ${keys.length}; T7_SEED in probe.mjs, seeded through startServe({seedRepos}), should give 2 PRs`,
+        listed,
+      );
+      if (!listed) break hiddenScenario;
+      for (const b of await pg.$$('.kit-row .kit-box')) await b.click();
+      check(
+        'Attention active: "attached: 2 prs selected"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === '2 prs selected',
+        ),
+      );
+
+      // Another section is shown: until Rules exists (Task 8) it sets nothing.
+      await pg.evaluate(() => {
+        location.hash = '#/rules';
+      });
+      check(
+        'showing another section sets its context ("nothing" until Task 8)',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === 'nothing',
+        ),
+      );
+
+      // A live decided event deselects a selected key under the hidden list.
+      const r = await fetch(`${serveHandle.base}/api/decide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Local-Token': serveHandle.token,
+        },
+        body: JSON.stringify({ keys: [keys[0]], disposition: 'keep' }),
+      });
+      check(`serve decides ${keys[0]} (${r.status})`, r.ok);
+      check(
+        'the hidden list drops the decided key from its selection',
+        await until(
+          pg,
+          () => document.querySelectorAll('.kit-row.sel').length === 1,
+        ),
+      );
+      const after = await attached();
+      check(
+        `the decided event leaves the attached line alone (${after})`,
+        after === 'nothing',
+      );
+
+      // Back to Attention: it re-feeds what is still selected.
+      await pg.evaluate(() => {
+        location.hash = '#/attention/waiting';
+      });
+      const rest = keys[1].slice(keys[1].indexOf(':') + 1);
+      check(
+        `Attention shown again re-feeds its selection ("${rest}")`,
+        await until(
+          pg,
+          (w) =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === w,
+          rest,
+        ),
+      );
     } finally {
       await pg.close();
     }
@@ -1178,11 +1588,11 @@ async function run() {
   const page = await context.newPage();
 
   try {
-    // The Task 7 scenarios run first: the attached-line scenario selects
-    // Attention rows, and later scenarios decide many of the fixture's items.
-    // PROBE_ONLY=composer runs only these.
-    await composerScenarios(context, serveHandle);
-    if (process.env.PROBE_ONLY === 'composer') return;
+    // PROBE_ONLY=composer runs only the Task 7 scenarios (their own serve).
+    if (process.env.PROBE_ONLY === 'composer') {
+      await composerScenarios(context);
+      return;
+    }
     // Navigate to the page with the ?t= token URL.
     // 'domcontentloaded' is used instead of 'networkidle' because the SSE
     // stream (/api/events) is an infinite connection that never goes idle.
@@ -5414,6 +5824,9 @@ async function run() {
         await t6Page.close();
       }
     }
+
+    // ---- Task 7 (its own seeded serve, so its place in the run is free) -----
+    await composerScenarios(context);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

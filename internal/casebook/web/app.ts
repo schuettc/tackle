@@ -50,7 +50,18 @@ export interface Section {
   id: 'attention' | 'rules' | 'apply';
   list: HTMLElement;
   read: HTMLElement;
+  /**
+   * show makes the section active for a route. The active section owns the
+   * composer's attached context: it calls ctx.setAttached here and whenever
+   * its context changes while it is active.
+   */
   show(sub: string): void;
+  /** hide tells the section it is no longer active (another one is shown). */
+  hide(): void;
+  /**
+   * onLive receives every live event, active or not, so a hidden section's
+   * state (its selection, its counts) stays current for when it comes back.
+   */
   onLive(type: string, data: unknown): void;
   primary(): Primary | null;
 }
@@ -266,9 +277,9 @@ export function boot(): void {
     poll: '/api/state',
     onEvent(e) {
       emitLive(e.type, e.data);
-      // Dispatch to the active section.
-      const sec = sections.get(currentRoute.section);
-      if (sec) sec.onLive(e.type, e.data);
+      // Every section hears every event; only the active one feeds the
+      // composer's attached line (Section.show/hide).
+      for (const sec of sections.values()) sec.onLive(e.type, e.data);
     },
     onStatus(s: LiveStatus) {
       handle.setLive(s);
@@ -295,10 +306,16 @@ export function boot(): void {
       const active = id === sectionId;
       sec.list.hidden = !active;
       sec.read.hidden = !active;
-      if (active) sec.show(r.sub);
+      if (!active) sec.hide();
     }
-
-    // With no registered sections, nothing to hide/show.
+    const activeSec = sections.get(sectionId);
+    if (activeSec) {
+      activeSec.show(r.sub);
+    } else {
+      // A section that isn't built yet (Rules before Task 8, Apply before
+      // Task 9) has no context: nothing is attached while it is shown.
+      ctx.setAttached({});
+    }
   });
 
   // ---- summary (counts) -----------------------------------------------------

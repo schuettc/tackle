@@ -192,7 +192,8 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
   }
 
   async function send(batch: boolean): Promise<void> {
-    const body = input.value.trim();
+    const sent = input.value;
+    const body = sent.trim();
     if (!body || sending) return;
     sending = true;
     note.textContent = '';
@@ -208,7 +209,12 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         attached: effective(),
         batch,
       });
-      input.value = '';
+      // Clear only what was sent: text typed while the send was in flight
+      // stays in the field.
+      const now = input.value;
+      if (now.startsWith(sent)) {
+        input.value = now.slice(sent.length).replace(/^\s+/, '');
+      }
       fit();
       override = null;
       renderAttached();
