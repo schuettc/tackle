@@ -15,7 +15,7 @@
 // setConditionError shows its message under the condition it names.
 
 import { h } from '/_kit/kit.js';
-import type { Condition, Field, VocabularyView } from './wire.d.ts';
+import type { Condition, Field, NoteToken, VocabularyView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 
 // Field types, as serve's rules.FieldType numbers them.
@@ -24,22 +24,30 @@ const DURATION = 2;
 const BOOL = 3;
 const COUNT = 4;
 
-let vocab: Promise<Field[]> | null = null;
+let vocab: Promise<VocabularyView> | null = null;
 
 // The message each editor shows (setConditionError), to redraw it with.
 const errors = new WeakMap<HTMLElement, { index: number; message: string }>();
 
-/** ruleVocabulary fetches the field vocabulary once. */
-export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
+// ruleVocabularyView fetches serve's rule vocabulary once.
+function ruleVocabularyView(ctx: Ctx): Promise<VocabularyView> {
   if (!vocab) {
-    vocab = ctx.api
-      .get<VocabularyView>('/rules/vocabulary')
-      .then((v) => v.fields ?? []);
+    vocab = ctx.api.get<VocabularyView>('/rules/vocabulary');
     vocab.catch(() => {
       vocab = null; // try again next time
     });
   }
   return vocab;
+}
+
+/** ruleVocabulary is the field vocabulary (fetched once). */
+export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
+  return ruleVocabularyView(ctx).then((v) => v.fields ?? []);
+}
+
+/** noteTokens are the placeholders a rule's note may use (serve's). */
+export function noteTokens(ctx: Ctx): Promise<NoteToken[]> {
+  return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
 }
 
 // picks reports whether a condition's value is chosen from a list.

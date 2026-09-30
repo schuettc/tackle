@@ -46,8 +46,8 @@ describe('attachedLabel', () => {
     );
     assert.equal(attachedLabel({ job: '3' }), 'job #3');
   });
-  test('a section, with nothing open in it, names the section', () => {
-    assert.equal(attachedLabel({ section: 'rules' }), 'rules');
+  test('a section, with nothing open in it, reads "section rules", as the agent reads it', () => {
+    assert.equal(attachedLabel({ section: 'rules' }), 'section rules');
     assert.ok(!isEmpty({ section: 'rules' }));
     assert.equal(
       attachedLabel({ section: 'rules', rule: 'x' }),

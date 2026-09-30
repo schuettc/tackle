@@ -1715,7 +1715,7 @@ function attachedLabel(a) {
   }
   if (a.rule) parts.push(`rule ${a.rule}`);
   if (a.job) parts.push(`job #${a.job}`);
-  if (a.section && parts.length === 0) parts.push(a.section);
+  if (a.section && parts.length === 0) parts.push(`section ${a.section}`);
   return parts.join(" · ");
 }
 function attachedText(a) {
@@ -2933,14 +2933,20 @@ var BOOL = 3;
 var COUNT = 4;
 var vocab = null;
 var errors = /* @__PURE__ */ new WeakMap();
-function ruleVocabulary(ctx) {
+function ruleVocabularyView(ctx) {
   if (!vocab) {
-    vocab = ctx.api.get("/rules/vocabulary").then((v) => v.fields ?? []);
+    vocab = ctx.api.get("/rules/vocabulary");
     vocab.catch(() => {
       vocab = null;
     });
   }
   return vocab;
+}
+function ruleVocabulary(ctx) {
+  return ruleVocabularyView(ctx).then((v) => v.fields ?? []);
+}
+function noteTokens(ctx) {
+  return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
 }
 function picks(f, op) {
   if (f.type === BOOL) return true;
@@ -3209,7 +3215,8 @@ function matchesHeading(total, by) {
 }
 function conditionErrorIndex(message2) {
   const m = /^condition (\d+): /.exec(message2);
-  return m ? Number(m[1]) : -1;
+  const n = m ? Number(m[1]) : 0;
+  return n >= 1 ? n - 1 : -1;
 }
 function viewCounts(rules) {
   let active = 0;
@@ -3228,6 +3235,7 @@ function sameRule(a, b) {
 }
 
 // rules.ts
+var HINT_SEP = " · ";
 var PREVIEW_DEBOUNCE_MS = 300;
 var PAGE = 200;
 var VIEWS2 = [
@@ -3250,6 +3258,7 @@ function renderRule(ctx, detail, hooks) {
   let workPropose = { ...base.propose };
   let exclude = base.exclude ?? [];
   let preview = detail.matches;
+  let dispositions = detail.matches.dispositions ?? [];
   let shown = preview.page ?? [];
   let invalid = null;
   let conflict = null;
@@ -3276,6 +3285,11 @@ function renderRule(ctx, detail, hooks) {
   const invalidEl = h11("div", { "data-testid": "rule-invalid" });
   const conflictEl = h11("div", { "data-testid": "rule-conflict" });
   const proposeEl = h11("div");
+  const proposeErrEl = h11("p", {
+    class: "cb-cond-err cb-propose-err",
+    "data-testid": "propose-err",
+    hidden: true
+  });
   const heading = h11("h3", { class: "kit-label cb-matches-label" });
   const groupChips = h11("span", { class: "cb-matches-view" });
   const matchesEl = h11("div", {
@@ -3349,6 +3363,8 @@ function renderRule(ctx, detail, hooks) {
       value
     );
     if (!editable()) {
+      drawChoices = () => {
+      };
       proposeEl.replaceChildren(
         h11(
           "div",
@@ -3369,36 +3385,79 @@ function renderRule(ctx, detail, hooks) {
       );
       return;
     }
-    const disp = h11("select", {
-      class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : ""),
-      "aria-label": "disposition"
+    const pick = h11("button", {
+      type: "button",
+      class: "cb-cond-v cb-disp",
+      "aria-label": "disposition",
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      onclick() {
+        setMenu(menu.hidden);
+      }
     });
-    const fill = (choices2) => {
-      const opts = [...choices2];
-      if (!opts.includes(p.disposition)) opts.unshift(p.disposition);
-      disp.replaceChildren(
-        ...opts.map(
-          (d) => h11("option", { value: d }, d === "" ? "choose…" : d)
+    const menu = h11("div", {
+      class: "cb-disp-menu",
+      role: "menu",
+      "aria-label": "dispositions",
+      hidden: true
+    });
+    const menuChips = h11("span", { class: "cb-disp-opts" });
+    menu.append(h11("span"), h11("span"), menuChips);
+    const onEsc = (e) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (!menu.isConnected) {
+        document.removeEventListener("keydown", onEsc, true);
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      pick.focus();
+    };
+    function setMenu(open) {
+      menu.hidden = !open;
+      pick.setAttribute("aria-expanded", String(open));
+      if (open) {
+        document.addEventListener("keydown", onEsc, true);
+        (menu.querySelector(".cb-disp-opt.on") ?? menu.querySelector(".cb-disp-opt"))?.focus();
+      } else {
+        document.removeEventListener("keydown", onEsc, true);
+      }
+    }
+    const needsUntil = () => !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
+    const choose = (d) => {
+      workPropose = { ...workPropose, disposition: d };
+      setMenu(false);
+      drawChoices();
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      edited();
+      pick.focus();
+    };
+    drawChoices = () => {
+      const cur = workPropose.disposition;
+      pick.textContent = cur || "choose…";
+      pick.dataset.value = cur;
+      pick.classList.toggle("cb-danger", DANGER_DISPS.has(cur));
+      menuChips.replaceChildren(
+        ...dispositions.map(
+          (d) => h11(
+            "button",
+            {
+              type: "button",
+              role: "menuitemradio",
+              "aria-checked": String(d === cur),
+              class: "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : ""),
+              "data-disp": d,
+              onclick() {
+                choose(d);
+              }
+            },
+            d
+          )
         )
       );
-      disp.value = p.disposition;
+      drawProposeErr();
     };
-    fill([]);
-    void getVocab(ctx).then((v) => {
-      const all = [];
-      for (const k of v.kinds ?? []) {
-        for (const d of k.allowed ?? []) if (!all.includes(d)) all.push(d);
-      }
-      fill(all);
-    }).catch(() => {
-    });
-    const needsUntil = () => !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
-    disp.addEventListener("change", () => {
-      workPropose = { ...workPropose, disposition: disp.value };
-      disp.classList.toggle("cb-danger", DANGER_DISPS.has(disp.value));
-      untilRow.hidden = !needsUntil();
-      edited();
-    });
     const text = (field, placeholder2) => {
       const input = h11("input", {
         class: "cb-cond-v",
@@ -3411,21 +3470,79 @@ function renderRule(ctx, detail, hooks) {
       input.addEventListener("input", () => {
         const v = input.value;
         workPropose = { ...workPropose, [field]: v || void 0 };
+        drawProposeErr();
         edited();
       });
       return input;
     };
-    const untilRow = tr("until", text("until", "e.g. 30d"));
-    untilRow.hidden = !needsUntil();
+    const hint = (testid) => h11(
+      "div",
+      { class: "cb-prop-hint", "data-testid": testid },
+      h11("span"),
+      h11("span"),
+      h11("span", { class: "cb-prop-hint-t" })
+    );
+    const untilIn = text("until", "");
+    const untilRow = tr("until", untilIn);
+    const untilHint = hint("until-hint");
+    untilRow.hidden = untilHint.hidden = !needsUntil();
+    const noteIn = text("note", "optional");
+    const noteHint = hint("note-hint");
+    const items = (el2, lead, words) => {
+      const out = [];
+      words.forEach((w, i) => {
+        if (i) out.push(HINT_SEP);
+        out.push(h11("span", { class: "cb-prop-hint-i" }, w));
+      });
+      el2.lastElementChild.replaceChildren(
+        ...words.length ? [lead, ...out] : []
+      );
+    };
+    void getVocab(ctx).then((v) => {
+      const forms = v.until_forms ?? [];
+      if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
+      items(
+        untilHint,
+        "",
+        forms.map((f) => f.syntax)
+      );
+    }).catch(() => {
+    });
+    void noteTokens(ctx).then((ts) => {
+      items(
+        noteHint,
+        "may use ",
+        ts.map((t) => `${t.token} ${t.meaning}`)
+      );
+    }).catch(() => {
+    });
     proposeEl.replaceChildren(
       h11(
         "div",
         { class: "kit-table cb-propose", "data-testid": "propose" },
-        tr("disposition", disp),
+        tr("disposition", pick),
+        menu,
         untilRow,
-        tr("note", text("note", "e.g. landed ({how}); restore tip {tip}"))
-      )
+        untilHint,
+        tr("note", noteIn),
+        noteHint
+      ),
+      proposeErrEl
     );
+    drawChoices();
+  }
+  let drawChoices = () => {
+  };
+  function drawProposeErr() {
+    let msg = "";
+    const d = workPropose.disposition;
+    if (saved.invalid?.startsWith("propose:") && sameAction(workPropose, base.propose) && sameConditions(work, base.match ?? [])) {
+      msg = saved.invalid;
+    } else if (d && dispositions.length && !dispositions.includes(d)) {
+      msg = `${d} can’t be proposed for what this rule matches (allowed: ${dispositions.join(", ")})`;
+    }
+    proposeErrEl.textContent = msg;
+    proposeErrEl.hidden = !msg;
   }
   function box(on, label, run) {
     return h11("span", {
@@ -3567,6 +3684,8 @@ function renderRule(ctx, detail, hooks) {
     setConditionError(editor, -1, null);
     preview = p;
     shown = p.page ?? [];
+    if (p.dispositions) dispositions = p.dispositions;
+    drawChoices();
     drawMatches();
     drawFacts();
   }
@@ -3810,6 +3929,19 @@ function renderRule(ctx, detail, hooks) {
       note.textContent = message(err);
     }
   }
+  function saysWhatHeEdited(r) {
+    return sameConditions(r.match ?? [], work) && sameAction(r.propose, workPropose);
+  }
+  function settle(d) {
+    conflict = null;
+    if (d) {
+      draw(d);
+      return;
+    }
+    drawConflict();
+    drawActions();
+    hooks.primaryChanged();
+  }
   async function save() {
     if (conflict) {
       refuseActivate();
@@ -3822,6 +3954,13 @@ function renderRule(ctx, detail, hooks) {
       );
       draw(d);
       hooks.saved();
+      if (conflict) {
+        const { detail: newer, by } = conflict;
+        settle(newer);
+        const who = by ? authorOf(by).name : "someone";
+        note.textContent = `Saved; then ${who} changed it. Here is serve’s copy; nothing else was done.`;
+        return false;
+      }
       return true;
     } catch (err) {
       if (isConflict(err)) void afterConflict("saved");
@@ -3898,6 +4037,10 @@ function renderRule(ctx, detail, hooks) {
   }
   function edited() {
     note.textContent = "";
+    if (conflict && (!dirty() || saysWhatHeEdited(conflict.detail.rule))) {
+      settle(conflict.detail);
+      return;
+    }
     drawActions();
     hooks.primaryChanged();
   }
@@ -3912,11 +4055,13 @@ function renderRule(ctx, detail, hooks) {
     seq++;
     saved = d;
     base = d.rule;
+    if (conflict && conflict.detail.version === d.version) conflict = null;
     work = keep ? keep.match : [...base.match ?? []];
     workPropose = keep ? keep.propose : { ...base.propose };
     exclude = base.exclude ?? [];
     preview = d.matches;
     shown = preview.page ?? [];
+    dispositions = d.matches.dispositions ?? [];
     invalid = d.invalid && !keep && (conditionErrorIndex(d.invalid) >= 0 || d.invalid.startsWith("rules/")) ? d.invalid : null;
     doc.dataset.status = base.status;
     doc.toggleAttribute("data-invalid", !!d.invalid);
@@ -3969,18 +4114,21 @@ function renderRule(ctx, detail, hooks) {
     },
     update(d, by) {
       if (d.version === saved.version) {
+        if (conflict) settle(null);
         const was = (saved.rule.exclude ?? []).map((x) => x.key).join("\n");
         const now = (d.rule.exclude ?? []).map((x) => x.key).join("\n");
         saved = { ...saved, record: d.record, invalid: d.invalid };
         if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
         return;
       }
-      if (!dirty()) {
+      if (!dirty() || saysWhatHeEdited(d.rule)) {
+        conflict = null;
         draw(d);
         return;
       }
       conflict = { detail: d, by };
       drawConflict();
+      drawActions();
       hooks.primaryChanged();
     },
     refresh() {

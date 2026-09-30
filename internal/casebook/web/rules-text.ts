@@ -75,10 +75,15 @@ export function matchesHeading(
   return `matches now \u00b7 ${total}` + (why ? ` \u00b7 ${why}` : '');
 }
 
-/** conditionErrorIndex reads which condition serve's validation error names (-1: none). */
+/**
+ * conditionErrorIndex reads which condition serve's validation error names,
+ * as the row's index (-1: none). serve counts conditions from 1, as Court
+ * and the agent do ("condition 2:" is the second row, index 1).
+ */
 export function conditionErrorIndex(message: string): number {
   const m = /^condition (\d+): /.exec(message);
-  return m ? Number(m[1]) : -1;
+  const n = m ? Number(m[1]) : 0;
+  return n >= 1 ? n - 1 : -1;
 }
 
 /** viewCounts counts the list's views. */

@@ -105,17 +105,22 @@ describe('reasonSummary / matchesHeading', () => {
 });
 
 describe('conditionErrorIndex', () => {
-  test('reads the index serve names', () => {
+  test('serve counts conditions from 1; the index is the row, from 0', () => {
     assert.equal(
       conditionErrorIndex(
         'condition 2: field "age" op "older-than": bad duration "7x"',
       ),
-      2,
+      1,
     );
-    assert.equal(conditionErrorIndex('condition 0: unknown field "x"'), 0);
+    assert.equal(conditionErrorIndex('condition 1: unknown field "x"'), 0);
   });
   test('-1 when no condition is named', () => {
     assert.equal(conditionErrorIndex('bad request body: EOF'), -1);
+    assert.equal(
+      conditionErrorIndex('condition 0: not a number serve writes'),
+      -1,
+    );
+    assert.equal(conditionErrorIndex('propose: wait needs an until'), -1);
   });
 });
 

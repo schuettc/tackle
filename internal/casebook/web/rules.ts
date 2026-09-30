@@ -5,7 +5,7 @@
 // and its track record ("849 match · 2 excluded · 3 pending"), and its status
 // pill (draft, active, or not valid); views all / active / drafts. Its foot
 // makes a new draft (`new rule`: an id and a name) or asks the agent to draft
-// one (the composer, with `attached: rules`). #/rules/<id> opens a rule:
+// one (the composer, with `attached: section rules`). #/rules/<id> opens a rule:
 // kicker, title, facts (status, matches, excluded, author), what a draft or
 // an active rule does, the conditions table with `+ condition`
 // (conditions.ts), the proposal, and the live matches: "matches now · N ·
@@ -60,7 +60,11 @@ import type {
   RulesView,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
-import { conditionEditor, setConditionError } from './conditions.ts';
+import {
+  conditionEditor,
+  noteTokens,
+  setConditionError,
+} from './conditions.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { DANGER_DISPS, getVocab } from './decide.ts';
 import {
@@ -74,6 +78,9 @@ import {
   sameRule,
   viewCounts,
 } from './rules-text.ts';
+
+// Between the items of a proposal hint: the dot stays with the item before.
+const HINT_SEP = '\u00a0\u00b7 ';
 
 /** The re-preview debounce (spec §4.3). */
 export const PREVIEW_DEBOUNCE_MS = 300;
@@ -143,6 +150,9 @@ export function renderRule(
   let workPropose: RuleAction = { ...base.propose };
   let exclude: Exclusion[] = base.exclude ?? [];
   let preview: MatchPreview = detail.matches;
+  // What serve says the rule may propose, for its conditions (with each
+  // preview; kept while the conditions are refused).
+  let dispositions: string[] = detail.matches.dispositions ?? [];
   let shown: MatchRow[] = preview.page ?? [];
   let invalid: string | null = null; // the conditions, as serve judged them
   let conflict: { detail: RuleDetailView; by: string } | null = null;
@@ -177,6 +187,11 @@ export function renderRule(
   const invalidEl = h('div', { 'data-testid': 'rule-invalid' });
   const conflictEl = h('div', { 'data-testid': 'rule-conflict' });
   const proposeEl = h('div');
+  const proposeErrEl = h('p', {
+    class: 'cb-cond-err cb-propose-err',
+    'data-testid': 'propose-err',
+    hidden: true,
+  });
   const heading = h('h3', { class: 'kit-label cb-matches-label' });
   const groupChips = h('span', { class: 'cb-matches-view' });
   const matchesEl = h('div', {
@@ -263,6 +278,7 @@ export function renderRule(
         value,
       );
     if (!editable()) {
+      drawChoices = () => {};
       proposeEl.replaceChildren(
         h(
           'div',
@@ -287,41 +303,91 @@ export function renderRule(
       );
       return;
     }
-    const disp = h('select', {
-      class:
-        'cb-cond-v' + (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+    // The disposition: a picker of what serve says this rule may propose
+    // (the dispositions every kind it can match allows; it follows the
+    // conditions with each preview), open in the table when chosen.
+    const pick = h('button', {
+      type: 'button',
+      class: 'cb-cond-v cb-disp',
       'aria-label': 'disposition',
-    }) as HTMLSelectElement;
-    const fill = (choices: string[]) => {
-      const opts = [...choices];
-      if (!opts.includes(p.disposition)) opts.unshift(p.disposition);
-      disp.replaceChildren(
-        ...opts.map((d) =>
-          h('option', { value: d }, d === '' ? 'choose\u2026' : d),
-        ),
-      );
-      disp.value = p.disposition;
+      'aria-haspopup': 'menu',
+      'aria-expanded': 'false',
+      onclick() {
+        setMenu(menu.hidden);
+      },
+    });
+    const menu = h('div', {
+      class: 'cb-disp-menu',
+      role: 'menu',
+      'aria-label': 'dispositions',
+      hidden: true,
+    });
+    const menuChips = h('span', { class: 'cb-disp-opts' });
+    menu.append(h('span'), h('span'), menuChips);
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      if (!menu.isConnected) {
+        document.removeEventListener('keydown', onEsc, true);
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      pick.focus();
     };
-    fill([]);
-    void getVocab(ctx)
-      .then((v) => {
-        const all: string[] = [];
-        for (const k of v.kinds ?? []) {
-          for (const d of k.allowed ?? []) if (!all.includes(d)) all.push(d);
-        }
-        fill(all);
-      })
-      .catch(() => {});
+    function setMenu(open: boolean): void {
+      menu.hidden = !open;
+      pick.setAttribute('aria-expanded', String(open));
+      if (open) {
+        document.addEventListener('keydown', onEsc, true);
+        (
+          menu.querySelector<HTMLElement>('.cb-disp-opt.on') ??
+          menu.querySelector<HTMLElement>('.cb-disp-opt')
+        )?.focus();
+      } else {
+        document.removeEventListener('keydown', onEsc, true);
+      }
+    }
     // until is for the dispositions that wait (wait, watch): its row shows
     // for those, or when the rule already has one.
     const needsUntil = () =>
       !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
-    disp.addEventListener('change', () => {
-      workPropose = { ...workPropose, disposition: disp.value };
-      disp.classList.toggle('cb-danger', DANGER_DISPS.has(disp.value));
-      untilRow.hidden = !needsUntil();
+    const choose = (d: string) => {
+      workPropose = { ...workPropose, disposition: d };
+      setMenu(false);
+      drawChoices();
+      untilRow.hidden = untilHint.hidden = !needsUntil();
       edited();
-    });
+      pick.focus();
+    };
+    drawChoices = () => {
+      const cur = workPropose.disposition;
+      pick.textContent = cur || 'choose\u2026';
+      pick.dataset.value = cur;
+      pick.classList.toggle('cb-danger', DANGER_DISPS.has(cur));
+      menuChips.replaceChildren(
+        ...dispositions.map((d) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              role: 'menuitemradio',
+              'aria-checked': String(d === cur),
+              class:
+                'kit-chip cb-disp-opt' +
+                (d === cur ? ' on' : '') +
+                (DANGER_DISPS.has(d) ? ' cb-danger' : ''),
+              'data-disp': d,
+              onclick() {
+                choose(d);
+              },
+            },
+            d,
+          ),
+        ),
+      );
+      drawProposeErr();
+    };
     const text = (field: 'until' | 'note', placeholder: string) => {
       const input = h('input', {
         class: 'cb-cond-v',
@@ -334,21 +400,94 @@ export function renderRule(
       input.addEventListener('input', () => {
         const v = input.value;
         workPropose = { ...workPropose, [field]: v || undefined };
+        drawProposeErr();
         edited();
       });
       return input;
     };
-    const untilRow = tr('until', text('until', 'e.g. 30d'));
-    untilRow.hidden = !needsUntil();
+    // A hint under a row, in the value's column; it wraps, never truncates.
+    const hint = (testid: string) =>
+      h(
+        'div',
+        { class: 'cb-prop-hint', 'data-testid': testid },
+        h('span'),
+        h('span'),
+        h('span', { class: 'cb-prop-hint-t' }),
+      );
+    const untilIn = text('until', '');
+    const untilRow = tr('until', untilIn);
+    const untilHint = hint('until-hint');
+    untilRow.hidden = untilHint.hidden = !needsUntil();
+    const noteIn = text('note', 'optional');
+    const noteHint = hint('note-hint');
+    // serve's words for both: the until forms it parses, the note's tokens.
+    // Each item stays whole on a line; the list wraps between them.
+    const items = (el: HTMLElement, lead: string, words: string[]) => {
+      const out: Array<Node | string> = [];
+      words.forEach((w, i) => {
+        if (i) out.push(HINT_SEP);
+        out.push(h('span', { class: 'cb-prop-hint-i' }, w));
+      });
+      el.lastElementChild!.replaceChildren(
+        ...(words.length ? [lead, ...out] : []),
+      );
+    };
+    void getVocab(ctx)
+      .then((v) => {
+        const forms = v.until_forms ?? [];
+        if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
+        items(
+          untilHint,
+          '',
+          forms.map((f) => f.syntax),
+        );
+      })
+      .catch(() => {});
+    void noteTokens(ctx)
+      .then((ts) => {
+        items(
+          noteHint,
+          'may use ',
+          ts.map((t) => `${t.token} ${t.meaning}`),
+        );
+      })
+      .catch(() => {});
     proposeEl.replaceChildren(
       h(
         'div',
         { class: 'kit-table cb-propose', 'data-testid': 'propose' },
-        tr('disposition', disp),
+        tr('disposition', pick),
+        menu,
         untilRow,
-        tr('note', text('note', 'e.g. landed ({how}); restore tip {tip}')),
+        untilHint,
+        tr('note', noteIn),
+        noteHint,
       ),
+      proposeErrEl,
     );
+    drawChoices();
+  }
+
+  // drawChoices redraws the disposition picker (a new list from serve).
+  let drawChoices: () => void = () => {};
+
+  // drawProposeErr says why the proposal isn't valid: serve's message for
+  // the copy it holds, or, once Court changes the disposition, whether
+  // this rule may propose it.
+  function drawProposeErr(): void {
+    let msg = '';
+    const d = workPropose.disposition;
+    if (
+      saved.invalid?.startsWith('propose:') &&
+      sameAction(workPropose, base.propose) &&
+      sameConditions(work, base.match ?? [])
+    ) {
+      msg = saved.invalid;
+    } else if (d && dispositions.length && !dispositions.includes(d)) {
+      msg = `${d} can\u2019t be proposed for what this rule matches (allowed: ${dispositions.join(', ')})`;
+    }
+    proposeErrEl.textContent = msg;
+    proposeErrEl.hidden = !msg;
   }
 
   // ---- matches ----
@@ -504,6 +643,8 @@ export function renderRule(
     setConditionError(editor, -1, null);
     preview = p;
     shown = p.page ?? [];
+    if (p.dispositions) dispositions = p.dispositions;
+    drawChoices();
     drawMatches();
     drawFacts();
   }
@@ -785,6 +926,27 @@ export function renderRule(
     }
   }
 
+  // saysWhatHeEdited: a copy of serve's whose conditions and proposal are
+  // Court's unsaved edits.
+  function saysWhatHeEdited(r: Rule): boolean {
+    return (
+      sameConditions(r.match ?? [], work) && sameAction(r.propose, workPropose)
+    );
+  }
+
+  // settle ends a conflict that no longer holds: with serve's copy drawn
+  // (it is newer than what the page shows), or just dropped.
+  function settle(d: RuleDetailView | null): void {
+    conflict = null;
+    if (d) {
+      draw(d);
+      return;
+    }
+    drawConflict();
+    drawActions();
+    hooks.primaryChanged();
+  }
+
   // ---- saving and lifecycle ----
 
   // save posts Court's edits over the version shown; false (with serve's
@@ -799,8 +961,17 @@ export function renderRule(
         `/rules/draft?version=${encodeURIComponent(saved.version)}`,
         body(),
       );
-      draw(d);
+      draw(d); // drops a conflict that was this save, heard live first
       hooks.saved();
+      if (conflict) {
+        // A change that landed after his save (serve took the save
+        // against the version shown, so the copy heard live is newer).
+        const { detail: newer, by } = conflict;
+        settle(newer);
+        const who = by ? authorOf(by).name : 'someone';
+        note.textContent = `Saved; then ${who} changed it. Here is serve\u2019s copy; nothing else was done.`;
+        return false;
+      }
       return true;
     } catch (err) {
       if (isConflict(err)) void afterConflict('saved');
@@ -883,6 +1054,12 @@ export function renderRule(
   // edited follows any edit: the proposal or the conditions.
   function edited(): void {
     note.textContent = '';
+    // Court undid his edits, or made them say what serve's copy says: the
+    // conflict no longer holds; serve's copy is drawn.
+    if (conflict && (!dirty() || saysWhatHeEdited(conflict.detail.rule))) {
+      settle(conflict.detail);
+      return;
+    }
     drawActions();
     hooks.primaryChanged();
   }
@@ -904,11 +1081,14 @@ export function renderRule(
     seq++;
     saved = d;
     base = d.rule;
+    // A conflict over this very copy no longer holds.
+    if (conflict && conflict.detail.version === d.version) conflict = null;
     work = keep ? keep.match : [...(base.match ?? [])];
     workPropose = keep ? keep.propose : { ...base.propose };
     exclude = base.exclude ?? [];
     preview = d.matches;
     shown = preview.page ?? [];
+    dispositions = d.matches.dispositions ?? [];
     // Conditions serve refuses (or a file it can't read) aren't previewed.
     invalid =
       d.invalid &&
@@ -969,6 +1149,9 @@ export function renderRule(
     },
     update(d, by) {
       if (d.version === saved.version) {
+        // serve is back at the copy his edits are on: a change shown as a
+        // conflict no longer holds.
+        if (conflict) settle(null);
         // The same rule; its exclusions (or record) may have moved.
         const was = (saved.rule.exclude ?? []).map((x) => x.key).join('\n');
         const now = (d.rule.exclude ?? []).map((x) => x.key).join('\n');
@@ -976,7 +1159,10 @@ export function renderRule(
         if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
         return;
       }
-      if (!dirty()) {
+      // No edits to keep, or serve's copy already says what his edits say
+      // (his own save, heard live before its reply): not a conflict.
+      if (!dirty() || saysWhatHeEdited(d.rule)) {
+        conflict = null;
         draw(d);
         return;
       }
@@ -984,6 +1170,7 @@ export function renderRule(
       // made it; Activate waits until he settles it.
       conflict = { detail: d, by };
       drawConflict();
+      drawActions();
       hooks.primaryChanged();
     },
     refresh() {

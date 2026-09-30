@@ -1320,8 +1320,69 @@ input.cb-cond-v::placeholder {
 }
 
 /* A proposal row a disposition doesn't use (until, unless wait / watch). */
-.cb-propose .kit-tr[hidden] {
+.cb-propose .kit-tr[hidden],
+.cb-propose .cb-prop-hint[hidden],
+.cb-propose .cb-disp-menu[hidden] {
   display: none;
+}
+
+/* The disposition picker: the value, quiet like a condition's picker, and
+ * under it (open) the dispositions this rule may propose, as kit chips. */
+button.cb-cond-v.cb-disp {
+  justify-self: start;
+  margin: -3px 0 -3px -7px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+}
+button.cb-cond-v.cb-disp:hover,
+button.cb-cond-v.cb-disp[aria-expanded='true'] {
+  border-color: var(--kit-line);
+}
+button.cb-cond-v.cb-disp:focus-visible {
+  outline: none;
+  border-color: var(--kit-signal);
+}
+.cb-disp-menu,
+.cb-prop-hint {
+  display: grid;
+  grid-template-columns: 120px 96px minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 0 14px 9px;
+}
+.cb-disp-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.cb-disp-opt.kit-chip.cb-danger {
+  color: var(--kit-danger);
+}
+.cb-disp-opt.kit-chip:hover,
+.cb-disp-opt.kit-chip:focus-visible {
+  color: var(--kit-fg);
+  border-color: var(--kit-muted);
+}
+/* A hint under a proposal row: serve's until forms, the note's tokens.
+ * It wraps; it is never cut off. */
+.cb-prop-hint-t {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  overflow-wrap: anywhere;
+}
+.cb-prop-hint-t:empty {
+  display: none;
+}
+.cb-prop-hint-i {
+  white-space: nowrap;
+}
+/* Why the proposal isn't valid, under its table. */
+.cb-propose-err {
+  padding: 0 0 9px;
+  margin: -2px 0 0;
 }
 .cb-matches-view[hidden] {
   display: none;

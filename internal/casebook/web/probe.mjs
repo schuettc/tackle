@@ -2095,7 +2095,10 @@ async function rulesScenariosOn(context, serveHandle) {
       id: 'r8-stale',
       name: 'Stale bot PRs (180d+) \u2192 close',
       status: 'draft',
-      match: [{ field: 'repo', op: 'is', value: 'schuettc/r8-none' }],
+      match: [
+        { field: 'kind', op: 'is', value: 'pr' },
+        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
+      ],
       propose: { disposition: 'close' },
     });
     await agent.api('POST', '/api/rules/activate', { id: 'r8-stale' });
@@ -2103,7 +2106,10 @@ async function rulesScenariosOn(context, serveHandle) {
       id: 'r8-pi-idea',
       name: 'Dependabot minor/patch \u2192 close when superseded',
       status: 'draft',
-      match: [{ field: 'repo', op: 'is', value: 'schuettc/r8-none' }],
+      match: [
+        { field: 'kind', op: 'is', value: 'pr' },
+        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
+      ],
       propose: { disposition: 'close' },
     });
     const pg = await openDock(context, serveHandle, fx, {
@@ -2194,8 +2200,9 @@ async function rulesScenariosOn(context, serveHandle) {
           els
             .filter((e) => getComputedStyle(e).display !== 'none')
             .map((e) => {
-              const v = e.querySelector('select, input');
-              return `${e.querySelector('.cb-cond-f').textContent}=${v.value}${v.classList.contains('cb-danger') ? ' (danger)' : ''}`;
+              const v = e.querySelector('button.cb-disp, input');
+              const val = v.tagName === 'BUTTON' ? v.dataset.value : v.value;
+              return `${e.querySelector('.cb-cond-f').textContent}=${val}${v.classList.contains('cb-danger') ? ' (danger)' : ''}`;
             }),
         ),
         [
@@ -2698,11 +2705,11 @@ async function rulesScenariosOn(context, serveHandle) {
         await addCondition(field, op, value);
         const said = await serveSays();
         check(
-          `serve refuses ${field} ${op} "${value}" (${said.status}: ${said.error})`,
-          said.status === 400 && said.error.startsWith('condition 5: '),
+          `serve refuses ${field} ${op} "${value}", naming the sixth row "condition 6" (${said.status}: ${said.error})`,
+          said.status === 400 && said.error.startsWith('condition 6: '),
         );
         check(
-          `the page shows serve's message under ${field}`,
+          `the page shows serve's message under ${field} (the sixth row)`,
           await eventually(async () => (await errorShown(5)) === said.error),
         );
         check(
@@ -3107,7 +3114,9 @@ async function rulesScenariosOn(context, serveHandle) {
       check(
         "an active rule's conditions are read-only (no + condition)",
         !(await pg.$('.cb-rule .cb-cond-add')) &&
-          !(await pg.$('.cb-rule input.cb-cond-v, .cb-rule select')),
+          !(await pg.$(
+            '.cb-rule input.cb-cond-v, .cb-rule select, .cb-rule button.cb-disp',
+          )),
       );
 
       await pg.evaluate(() => {
@@ -3237,36 +3246,219 @@ async function rulesScenariosOn(context, serveHandle) {
           (await pg.$eval('.cb-rule .kit-h1', (e) => e.textContent)) ===
             'Old forks \u2192 archive',
       );
-      // Finish it: a disposition and a condition, then save.
-      const untilShown = () =>
-        pg.$eval(
-          '[data-testid="propose"] input[aria-label="until"]',
-          (e) => getComputedStyle(e.closest('.kit-tr')).display !== 'none',
+      // The proposal: the picker offers what serve says this rule may
+      // propose, following its conditions (N1).
+      const chips = async () => {
+        await pg.click('[data-testid="propose"] button.cb-disp');
+        await pg.waitForSelector('.cb-disp-menu:not([hidden])', {
+          timeout: 4000,
+        });
+        return pg.$$eval('.cb-disp-menu .cb-disp-opt', (els) =>
+          els.map((e) => e.dataset.disp),
         );
-      await pg.selectOption('[data-testid="propose"] select', 'wait');
-      const withWait = await untilShown();
-      await pg.selectOption('[data-testid="propose"] select', 'archive');
-      check(
-        'the until row shows for wait, not for archive',
-        withWait && !(await untilShown()),
+      };
+      const closeMenu = async () => {
+        await pg.keyboard.press('Escape');
+        await until(pg, () =>
+          document.querySelector('.cb-disp-menu')?.hasAttribute('hidden'),
+        );
+      };
+      checkList(
+        "with no kind condition the picker offers serve's dispositions for every kind (no archive)",
+        await chips(),
+        fresh.matches.dispositions,
+      );
+      checkList('(serve says keep, wait, ignore)', fresh.matches.dispositions, [
+        'keep',
+        'wait',
+        'ignore',
+      ]);
+      await closeMenu();
+      // Two conditions: kind is repo, fork is true.
+      await pg.click('.cb-cond-add');
+      await pg.click(
+        '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
       );
       await pg.click('.cb-cond-add');
       await pg.click(
         '.cb-cond-menu-row[data-field="fork"] .cb-cond-menu-op[data-op="is"]',
       );
+      const forks = {
+        match: [
+          { field: 'kind', op: 'is', value: 'repo' },
+          { field: 'fork', op: 'is', value: 'true' },
+        ],
+        propose: { disposition: '' },
+      };
+      const forServe = await agent.api('POST', '/api/rules/preview', forks);
+      await until(
+        pg,
+        (want) =>
+          document.querySelector('.cb-matches-label')?.textContent === want,
+        `matches now \u00b7 ${forServe.total}`,
+      );
+      checkList(
+        "with kind is repo it offers serve's dispositions for a repo (archive, no close)",
+        await chips(),
+        forServe.dispositions,
+      );
+      await pg.click('.cb-disp-opt[data-disp="wait"]');
+      const untilShown = () =>
+        pg.$eval(
+          '[data-testid="propose"] input[aria-label="until"]',
+          (e) => getComputedStyle(e.closest('.kit-tr')).display !== 'none',
+        );
+      const withWait = await untilShown();
+      const dv = await agent.api('GET', '/api/decisions/vocabulary');
+      const hints = await pg.evaluate(() => {
+        const t = (id) =>
+          document.querySelector(`[data-testid="${id}"] .cb-prop-hint-t`);
+        const fits = (e) =>
+          !!e &&
+          e.scrollWidth <= e.clientWidth &&
+          getComputedStyle(e).display !== 'none' &&
+          e.getBoundingClientRect().right <=
+            document.querySelector('.cb-propose').getBoundingClientRect().right;
+        return {
+          until: t('until-hint')?.textContent,
+          untilFits: fits(t('until-hint')),
+          placeholder: document.querySelector(
+            '[data-testid="propose"] input[aria-label="until"]',
+          ).placeholder,
+          note: t('note-hint')?.textContent,
+          noteFits: fits(t('note-hint')),
+          notePlaceholder: document.querySelector(
+            '[data-testid="propose"] input[aria-label="note"]',
+          ).placeholder,
+        };
+      });
+      check(
+        `the until hint is serve's until forms, whole ("${hints.until}", ${hints.placeholder})`,
+        withWait &&
+          hints.untilFits &&
+          hints.until ===
+            (dv.until_forms ?? []).map((f) => f.syntax).join('\u00a0\u00b7 ') &&
+          hints.placeholder === `e.g. ${dv.until_forms[0].example}`,
+      );
+      const rv = await agent.api('GET', '/api/rules/vocabulary');
+      check(
+        `the note hint lists serve's tokens, generically and whole ("${hints.note}")`,
+        hints.noteFits &&
+          hints.notePlaceholder === 'optional' &&
+          hints.note ===
+            'may use ' +
+              (rv.note_tokens ?? [])
+                .map((t) => `${t.token} ${t.meaning}`)
+                .join('\u00a0\u00b7 ') &&
+          (rv.note_tokens ?? []).length === 5,
+      );
+      // An until serve can't parse: saved (a draft may be unfinished), shown
+      // as not valid in serve's words, and never activated.
+      await pg.fill('[data-testid="propose"] input[aria-label="until"]', '30d');
+      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+      let withBadUntil = null;
+      await eventually(async () => {
+        const r = await ruleOf('old-forks-archive');
+        if (r.rule.propose.until === '30d') withBadUntil = r;
+        return !!withBadUntil;
+      });
+      check(
+        `serve holds "wait until 30d" as not valid (${withBadUntil?.invalid})`,
+        (withBadUntil?.invalid ?? '').includes('invalid until "30d"'),
+      );
+      check(
+        "the page shows serve's reason in the card and under the proposal",
+        await until(
+          pg,
+          (w) =>
+            document.querySelector(
+              '[data-testid="rule-invalid"] .cb-invalid-msg',
+            )?.textContent === w &&
+            document.querySelector('[data-testid="propose-err"]')
+              ?.textContent === w &&
+            !document.querySelector('[data-testid="propose-err"]').hidden,
+          withBadUntil?.invalid ?? '-',
+        ),
+      );
+      const refusedAct = pg.waitForResponse((r) =>
+        r.url().includes('/api/rules/activate'),
+      );
+      await pg.click('.kit-primary');
+      check(
+        'Activate is refused (400) and says why; serve still has a draft',
+        (await refusedAct).status() === 400 &&
+          (await until(pg, () =>
+            (
+              document.querySelector('.cb-rule-note')?.textContent ?? ''
+            ).startsWith('not activated: '),
+          )) &&
+          (await ruleOf('old-forks-archive')).rule.status === 'draft',
+      );
+      // The screenshot: the proposal with the until hint, the picker open.
+      await chips();
+      await pg.$eval('[data-testid="propose"]', (e) =>
+        e.scrollIntoView({ block: 'center' }),
+      );
+      check(
+        '/tmp/t8-proposal-light.png is light (theme and body)',
+        await r8Light(pg),
+      );
+      await pg.screenshot({ path: '/tmp/t8-proposal-light.png' });
+      await closeMenu();
+      // Fixed: archive, no until.
+      await pg.fill('[data-testid="propose"] input[aria-label="until"]', '');
+      await chips();
+      await pg.click('.cb-disp-opt[data-disp="archive"]');
+      check(
+        'the until row showed for wait, not for archive',
+        withWait && !(await untilShown()),
+      );
       await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
       check(
-        'saved: serve has the disposition and the condition, and it is valid',
+        'saved: serve has the disposition and the conditions, and it is valid',
         await eventually(async () => {
           const r = await ruleOf('old-forks-archive');
           return (
             r.rule.propose.disposition === 'archive' &&
-            r.rule.match.length === 1 &&
-            r.rule.match[0].field === 'fork' &&
-            r.rule.match[0].value === 'true' &&
+            !r.rule.propose.until &&
+            r.rule.match.map((c) => `${c.field} ${c.value}`).join(', ') ===
+              'kind repo, fork true' &&
             !r.invalid
           );
         }),
+      );
+      // A condition that makes the disposition one the rule can't propose:
+      // the page says so before anything is saved.
+      await pg.selectOption(
+        '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
+        'branch',
+      );
+      const branchDisps = (
+        await agent.api('POST', '/api/rules/preview', {
+          ...forks,
+          match: [{ field: 'kind', op: 'is', value: 'branch' }, forks.match[1]],
+        })
+      ).dispositions;
+      check(
+        `kind is branch: "archive can't be proposed", with serve's list (${branchDisps})`,
+        await until(
+          pg,
+          (want) =>
+            document.querySelector('[data-testid="propose-err"]')
+              ?.textContent === want,
+          `archive can\u2019t be proposed for what this rule matches (allowed: ${branchDisps.join(', ')})`,
+        ),
+      );
+      await pg.selectOption(
+        '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
+        'repo',
+      );
+      check(
+        'back to kind is repo: the message goes',
+        await until(
+          pg,
+          () => document.querySelector('[data-testid="propose-err"]')?.hidden,
+        ),
       );
       check(
         'the page drops the not-valid card, and the list pill reads draft',
@@ -3319,8 +3511,10 @@ async function rulesScenariosOn(context, serveHandle) {
           .textContent,
       }));
       check(
-        `asking the agent focuses the composer, "attached: rules", no text (${JSON.stringify(asked)})`,
-        asked.focused && asked.attached === 'rules' && asked.value === '',
+        `asking the agent focuses the composer, "attached: section rules" (as the agent reads it), no text (${JSON.stringify(asked)})`,
+        asked.focused &&
+          asked.attached === 'section rules' &&
+          asked.value === '',
       );
       await pg.keyboard.type('draft a rule for dependabot minor bumps');
       await pg.keyboard.press('Enter');
@@ -3464,7 +3658,7 @@ async function rulesScenariosOn(context, serveHandle) {
       });
       await pg.keyboard.type('schuettc/r8-landed');
       await agent.ruleDraft(sid, {
-        ...arch('close'),
+        ...arch('keep'),
         match: [
           { field: 'kind', op: 'is', value: 'repo' },
           { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
@@ -3479,25 +3673,30 @@ async function rulesScenariosOn(context, serveHandle) {
         '[data-testid="rule-conflict"] .kit-btn:has-text("reload theirs")',
       );
       check(
-        "reload theirs shows serve's copy (close), and drops his edit",
+        "reload theirs shows serve's copy (keep), and drops his edit",
         await until(
           pg,
           () =>
-            document.querySelector('[data-testid="propose"] select')?.value ===
-              'close' &&
+            document.querySelector('[data-testid="propose"] button.cb-disp')
+              ?.dataset.value === 'keep' &&
             document.querySelector('.cb-cond[data-index="1"] input.cb-cond-v')
               ?.value === 'schuettc/r8-other',
         ),
       );
       await pg.click('.kit-primary');
       check(
-        'Activate then activates what is shown: close',
+        'Activate then activates what is shown: keep',
         await eventually(async () => {
           const r = await ruleOf('r8-arch');
           return (
-            r.rule.status === 'active' && r.rule.propose.disposition === 'close'
+            r.rule.status === 'active' && r.rule.propose.disposition === 'keep'
           );
         }),
+      );
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
       );
       await pg.click('.kit-primary'); // Deactivate
       await eventually(
@@ -3539,8 +3738,8 @@ async function rulesScenariosOn(context, serveHandle) {
           () =>
             document.querySelector('.cb-rule .kit-h1')?.textContent ===
               'Dormant repos, all of them' &&
-            document.querySelector('[data-testid="propose"] select')?.value ===
-              'delete' &&
+            document.querySelector('[data-testid="propose"] button.cb-disp')
+              ?.dataset.value === 'delete' &&
             (
               document.querySelector('.cb-rule-note')?.textContent ?? ''
             ).startsWith(
@@ -3553,6 +3752,190 @@ async function rulesScenariosOn(context, serveHandle) {
         (await ruleOf('r8-arch')).rule.status === 'draft',
       );
       await pg.unroute(liveReads, holdReads);
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: rules — Court's own save, heard live first (N4) ----------
+  //
+  // serve publishes the save before the page has its reply; the live read
+  // of it can land first. That is Court's own change, not someone else's:
+  // no conflict card ("by you") appears, none is left behind, and Activate
+  // is not held up.
+  console.log("\nscenario: rules — Court's own save, heard live first");
+  {
+    await agent.api('POST', '/api/rules/draft', {
+      id: 'r8-race',
+      name: 'Race repos',
+      status: 'draft',
+      match: [
+        { field: 'kind', op: 'is', value: 'repo' },
+        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
+      ],
+      propose: { disposition: 'archive' },
+    });
+    const pg = await context.newPage();
+    const card = () =>
+      pg.$eval(
+        '[data-testid="rule-conflict"]',
+        (e) => e.querySelector('.kit-card-head')?.textContent ?? '',
+      );
+    try {
+      await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.goto(serveHandle.url + '#/rules/r8-race', {
+        waitUntil: 'domcontentloaded',
+      });
+      await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule')?.dataset.rule === 'r8-race' &&
+          document.querySelector('[data-testid="conditions"]')?.dataset
+            .ready === 'true',
+        undefined,
+        8000,
+      );
+      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
+        clickCount: 3,
+      });
+      await pg.keyboard.type('schuettc/r8-other');
+      // Hold the save's reply (serve has done the save) until the live
+      // read of it has been answered and drawn.
+      let release;
+      const held = new Promise((r) => {
+        release = r;
+      });
+      const saves = /\/api\/rules\/draft/;
+      let replied;
+      const answered = new Promise((r) => {
+        replied = r;
+      });
+      const hold = async (route) => {
+        const resp = await route.fetch();
+        await held;
+        await route.fulfill({ response: resp });
+        replied();
+      };
+      await pg.route(saves, hold);
+      const liveRead = pg.waitForResponse(
+        (r) => r.url().includes('/api/rule?id=r8-race') && r.status() === 200,
+      );
+      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+      await liveRead;
+      check(
+        'serve has his save while the page still waits for its reply',
+        await eventually(
+          async () =>
+            (await ruleOf('r8-race')).rule.match[1].value ===
+            'schuettc/r8-other',
+        ),
+      );
+      // Two frames for the live read to be drawn.
+      await pg.evaluate(
+        () =>
+          new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r)),
+          ),
+      );
+      const during = await card();
+      check(
+        `the live read of his own save is no conflict (card: "${during}")`,
+        during === '',
+      );
+      release();
+      await answered;
+      await pg.unroute(saves, hold);
+      check(
+        'after the reply: no conflict card, nothing left to save',
+        await until(
+          pg,
+          () =>
+            !document.querySelector(
+              '[data-testid="rule-conflict"] .kit-card',
+            ) &&
+            ![...document.querySelectorAll('.cb-rule-actions .kit-btn')].some(
+              (b) => b.textContent === 'save draft',
+            ),
+        ),
+      );
+      await pg.click('.kit-primary');
+      check(
+        'and Activate activates his copy at once',
+        await eventually(async () => {
+          const r = await ruleOf('r8-race');
+          return (
+            r.rule.status === 'active' &&
+            r.rule.match[1].value === 'schuettc/r8-other'
+          );
+        }),
+      );
+      // Deactivate, once the page shows it active.
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
+      );
+      await pg.click('.kit-primary');
+      check(
+        'Deactivate puts it back to a draft, editable again',
+        (await eventually(
+          async () => (await ruleOf('r8-race')).rule.status === 'draft',
+        )) &&
+          (await until(
+            pg,
+            () =>
+              !!document.querySelector(
+                '.cb-cond[data-index="1"] input.cb-cond-v',
+              ),
+          )),
+      );
+
+      // A conflict that stops holding clears: Court's edit, the agent's
+      // change over it, then Court undoes his edit — nothing of his is
+      // left to keep, so serve's copy shows and Activate isn't held.
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Activate',
+      );
+      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
+        clickCount: 3,
+      });
+      await pg.keyboard.type('schuettc/r8-landed');
+      await agent.api('POST', '/api/rules/draft', {
+        id: 'r8-race',
+        name: 'Race repos, renamed',
+        status: 'draft',
+        match: [
+          { field: 'kind', op: 'is', value: 'repo' },
+          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
+        ],
+        propose: { disposition: 'archive' },
+      });
+      check(
+        'a change under his edit shows as a conflict',
+        await until(
+          pg,
+          () =>
+            !!document.querySelector('[data-testid="rule-conflict"] .kit-card'),
+        ),
+      );
+      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
+        clickCount: 3,
+      });
+      await pg.keyboard.type('schuettc/r8-other');
+      check(
+        "undoing his edit clears it: serve's copy (renamed) shows, no card",
+        await until(
+          pg,
+          () =>
+            !document.querySelector(
+              '[data-testid="rule-conflict"] .kit-card',
+            ) &&
+            document.querySelector('.cb-rule .kit-h1')?.textContent ===
+              'Race repos, renamed',
+        ),
+      );
     } finally {
       await pg.close();
     }
@@ -3622,8 +4005,8 @@ async function invalidRulesScenariosOn(context, serveHandle) {
   };
   const bad = await ruleOf('r8-bad');
   check(
-    `serve reads r8-bad as invalid, naming the condition (${bad.invalid})`,
-    bad.invalid.startsWith('condition 1: ') && bad.matches.total === 0,
+    `serve reads r8-bad as invalid, naming its second condition as Court counts: "condition 2" (${bad.invalid})`,
+    bad.invalid.startsWith('condition 2: ') && bad.matches.total === 0,
   );
   checkList(
     'serve refuses to preview it or propose from it',
@@ -3697,8 +4080,25 @@ async function invalidRulesScenariosOn(context, serveHandle) {
         doc.msg === bad.invalid,
     );
     check(
-      "serve's message is under condition 1 too",
+      "serve's message is under the condition it names too (the second row)",
       doc.inline === bad.invalid,
+    );
+    const numbered = await pg.$$eval(
+      '.cb-rule > [data-testid="conditions"] .cb-cond',
+      (els) =>
+        els
+          .map((e, i) => {
+            const err = e.querySelector('.cb-cond-err');
+            if (!err || err.hidden) return null;
+            const m = /^condition (\d+): /.exec(err.textContent);
+            return `row ${i + 1} says condition ${m ? m[1] : '?'}`;
+          })
+          .filter(Boolean),
+    );
+    checkList(
+      'the number Court reads is the row it sits under, counted from 1',
+      numbered,
+      ['row 2 says condition 2'],
     );
     check(
       'its matches are not previewed (no count, no list / by repo)',
@@ -3778,7 +4178,7 @@ async function invalidRulesScenariosOn(context, serveHandle) {
         return (
           r.rule.status === 'draft' &&
           r.rule.match[1].value === 'lots' &&
-          r.invalid.startsWith('condition 1: ')
+          r.invalid.startsWith('condition 2: ')
         );
       }),
     );
@@ -3820,7 +4220,8 @@ async function invalidRulesScenariosOn(context, serveHandle) {
     await pg.click(
       '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
     );
-    await pg.selectOption('[data-testid="propose"] select', 'keep');
+    await pg.click('[data-testid="propose"] button.cb-disp');
+    await pg.click('.cb-disp-opt[data-disp="keep"]');
     await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
     check(
       'saving replaces it with a valid rule',
@@ -3843,7 +4244,7 @@ async function invalidRulesScenariosOn(context, serveHandle) {
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 404;
+const MIN_CHECKS = 423;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
