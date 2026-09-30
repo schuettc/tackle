@@ -196,3 +196,64 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 
 	return res, nil
 }
+
+// tidyResult is the JSON the helper's --tidy mode prints on stdout.
+type tidyResult struct {
+	Source  *string  `json:"source"` // null: the helper refused (not UTF-8)
+	Removed []string `json:"removed"`
+}
+
+// Tidy removes now-unused imports from a TypeScript test file's source: it
+// runs the embedded helper as `node tsext.cjs --tidy <typescript-dir>
+// <relpath>`, feeding src on stdin, and decodes its
+// {"source":...,"removed":[...]} JSON reply. If node is not on PATH, or
+// no typescript package can be found ($CULL_TS or node_modules/typescript
+// walking up from root), src is returned unchanged with no error and no
+// removals.
+func Tidy(root, relpath string, before, src []byte) ([]byte, []string, error) {
+	nodePath, err := exec.LookPath("node")
+	if err != nil {
+		return src, nil, nil
+	}
+
+	tsDir, ok := findTypescript(root)
+	if !ok {
+		return src, nil, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "cull-tsext-tidy-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: chmod temp dir: %w", err)
+	}
+	helperPath := filepath.Join(tmpDir, "tsext.cjs")
+	if err := os.WriteFile(helperPath, helperSrc, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: write helper: %w", err)
+	}
+
+	beforePath := filepath.Join(tmpDir, "before")
+	if err := os.WriteFile(beforePath, before, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: write before: %w", err)
+	}
+	cmd := exec.Command(nodePath, helperPath, "--tidy", tsDir, filepath.ToSlash(relpath), beforePath)
+	cmd.Env = extract.HelperEnv(defaultMaxContext)
+	cmd.Stdin = bytes.NewReader(src)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: run helper --tidy: %w (stderr: %s)", err, stderr.String())
+	}
+
+	var result tidyResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		return nil, nil, fmt.Errorf("extract/ts: decode helper --tidy output %q: %w", stdout.Bytes(), err)
+	}
+	if result.Source == nil {
+		return src, nil, nil
+	}
+	return []byte(*result.Source), result.Removed, nil
+}

@@ -30,6 +30,10 @@ func init() {
 // defaultMaxContext matches pyext.py's MAX_CTX.
 const defaultMaxContext = 24000
 
+// helperEnvFunc is extract.HelperEnv, indirected so tests can observe the
+// environment Tidy computes for the subprocess.
+var helperEnvFunc = extract.HelperEnv
+
 type pythonExtractor struct{}
 
 // New builds the Python extractor.
@@ -153,4 +157,64 @@ func (pythonExtractor) Extract(root string, relpaths []string, maxContext int) (
 	}
 
 	return res, nil
+}
+
+// tidyResult is the JSON the helper's --tidy mode prints on stdout.
+type tidyResult struct {
+	Source  *string  `json:"source"` // null: the helper refused (not UTF-8)
+	Removed []string `json:"removed"`
+}
+
+// Tidy removes now-unused imports from a Python test file's source: it
+// runs the embedded helper as `python3 pyext.py --tidy --before <file>`,
+// feeding src on stdin, and decodes its {"source":...,"removed":[...]}
+// JSON reply. root is accepted for parity with the ts package (which
+// needs it to locate the typescript package) but isn't otherwise used:
+// tidy mode needs no cross-file resolution. If python3 is not on PATH,
+// src is returned unchanged with no error and no removals.
+//
+// before is the pre-edit file: only imports whose names it used and src
+// no longer uses are removed.
+func Tidy(root, relpath string, before, src []byte) ([]byte, []string, error) {
+	_ = root
+	pyPath, err := exec.LookPath("python3")
+	if err != nil {
+		return src, nil, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "cull-pyext-tidy-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("extract/python: temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+	if err := os.Chmod(tmpDir, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: chmod temp dir: %w", err)
+	}
+	helperPath := filepath.Join(tmpDir, "pyext.py")
+	if err := os.WriteFile(helperPath, helperSrc, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: write helper: %w", err)
+	}
+
+	beforePath := filepath.Join(tmpDir, "before")
+	if err := os.WriteFile(beforePath, before, 0o600); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: write before: %w", err)
+	}
+	cmd := exec.Command(pyPath, helperPath, "--tidy", "--before", beforePath)
+	cmd.Env = helperEnvFunc(defaultMaxContext)
+	cmd.Stdin = bytes.NewReader(src)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: run helper --tidy: %w (stderr: %s)", err, stderr.String())
+	}
+
+	var result tidyResult
+	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &result); err != nil {
+		return nil, nil, fmt.Errorf("extract/python: decode helper --tidy output %q: %w", stdout.Bytes(), err)
+	}
+	if result.Source == nil {
+		return src, nil, nil
+	}
+	return []byte(*result.Source), result.Removed, nil
 }

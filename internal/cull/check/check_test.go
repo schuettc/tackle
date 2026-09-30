@@ -3,7 +3,10 @@ package check
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +30,8 @@ type fakeEval struct {
 	calls       atomic.Int32
 	cut         map[string]bool
 	consolidate map[string]bool
+	errOnTest   map[string]bool // per-test judge.State call for this test name errors
+	errOnGroup  map[string]bool // group judge.GroupState call errors if any member matches
 }
 
 func f64(v float64) *float64 { return &v }
@@ -36,10 +41,18 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 	act := "keep"
 	switch s := state.(type) {
 	case judge.State:
+		if f.errOnTest != nil && f.errOnTest[s.TestName] {
+			return jev.Response{}, fmt.Errorf("fake error for %s", s.TestName)
+		}
 		if f.cut != nil && f.cut[s.TestName] {
 			act = "cut"
 		}
 	case judge.GroupState:
+		for _, t := range s.Tests {
+			if f.errOnGroup != nil && f.errOnGroup[t.Name] {
+				return jev.Response{}, fmt.Errorf("fake error for group with %s", t.Name)
+			}
+		}
 		act = "keep_separate"
 		for _, t := range s.Tests {
 			if f.consolidate != nil && f.consolidate[t.Name] {
@@ -494,6 +507,185 @@ func TestCheckNoTypescriptReported(t *testing.T) {
 // TestCheckMonorepoNoRootGoMod: a Go module in a subdirectory plus a Python
 // test at the root, with no root go.mod — both are extracted, and a stray
 // Go test with no go.mod is skipped, not fatal.
+// TestReportFilesInventory: on a suite check, every extracted test appears
+// under its file in Files, with its id and hash, and the file's sha256
+// matches the file's actual bytes.
+func TestReportFilesInventory(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	content := "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n"
+	writeFile(t, root, "pkg/calc_test.go", content)
+
+	f := &fakeEval{}
+	report, err := Run(context.Background(), f, Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fi, ok := report.Files["pkg/calc_test.go"]
+	if !ok {
+		t.Fatalf("Files = %+v, want pkg/calc_test.go present", report.Files)
+	}
+	sum := sha256.Sum256([]byte(content))
+	if fi.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Errorf("sha256 = %q, want %q", fi.SHA256, hex.EncodeToString(sum[:]))
+	}
+	names := map[string]string{} // id -> hash
+	for _, ft := range fi.Tests {
+		names[ft.ID] = ft.Hash
+	}
+	if len(names) != 2 {
+		t.Fatalf("fi.Tests = %+v, want 2 entries", fi.Tests)
+	}
+	for _, tr := range report.Tests {
+		h, ok := names[tr.ID]
+		if !ok || h != tr.Hash || h == "" {
+			t.Errorf("file inventory for %s = %q, want %q", tr.ID, h, tr.Hash)
+		}
+	}
+}
+
+// TestFileChangedDuringCheckIsSkipped: if a file's bytes change between
+// extraction and fileInventory's hashing (racing with an editor, e.g.), the
+// hash check catches it: the file is dropped entirely (not in Files or
+// Tests) and reported as Skipped, while an unrelated file is unaffected.
+func TestFileChangedDuringCheckIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	writeFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
+	writeFile(t, root, "pkg/other_test.go", "package pkg\n\nfunc TestOther(t *testing.T) {\n\t_ = 2\n}\n")
+
+	testHookBeforeHash = func(relpath string) {
+		if relpath == "pkg/calc_test.go" {
+			writeFile(t, root, relpath, "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 999\n}\n")
+		}
+	}
+	t.Cleanup(func() { testHookBeforeHash = nil })
+
+	f := &fakeEval{}
+	var stderr bytes.Buffer
+	report, err := Run(context.Background(), f, Options{Path: root, Stderr: &stderr})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := report.Files["pkg/calc_test.go"]; ok {
+		t.Errorf("Files = %+v, want pkg/calc_test.go absent", report.Files)
+	}
+	for _, tr := range report.Tests {
+		if tr.File == "pkg/calc_test.go" {
+			t.Errorf("Tests = %+v, want no test from pkg/calc_test.go", report.Tests)
+		}
+	}
+	for _, g := range report.Groups {
+		if g.File == "pkg/calc_test.go" {
+			t.Errorf("Groups = %+v, want no group from pkg/calc_test.go", report.Groups)
+		}
+	}
+	found := false
+	for _, s := range report.Skipped {
+		if s.File == "pkg/calc_test.go" {
+			found = true
+			if s.Reason != "changed during check; run cull check again" {
+				t.Errorf("reason = %q, want %q", s.Reason, "changed during check; run cull check again")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("skipped = %+v, want pkg/calc_test.go", report.Skipped)
+	}
+
+	if _, ok := report.Files["pkg/other_test.go"]; !ok {
+		t.Errorf("Files = %+v, want pkg/other_test.go present", report.Files)
+	}
+	otherFound := false
+	for _, tr := range report.Tests {
+		if tr.Name == "TestOther" {
+			otherFound = true
+		}
+	}
+	if !otherFound {
+		t.Errorf("tests = %+v, want TestOther judged", report.Tests)
+	}
+}
+
+// TestDiffModeInventoryHasUnjudgedTests: in diff mode, an untouched sibling
+// test in a touched file shows up in Files (inventory), even though it is
+// not in Tests (not judged).
+func TestDiffModeInventoryHasUnjudgedTests(t *testing.T) {
+	dir, cfg := newGitRepo(t)
+	goModule(t, dir)
+	withEgress(t, dir)
+	writeFile(t, dir, "pkg/calc_test.go",
+		"package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n")
+	runGit(t, dir, cfg, "add", ".")
+	runGit(t, dir, cfg, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(runGit(t, dir, cfg, "rev-parse", "HEAD"))
+
+	// Only TestA's body changes; TestB is untouched.
+	writeFile(t, dir, "pkg/calc_test.go",
+		"package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 99\n}\n\nfunc TestB(t *testing.T) {\n\t_ = 2\n}\n")
+
+	f := &fakeEval{}
+	report, err := Run(context.Background(), f, Options{Path: dir, Diff: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Tests) != 1 || report.Tests[0].Name != "TestA" {
+		t.Fatalf("tests = %+v, want only TestA judged", report.Tests)
+	}
+	fi, ok := report.Files["pkg/calc_test.go"]
+	if !ok {
+		t.Fatalf("Files = %+v, want pkg/calc_test.go present", report.Files)
+	}
+	hasB := false
+	for _, ft := range fi.Tests {
+		if strings.HasSuffix(ft.ID, ":TestB") {
+			hasB = true
+		}
+	}
+	if !hasB {
+		t.Errorf("file tests = %+v, want TestB present though not judged", fi.Tests)
+	}
+}
+
+// TestGroupRowsRecorded: a consolidate group's MemberHashes and Rows are
+// aligned with Members, and Rows carries the literal values that tell the
+// members apart.
+func TestGroupRowsRecorded(t *testing.T) {
+	root := t.TempDir()
+	goModule(t, root)
+	withEgress(t, root)
+	src := "package pkg\n\n" +
+		"func TestA1(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tx := \"one\"\n\t_ = x\n\ty := 1\n\t_ = y\n}\n\n" +
+		"func TestA2(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tx := \"two\"\n\t_ = x\n\ty := 2\n\t_ = y\n}\n"
+	writeFile(t, root, "pkg/calc_test.go", src)
+
+	f := &fakeEval{consolidate: map[string]bool{"TestA1": true, "TestA2": true}}
+	report, err := Run(context.Background(), f, Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Groups) != 1 {
+		t.Fatalf("groups = %+v, want 1", report.Groups)
+	}
+	g := report.Groups[0]
+	if len(g.Members) != 2 || len(g.MemberHashes) != len(g.Members) || len(g.Rows) != len(g.Members) {
+		t.Fatalf("group = %+v, want MemberHashes/Rows aligned with Members", g)
+	}
+	for i, h := range g.MemberHashes {
+		if h == "" {
+			t.Errorf("MemberHashes[%d] empty", i)
+		}
+	}
+	for i, row := range g.Rows {
+		if len(row) == 0 {
+			t.Errorf("Rows[%d] = %v, want non-empty (a distinguishing literal)", i, row)
+		}
+	}
+}
+
 func TestCheckMonorepoNoRootGoMod(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")

@@ -247,6 +247,97 @@ func TestBrokenFileSkipped(t *testing.T) {
 	}
 }
 
+func TestTsTidyDropsUnusedSpecifier(t *testing.T) {
+	requireTS(t)
+	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "sub"), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "import { add } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	if string(out) != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+	if len(removed) != 1 || removed[0] != `"./calc".sub` {
+		t.Errorf("removed = %v, want [\"./calc\".sub]", removed)
+	}
+}
+
+func TestTsTidyKeepsTypeOnlyUse(t *testing.T) {
+	requireTS(t)
+	src := "import { Calc } from \"./calc\";\n\nfunction make(): Calc {\n  return {} as Calc;\n}\n\ntest(\"x\", () => {\n  make();\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "Calc"), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestTsTidyKeepsSideEffectImport(t *testing.T) {
+	requireTS(t)
+	src := "import \"./setup\";\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+}
+
+func TestTsTidySkipsImportWithTrailingComment(t *testing.T) {
+	requireTS(t)
+	// Fully unused, with a trailing comment.
+	src := "import \"./setup\"; // side effects only\n\ntest(\"x\", () => {\n  expect(1).toBe(1);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none", removed)
+	}
+
+	// Partially unused, with a trailing comment.
+	src2 := "import { add, sub } from \"./calc\"; // math ops\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out2, removed2, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src2, "sub"), []byte(src2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out2) != src2 {
+		t.Errorf("out = %q, want unchanged %q", out2, src2)
+	}
+	if len(removed2) != 0 {
+		t.Errorf("removed = %v, want none", removed2)
+	}
+}
+
+func TestTsTidyRevertsOnPostCheckFailure(t *testing.T) {
+	requireTS(t)
+	t.Setenv("CULL_TIDY_TEST_FORCE_BROKEN", "1")
+	src := "import { add, sub } from \"./calc\";\n\ntest(\"add\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "sub"), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src {
+		t.Errorf("out = %q, want unchanged original %q", out, src)
+	}
+	if len(removed) != 0 {
+		t.Errorf("removed = %v, want none (post-check failure must not report removals)", removed)
+	}
+}
+
 func TestNoTypescriptSkips(t *testing.T) {
 	t.Setenv("CULL_TS", "")
 	root := t.TempDir()
@@ -266,5 +357,81 @@ func TestNoTypescriptSkips(t *testing.T) {
 	want := "typescript not found under " + root
 	if res.Skipped[0].Reason != want {
 		t.Errorf("Reason = %q, want %q", res.Skipped[0].Reason, want)
+	}
+}
+
+// TestTsTidySkipsImportSharingALine: two imports on one line; deleting
+// the unused one's line would delete the used one too (I-3).
+func TestTsTidySkipsImportSharingALine(t *testing.T) {
+	requireTS(t)
+	src := "import { a } from \"./a\"; import { b } from \"./b\";\n\ntest(\"x\", () => {\n  b();\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "a"), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}
+
+// TestTsTidyRefusesNonUTF8: a file that is not valid UTF-8 is returned
+// byte-for-byte (M-2).
+func TestTsTidyRefusesNonUTF8(t *testing.T) {
+	requireTS(t)
+	src := "import { a } from \"./a\";\n\ntest(\"x\", () => {\n  expect(\"\xe9\").toBe(\"\xe9\");\n});\n"
+	out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, "a"), []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != src || len(removed) != 0 {
+		t.Errorf("out = %q removed = %v, want unchanged", out, removed)
+	}
+}
+
+// cutUsing is the pre-edit file for a tidy test: src plus a (since
+// removed) test that used names. Tidy only drops imports the cut
+// orphaned, so this is what makes names removable (I-4).
+func cutUsing(src string, names ...string) []byte {
+	return []byte(src + "\ntest(\"gone\", () => {\n  use(" + strings.Join(names, ", ") + ");\n});\n")
+}
+
+// TestTsTidyEditsImportsInPlace (I-1): partial imports lose only the
+// unused name (its own line in a braced list, else its segment and one
+// comma), never re-rendered; a deleted statement takes the blank lines
+// after it.
+func TestTsTidyEditsImportsInPlace(t *testing.T) {
+	requireTS(t)
+	body := "\n\ntest(\"x\", () => {\n  expect(a(c)).toBe(D);\n});\n"
+	for _, c := range []struct {
+		name, imports string
+		gone          []string
+		want          string
+	}{
+		{"multi-line middle", "import {\n  a,\n  b,\n  c,\n} from \"./m\";", []string{"b"},
+			"import {\n  a,\n  c,\n} from \"./m\";"},
+		{"multi-line last no comma", "import {\n  a,\n  c,\n  b\n} from \"./m\";", []string{"b"},
+			"import {\n  a,\n  c\n} from \"./m\";"},
+		{"one line middle", "import { a, b, c } from \"./m\";", []string{"b"}, "import { a, c } from \"./m\";"},
+		{"one line last two", "import { a, c, b, x as y } from \"./m\";", []string{"b", "y"}, "import { a, c } from \"./m\";"},
+		{"type-only kept", "import { type T, a, b, c } from \"./m\";", []string{"b"}, "import { type T, a, c } from \"./m\";"},
+		{"default kept", "import D, { b } from \"./m\";\nimport { a, c } from \"./n\";", []string{"b"},
+			"import D from \"./m\";\nimport { a, c } from \"./n\";"},
+		{"default dropped", "import b, { a, c, D } from \"./m\";", []string{"b"}, "import { a, c, D } from \"./m\";"},
+		{"own block", "import { a, c, D } from \"./m\";\n\nimport { b } from \"./b\";", []string{"b"},
+			"import { a, c, D } from \"./m\";"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			src := c.imports + body
+			out, removed, err := Tidy(t.TempDir(), "test/calc.test.ts", cutUsing(src, c.gone...), []byte(src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := c.want + body; string(out) != want {
+				t.Errorf("out = %q\nwant  %q", out, want)
+			}
+			if len(removed) != len(c.gone) {
+				t.Errorf("removed = %v, want %d", removed, len(c.gone))
+			}
+		})
 	}
 }

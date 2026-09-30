@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -346,5 +347,126 @@ func TestCheckSkippedShownNotFatal(t *testing.T) {
 	}
 	if !strings.Contains(errw, "cull: skipped pkg/broken_test.go: parse") {
 		t.Errorf("dry-run errw = %q, want a skip line", errw)
+	}
+}
+
+// groupTripleSrc renders three near-duplicate Go tests distinguished only
+// by a string literal, and groupID reads the group id `cull check` wrote
+// to <root>/.cull/last.json for them.
+func groupTripleSrc(a, b, c string) string {
+	tmpl := "func TestFoo%s(t *testing.T) {\n\tcfg := \"cfg\"\n\t_ = cfg\n\tval := \"%s\"\n\t_ = val\n\ty := 1\n\t_ = y\n}\n"
+	return "package pkg\n\n" + fmt.Sprintf(tmpl, "A", a) + "\n" + fmt.Sprintf(tmpl, "B", b) + "\n" + fmt.Sprintf(tmpl, "C", c)
+}
+
+func groupTableSrc(name string, values ...string) string {
+	var b strings.Builder
+	b.WriteString("package pkg\n\nfunc " + name + "(t *testing.T) {\n\tcases := []string{")
+	for i, v := range values {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("\"" + v + "\"")
+	}
+	b.WriteString("}\n\tfor _, val := range cases {\n\t\tcfg := \"cfg\"\n\t\t_ = cfg\n\t\t_ = val\n\t\ty := 1\n\t\t_ = y\n\t}\n}\n")
+	return b.String()
+}
+
+func lastGroupID(t *testing.T, root string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".cull", "last.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var r struct {
+		Groups []struct {
+			ID string `json:"id"`
+		} `json:"groups"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Groups) != 1 {
+		t.Fatalf("groups in last.json = %+v, want 1", r.Groups)
+	}
+	return r.Groups[0].ID
+}
+
+func groupCheckRepo(t *testing.T) (root, groupID string) {
+	t.Helper()
+	checkEnv(t, "k")
+	(&checkFake{boost: map[string]string{"TestFooA": "consolidate", "TestFooB": "consolidate", "TestFooC": "consolidate"}}).start(t)
+	root = t.TempDir()
+	ckGoModule(t, root)
+	ckWriteFile(t, root, ".cull.toml", "egress = true\ntest_command = \"true\"\n")
+	ckWriteFile(t, root, "pkg/calc_test.go", groupTripleSrc("a", "b", "c"))
+
+	code, _, errw := run(t, "", "check", root)
+	if code != 1 {
+		t.Fatalf("initial check: code %d, errw %q", code, errw)
+	}
+	return root, lastGroupID(t, root)
+}
+
+func TestCheckGroupPassesForGoodTable(t *testing.T) {
+	root, groupID := groupCheckRepo(t)
+	ckWriteFile(t, root, "pkg/calc_test.go", groupTableSrc("TestFooTable", "a", "b", "c"))
+
+	checkEnv(t, "k")
+	(&checkFake{}).start(t)
+	code, out, errw := run(t, "", "check", root, "--group", groupID, "--json")
+	if code != 0 {
+		t.Fatalf("code %d, out %q, errw %q", code, out, errw)
+	}
+	var gc map[string]any
+	if err := json.Unmarshal([]byte(out), &gc); err != nil {
+		t.Fatalf("--json output not valid JSON: %v\n%s", err, out)
+	}
+	if gc["ok"] != true {
+		t.Errorf("gc = %v, want ok = true", gc)
+	}
+}
+
+func TestCheckGroupUnknownGroupExitsTwo(t *testing.T) {
+	root, _ := groupCheckRepo(t)
+	checkEnv(t, "k")
+	(&checkFake{}).start(t)
+	code, _, errw := run(t, "", "check", root, "--group", "group:doesnotexist")
+	if code != 2 || !strings.Contains(errw, "group:doesnotexist") {
+		t.Fatalf("code %d, errw %q", code, errw)
+	}
+}
+
+func TestCheckGroupFlaggedExitsOne(t *testing.T) {
+	root, groupID := groupCheckRepo(t)
+	ckWriteFile(t, root, "pkg/calc_test.go", groupTableSrc("TestFooTable", "a", "b", "c"))
+
+	checkEnv(t, "k")
+	(&checkFake{boost: map[string]string{"TestFooTable": "cut"}}).start(t)
+	code, out, errw := run(t, "", "check", root, "--group", groupID)
+	if code != 1 {
+		t.Fatalf("code %d, out %q, errw %q", code, out, errw)
+	}
+	if !strings.Contains(out, "flagged") {
+		t.Errorf("out = %q, want a flagged line", out)
+	}
+}
+
+func TestCheckGroupEgressGateBeforeKey(t *testing.T) {
+	checkEnv(t, "")
+	f := &checkFake{}
+	f.start(t)
+	root := t.TempDir()
+	ckGoModule(t, root)
+	ckWriteFile(t, root, "pkg/calc_test.go", "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n")
+
+	code, _, errw := run(t, "", "check", root, "--group", "group:anything")
+	if code != 2 || !strings.Contains(errw, "egress = true") {
+		t.Fatalf("code %d, errw %q", code, errw)
+	}
+	if strings.Contains(errw, "TYPESAFE_API_KEY") {
+		t.Errorf("errw = %q, should not mention the key before the egress gate", errw)
+	}
+	if f.n.Load() != 0 {
+		t.Errorf("server saw %d requests", f.n.Load())
 	}
 }
