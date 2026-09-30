@@ -123,6 +123,7 @@ export interface RulesView {
 export interface RuleRow {
   rule: Rule;
   record: TrackRecord;
+  invalid?: string;
 }
 
 export interface RuleDetailView {
@@ -130,6 +131,7 @@ export interface RuleDetailView {
   record: TrackRecord;
   matches: MatchPreview;
   version: string;
+  invalid?: string;
 }
 
 export interface MatchPreview {

@@ -168,6 +168,9 @@ type RulesView struct {
 type RuleRow struct {
 	Rule   rules.Rule        `json:"rule"`
 	Record rules.TrackRecord `json:"record"`
+	// Invalid is why the rule is not valid (serve's validation message,
+	// naming the condition), or why its file can't be read; "" when valid.
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // RuleDetailView is the response body of GET /api/rule, POST /api/rules/draft,
@@ -180,6 +183,9 @@ type RuleDetailView struct {
 	// Version names this exact content of the rule (rules.Version). The page
 	// sends it back with activate and save; serve refuses (409) a stale one.
 	Version string `json:"version"`
+	// Invalid is why the rule is not valid (as RuleRow.Invalid). An invalid
+	// rule's conditions are not previewed: Matches is empty.
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // MatchPreview is the paginated, grouped match list returned by

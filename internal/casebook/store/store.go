@@ -316,6 +316,16 @@ func (r *Repo) Validate() []error {
 
 // Rules reads every rules/*.toml file. Parse errors are collected in errs and
 // those files are skipped.
+// RuleFileError is a rules/<id>.toml that can't be read as a rule. It keeps
+// the id, so the rule is still listed (as invalid) rather than dropped.
+type RuleFileError struct {
+	ID  string
+	Err error
+}
+
+func (e *RuleFileError) Error() string { return "rules/" + e.ID + ".toml: " + e.Err.Error() }
+func (e *RuleFileError) Unwrap() error { return e.Err }
+
 func (r *Repo) Rules() ([]rules.Rule, []error) {
 	paths, err := r.Glob("rules/*.toml")
 	if err != nil {
@@ -331,7 +341,8 @@ func (r *Repo) Rules() ([]rules.Rule, []error) {
 		}
 		ru, err := rules.Decode(b)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", rel, err))
+			id := strings.TrimSuffix(strings.TrimPrefix(rel, "rules/"), ".toml")
+			errs = append(errs, &RuleFileError{ID: id, Err: err})
 			continue
 		}
 		out = append(out, ru)
@@ -353,15 +364,21 @@ func (r *Repo) ReadRule(id string) (*rules.Rule, error) {
 	}
 	ru, err := rules.Decode(b)
 	if err != nil {
-		return nil, fmt.Errorf("rules/%s.toml: %w", id, err)
+		return nil, &RuleFileError{ID: id, Err: err}
 	}
 	return &ru, nil
 }
 
 // WriteRule writes ru as rules/<id>.toml and commits with msg. It does not
-// push; call Sync to propagate the change.
+// push; call Sync to propagate the change. An active rule must be valid; a
+// draft only well-formed (so an invalid rule can be deactivated, and a new
+// one saved before it is complete).
 func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
-	if err := ru.Validate(); err != nil {
+	check := ru.ValidateStructure
+	if ru.Status == rules.StatusActive {
+		check = ru.Validate
+	}
+	if err := check(); err != nil {
 		return err
 	}
 	b, err := rules.Encode(ru)

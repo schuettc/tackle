@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -10,17 +11,26 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/propose"
 	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
 // getRules handles GET /api/rules.
 // Returns all rules with their track records.
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	all, _ := s.App.Repo.Rules()
+	all, errs := s.App.Repo.Rules()
 	rows := make([]RuleRow, 0, len(all))
 	for _, ru := range all {
 		rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-		rows = append(rows, RuleRow{Rule: ru, Record: rec})
+		rows = append(rows, RuleRow{Rule: ru, Record: rec, Invalid: invalidReason(ru)})
+	}
+	// A file that can't be read as a rule is listed too, as invalid: Court
+	// sees it and can replace it from the page.
+	for _, err := range errs {
+		var fe *store.RuleFileError
+		if errors.As(err, &fe) {
+			rows = append(rows, RuleRow{Rule: unreadableRule(fe.ID), Invalid: fe.Error()})
+		}
 	}
 	reply(w, RulesView{Rules: rows}, nil)
 }
@@ -34,6 +44,11 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ru, err := s.App.Repo.ReadRule(id)
+	var fe *store.RuleFileError
+	if errors.As(err, &fe) {
+		reply(w, RuleDetailView{Rule: unreadableRule(id), Matches: emptyPreview(), Invalid: fe.Error()}, nil)
+		return
+	}
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return
@@ -43,6 +58,24 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, s.ruleDetail(ctx, *ru), nil)
+}
+
+// unreadableRule stands in for a rules/<id>.toml that can't be read: a draft
+// with nothing in it, which a save from the page replaces.
+func unreadableRule(id string) rules.Rule {
+	return rules.Rule{ID: id, Name: id, Status: rules.StatusDraft, Match: []rules.Condition{}}
+}
+
+// invalidReason is serve's validation message for ru, "" when it is valid.
+func invalidReason(ru rules.Rule) string {
+	if err := ru.Validate(); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+func emptyPreview() MatchPreview {
+	return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{}}
 }
 
 // postRulesDraft handles POST /api/rules/draft.
@@ -76,7 +109,13 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 
 	now := s.Now()
 	existing, err := s.App.Repo.ReadRule(in.ID)
-	if err != nil {
+	var fe *store.RuleFileError
+	replacing := errors.As(err, &fe) // a file that isn't a rule: the save replaces it
+	if replacing && r.URL.Query().Get("create") == "1" {
+		reply(w, nil, conflict("rule %q already exists (its file can't be read)", in.ID))
+		return
+	}
+	if err != nil && !replacing {
 		reply(w, nil, bad("%v", err))
 		return
 	}
@@ -101,9 +140,14 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		in.CreatedAt = now
 		in.EditedAt = now
 		msg = "rule " + in.ID + " created by " + by
+		if replacing {
+			msg = "rule " + in.ID + " rewritten by " + by + " (its file could not be read)"
+		}
 	} else {
-		// Edit existing draft.
-		if existing.Status == rules.StatusActive {
+		// Edit existing draft. An active rule is edited only when it is
+		// invalid (rebuild skips it): saving the fix makes it a draft, for
+		// Court to activate again.
+		if existing.Status == rules.StatusActive && existing.Validate() == nil {
 			reply(w, nil, bad("cannot edit an active rule via draft endpoint; deactivate it first"))
 			return
 		}
@@ -308,6 +352,10 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ru.Validate(); err != nil {
+		reply(w, nil, bad("rule %s is not valid: %v", ru.ID, err))
+		return
+	}
 	proposals, n, err := rules.ProposeOnce(ctx, *ru, s.Index.Result(), s.Now(), s.Props)
 	if err != nil {
 		reply(w, nil, bad("%v", err))
@@ -356,6 +404,10 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 		by = "court"
 	}
 
+	if err := ru.Validate(); err != nil {
+		reply(w, nil, bad("rule %s is not valid: %v", ru.ID, err))
+		return
+	}
 	ru.Status = rules.StatusActive
 	msg := "rule " + ru.ID + " → active by " + by
 	if err := s.App.Repo.WriteRule(ctx, *ru, msg); err != nil {
@@ -515,11 +567,18 @@ func conflict(format string, a ...any) error {
 // record, its first page of matches now and its version.
 func (s *Server) ruleDetail(ctx context.Context, ru rules.Rule) RuleDetailView {
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
+	// Conditions serve refuses are never previewed: a bad value would read
+	// as "0 matches" (or match as something it doesn't say).
+	matches := emptyPreview()
+	if rules.ValidateConditions(ru.Match) == nil {
+		matches = buildPreview(ru, s.Index.Result(), s.Now(), 0, 200)
+	}
 	return RuleDetailView{
 		Rule:    ru,
 		Record:  rec,
-		Matches: buildPreview(ru, s.Index.Result(), s.Now(), 0, 200),
+		Matches: matches,
 		Version: rules.Version(ru),
+		Invalid: invalidReason(ru),
 	}
 }
 

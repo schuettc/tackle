@@ -129,6 +129,30 @@ func Version(r Rule) string {
 	return hex.EncodeToString(sum[:8])
 }
 
+// ValidateStructure checks only what a rule file needs to be a rule: a safe
+// id and a known status. A draft may be saved in any state of completion or
+// correctness (Court fixes it on the page); Validate is what activation and
+// evaluation require.
+func (r Rule) ValidateStructure() error {
+	if !idRe.MatchString(r.ID) {
+		return fmt.Errorf("rule id %q must match ^[a-z0-9-]+$", r.ID)
+	}
+	if !slices.Contains(validStatuses, r.Status) {
+		return fmt.Errorf("rule status %q is not valid (want draft or active)", r.Status)
+	}
+	return nil
+}
+
+// ValidateConditions checks every condition, naming the first bad one.
+func ValidateConditions(match []Condition) error {
+	for i, c := range match {
+		if err := ValidateCondition(c); err != nil {
+			return fmt.Errorf("condition %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // Validate reports any structural errors in r.
 // It checks:
 //   - id non-empty and matches ^[a-z0-9-]+$
@@ -150,6 +174,9 @@ func (r Rule) Validate() error {
 		if err := ValidateCondition(c); err != nil {
 			return fmt.Errorf("condition %d: %w", i, err)
 		}
+	}
+	if r.Propose.Disposition == "" {
+		return fmt.Errorf("propose: no disposition yet (what the rule proposes)")
 	}
 	if !slices.Contains(allDispositions, r.Propose.Disposition) {
 		return fmt.Errorf("propose.disposition %q is not a valid disposition", r.Propose.Disposition)
