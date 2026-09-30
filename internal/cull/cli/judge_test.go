@@ -30,12 +30,12 @@ func (f *fakeJev) start(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		if f.status != 0 {
 			w.WriteHeader(f.status)
-			io.WriteString(w, `{"detail":"nope"}`)
+			_, _ = io.WriteString(w, `{"detail":"nope"}`)
 			return
 		}
 		if f.fail422 != "" && strings.Contains(string(b), f.fail422) {
 			w.WriteHeader(422)
-			io.WriteString(w, `{"detail":"bad state"}`)
+			_, _ = io.WriteString(w, `{"detail":"bad state"}`)
 			return
 		}
 		var req struct {
@@ -44,7 +44,9 @@ func (f *fakeJev) start(t *testing.T) {
 				Criteria json.RawMessage `json:"criteria"`
 			} `json:"questions"`
 		}
-		json.Unmarshal(b, &req)
+		if err := json.Unmarshal(b, &req); err != nil {
+			t.Errorf("fake jev: %v", err)
+		}
 		ans := map[string]any{}
 		for k, q := range req.Questions {
 			switch q.Type {
@@ -54,7 +56,9 @@ func (f *fakeJev) start(t *testing.T) {
 				ans[k] = map[string]any{"type": "score", "score": 2.0, "confidence": 0.8}
 			case "choice":
 				var opts map[string]string
-				json.Unmarshal(q.Criteria, &opts)
+				if err := json.Unmarshal(q.Criteria, &opts); err != nil {
+					t.Errorf("fake jev criteria: %v", err)
+				}
 				probs := map[string]float64{}
 				first := ""
 				for o := range opts {
@@ -67,7 +71,7 @@ func (f *fakeJev) start(t *testing.T) {
 				ans[k] = map[string]any{"type": "choice", "choice": first, "probabilities": probs, "confidence": 0.85}
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": ans})
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": ans})
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("CULL_TYPESAFE_URL", srv.URL)
@@ -269,7 +273,9 @@ func TestJudgeReadsFileArgument(t *testing.T) {
 	judgeEnv(t, "k")
 	(&fakeJev{}).start(t)
 	p := filepath.Join(t.TempDir(), "cases.jsonl")
-	os.WriteFile(p, []byte(threeCases()), 0o600)
+	if err := os.WriteFile(p, []byte(threeCases()), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	code, out, errw := run(t, "", "judge", "--egress", p)
 	if code != 0 || len(lines(t, out)) != 3 {
 		t.Fatalf("exit %d, errw %q", code, errw)
