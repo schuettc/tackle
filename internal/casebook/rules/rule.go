@@ -6,6 +6,8 @@ package rules
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"slices"
@@ -111,6 +113,20 @@ var allDispositions = func() []string {
 // what edited_at dates (spec §4.1); a rename or an exclusion is not an edit.
 func SameMeaning(a, b Rule) bool {
 	return slices.Equal(a.Match, b.Match) && a.Propose == b.Propose
+}
+
+// Version names r's content: everything but its exclusions (which change
+// what matches, live on the page, not what the rule says). Two copies with
+// the same version say the same thing; a rename, a status change or an edit
+// changes it.
+func Version(r Rule) string {
+	r.Exclude = nil
+	b, err := Encode(r)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 // Validate reports any structural errors in r.

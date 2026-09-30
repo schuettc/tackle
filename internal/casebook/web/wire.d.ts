@@ -129,6 +129,7 @@ export interface RuleDetailView {
   rule: Rule;
   record: TrackRecord;
   matches: MatchPreview;
+  version: string;
 }
 
 export interface MatchPreview {

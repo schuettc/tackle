@@ -177,6 +177,9 @@ type RuleDetailView struct {
 	Rule    rules.Rule        `json:"rule"`
 	Record  rules.TrackRecord `json:"record"`
 	Matches MatchPreview      `json:"matches"`
+	// Version names this exact content of the rule (rules.Version). The page
+	// sends it back with activate and save; serve refuses (409) a stale one.
+	Version string `json:"version"`
 }
 
 // MatchPreview is the paginated, grouped match list returned by

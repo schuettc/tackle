@@ -1,6 +1,8 @@
 package serve
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -40,9 +42,7 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: "rule " + id + " not found"})
 		return
 	}
-	rec, _ := rules.RuleRecord(ctx, s.Props, id)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesDraft handles POST /api/rules/draft.
@@ -80,6 +80,18 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
+	// ?create=1 makes a new draft and never overwrites one; ?version= saves
+	// over exactly the copy the page read (a page never overwrites edits it
+	// didn't show).
+	q := r.URL.Query()
+	if q.Get("create") == "1" && existing != nil {
+		reply(w, nil, conflict("rule %q already exists", in.ID))
+		return
+	}
+	if v := q.Get("version"); v != "" && existing != nil && v != rules.Version(*existing) {
+		reply(w, nil, conflict("rule %s changed since you read it; nothing was saved", in.ID))
+		return
+	}
 
 	var msg string
 	if existing == nil {
@@ -103,8 +115,7 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if unchanged(existing, in) {
-		rec, _ := rules.RuleRecord(ctx, s.Props, in.ID)
-		reply(w, RuleDetailView{Rule: in, Record: rec, Matches: buildPreview(in, s.Index.Result(), now, 0, 200)}, nil)
+		reply(w, s.ruleDetail(ctx, in), nil)
 		return
 	}
 	if err := s.App.Repo.WriteRule(ctx, in, msg); err != nil {
@@ -114,9 +125,7 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, in.ID)
-	preview := buildPreview(in, s.Index.Result(), now, 0, 200)
-	reply(w, RuleDetailView{Rule: in, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, in), nil)
 }
 
 // postRulesPreview handles POST /api/rules/preview.
@@ -191,9 +200,7 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 	for _, ex := range ru.Exclude {
 		if ex.Key == in.Key {
 			// Already excluded; no-op.
-			rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-			preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-			reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+			reply(w, s.ruleDetail(ctx, *ru), nil)
 			return
 		}
 	}
@@ -213,9 +220,7 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "excluded", "key": in.Key})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesInclude handles POST /api/rules/include.
@@ -265,9 +270,7 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 	}
 	if !removed {
 		// No exclusion to remove; no-op.
-		rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-		preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-		reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+		reply(w, s.ruleDetail(ctx, *ru), nil)
 		return
 	}
 	ru.Exclude = kept
@@ -281,9 +284,7 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "included", "key": in.Key})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesProposeOnce handles POST /api/rules/propose-once.
@@ -326,6 +327,9 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID string `json:"id"`
+		// Version is the copy the page shows (RuleDetailView.Version); when
+		// given, serve activates only that copy.
+		Version string `json:"version"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -339,6 +343,11 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	if ru == nil {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: "rule " + in.ID + " not found"})
+		return
+	}
+
+	if in.Version != "" && in.Version != rules.Version(*ru) {
+		reply(w, nil, conflict("rule %s changed since you read it; nothing was activated", ru.ID))
 		return
 	}
 
@@ -362,9 +371,7 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "activated", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesDeactivate handles POST /api/rules/deactivate.
@@ -402,9 +409,7 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "deactivated", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // getRulesVocabulary handles GET /api/rules/vocabulary.
@@ -487,8 +492,7 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if unchanged(existing, in.Rule) {
-		rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
-		reply(w, RuleDetailView{Rule: in.Rule, Record: rec, Matches: buildPreview(in.Rule, s.Index.Result(), now, 0, 200)}, nil)
+		reply(w, s.ruleDetail(ctx, in.Rule), nil)
 		return
 	}
 	if err := s.App.Repo.WriteRule(ctx, in.Rule, msg); err != nil {
@@ -498,9 +502,25 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
-	preview := buildPreview(in.Rule, s.Index.Result(), now, 0, 200)
-	reply(w, RuleDetailView{Rule: in.Rule, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, in.Rule), nil)
+}
+
+// conflict is a 409: the request was made against a copy that is no longer
+// serve's.
+func conflict(format string, a ...any) error {
+	return httpError{code: http.StatusConflict, msg: fmt.Sprintf(format, a...), errCode: "conflict"}
+}
+
+// ruleDetail is what every rule route answers with: the rule, its track
+// record, its first page of matches now and its version.
+func (s *Server) ruleDetail(ctx context.Context, ru rules.Rule) RuleDetailView {
+	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
+	return RuleDetailView{
+		Rule:    ru,
+		Record:  rec,
+		Matches: buildPreview(ru, s.Index.Result(), s.Now(), 0, 200),
+		Version: rules.Version(ru),
+	}
 }
 
 // editedAt is a saved draft's edited_at: now when its conditions or its
