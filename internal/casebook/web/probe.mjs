@@ -411,19 +411,38 @@ async function composerScenariosOn(context, serveHandle) {
       const d2 = await fx.agent.wait(fx.sid);
       check('⌘↵: nothing is delivered to the agent', d2 === null);
 
-      // Text typed while a send is in flight survives it. The page's POST is
-      // held for 800 ms so there's time to type during it.
+      // The field clears when a send starts; text typed while the send is in
+      // flight is Court's and survives it. The page's POST is held for 800
+      // ms so there's time to look and to type during it.
       const hold = async (route) => {
         if (route.request().method() === 'POST') {
           await new Promise((r) => setTimeout(r, 800));
         }
         await route.continue();
       };
+      const field = () =>
+        pg.$eval('[data-testid="composer-input"]', (el) => el.value);
+      const settle = (d) =>
+        fx.agent.reply(
+          fx.sid,
+          (d?.delivery?.messages ?? []).map((m) => m.id),
+          'answered',
+        );
       await pg.route('**/api/messages', hold);
       await compose(pg, 'first part');
-      await pg.keyboard.type(' and the next thought');
       check(
-        'text typed during a send stays; only what was sent is cleared',
+        'the field clears as soon as the send starts, before serve answers',
+        (await field()) === '',
+      );
+      await pg.keyboard.type('and the next thought');
+      const d3 = await fx.agent.wait(fx.sid);
+      checkList(
+        'the agent receives only what was sent',
+        (d3?.delivery?.messages ?? []).map((m) => m.body),
+        ['first part'],
+      );
+      check(
+        'text typed during a send stays after it',
         await until(
           pg,
           () =>
@@ -432,66 +451,82 @@ async function composerScenariosOn(context, serveHandle) {
         ),
       );
       await pg.unroute('**/api/messages', hold);
-      const d3 = await fx.agent.wait(fx.sid);
-      checkList(
-        'the agent receives only what was sent',
-        (d3?.delivery?.messages ?? []).map((m) => m.body),
-        ['first part'],
-      );
-
-      // Court edits the START of the field (and its end) during a send: the
-      // sent text is removed wherever it now sits, what he typed stays, and
-      // sending again sends only that, never the first message twice.
-      // Settle the delivery first, so the next one comes.
-      const settle = (d) =>
-        fx.agent.reply(
-          fx.sid,
-          (d?.delivery?.messages ?? []).map((m) => m.id),
-          'answered',
-        );
       await settle(d3);
+
+      // Send "y", then type "hey, " at the start of the field during the
+      // send: nothing of Court's is touched ("he, y" was the bug).
       await pg.click('[data-testid="composer-input"]');
       await pg.keyboard.press('ControlOrMeta+a');
       await pg.keyboard.press('Backspace');
       await pg.route('**/api/messages', hold);
-      await compose(pg, 'second part');
-      const typeAt = async (where, text) => {
-        await pg.evaluate((w) => {
-          const el = document.querySelector('[data-testid="composer-input"]');
-          const at = w === 'start' ? 0 : el.value.length;
-          el.focus();
-          el.setSelectionRange(at, at);
-        }, where);
-        await pg.keyboard.type(text);
-      };
-      await typeAt('start', 'A ');
-      await typeAt('end', ' B');
-      const edited = await until(
-        pg,
-        () =>
-          document.querySelector('[data-testid="composer-input"]').value ===
-          'A B',
-      );
-      check(
-        'text typed before and after the sent text during a send stays; the sent text is removed wherever it sits',
-        edited,
-      );
-      await pg.unroute('**/api/messages', hold);
+      await compose(pg, 'y');
+      await pg.evaluate(() => {
+        const el = document.querySelector('[data-testid="composer-input"]');
+        el.focus();
+        el.setSelectionRange(0, 0);
+      });
+      await pg.keyboard.type('hey, ');
       const d4 = await fx.agent.wait(fx.sid);
       checkList(
-        'the agent receives the sent text once',
+        'the agent receives "y" once',
         (d4?.delivery?.messages ?? []).map((m) => m.body),
-        ['second part'],
+        ['y'],
       );
+      await pg.waitForTimeout(100);
+      const afterY = await field();
+      check(
+        `"hey, " typed before a sending "y" stays whole (got ${JSON.stringify(afterY)})`,
+        afterY === 'hey, ',
+      );
+      await pg.unroute('**/api/messages', hold);
       await settle(d4);
       await pg.click('[data-testid="composer-input"]');
+      await pg.keyboard.type('there');
       await pg.keyboard.press('Enter');
       const d5 = await fx.agent.wait(fx.sid);
       checkList(
-        'sending again sends only what Court typed, not the first message twice',
+        'sending again sends only what Court typed, never "y" twice',
         (d5?.delivery?.messages ?? []).map((m) => m.body),
-        ['A B'],
+        ['hey, there'],
       );
+      await settle(d5);
+
+      // A send that fails puts the sent text back, in front of anything
+      // typed while it was in flight.
+      const fail = async (route) => {
+        if (route.request().method() === 'POST') {
+          await new Promise((r) => setTimeout(r, 800));
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'probe: refused' }),
+          });
+          return;
+        }
+        await route.continue();
+      };
+      await pg.route('**/api/messages', fail);
+      await compose(pg, 'lost text');
+      check(
+        'a failing send also clears the field while it is in flight',
+        (await field()) === '',
+      );
+      await pg.keyboard.type('and more');
+      check(
+        'a failed send restores the sent text in front of what was typed meanwhile',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-input"]').value ===
+            'lost text and more',
+        ),
+      );
+      check(
+        'a failed send says "not sent"',
+        (await pg.$eval('.cb-comp-note', (el) => el.textContent)) ===
+          'not sent',
+      );
+      await pg.unroute('**/api/messages', fail);
     } finally {
       await pg.close();
     }

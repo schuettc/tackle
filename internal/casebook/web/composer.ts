@@ -191,19 +191,12 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     return t.id;
   }
 
-  // withoutSent removes the sent text from what the field holds now. Court
-  // may have typed before it, after it, or both; the two sides meet with one
-  // run of whitespace between them (or none, at the start or end). If he
-  // edited inside the sent text it is no longer there as sent; what he made
-  // of it is his, and it stays.
-  function withoutSent(now: string, sent: string): string {
-    const at = now.indexOf(sent);
-    if (at < 0) return now;
-    const before = now.slice(0, at);
-    const after = now.slice(at + sent.length);
-    if (!before.trim()) return after.replace(/^\s+/, '');
-    if (/\s$/.test(before)) return before + after.replace(/^\s+/, '');
-    return before + after;
+  // restoreSent puts a message that didn't go back in the field, in front of
+  // whatever Court typed while it was in flight, one space between them.
+  function restoreSent(sent: string): void {
+    const typed = input.value.replace(/^\s+/, '');
+    input.value = typed ? `${sent.replace(/\s+$/, '')} ${typed}` : sent;
+    fit();
   }
 
   async function send(batch: boolean): Promise<void> {
@@ -212,6 +205,12 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     if (!body || sending) return;
     sending = true;
     note.textContent = '';
+    // The field clears as the send starts, so it never holds sent text:
+    // anything typed from here on is Court's next message and stays, whatever
+    // happens to this one. Only a send that fails puts its text back.
+    input.value = '';
+    fit();
+    let posted = false;
     try {
       const thread = await threadFor(body);
       if (!thread) {
@@ -224,17 +223,14 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         attached: effective(),
         batch,
       });
-      // Clear only what was sent, wherever it now sits: text typed while the
-      // send was in flight (before it or after it) stays in the field, and
-      // the sent text never does, so it cannot be sent twice.
-      input.value = withoutSent(input.value, sent);
-      fit();
+      posted = true;
       override = null;
       renderAttached();
     } catch (err) {
       note.textContent = 'not sent';
       console.error('[composer] send:', err);
     } finally {
+      if (!posted) restoreSent(sent);
       sending = false;
     }
   }

@@ -1829,14 +1829,10 @@ function makeComposer(ctx, dock) {
     dock.threadCreated(t);
     return t.id;
   }
-  function withoutSent(now, sent) {
-    const at2 = now.indexOf(sent);
-    if (at2 < 0) return now;
-    const before = now.slice(0, at2);
-    const after = now.slice(at2 + sent.length);
-    if (!before.trim()) return after.replace(/^\s+/, "");
-    if (/\s$/.test(before)) return before + after.replace(/^\s+/, "");
-    return before + after;
+  function restoreSent(sent) {
+    const typed = input.value.replace(/^\s+/, "");
+    input.value = typed ? `${sent.replace(/\s+$/, "")} ${typed}` : sent;
+    fit();
   }
   async function send(batch) {
     const sent = input.value;
@@ -1844,6 +1840,9 @@ function makeComposer(ctx, dock) {
     if (!body || sending) return;
     sending = true;
     note.textContent = "";
+    input.value = "";
+    fit();
+    let posted = false;
     try {
       const thread = await threadFor(body);
       if (!thread) {
@@ -1856,14 +1855,14 @@ function makeComposer(ctx, dock) {
         attached: effective(),
         batch
       });
-      input.value = withoutSent(input.value, sent);
-      fit();
+      posted = true;
       override = null;
       renderAttached();
     } catch (err) {
       note.textContent = "not sent";
       console.error("[composer] send:", err);
     } finally {
+      if (!posted) restoreSent(sent);
       sending = false;
     }
   }
