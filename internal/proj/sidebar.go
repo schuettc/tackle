@@ -56,6 +56,10 @@ func resolveDir(socket, session, dir string) string {
 	return os.Getenv("HOME")
 }
 
+// ResolveDir is resolveDir for callers outside proj: a restore's saved
+// directory may be a worktree that has since been deleted.
+func ResolveDir(socket, session, dir string) string { return resolveDir(socket, session, dir) }
+
 // shellBin returns the user's login shell, or zsh as the bash builder's
 // ${SHELL:-zsh} default.
 func shellBin() string {

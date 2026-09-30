@@ -59,7 +59,7 @@ func Run(path string, resolve func() string) int {
 	m.Resolve = resolve
 
 	if w, err := fsnotify.NewWatcher(); err == nil {
-		defer w.Close()
+		defer func() { _ = w.Close() }()
 		if err := w.Add(filepath.Dir(path)); err == nil {
 			m.WatchCmd = watchCmd(w, m.pathRef)
 		}

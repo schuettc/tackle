@@ -11,6 +11,7 @@
 package projtui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -22,11 +23,31 @@ import (
 	"github.com/schuettc/tackle/internal/proj"
 )
 
-// refreshInterval is how often the live-refresh tick re-runs discovery.
-const refreshInterval = 1500 * time.Millisecond
+// refreshInterval is how often the live-refresh tick re-runs discovery. A var
+// so tests can shorten it.
+var refreshInterval = 1500 * time.Millisecond
 
 // tickMsg is delivered by the live-refresh tick command.
 type tickMsg struct{}
+
+// refreshedMsg carries a background discovery's results back to Update.
+// Discovery (every server's sessions, agents and muster counts; the saved
+// record and its transcripts) takes around a second, so it never runs inside
+// Update: a key pressed meanwhile is handled at once. fromTick says whether
+// the live-refresh tick started it, and so whether applying it re-arms the
+// tick (an action-started refresh must not start a second tick loop).
+type refreshedMsg struct {
+	live               bool
+	sessions, projects []Row
+	saved              bool
+	savedRows          []Row
+	savedErr           error
+	fromTick           bool
+}
+
+// primedMsg reports that the launch-time prime (hook + snapshot every live
+// server) has finished, so the saved rows are worth reloading.
+type primedMsg struct{}
 
 // rootsEditedMsg is delivered when the external $EDITOR (^e) exits.
 type rootsEditedMsg struct{ err error }
@@ -50,12 +71,14 @@ const (
 )
 
 // entranceScope selects what the entrance view lists: folders (projects, the
-// default launcher view) or live sessions. Toggled with tab at the entrance.
+// default launcher view), live sessions, or saved sessions (the restore
+// view). tab cycles through them at the entrance.
 type entranceScope int
 
 const (
 	scopeFolders entranceScope = iota
 	scopeSessions
+	scopeSaved
 )
 
 // RowKind tags a row so the renderer and enter-handler know how to treat it.
@@ -65,6 +88,8 @@ const (
 	RowSession RowKind = iota // a live tmux session
 	RowProject                // a project with no live session (entrance only)
 	RowNewWork                // synthetic "+ new work…" (project view, TOP)
+	RowSaved                  // a remembered session (saved scope)
+	RowHeader                 // a saved-scope window group label (not selectable)
 )
 
 // Row is one selectable line. Sessions carry Socket/Name for jumping; projects
@@ -81,14 +106,26 @@ type Row struct {
 	Project        string
 	Unread         int
 	ActionRequired int
+
+	// Saved-scope fields (RowSaved only). Window is the saved Ghostty window
+	// (0 = unplaced); visibleRows turns changes of it into header rows.
+	Window       int
+	Conversation string
+	Running      bool
+	Attached     bool
+	Transcript   bool
+	Checked      bool
 }
 
-// Result is what the user chose. Kind is "" (cancel), "jump", or "new".
+// Result is what the user chose. Kind is "" (cancel), "jump", "new", or
+// "restore" (Names; Name set too means jump to it instead of rebuilding
+// Ghostty windows).
 //   - jump: Socket+Name identify the session to attach/switch to.
 //   - new:  Project+Work (Work=="" means the home session, name==project) plus
 //     the chosen Agent and Sidebar; the caller runs EnsureSession then Goto.
 type Result struct {
 	Kind    string
+	Names   []string // restore: the saved sessions to bring back, in saved order
 	Project string
 	Work    string
 	Agent   string
@@ -161,6 +198,30 @@ type Model struct {
 	kill        func(socket, name string) error
 	reapConfirm string
 
+	// saved is the saved scope's rows, checked the restore selection by name
+	// (present = seen; false = the operator unchecked it). loadSaved, forget
+	// and saveLayout are seams: newModel leaves them inert so tests never read
+	// or write the real record; New/NewFor wire the real ones.
+	saved       []Row
+	savedLoaded bool
+	checked     map[string]bool
+	loadSaved   func() ([]Row, error)
+	forget      func(name string) error
+	saveLayout  func() (windows, tabs int, err error)
+
+	// prime runs once in the background at launch (proj.PrimeAll in the real
+	// picker, nil in tests). refreshing is true while a discovery is in
+	// flight; at most one runs at a time.
+	prime      func()
+	refreshing bool
+
+	// offset is the main list's scroll position and modelOffset the model
+	// overlay's; each moves only when its cursor crosses an edge.
+	// sessionsLoaded is false until the first background scan lands.
+	offset         int
+	modelOffset    int
+	sessionsLoaded bool
+
 	Result Result
 }
 
@@ -173,15 +234,18 @@ func newModel(sessions, projects []Row, defaultAgent string, sidebar bool, model
 		models = func(string) []string { return nil }
 	}
 	m := Model{
-		sessions:      sessions,
-		projects:      projects,
-		agentChoices:  agentChoicesFrom(defaultAgent),
-		sidebarChoice: sidebar,
-		models:        models,
-		refresh:       defaultRefresh,
-		kill:          proj.KillSession,
-		saveDefault:   proj.SaveDefaultModel,
-		help:          newHelp(),
+		sessions:       sessions,
+		projects:       projects,
+		agentChoices:   agentChoicesFrom(defaultAgent),
+		sidebarChoice:  sidebar,
+		models:         models,
+		refresh:        defaultRefresh,
+		kill:           proj.KillSession,
+		saveDefault:    proj.SaveDefaultModel,
+		checked:        map[string]bool{},
+		sessionsLoaded: true,
+		forget:         func(string) error { return nil },
+		help:           newHelp(),
 	}
 	m = m.reseedModels()
 	return m.rebuildEntrance()
@@ -221,6 +285,9 @@ func buildRows(roots proj.Roots, live []proj.Session) (sessions, projects []Row)
 	return sessions, projects
 }
 
+// liveSessions scans every proj server; a seam so tests never touch tmux.
+var liveSessions = proj.LiveSessions
+
 // defaultRefresh re-runs discovery via the real proj package and converts the
 // results into rows. On a roots load error it returns no rows.
 func defaultRefresh() (sessions, projects []Row) {
@@ -228,7 +295,7 @@ func defaultRefresh() (sessions, projects []Row) {
 	if err != nil {
 		return nil, nil
 	}
-	return buildRows(roots, proj.LiveSessions())
+	return buildRows(roots, liveSessions())
 }
 
 // New loads roots, config and live sessions, builds the entrance rows, and
@@ -241,8 +308,12 @@ func New() (Model, error) {
 	}
 	cfg := proj.LoadConfig()
 
-	sessions, projects := buildRows(roots, proj.LiveSessions())
-	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	// Folders come from the roots file alone, so the first frame draws at
+	// once; the tmux scan (about a second across many servers) runs in the
+	// background from Init and fills in the sessions.
+	sessions, projects := buildRows(roots, nil)
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
+	m.sessionsLoaded = false
 	m.defaultModel = cfg.DefaultModel
 	if cfg.DefaultModel != "" {
 		m = m.selectModel(cfg.DefaultModel)
@@ -266,8 +337,12 @@ func NewFor(project, agent string) (Model, error) {
 	}
 	cfg := proj.LoadConfig()
 
-	sessions, projects := buildRows(roots, proj.LiveSessions())
-	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg))
+	// Folders come from the roots file alone, so the first frame draws at
+	// once; the tmux scan (about a second across many servers) runs in the
+	// background from Init and fills in the sessions.
+	sessions, projects := buildRows(roots, nil)
+	m := newModel(sessions, projects, cfg.DefaultAgent, cfg.Sidebar, modelsResolver(cfg)).withRecord()
+	m.sessionsLoaded = false
 	m.defaultModel = cfg.DefaultModel
 	if agent != "" {
 		m = m.selectAgent(agent)
@@ -322,7 +397,70 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(refreshInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
-func (m Model) Init() tea.Cmd { return tickCmd() }
+// Init starts the first discovery at once (its result arms the live-refresh
+// tick) and, in the real picker, the background prime.
+func (m Model) Init() tea.Cmd {
+	first := tickCmd()
+	if m.refresh != nil || m.loadSaved != nil {
+		first = refreshCmd(m.refresh, m.loadSaved, true)
+	}
+	if m.prime == nil {
+		return first
+	}
+	return tea.Batch(first, primeCmd(m.prime))
+}
+
+// primeCmd runs prime off the update loop and reports when it is done.
+func primeCmd(prime func()) tea.Cmd {
+	return func() tea.Msg {
+		prime()
+		return primedMsg{}
+	}
+}
+
+// startRefresh launches a background discovery unless one is already in
+// flight (or there is nothing to discover). fromTick marks a refresh started
+// by the live-refresh tick, whose result re-arms the tick.
+func (m Model) startRefresh(fromTick bool) (Model, tea.Cmd) {
+	if m.refreshing || (m.refresh == nil && m.loadSaved == nil) {
+		return m, nil
+	}
+	m.refreshing = true
+	return m, refreshCmd(m.refresh, m.loadSaved, fromTick)
+}
+
+// refreshCmd runs discovery off the update loop.
+func refreshCmd(refresh func() (sessions, projects []Row), load func() ([]Row, error), fromTick bool) tea.Cmd {
+	return func() tea.Msg {
+		msg := refreshedMsg{fromTick: fromTick}
+		if refresh != nil {
+			msg.live = true
+			msg.sessions, msg.projects = refresh()
+		}
+		if load != nil {
+			msg.saved = true
+			msg.savedRows, msg.savedErr = load()
+		}
+		return msg
+	}
+}
+
+// applyRefreshed installs a discovery's results, preserving the view.
+func (m Model) applyRefreshed(msg refreshedMsg) (tea.Model, tea.Cmd) {
+	m.refreshing = false
+	if msg.live {
+		m.sessions, m.projects = msg.sessions, msg.projects
+		m.sessionsLoaded = true
+	}
+	if msg.saved {
+		m = m.applySaved(msg.savedRows, msg.savedErr)
+	}
+	m = m.rebuildPreserving()
+	if msg.fromTick {
+		return m, tickCmd()
+	}
+	return m, nil
+}
 
 // rebuildEntrance sets the entrance rows from the active scope (folders by
 // default, or live sessions) and resets to the entrance view.
@@ -331,11 +469,16 @@ func (m Model) rebuildEntrance() Model {
 	m.project = ""
 	m.filter = ""
 	m.cursor = 0
-	if m.scope == scopeSessions {
+	m.offset = 0
+	switch m.scope {
+	case scopeSessions:
 		m.rows = append([]Row(nil), m.sessions...)
-	} else {
+	case scopeSaved:
+		m.rows = append([]Row(nil), m.saved...)
+	default:
 		m.rows = append([]Row(nil), m.projects...)
 	}
+	m.clampCursor() // off a leading group header
 	return m
 }
 
@@ -346,6 +489,7 @@ func (m Model) drillInto(project string) Model {
 	m.project = project
 	m.filter = ""
 	m.cursor = 0
+	m.offset = 0
 	rows := []Row{
 		{Kind: RowNewWork, Label: "+ new work…", Project: project},
 	}
@@ -360,21 +504,45 @@ func (m Model) drillInto(project string) Model {
 
 // visibleRows applies the fuzzy substring filter. The synthetic specials
 // (new work) are always visible so "+ new work…" stays at the top.
+// In the saved scope a header row precedes each window group that still has
+// a visible row, so a filter never leaves an empty group's label behind.
 func (m Model) visibleRows() []Row {
-	if m.filter == "" {
-		return m.rows
+	rows := m.rows
+	if m.filter != "" {
+		rows = nil
+		for _, r := range m.rows {
+			if r.Kind == RowNewWork || fuzzyMatch(m.filter, r.Label) {
+				rows = append(rows, r)
+			}
+		}
+	}
+	if m.view != viewEntrance || m.scope != scopeSaved {
+		return rows
 	}
 	var out []Row
-	for _, r := range m.rows {
-		if r.Kind == RowNewWork {
-			out = append(out, r)
-			continue
+	for i, r := range rows {
+		if i == 0 || rows[i-1].Window != r.Window {
+			label := "unplaced"
+			if r.Window > 0 {
+				label = fmt.Sprintf("window %d", r.Window)
+			}
+			out = append(out, Row{Kind: RowHeader, Label: label, Window: r.Window})
 		}
-		if fuzzyMatch(m.filter, r.Label) {
-			out = append(out, r)
-		}
+		out = append(out, r)
 	}
 	return out
+}
+
+// move steps the cursor by delta (±1), skipping group headers; at either end
+// it stays put.
+func (m *Model) move(delta int) {
+	vis := m.visibleRows()
+	for i := m.cursor + delta; i >= 0 && i < len(vis); i += delta {
+		if vis[i].Kind != RowHeader {
+			m.cursor = i
+			return
+		}
+	}
 }
 
 func (m Model) agentChoice() string {
@@ -391,7 +559,17 @@ func (m Model) modelChoice() string {
 	return m.modelChoices[m.modelIndex%len(m.modelChoices)]
 }
 
+// Update handles msg, then scrolls the list only as far as needed to keep the
+// cursor on screen.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.update(msg)
+	if nm, ok := next.(Model); ok {
+		return nm.followCursor(), cmd
+	}
+	return next, cmd
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -401,19 +579,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		return m.tick()
 
+	case refreshedMsg:
+		return m.applyRefreshed(msg)
+
+	case primedMsg:
+		return m.startRefresh(false)
+
 	case tea.MouseMsg:
 		if m.inputKind != inputNone {
 			return m, nil
 		}
 		switch msg.Button {
 		case tea.MouseButtonWheelUp:
-			if m.cursor > 0 {
-				m.cursor--
-			}
+			m.move(-1)
 		case tea.MouseButtonWheelDown:
-			if m.cursor < len(m.visibleRows())-1 {
-				m.cursor++
-			}
+			m.move(1)
 		}
 		return m, nil
 
@@ -575,18 +755,19 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.footerHint = ""
 		return m, nil
 	}
+	if m.view == viewEntrance && m.scope == scopeSaved {
+		if next, cmd, ok := m.updateSaved(msg); ok {
+			return next, cmd
+		}
+	}
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "tab":
-		// tab toggles the entrance scope; agent/sidebar are new-session settings
+		// tab cycles the entrance scope; agent/sidebar are new-session settings
 		// and live in the new-work input, not the browse view.
 		if m.view == viewEntrance {
-			if m.scope == scopeFolders {
-				m.scope = scopeSessions
-			} else {
-				m.scope = scopeFolders
-			}
+			m.scope = nextScope(m.scope)
 			return m.rebuildEntrance(), nil
 		}
 		return m, nil
@@ -605,14 +786,10 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.help.ShowAll = !m.help.ShowAll
 		return m, nil
 	case "up", "ctrl+p":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.move(-1)
 		return m, nil
 	case "down", "ctrl+n":
-		if m.cursor < len(m.visibleRows())-1 {
-			m.cursor++
-		}
+		m.move(1)
 		return m, nil
 	case "enter":
 		return m.activate()
@@ -653,6 +830,9 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case RowProject:
 		return m.drillInto(row.Label), nil
+	case RowSaved:
+		m.Result = Result{Kind: "restore", Names: []string{row.Name}, Name: row.Name, Socket: row.Socket}
+		return m, tea.Quit
 	case RowNewWork:
 		ti := textinput.New()
 		ti.Placeholder = "work name"
@@ -666,14 +846,19 @@ func (m Model) activate() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// tick re-runs discovery and rebuilds the session/project rows, preserving the
-// current view, filter and (clamped) cursor. While a name is being typed the
-// refresh is skipped so the input is not disturbed; the tick is always re-armed.
+// tick starts a background discovery. While a name is being typed, or while
+// another discovery is still in flight, it skips this round and re-arms
+// itself; otherwise the discovery's result re-arms it (see applyRefreshed),
+// so exactly one tick loop ever runs.
 func (m Model) tick() (tea.Model, tea.Cmd) {
-	if m.inputKind != inputNone || m.refresh == nil {
+	if m.inputKind != inputNone || m.refreshing {
 		return m, tickCmd()
 	}
-	return m.refreshRows(), tickCmd()
+	m, cmd := m.startRefresh(true)
+	if cmd == nil {
+		return m, tickCmd()
+	}
+	return m, cmd
 }
 
 // submitAddRoot validates the typed path, appends it to the roots file, and
@@ -699,14 +884,15 @@ func (m Model) reloadRoots() Model {
 	return m.rebuildEntrance()
 }
 
-// refreshRows re-runs discovery and rebuilds the ACTIVE view, preserving
-// view/filter/project and clamping the cursor.
-func (m Model) refreshRows() Model {
-	if m.refresh == nil {
-		return m
+// rebuildPreserving rebuilds the ACTIVE view from the current rows,
+// preserving view/filter/project/scroll. The cursor stays on the same row by
+// identity; if that row is gone it keeps its position (clamped).
+func (m Model) rebuildPreserving() Model {
+	view, filter, cursor, project, offset := m.view, m.filter, m.cursor, m.project, m.offset
+	selected := ""
+	if vis := m.visibleRows(); cursor < len(vis) {
+		selected = rowKey(vis[cursor])
 	}
-	m.sessions, m.projects = m.refresh()
-	view, filter, cursor, project := m.view, m.filter, m.cursor, m.project
 	if view == viewProject {
 		m = m.drillInto(project)
 	} else {
@@ -715,9 +901,27 @@ func (m Model) refreshRows() Model {
 	m.view = view
 	m.filter = filter
 	m.project = project
+	m.offset = offset
 	m.cursor = cursor
+	if selected != "" {
+		for i, r := range m.visibleRows() {
+			if rowKey(r) == selected {
+				m.cursor = i
+				break
+			}
+		}
+	}
 	m.clampCursor()
 	return m
+}
+
+// rowKey identifies a row across refreshes.
+func rowKey(r Row) string {
+	name := r.Name
+	if name == "" {
+		name = r.Label
+	}
+	return fmt.Sprint(int(r.Kind), "\x1f", name)
 }
 
 // reap kills the highlighted session. The first ^x arms a confirmation; a
@@ -729,31 +933,62 @@ func (m Model) reap() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	row := vis[m.cursor]
-	if row.Kind != RowSession {
+	if row.Kind != RowSession && row.Kind != RowSaved {
 		m.reapConfirm = ""
 		m.footerHint = "nothing to reap here"
 		return m, nil
 	}
-	if row.Name == proj.CurrentSessionName() {
+	// A saved session that is not running has nothing to kill: ^x forgets it.
+	live := row.Kind == RowSession || row.Running
+	if live && row.Name == proj.CurrentSessionName() {
 		m.reapConfirm = ""
 		m.footerHint = "can't reap the session you're in"
 		return m, nil
 	}
+	verb := "reap"
+	if !live {
+		verb = "forget"
+	}
 	if m.reapConfirm != row.Name {
 		m.reapConfirm = row.Name
-		m.footerHint = "reap " + row.Name + "? ^x to confirm · any key cancels"
+		m.footerHint = verb + " " + row.Name + "? ^x to confirm · any key cancels"
 		return m, nil
 	}
 	m.reapConfirm = ""
-	if m.kill != nil {
+	if live && m.kill != nil {
 		if err := m.kill(row.Socket, row.Name); err != nil {
 			m.footerHint = "reap: " + err.Error()
 			return m, nil
 		}
 	}
-	m = m.refreshRows()
-	m.footerHint = "reaped " + row.Name
-	return m, nil
+	// Reaping is the one way a session leaves the saved record (a plain tmux
+	// kill or a reboot keeps it restorable).
+	if err := m.forget(row.Name); err != nil {
+		m.footerHint = "forget: " + err.Error()
+		return m, nil
+	}
+	// Drop the row now and confirm with a background discovery, rather than
+	// freezing the picker for a synchronous one.
+	m.sessions = withoutRow(m.sessions, row.Name)
+	m.saved = withoutRow(m.saved, row.Name)
+	delete(m.checked, row.Name)
+	m = m.rebuildPreserving()
+	m.footerHint = verb + "ed " + row.Name
+	if !live {
+		m.footerHint = "forgot " + row.Name
+	}
+	return m.startRefresh(false)
+}
+
+// withoutRow returns rows minus any row named name.
+func withoutRow(rows []Row, name string) []Row {
+	out := rows[:0:0]
+	for _, r := range rows {
+		if r.Name != name {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // editRootsCmd suspends the TUI, opens the roots file in $EDITOR (then $VISUAL,
@@ -779,12 +1014,28 @@ func editorFields() []string {
 }
 
 func (m *Model) clampCursor() {
-	n := len(m.visibleRows())
+	vis := m.visibleRows()
+	n := len(vis)
 	if m.cursor >= n {
 		m.cursor = n - 1
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
+	}
+	// Never rest on a group header: the next row down, else the next up.
+	if n > 0 && vis[m.cursor].Kind == RowHeader {
+		for i := m.cursor; i < n; i++ {
+			if vis[i].Kind != RowHeader {
+				m.cursor = i
+				return
+			}
+		}
+		for i := m.cursor; i >= 0; i-- {
+			if vis[i].Kind != RowHeader {
+				m.cursor = i
+				return
+			}
+		}
 	}
 }
 

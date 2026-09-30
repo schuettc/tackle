@@ -191,7 +191,7 @@ func encodeNewJSON(w io.Writer, j newJSON) error {
 	if err != nil {
 		return tools.Exitf(1, "%v", err)
 	}
-	fmt.Fprintln(w, string(b))
+	_, _ = fmt.Fprintln(w, string(b))
 	return nil
 }
 
@@ -269,7 +269,7 @@ func cmdNew(args []string, out, errw io.Writer) error {
 			return err
 		}
 	} else {
-		fmt.Fprintln(out, name)
+		_, _ = fmt.Fprintln(out, name)
 	}
 
 	// A command against a reused session is refused so hail never clobbers a
@@ -379,6 +379,6 @@ func writeJSON(out io.Writer, v any) error {
 	if err != nil {
 		return tools.Exitf(1, "%v", err)
 	}
-	fmt.Fprintln(out, string(b))
+	_, _ = fmt.Fprintln(out, string(b))
 	return nil
 }

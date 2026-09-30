@@ -7,7 +7,7 @@ import "testing"
 func TestLiveSessionsPrefersProjAgentOption(t *testing.T) {
 	requireTmux(t)
 	sock := "proj-agentopt-test"
-	defer Run(sock, "kill-server")
+	defer func() { _, _ = Run(sock, "kill-server") }()
 
 	created, err := EnsureSession(sock, "proj-agentopt-test/w", t.TempDir(), "none", "", nil)
 	if err != nil || !created {

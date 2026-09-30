@@ -19,7 +19,7 @@ func TestServersAndFind(t *testing.T) {
 	if _, err := Run(sock, "new-session", "-d", "-s", "proj-phase1-test/w", "-c", t.TempDir()); err != nil {
 		t.Fatalf("new-session: %v", err)
 	}
-	defer Run(sock, "kill-server")
+	defer func() { _, _ = Run(sock, "kill-server") }()
 
 	found := false
 	for _, s := range Servers() {
