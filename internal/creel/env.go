@@ -43,6 +43,14 @@ func ValidName(s string) bool {
 	return true
 }
 
+// ErrDestOutsideCwd is ResolveDest's refusal. Its text is the harness status
+// token ("error:dest-outside-cwd") that pi-creel matches on, so it must not change.
+var ErrDestOutsideCwd = errors.New("dest-outside-cwd")
+
+// destOutsideCwdHelp is what a person reads when ResolveDest refuses.
+const destOutsideCwdHelp = "--dest must be inside the working directory, so a secret only lands where " +
+	"this project keeps its files; use a path under it, e.g. .env or .worktrees/<name>/.env"
+
 // ResolveDest resolves dest against cwd and rejects any path that escapes cwd.
 // An empty dest defaults to ".env". The returned path is absolute and cleaned.
 func ResolveDest(cwd, dest string) (string, error) {
@@ -59,7 +67,7 @@ func ResolveDest(cwd, dest string) (string, error) {
 		return "", err
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", errors.New("dest-outside-cwd")
+		return "", ErrDestOutsideCwd
 	}
 	return p, nil
 }
@@ -227,7 +235,7 @@ type Event struct {
 // real saves.
 func WriteEvent(path string, res Result) error {
 	if path == "" || res.Err != nil {
-		return nil
+		return nil //nolint:nilerr // no event to write when the capture itself errored (documented no-op)
 	}
 	if res.Action != Added && res.Action != Updated {
 		return nil
@@ -250,8 +258,8 @@ func atomicWrite(path, content string, mode os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	cleanup := func(e error) error {
-		tmp.Close()
-		os.Remove(tmpName)
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
 		return e
 	}
 	if err := tmp.Chmod(mode); err != nil {
@@ -264,11 +272,11 @@ func atomicWrite(path, content string, mode os.FileMode) error {
 		return cleanup(err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return err
 	}
 	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName)
 		return fmt.Errorf("rename %s to %s: %w", tmpName, path, err)
 	}
 	return nil

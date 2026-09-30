@@ -8,8 +8,8 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
 - **scratch** — per-directory scratch notes with a live TUI.
 - **proj** — agent-aware tmux session picker; the way *in* to a work session.
 - **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it. Consume a captured key with `creel exec NAME -- <command>`, which runs the command with the value in its environment only — never printed, never in the agent's context.
-- **docket** — records the intended fate of every repo, pull request, issue, branch and worktree you own or touch, journals git/gh activity from any agent or terminal, and shows what needs attention. Its data lives in your own private git repo. (Preview.)
-  Install: `kempt apply -manifest cmd/docket/kempt.toml -packages docket`, then `docket init` (creates a private `<you>/docket-data` if needed) and `docket hooks install`.
+- **casebook** — records the intended fate of every repo, pull request, issue, branch and worktree you own or touch, journals git/gh activity from any agent or terminal, and shows what needs attention. Its data lives in your own private git repo. (Preview.)
+  Install: `kempt apply -manifest cmd/casebook/kempt.toml -packages casebook`, then `casebook init` (creates a private `<you>/casebook-data` if needed) and `casebook hooks install`.
 
 ## Install
 
@@ -45,6 +45,33 @@ pane inside the chosen session.
 
 Sessions live on **per-project tmux servers** (one server per project root), so
 a crash or runaway in one project never takes down another.
+
+### Restoring after a reboot
+
+`proj` remembers every work session it sees in
+`~/.local/state/proj/sessions.json`: its name, directory, agent, and the
+agent conversation it holds (the `@harness_session` id that pi and Claude Code
+announce). tmux hooks that `proj` installs on each of its servers keep the
+record current as sessions are created, renamed, or switch conversation. The
+record only grows: a reboot, a crash or a plain `tmux kill-session` leaves the
+session restorable. Reaping it with `^x` in the picker is what removes it.
+
+`tab` at the picker's entrance cycles **folders → sessions → saved**. The saved
+scope lists every remembered session, grouped by the Ghostty window it sat in:
+
+| Key | Effect |
+|-----|--------|
+| `space` | check / uncheck the highlighted session (everything not open is checked by default) |
+| `^r` | restore the checked sessions and rebuild their Ghostty windows and tabs |
+| `enter` | restore just the highlighted session and jump to it |
+| `^s` | save the current Ghostty window/tab layout (nothing records it automatically) |
+| `^x` | forget the session (reaping it too if it is running) |
+
+A restored session is recreated in its saved directory with its sidebar, and
+its agent reopens the saved conversation (`pi --session <id>` /
+`claude --resume <id>`). A session whose conversation file is gone shows
+`(no transcript)` and starts a fresh agent under the same name. Unchecked
+sessions stay saved for next time.
 
 `proj` also understands non-interactive invocations that agents use safely:
 

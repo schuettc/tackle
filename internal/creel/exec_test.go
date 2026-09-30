@@ -259,3 +259,11 @@ func assertNoSecret(t *testing.T, secret string, streams ...[]byte) {
 		}
 	}
 }
+
+func TestExecExplainsDestOutsideCwd(t *testing.T) {
+	var out, errbuf bytes.Buffer
+	code := runExec(t.TempDir(), []string{"KEY", "--dest", "../../elsewhere/secrets", "--", "true"}, &out, &errbuf)
+	if code != 2 || !strings.Contains(errbuf.String(), "inside the working directory") {
+		t.Fatalf("exit %d, stderr %q; want 2 and the rule", code, errbuf.String())
+	}
+}
