@@ -96,7 +96,7 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			if err != nil {
 				return tools.Exitf(2, "%v", err)
 			}
-			defer f.Close()
+			defer func() { _ = f.Close() }()
 			in = f
 		}
 		capBytes, _ := strconv.Atoi(str(fs, "max-context-bytes"))
@@ -108,7 +108,7 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		if boolFlag(fs, "dry-run") {
 			for _, it := range items {
 				b, _ := json.Marshal(map[string]any{"id": it.id, "state": it.state})
-				fmt.Fprintf(out, "%s\n", b)
+				_, _ = fmt.Fprintf(out, "%s\n", b)
 			}
 			return nil
 		}

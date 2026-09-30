@@ -32,9 +32,9 @@ func server(t *testing.T, statuses []int, body string, check func(*http.Request,
 		st := statuses[min(i, len(statuses)-1)]
 		w.WriteHeader(st)
 		if st == 200 {
-			io.WriteString(w, body)
+			_, _ = io.WriteString(w, body)
 		} else {
-			io.WriteString(w, `{"detail":"bad"}`)
+			_, _ = io.WriteString(w, `{"detail":"bad"}`)
 		}
 	}))
 	t.Cleanup(srv.Close)

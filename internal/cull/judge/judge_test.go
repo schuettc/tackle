@@ -127,11 +127,15 @@ func TestThresholdOnlyChangeUsesCache(t *testing.T) {
 	c := &Cache{Dir: t.TempDir()}
 	f := &fake{}
 	o := opts(t, c)
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	f.calls.Store(0)
 	o.Rubric.Policy.Act = 0.9
 	o.Rubric.Version = "v2"
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	if f.calls.Load() != 0 {
 		t.Errorf("threshold-only change made %d calls", f.calls.Load())
 	}
@@ -141,10 +145,14 @@ func TestQuestionChangeMissesCache(t *testing.T) {
 	c := &Cache{Dir: t.TempDir()}
 	f := &fake{}
 	o := opts(t, c)
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	f.calls.Store(0)
 	o.Rubric.Questions[0].Instructions += " Changed."
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	if f.calls.Load() != 5 {
 		t.Errorf("question change made %d calls, want 5", f.calls.Load())
 	}
@@ -154,10 +162,14 @@ func TestRefreshBypassesGet(t *testing.T) {
 	c := &Cache{Dir: t.TempDir()}
 	f := &fake{}
 	o := opts(t, c)
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	f.calls.Store(0)
 	o.Refresh = true
-	JudgeAll(context.Background(), f, states(5), o)
+	if _, err := JudgeAll(context.Background(), f, states(5), o); err != nil {
+		t.Fatal(err)
+	}
 	if f.calls.Load() != 5 {
 		t.Errorf("refresh made %d calls, want 5", f.calls.Load())
 	}
