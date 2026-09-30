@@ -94,7 +94,7 @@ func (pythonExtractor) Extract(root string, relpaths []string, maxContext int) (
 	if err != nil {
 		return extract.Result{}, fmt.Errorf("extract/python: temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	if err := os.Chmod(tmpDir, 0o700); err != nil {
 		return extract.Result{}, fmt.Errorf("extract/python: chmod temp dir: %w", err)
 	}

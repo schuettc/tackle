@@ -115,7 +115,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		return Report{}, err
 	}
 	for _, sk := range skipped {
-		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
+		_, _ = fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
 	}
 
 	keptCases := allCases
@@ -325,9 +325,9 @@ func spanLines(root, relpath string, span cases.Span) (start, end int, err error
 func printDryRunStates(w io.Writer, tests []cases.TestCase, groups []cases.Group, maxContext int) {
 	enc := json.NewEncoder(w)
 	for _, tc := range tests {
-		enc.Encode(map[string]any{"id": tc.ID, "state": judge.StateFor(tc)})
+		_ = enc.Encode(map[string]any{"id": tc.ID, "state": judge.StateFor(tc)})
 	}
 	for _, g := range groups {
-		enc.Encode(map[string]any{"id": g.ID, "state": judge.GroupStateFor(g, maxContext)})
+		_ = enc.Encode(map[string]any{"id": g.ID, "state": judge.GroupStateFor(g, maxContext)})
 	}
 }

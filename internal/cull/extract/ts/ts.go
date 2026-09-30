@@ -136,7 +136,7 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 	if err != nil {
 		return extract.Result{}, fmt.Errorf("extract/ts: temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	if err := os.Chmod(tmpDir, 0o700); err != nil {
 		return extract.Result{}, fmt.Errorf("extract/ts: chmod temp dir: %w", err)
 	}
