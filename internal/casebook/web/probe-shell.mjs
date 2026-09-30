@@ -179,7 +179,7 @@ const EXPECT = {
     'a',
     'r',
   ],
-  board: [...FAMILY, ...PAGE_KEYS, 'd'],
+  board: ['/', ...FAMILY, ...PAGE_KEYS, 'd'],
   rules: [...MOVE_OPEN, ...FAMILY, ...PAGE_KEYS, 'a'],
   apply: [...MOVE_OPEN, ...SELECT, ...FAMILY, ...PAGE_KEYS, 'a', 'p'],
 };
@@ -194,6 +194,7 @@ export async function shellScenarios(shared, t) {
     ['offline · N queued', offlineQueuedScenario],
     ['the stale pill from an API call', staleApiScenario],
     ['200 rows and "show more"', pageCapScenario],
+    ["the board's search", boardSearchScenario],
   ]) {
     try {
       await run(shared, t);
@@ -790,7 +791,7 @@ async function keyboardScenario(shared, t) {
         });
         await until(pg, () => !!document.querySelector('.cb-board'));
         checkList(
-          'on the board the ? overlay lists exactly its keys (no list keys)',
+          'on the board the ? overlay lists exactly its keys (its search, d; no list keys)',
           await overlayKeys(t, pg),
           [...EXPECT.board].sort(),
         );
@@ -1677,6 +1678,150 @@ async function pageCapScenario(shared, t) {
           );
           const m2 = await more();
           check(`and the "show more" goes (shown ${m2.shown})`, !m2.shown);
+        } finally {
+          await pg.close();
+        }
+      }),
+  );
+}
+
+// ---- the board's search ----------------------------------------------------------
+
+// boardSearchScenario: on the board, the search field filters the lanes as
+// it filters the list: / focuses it, typing narrows every lane to what serve
+// finds for the text, Esc clears it and the lanes fill again, and the list
+// then shows the same search's rows.
+async function boardSearchScenario(shared, t) {
+  const { check, checkList, until } = t;
+  console.log("\nscenario: the board's search searches the board");
+  const BS = 'bs-probe';
+  await withServe(
+    {
+      seedRepos: [
+        seedRepo(BS, [
+          [71, 'rename the ledger export', 'kai'],
+          [72, 'ledger totals drift by a cent', 'kai'],
+          [73, 'bump the chart library', 'noa'],
+        ]),
+        seedRepo(`${BS}-other`, [[81, 'the ledger page is slow', 'noa']]),
+        dormant(`${BS}-dormant`),
+      ],
+    },
+    (serveHandle) =>
+      withContext(shared, async (context) => {
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        // What serve finds for a text across the board's lanes (each item
+        // once, in lane order: waiting, proposed, due, new).
+        const lanesFind = async (q) => {
+          const seen = new Set();
+          for (const v of ['waiting', 'proposed', 'due', 'new']) {
+            const r = await agent.api(
+              'GET',
+              `/api/items?view=${v}&offset=0&limit=500${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+            );
+            for (const it of r.items ?? []) seen.add(it.key);
+          }
+          return [...seen].sort();
+        };
+        const pg = await context.newPage();
+        const errors = [];
+        pg.on('pageerror', (e) => errors.push(String(e)));
+        try {
+          await pg.setViewportSize({ width: 1600, height: 900 });
+          await pg.goto(serveHandle.url + '#/attention/board', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          const cards = () =>
+            pg.$$eval('.cb-board .cb-lane .kit-card[data-id]', (els) =>
+              [...new Set(els.map((e) => e.dataset.id))].sort(),
+            );
+          const allKeys = await lanesFind('');
+          const boardIs = (want) =>
+            until(
+              pg,
+              (w) =>
+                [
+                  ...new Set(
+                    [
+                      ...document.querySelectorAll(
+                        '.cb-board .cb-lane .kit-card[data-id]',
+                      ),
+                    ].map((e) => e.dataset.id),
+                  ),
+                ]
+                  .sort()
+                  .join('|') === w,
+              want.join('|'),
+              8000,
+            );
+          check(
+            `the board shows every item in its lanes (${allKeys.length})`,
+            allKeys.length > 4 && (await boardIs(allKeys)),
+          );
+          await press(pg, '/');
+          check(
+            '/ on the board focuses the search field',
+            await until(
+              pg,
+              () =>
+                document.activeElement?.classList.contains('kit-search') &&
+                !!document.activeElement.closest('.kit-list:not([hidden])'),
+            ),
+          );
+          await pg.keyboard.type('ledger');
+          const want = await lanesFind('ledger');
+          const narrowed = await boardIs(want);
+          checkList(
+            `typing "ledger" narrows the lanes to what serve finds for it`,
+            await cards(),
+            want,
+          );
+          check(
+            `(${want.length} of ${allKeys.length}, in the URL as ?q=ledger)`,
+            narrowed &&
+              want.length === 3 &&
+              want.length < allKeys.length &&
+              (await pg.evaluate(() =>
+                new URL(location.href).searchParams.get('q'),
+              )) === 'ledger',
+          );
+          await pg.keyboard.press('Escape');
+          check(
+            'Esc clears the search, and the lanes fill again',
+            await boardIs(allKeys),
+          );
+          // The same search on the list: its rows are the waiting lane's.
+          await press(pg, '/');
+          await pg.keyboard.type('ledger');
+          await boardIs(want);
+          await pg.evaluate(() => {
+            location.hash = '#/attention/waiting';
+          });
+          const waiting = (
+            await agent.api(
+              'GET',
+              '/api/items?view=waiting&offset=0&limit=500&q=ledger',
+            )
+          ).items.map((it) => it.title);
+          const rowsNow = await until(
+            pg,
+            (w) =>
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row .kit-title',
+                ),
+              ]
+                .map((e) => e.textContent)
+                .sort()
+                .join('|') === w,
+            [...waiting].sort().join('|'),
+          );
+          check(
+            `and the list, switched to, searches the same: ${waiting.join(', ')}`,
+            rowsNow && waiting.length === 3,
+          );
+          check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
         } finally {
           await pg.close();
         }

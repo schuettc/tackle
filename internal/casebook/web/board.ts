@@ -248,10 +248,15 @@ export function makeBoard(
   let boardTotalUnique = 0;
 
   // Re-fetch all four lanes in parallel; deduplicate by key in precedence order.
+  // An older refresh (the search changed meanwhile) never paints over a
+  // newer one.
+  let refreshSeq = 0;
   async function refresh(): Promise<void> {
+    const mine = ++refreshSeq;
     const results = await Promise.allSettled(
       LANES.map(({ id }) => fetchLane(id)),
     );
+    if (mine !== refreshSeq) return;
 
     const seenIds = new Set<string>();
     for (let i = 0; i < LANES.length; i++) {

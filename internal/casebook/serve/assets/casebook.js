@@ -2730,10 +2730,13 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     return { items: data.items ?? [], total: data.total };
   }
   let boardTotalUnique = 0;
+  let refreshSeq = 0;
   async function refresh() {
+    const mine = ++refreshSeq;
     const results = await Promise.allSettled(
       LANES.map(({ id }) => fetchLane(id))
     );
+    if (mine !== refreshSeq) return;
     const seenIds = /* @__PURE__ */ new Set();
     for (let i = 0; i < LANES.length; i++) {
       const { id } = LANES[i];
@@ -2989,7 +2992,8 @@ function makeAttention(ctx) {
           searchDebounceTimer = null;
           filters.q = text;
           setUrlQ(text);
-          void reload();
+          if (boardHandle) void boardHandle.refresh();
+          else void reload();
         }, 200);
       }
     },
@@ -3221,7 +3225,15 @@ function makeAttention(ctx) {
     }
   };
   const listKeys = [decideKey, acceptKey, rejectKey];
-  const boardKeys = [decideKey];
+  const searchKey = {
+    keys: "/",
+    label: "search",
+    group: "family",
+    run() {
+      handle.focusSearch?.();
+    }
+  };
+  const boardKeys = [decideKey, searchKey];
   void ctx.api.get("/summary").then((s) => {
     applyCounts(s.counts);
   }).catch(() => {
@@ -3316,7 +3328,8 @@ function makeAttention(ctx) {
     // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
     // to this list while it shows. The board is not a list: it has no
     // cursor, and its cards hide the reading column, so there only "d"
-    // (the shared selection) works.
+    // (the shared selection) and "/" (the search, which filters the lanes)
+    // work.
     listKeys: () => boardHandle ? null : { nav: handle, selects: true },
     keys: () => boardHandle ? boardKeys : listKeys,
     onLive(type, data) {

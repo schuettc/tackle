@@ -308,7 +308,9 @@ export function makeAttention(ctx: Ctx): Section {
           searchDebounceTimer = null;
           filters.q = text;
           setUrlQ(text);
-          void reload();
+          // The board searches its lanes as the list searches its rows.
+          if (boardHandle) void boardHandle.refresh();
+          else void reload();
         }, 200);
       },
     },
@@ -609,7 +611,17 @@ export function makeAttention(ctx: Ctx): Section {
   };
 
   const listKeys: KeyBinding[] = [decideKey, acceptKey, rejectKey];
-  const boardKeys: KeyBinding[] = [decideKey];
+  // The board is not a list (no j/k/o/x), but it has the list's search
+  // field: / focuses it there too.
+  const searchKey: KeyBinding = {
+    keys: '/',
+    label: 'search',
+    group: 'family',
+    run() {
+      handle.focusSearch?.();
+    },
+  };
+  const boardKeys: KeyBinding[] = [decideKey, searchKey];
 
   // Load summary for initial counts.
   void ctx.api
@@ -750,7 +762,8 @@ export function makeAttention(ctx: Ctx): Section {
     // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
     // to this list while it shows. The board is not a list: it has no
     // cursor, and its cards hide the reading column, so there only "d"
-    // (the shared selection) works.
+    // (the shared selection) and "/" (the search, which filters the lanes)
+    // work.
     listKeys: () => (boardHandle ? null : { nav: handle, selects: true }),
     keys: () => (boardHandle ? boardKeys : listKeys),
     onLive(type: string, data: unknown) {
