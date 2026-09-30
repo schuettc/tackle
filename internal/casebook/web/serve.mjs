@@ -63,9 +63,12 @@ function findBinary() {
 //
 // seedRepos adds repos (the cache's repo shape: {repo, prs, issues, …}) to the
 // fixture's GitHub cache, so a scenario can own Attention items no other
-// scenario touches.
+// scenario touches. seedMachines adds other machines' snapshots (the
+// machines/<machine>.json shape: {version, machine, roots, clones}) to the
+// casebook-data repo, committed, so a scenario can own local branches (with
+// their landed verdicts) no other scenario touches.
 let homes = 0;
-function setupHome(seedRepos = []) {
+function setupHome(seedRepos = [], seedMachines = []) {
   const fixture = join(here, 'testdata', 'home');
   const home = join(tmpdir(), `casebook-probe-${process.pid}-${homes++}`);
 
@@ -77,6 +80,30 @@ function setupHome(seedRepos = []) {
   const bundlePath = join(fixture, 'data', 'repo.bundle');
   const repoPath = join(home, 'data', 'repo');
   execSync(`git clone -q "${bundlePath}" "${repoPath}"`, { stdio: 'pipe' });
+  if (seedMachines.length) {
+    for (const snap of seedMachines) {
+      writeFileSync(
+        join(repoPath, 'machines', `${snap.machine}.json`),
+        JSON.stringify(snap, null, 2) + '\n',
+      );
+    }
+    const git = (args) =>
+      execSync(`git ${args}`, {
+        cwd: repoPath,
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'probe',
+          GIT_AUTHOR_EMAIL: 'probe@example.com',
+          GIT_COMMITTER_NAME: 'probe',
+          GIT_COMMITTER_EMAIL: 'probe@example.com',
+          GIT_CONFIG_GLOBAL: '/dev/null',
+          GIT_CONFIG_NOSYSTEM: '1',
+        },
+      });
+    git('add machines');
+    git('commit -q -m "probe: seed machine snapshots"');
+  }
 
   // Copy the github cache to the state directory, which is where CachePath()
   // looks: $CASEBOOK_HOME/state/github.json (tools.StateDir("casebook") joins
@@ -142,7 +169,7 @@ function waitForAdvert(advertPath, timeoutMs = 10000) {
  */
 export async function startServe(opts = {}) {
   const bin = findBinary();
-  const home = setupHome(opts.seedRepos);
+  const home = setupHome(opts.seedRepos, opts.seedMachines);
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
   const proc = spawn(bin, SERVE_ARGS, {

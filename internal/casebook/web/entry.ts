@@ -4,7 +4,9 @@
 import { boot, registerSection, registerDock } from './app.ts';
 import { makeAttention } from './attention.ts';
 import { makeDock } from './dock.ts';
+import { makeRules } from './rules.ts';
 
 registerSection(makeAttention);
+registerSection(makeRules);
 registerDock(makeDock);
 boot();

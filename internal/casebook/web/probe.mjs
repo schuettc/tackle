@@ -68,6 +68,10 @@ function cleanup() {
     _keysServe.stop();
     _keysServe = null;
   }
+  if (_rulesServe) {
+    _rulesServe.stop();
+    _rulesServe = null;
+  }
 }
 
 process.on('SIGTERM', () => {
@@ -1589,12 +1593,12 @@ async function composerScenariosOn(context, serveHandle) {
         ),
       );
 
-      // Another section is shown: until Rules exists (Task 8) it sets nothing.
+      // Another section is shown: Rules with no rule open attaches nothing.
       await pg.evaluate(() => {
         location.hash = '#/rules';
       });
       check(
-        'showing another section sets its context ("nothing" until Task 8)',
+        'showing Rules with no rule open sets its context ("nothing")',
         await until(
           pg,
           () =>
@@ -1625,6 +1629,11 @@ async function composerScenariosOn(context, serveHandle) {
         `the decided event leaves the attached line alone (${after})`,
         after === 'nothing',
       );
+      const primaryHidden = await pg.$eval('.kit-primary', (e) => e.hidden);
+      check(
+        "and the bar's primary stays Rules' (none), not Attention's Decide 1",
+        primaryHidden,
+      );
 
       // Back to Attention: it re-feeds what is still selected.
       await pg.evaluate(() => {
@@ -1639,6 +1648,14 @@ async function composerScenariosOn(context, serveHandle) {
             document.querySelector('[data-testid="composer-attached"]')
               .textContent === w,
           rest,
+        ),
+      );
+      check(
+        'and its primary again: "Decide 1"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.kit-primary')?.textContent === 'Decide 1',
         ),
       );
     } finally {
@@ -1797,8 +1814,1165 @@ async function keyScopeScenariosOn(context, serveHandle) {
       'back on Attention, "a" accepts the open item\'s proposal',
       await eventually(async () => (await proposalState()) === 'accepted'),
     );
+
+    // The ? overlay lists what is bound: each section's own keys only while
+    // it is shown ("/" is Attention's search; "a" is Attention's accept and
+    // Rules' activate).
+    const overlay = async () => {
+      await pressWithFocus(pg, '?');
+      await until(pg, () => !!document.querySelector('.kit-keys'));
+      const labels = await pg.$$eval(
+        '.kit-keys .kit-keys-row > span:last-child',
+        (els) => els.map((e) => e.textContent),
+      );
+      await pg.keyboard.press('Escape');
+      await until(pg, () => !document.querySelector('.kit-keys'));
+      return labels;
+    };
+    const onAttention = await overlay();
+    check(
+      `on Attention the overlay lists its keys ("search", "accept proposal"), not Rules' (${onAttention.join(', ')})`,
+      onAttention.includes('search') &&
+        onAttention.includes('accept proposal') &&
+        !onAttention.includes('activate the open draft'),
+    );
+    await agent.api('POST', '/api/rules/draft', {
+      id: 'keys-rule',
+      name: 'Keys rule',
+      status: 'draft',
+      match: [{ field: 'repo', op: 'is', value: 'schuettc/keys-scope' }],
+      propose: { disposition: 'keep' },
+    });
+    await pg.evaluate(() => {
+      location.hash = '#/rules/keys-rule';
+    });
+    await until(
+      pg,
+      () =>
+        document.querySelector('.cb-rule')?.dataset.rule === 'keys-rule' &&
+        document.querySelector('.kit-primary')?.textContent === 'Activate',
+      undefined,
+      8000,
+    );
+    const onRules = await overlay();
+    check(
+      `on Rules the overlay lists "activate the open draft", not Attention's "search" or "accept proposal" (${onRules.join(', ')})`,
+      onRules.includes('activate the open draft') &&
+        !onRules.includes('search') &&
+        !onRules.includes('accept proposal'),
+    );
+    await pressWithFocus(pg, '/');
+    check(
+      'on Rules, "/" does not reach Attention\'s hidden search',
+      !(await pg.evaluate(() =>
+        document.activeElement?.classList.contains('kit-search'),
+      )),
+    );
+    await pressWithFocus(pg, 'a');
+    check(
+      'on Rules, "a" activates the open draft (the key Attention also binds)',
+      await eventually(async () => {
+        const r = await agent.api('GET', '/api/rule?id=keys-rule');
+        return r.rule.status === 'active';
+      }),
+    );
+    await pg.evaluate(() => {
+      location.hash = '#/attention/waiting';
+    });
+    await until(
+      pg,
+      () =>
+        document
+          .querySelector('.kit-ctl[data-id="attention"]')
+          ?.classList.contains('on') ?? false,
+    );
+    await pressWithFocus(pg, '/');
+    check(
+      'back on Attention, "/" focuses its search',
+      await until(pg, () =>
+        document.activeElement?.classList.contains('kit-search'),
+      ),
+    );
   } finally {
     await pg.close();
+  }
+}
+
+// ---- Task 8: the Rules section ----------------------------------------------
+//
+// The rules scenarios start their own serve. Its local branches come from a
+// seeded machine snapshot (serve.mjs seedMachines): machine probe-r8's clones
+// under /home/probe-r8, each branch with the landed verdict a real sync would
+// have written. Its rules are made through serve's own routes: Court's with
+// POST /api/rules/draft, the agent's with POST /api/agent/rule-draft.
+
+let r8Sha = 1;
+const r8Tip = () => (r8Sha++).toString(16).padStart(40, 'a');
+function r8Branch(name, landed) {
+  const tip = r8Tip();
+  const b = { name, tip, tip_at: '2026-09-20T00:00:00Z' };
+  if (!landed) return { ...b, landed_state: 'no' };
+  const main = landed === 'main';
+  return {
+    ...b,
+    landed_state: 'yes',
+    landed: main ? 'in main' : `merged #${landed}`,
+    landed_tip: tip,
+    landed_how: main ? 'default-branch' : 'merged-pr',
+  };
+}
+function r8Clone(name, branches) {
+  return {
+    path: `/home/probe-r8/${name}`,
+    repo: `schuettc/${name}`,
+    remotes: { origin: `schuettc/${name}` },
+    branches: [{ name: 'main', tip: r8Tip(), landed_state: 'no' }, ...branches],
+  };
+}
+const R8_MACHINE = {
+  version: 1,
+  machine: 'probe-r8',
+  roots: ['/home/probe-r8'],
+  clones: [
+    // r8-landed: 3 landed in main, 2 through merged PRs, 1 not landed.
+    r8Clone('r8-landed', [
+      r8Branch('feat/a1', 'main'),
+      r8Branch('feat/a2', 'main'),
+      r8Branch('feat/a3', 'main'),
+      r8Branch('feat/m1', 11),
+      r8Branch('feat/m2', 12),
+      r8Branch('feat/open', null),
+    ]),
+    r8Clone('r8-other', [r8Branch('feat/o1', 'main')]),
+    r8Clone('r8-agent', [r8Branch('feat/g1', 21), r8Branch('feat/g2', 22)]),
+    r8Clone(
+      'r8-many',
+      Array.from({ length: 203 }, (_, i) =>
+        r8Branch(`feat/n${String(i + 1).padStart(3, '0')}`, 'main'),
+      ),
+    ),
+  ],
+};
+const R8_BR = (repo, b) => `branch:schuettc/${repo}@${b}`;
+// Court's draft: every landed branch of r8-landed and r8-other, undecided.
+// 6 match: 4 in main (a1 a2 a3 o1), 2 via merged PR (m1 m2).
+const R8_LANDED = {
+  id: 'r8-landed',
+  name: 'Landed branches \u2192 delete',
+  status: 'draft',
+  match: [
+    { field: 'kind', op: 'is', value: 'branch' },
+    { field: 'repo', op: 'in', value: 'schuettc/r8-landed,schuettc/r8-other' },
+    { field: 'landed', op: 'is', value: 'all-machines' },
+    { field: 'landed-how', op: 'in', value: 'default-branch,merged-pr' },
+    { field: 'has-decision', op: 'is', value: 'false' },
+  ],
+  propose: { disposition: 'delete', note: 'landed ({how}); restore tip {tip}' },
+};
+const R8_AGENT = {
+  id: 'r8-agent',
+  name: 'Merged agent branches \u2192 delete',
+  status: 'draft',
+  match: [
+    { field: 'kind', op: 'is', value: 'branch' },
+    { field: 'repo', op: 'is', value: 'schuettc/r8-agent' },
+    { field: 'landed', op: 'is', value: 'all-machines' },
+  ],
+  propose: { disposition: 'delete' },
+};
+const R8_MANY = {
+  id: 'r8-many',
+  name: 'Many landed branches',
+  status: 'draft',
+  match: [
+    { field: 'kind', op: 'is', value: 'branch' },
+    { field: 'repo', op: 'is', value: 'schuettc/r8-many' },
+  ],
+  propose: { disposition: 'delete' },
+};
+
+let _rulesServe = null;
+async function rulesScenarios(context) {
+  const serveHandle = await startServe({ seedMachines: [R8_MACHINE] });
+  _rulesServe = serveHandle;
+  try {
+    await rulesScenariosOn(context, serveHandle);
+  } finally {
+    serveHandle.stop();
+    _rulesServe = null;
+  }
+}
+
+// The page's words and state, read in one place.
+const r8Read = {
+  attached: (pg) =>
+    pg.$eval('[data-testid="composer-attached"]', (e) => e.textContent),
+  primary: (pg) =>
+    pg.$eval('.kit-primary', (e) => (e.hidden ? '' : e.textContent.trim())),
+  heading: (pg) =>
+    pg.$eval('.cb-matches-label', (e) => e.textContent).catch(() => ''),
+  ticked: (pg) =>
+    pg.$$eval('[data-testid="matches"] .cb-mr.on', (els) =>
+      els.map((e) => e.dataset.key),
+    ),
+  facts: (pg) =>
+    pg.$$eval('.cb-rule .kit-facts > span', (els) =>
+      els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
+    ),
+};
+
+async function r8Shoot(pg, name) {
+  const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
+  for (const theme of ['light', 'dark']) {
+    for (let i = 0; i < 3; i++) {
+      const t = await pg.evaluate(() => document.documentElement.dataset.theme);
+      if (t === theme) break;
+      await pg.click('button.kit-ctl:has-text("theme")');
+    }
+    const got = await pg.evaluate(() => ({
+      theme: document.documentElement.dataset.theme,
+      bg: getComputedStyle(document.body).backgroundColor,
+    }));
+    check(
+      `/tmp/t8-${name}-${theme}.png is ${theme} (theme ${got.theme}, body ${got.bg})`,
+      got.theme === theme && got.bg === bgs[theme],
+    );
+    await pg.screenshot({ path: `/tmp/t8-${name}-${theme}.png` });
+  }
+  // Back to light for whatever follows.
+  for (let i = 0; i < 3; i++) {
+    const t = await pg.evaluate(() => document.documentElement.dataset.theme);
+    if (t === 'light') break;
+    await pg.click('button.kit-ctl:has-text("theme")');
+  }
+}
+
+async function rulesScenariosOn(context, serveHandle) {
+  const agent = createAgent(serveHandle.base, serveHandle.token);
+  const ruleOf = (id) =>
+    agent.api('GET', `/api/rule?id=${encodeURIComponent(id)}`);
+  const proposedBy = async (id) => {
+    const v = await agent.api('GET', '/api/items?view=proposed&limit=500');
+    return (v.items ?? [])
+      .filter((it) => it.proposal?.source === `rule:${id}`)
+      .map((it) => it.key)
+      .sort();
+  };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ---- scenario: rules — matches update live ------------------------------
+  console.log('\nscenario: rules — matches update live');
+  {
+    const made = await agent.api('POST', '/api/rules/draft', R8_LANDED);
+    check(
+      'serve drafts r8-landed with 6 matches (the seeded snapshot)',
+      made?.matches?.total === 6,
+    );
+    const fx = await dockFixture(serveHandle, 'r8-rules');
+    const stopPresent = fx.present();
+    // Two more rules for the list, matching nothing: an active one of
+    // Court's and a draft of the agent's.
+    await agent.api('POST', '/api/rules/draft', {
+      id: 'r8-stale',
+      name: 'Stale bot PRs (180d+) \u2192 close',
+      status: 'draft',
+      match: [{ field: 'repo', op: 'is', value: 'schuettc/r8-none' }],
+      propose: { disposition: 'close' },
+    });
+    await agent.api('POST', '/api/rules/activate', { id: 'r8-stale' });
+    await fx.agent.ruleDraft(fx.sid, {
+      id: 'r8-pi-idea',
+      name: 'Dependabot minor/patch \u2192 close when superseded',
+      status: 'draft',
+      match: [{ field: 'repo', op: 'is', value: 'schuettc/r8-none' }],
+      propose: { disposition: 'close' },
+    });
+    const pg = await openDock(context, serveHandle, fx, {
+      hash: '#/rules/r8-landed',
+      clock: true,
+    });
+    let previews = 0;
+    pg.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().includes('/api/rules/preview')) {
+        previews++;
+      }
+    });
+    try {
+      const opened = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule')?.dataset.status === 'draft' &&
+          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+            .length === 6,
+        undefined,
+        8000,
+      );
+      check('#/rules/r8-landed opens the rule as a document', opened);
+      check(
+        'a draft shows matches by reason: "matches now · 6 · 4 in main · 2 via merged pr"',
+        (await r8Read.heading(pg)) ===
+          'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
+      );
+      const server = await ruleOf('r8-landed');
+      checkList(
+        'the reasons are serve\'s ("in main" 4, "via merged PR" 2)',
+        (server.matches.by_reason ?? []).map((r) => `${r.reason} ${r.count}`),
+        ['in main 4', 'via merged PR 2'],
+      );
+      checkList(
+        "the ticked rows are serve's matches, in serve's order",
+        await r8Read.ticked(pg),
+        (server.matches.page ?? []).map((m) => m.key),
+      );
+      checkList(
+        "the rows show keys without their kind, and each one's reason",
+        await pg.$$eval('[data-testid="matches"] .cb-mr.on', (els) =>
+          els.map(
+            (e) =>
+              `${e.querySelector('.cb-mr-k').textContent} | ${e.querySelector('.cb-mr-w').textContent}`,
+          ),
+        ),
+        (server.matches.page ?? []).map(
+          (m) => `${m.key.replace(/^branch:/, '')} | ${m.reason.toLowerCase()}`,
+        ),
+      );
+      checkList(
+        'the facts: status, matches, excluded, author',
+        await r8Read.facts(pg),
+        ['status draft', 'matches 6', 'excluded 0', 'by you'],
+      );
+      check(
+        'the kicker reads "rule · draft · rules/r8-landed.toml"',
+        (await pg.$eval('.cb-rule .kit-kick', (e) => e.textContent)) ===
+          'rule \u00b7 draft \u00b7 rules/r8-landed.toml',
+      );
+      check(
+        'the composer attaches the open rule: "rule r8-landed"',
+        (await r8Read.attached(pg)) === 'rule r8-landed',
+      );
+      check(
+        'the bar\'s primary on a draft is "Activate"',
+        (await r8Read.primary(pg)) === 'Activate',
+      );
+      checkList(
+        "the conditions table shows the rule's conditions",
+        await pg.$$eval('[data-testid="conditions"] .cb-cond', (els) =>
+          els.map((e) =>
+            [
+              e.querySelector('.cb-cond-f').textContent,
+              e.querySelector('.cb-cond-o').value ??
+                e.querySelector('.cb-cond-o').textContent,
+              e.querySelector('.cb-cond-v').value ??
+                e.querySelector('.cb-cond-v').textContent,
+            ].join(' '),
+          ),
+        ),
+        R8_LANDED.match.map((c) => `${c.field} ${c.op} ${c.value}`),
+      );
+      checkList(
+        'the proposal table: disposition and note',
+        await pg.$$eval('[data-testid="propose"] .kit-tr', (els) =>
+          els.map((e) => e.textContent),
+        ),
+        ['dispositiondelete', 'notelanded ({how}); restore tip {tip}'],
+      );
+
+      // Grouped by repo: serve's groups, each with its rows.
+      await pg.click('.cb-matches-view .kit-chip:has-text("by repo")');
+      checkList(
+        'by repo groups the matches under each repo, with its reasons',
+        await pg.$$eval(
+          '[data-testid="matches"] .cb-mgroup, [data-testid="matches"] .cb-mr.on',
+          (els) =>
+            els.map((e) =>
+              e.classList.contains('cb-mgroup')
+                ? `# ${e.textContent}`
+                : e.dataset.key,
+            ),
+        ),
+        [
+          '# schuettc/r8-landed5 \u00b7 3 in main \u00b7 2 via merged pr',
+          R8_BR('r8-landed', 'feat/a1'),
+          R8_BR('r8-landed', 'feat/a2'),
+          R8_BR('r8-landed', 'feat/a3'),
+          R8_BR('r8-landed', 'feat/m1'),
+          R8_BR('r8-landed', 'feat/m2'),
+          '# schuettc/r8-other1 \u00b7 1 in main',
+          R8_BR('r8-other', 'feat/o1'),
+        ],
+      );
+      await pg.click('.cb-matches-view .kit-chip:has-text("list")');
+
+      // Untick feat/a1: a reason, then serve excludes it.
+      const a1 = R8_BR('r8-landed', 'feat/a1');
+      const untick = async (key, reason) => {
+        await pg.click(
+          `[data-testid="matches"] .cb-mr[data-key="${key}"] .kit-box`,
+        );
+        await pg.waitForSelector('[data-testid="exclude-sheet"] input', {
+          timeout: 4000,
+        });
+        await pg.keyboard.type(reason);
+        await pg.keyboard.press('Enter');
+      };
+      await untick(a1, 'keep for reference');
+      check(
+        'unticking a match adds an exclusion and the count drops: "matches now · 5 · 3 in main · 2 via merged pr"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-matches-label')?.textContent ===
+            'matches now \u00b7 5 \u00b7 3 in main \u00b7 2 via merged pr',
+        ),
+      );
+      const ex = await pg.$eval(
+        `[data-testid="matches"] .cb-mr[data-key="${a1}"]`,
+        (e) => ({
+          x: e.classList.contains('x'),
+          checked: e.querySelector('.kit-box').getAttribute('aria-checked'),
+          w: e.querySelector('.cb-mr-w').textContent,
+        }),
+      );
+      check(
+        `the row stays, marked excluded and unticked ("${ex.w}")`,
+        ex.x &&
+          ex.checked === 'false' &&
+          ex.w === 'excluded \u00b7 keep for reference',
+      );
+      const afterEx = await ruleOf('r8-landed');
+      checkList(
+        'serve holds the exclusion with its reason, and matches 5',
+        [
+          ...(afterEx.rule.exclude ?? []).map((x) => `${x.key} ${x.reason}`),
+          String(afterEx.matches.total),
+        ],
+        [`${a1} keep for reference`, '5'],
+      );
+      checkList('the facts count it: excluded 1', await r8Read.facts(pg), [
+        'status draft',
+        'matches 5',
+        'excluded 1',
+        'by you',
+      ]);
+
+      // Re-tick: serve includes it again.
+      await pg.click(
+        `[data-testid="matches"] .cb-mr.x[data-key="${a1}"] .kit-box`,
+      );
+      check(
+        're-ticking includes it: the count is 6 again',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-matches-label')?.textContent ===
+            'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
+        ),
+      );
+      const afterIn = await ruleOf('r8-landed');
+      check(
+        'serve dropped the exclusion (none left, matches 6)',
+        (afterIn.rule.exclude ?? []).length === 0 &&
+          afterIn.matches.total === 6,
+      );
+
+      // Exclude it again for the screenshots: one excluded match.
+      await untick(a1, 'keep for reference');
+      await until(
+        pg,
+        () =>
+          !!document.querySelector('[data-testid="matches"] .cb-mr.x') &&
+          !document.querySelector('.kit-sheet'),
+      );
+
+      // Geometry and style: the list and the document fill their columns.
+      const geo = await pg.evaluate(() => {
+        const r = (sel) => {
+          const e = document.querySelector(sel);
+          if (!e) return null;
+          const b = e.getBoundingClientRect();
+          return {
+            x: Math.round(b.x),
+            y: Math.round(b.y),
+            w: Math.round(b.width),
+            h: Math.round(b.height),
+            display: getComputedStyle(e).display,
+          };
+        };
+        const lists = [...document.querySelectorAll('.kit-app > .kit-list')];
+        return {
+          list: r('.cb-rules-list'),
+          read: r('.cb-rules-read'),
+          doc: r('.cb-rules-read .kit-doc'),
+          rail: r('.kit-rail'),
+          bar: r('.kit-bar'),
+          others: lists
+            .filter((e) => !e.classList.contains('cb-rules-list'))
+            .map((e) => getComputedStyle(e).display),
+        };
+      });
+      check(
+        `the rules list fills the list column: x 0, 400 wide, bar to bottom (${JSON.stringify(geo.list)})`,
+        geo.list.x === 0 &&
+          geo.list.w === 400 &&
+          geo.list.y === geo.bar.h &&
+          geo.list.y + geo.list.h === 900,
+      );
+      check(
+        `the rule fills the reading column, between the list and the rail (${JSON.stringify(geo.read)})`,
+        geo.read.x === 400 &&
+          geo.read.x + geo.read.w === geo.rail.x &&
+          geo.read.y === geo.bar.h,
+      );
+      check(
+        `the document is the kit's 640 px column, centred (${JSON.stringify(geo.doc)})`,
+        geo.doc.w === 640 &&
+          Math.abs(geo.doc.x - (geo.read.x + (geo.read.w - 640) / 2)) <= 1,
+      );
+      check(
+        `Attention's list is not displayed (${geo.others.join(',')})`,
+        geo.others.length === 1 && geo.others[0] === 'none',
+      );
+      const wait = await cssColor(pg, 'var(--kit-wait)');
+      const signal = await cssColor(pg, 'var(--kit-signal)');
+      const muted = await cssColor(pg, 'var(--kit-muted)');
+      const pill = await pg.$eval(
+        '.kit-row[data-rule="r8-landed"] .kit-meta',
+        (e) => {
+          const s = getComputedStyle(e);
+          return {
+            text: e.textContent,
+            color: s.color,
+            bg: s.backgroundColor,
+            radius: s.borderRadius,
+            h: Math.round(e.getBoundingClientRect().height),
+          };
+        },
+      );
+      check(
+        `the draft pill is the wait colour on its wash, a 6px pill (${JSON.stringify(pill)})`,
+        pill.text === 'draft' &&
+          pill.color === wait &&
+          pill.bg !== 'rgba(0, 0, 0, 0)' &&
+          pill.radius === '6px' &&
+          pill.h <= 22,
+      );
+      check(
+        "the open rule's row reads as open",
+        await pg.$eval('.kit-row[data-rule="r8-landed"]', (e) =>
+          e.classList.contains('open'),
+        ),
+      );
+      const boxes = await pg.evaluate(() => {
+        const st = (sel) => {
+          const e = document.querySelector(sel);
+          const s = getComputedStyle(e);
+          const b = e.getBoundingClientRect();
+          return {
+            bg: s.backgroundColor,
+            border: s.borderTopColor,
+            bw: s.borderTopWidth,
+            w: Math.round(b.width),
+            h: Math.round(b.height),
+          };
+        };
+        const k = document.querySelector(
+          '[data-testid="matches"] .cb-mr.x .cb-mr-k',
+        );
+        return {
+          on: st('[data-testid="matches"] .cb-mr.on .kit-box'),
+          off: st('[data-testid="matches"] .cb-mr.x .kit-box'),
+          struck: getComputedStyle(k).textDecorationLine,
+          kColor: getComputedStyle(k).color,
+        };
+      });
+      check(
+        `a ticked match's box is filled in the signal colour, 14px (${JSON.stringify(boxes.on)})`,
+        boxes.on.bg === signal &&
+          boxes.on.border === signal &&
+          boxes.on.w === 14 &&
+          boxes.on.h === 14,
+      );
+      check(
+        `the unticked box is empty with the muted edge (${JSON.stringify(boxes.off)})`,
+        boxes.off.bg === 'rgba(0, 0, 0, 0)' &&
+          boxes.off.border === muted &&
+          boxes.off.bw !== '0px' &&
+          boxes.off.w === 14 &&
+          boxes.off.h === 14,
+      );
+      check(
+        `the excluded key is struck through and muted (${boxes.struck}, ${boxes.kColor})`,
+        boxes.struck === 'line-through' && boxes.kColor === muted,
+      );
+      checkList(
+        "the list: each rule with its record and status pill, in serve's order",
+        await pg.$$eval('.cb-rules-list .kit-row', (els) =>
+          els.map(
+            (e) =>
+              `${e.dataset.rule}: ${e.querySelector('.kit-kicker').textContent} | ${e.querySelector('.kit-meta').className.replace('kit-meta kit-pill ', '')} ${e.querySelector('.kit-meta').textContent}`,
+          ),
+        ),
+        (await agent.api('GET', '/api/rules')).rules.map(
+          (r) =>
+            `${r.rule.id}: 0 pending | ${r.rule.status === 'active' ? 'ok' : 'wait'} ${r.rule.status}`,
+        ),
+      );
+      checkList(
+        'the views count all, active and drafts',
+        await pg.$$eval('.cb-rules-list .kit-chip', (els) =>
+          els.map((e) => e.textContent),
+        ),
+        ['all3', 'active1', 'drafts2'],
+      );
+      check(
+        'the bar counts the rules',
+        (await pg.$eval(
+          '.kit-ctl[data-id="rules"] .kit-n',
+          (e) => e.textContent,
+        )) === '3',
+      );
+      // The whole document, down to the excluded match, in the shot.
+      await pg.$eval('.cb-rules-read', (e) => {
+        e.scrollTop = e.scrollHeight;
+      });
+      await r8Shoot(pg, 'rules');
+      await pg.$eval('.cb-rules-read', (e) => {
+        e.scrollTop = 0;
+      });
+
+      // The + condition menu offers the vocabulary: every field with its
+      // operators, as serve lists them.
+      await pg.click('.cb-cond-add');
+      await pg.$eval('[data-testid="conditions"]', (e) =>
+        e.scrollIntoView({ block: 'start' }),
+      );
+      const vocab = await agent.api('GET', '/api/rules/vocabulary');
+      checkList(
+        'the + condition menu lists every field with its operators',
+        await pg.$$eval('.cb-cond-menu-row', (els) =>
+          els.map(
+            (e) =>
+              `${e.dataset.field}: ${[...e.querySelectorAll('.cb-cond-menu-op')]
+                .map((b) => b.dataset.op)
+                .join(' ')}`,
+          ),
+        ),
+        (vocab.fields ?? []).map(
+          (f) => `${f.name}: ${(f.ops ?? []).join(' ')}`,
+        ),
+      );
+      check(
+        'the menu is shown',
+        await pg.$eval(
+          '.cb-cond-menu',
+          (e) => !e.hidden && e.offsetHeight > 100,
+        ),
+      );
+      await r8Shoot(pg, 'condition-menu');
+      await pg.keyboard.press('Escape');
+      check(
+        'Esc closes the menu',
+        await until(pg, () => document.querySelector('.cb-cond-menu').hidden),
+      );
+
+      // Editing a condition re-previews, 300 ms after the last edit. The
+      // page's clock is paused so the debounce is measured, not slept.
+      await pg.clock.pauseAt(Date.now() + 2000);
+      previews = 0;
+      const how = '.cb-cond[data-index="3"] input.cb-cond-v';
+      await pg.click(how, { clickCount: 3 });
+      await pg.keyboard.type('merged-pr');
+      await sleep(400);
+      check(
+        `no preview while the clock stands still after typing (${previews})`,
+        previews === 0,
+      );
+      await pg.clock.runFor(299);
+      await sleep(400);
+      check(
+        `no preview 299 ms after the last edit (${previews})`,
+        previews === 0,
+      );
+      await pg.clock.runFor(1);
+      check(
+        'editing a condition re-previews after the debounce: "matches now · 2 · 2 via merged pr"',
+        await eventually(
+          async () =>
+            (await r8Read.heading(pg)) ===
+            'matches now \u00b7 2 \u00b7 2 via merged pr',
+        ),
+      );
+      check(
+        `the nine keystrokes made one preview (${previews})`,
+        previews === 1,
+      );
+      // Each edit restarts the wait.
+      previews = 0;
+      await pg.keyboard.type('x');
+      await pg.clock.runFor(200);
+      await pg.keyboard.press('Backspace');
+      await pg.clock.runFor(200);
+      await sleep(300);
+      check(
+        `an edit 200 ms into the wait restarts it (${previews} after 400 ms)`,
+        previews === 0,
+      );
+      await pg.clock.runFor(100);
+      check(
+        '300 ms after the last edit it previews once',
+        await eventually(async () => previews === 1),
+      );
+      await pg.clock.resume();
+      check(
+        'nothing is saved by a preview (serve still has default-branch,merged-pr)',
+        (await ruleOf('r8-landed')).rule.match[3].value ===
+          'default-branch,merged-pr',
+      );
+      check(
+        'with unsaved edits the draft offers "save draft"',
+        await until(pg, () =>
+          [...document.querySelectorAll('.cb-rule-actions .kit-btn')]
+            .map((b) => b.textContent)
+            .includes('save draft'),
+        ),
+      );
+
+      // Validation is serve's: a bad duration and a bad count show serve's
+      // message under the condition, and the matches wait for a valid rule.
+      const bodyNow = () =>
+        pg.evaluate(() =>
+          [
+            ...document.querySelectorAll('[data-testid="conditions"] .cb-cond'),
+          ].map((e) => ({
+            field: e.querySelector('.cb-cond-f').textContent,
+            op:
+              e.querySelector('.cb-cond-o').value ??
+              e.querySelector('.cb-cond-o').textContent,
+            value:
+              e.querySelector('.cb-cond-v').value ??
+              e.querySelector('.cb-cond-v').textContent,
+          })),
+        );
+      const serveSays = async () => {
+        const r = await fetch(`${serveHandle.base}/api/rules/preview`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Local-Token': serveHandle.token,
+          },
+          body: JSON.stringify({ ...R8_LANDED, match: await bodyNow() }),
+        });
+        const j = await r.json();
+        return { status: r.status, error: j.error ?? '' };
+      };
+      const addCondition = async (field, op, value) => {
+        await pg.click('.cb-cond-add');
+        await pg.click(
+          `.cb-cond-menu-row[data-field="${field}"] .cb-cond-menu-op[data-op="${op}"]`,
+        );
+        await pg.keyboard.type(value);
+      };
+      const errorShown = (i) =>
+        pg.$eval(`.cb-cond[data-index="${i}"] .cb-cond-err`, (e) =>
+          e.hidden ? '' : e.textContent,
+        );
+      for (const [field, op, value] of [
+        ['age', 'older-than', '7x'],
+        ['open-prs', 'gt', 'lots'],
+      ]) {
+        await addCondition(field, op, value);
+        const said = await serveSays();
+        check(
+          `serve refuses ${field} ${op} "${value}" (${said.status}: ${said.error})`,
+          said.status === 400 && said.error.startsWith('condition 5: '),
+        );
+        check(
+          `the page shows serve's message under ${field}`,
+          await eventually(async () => (await errorShown(5)) === said.error),
+        );
+        check(
+          `a bad ${field} is not previewed as if valid (no count, matches "—")`,
+          (await r8Read.heading(pg)) === 'matches now' &&
+            (await pg.$eval(
+              '[data-testid="matches"]',
+              (e) => e.textContent,
+            )) === 'not previewed: condition 6 is not valid' &&
+            (await r8Read.facts(pg))[1] === 'matches \u2014',
+        );
+        await pg.click('.cb-cond[data-index="5"] .cb-cond-rm');
+        check(
+          `removing it previews the valid rule again (${field})`,
+          await until(
+            pg,
+            () =>
+              document.querySelector('.cb-matches-label')?.textContent ===
+                'matches now \u00b7 2 \u00b7 2 via merged pr' &&
+              [...document.querySelectorAll('.cb-cond-err')].every(
+                (e) => e.hidden,
+              ),
+          ),
+        );
+      }
+
+      // save draft persists the edit.
+      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+      check(
+        'save draft saves the edit to serve',
+        await eventually(
+          async () =>
+            (await ruleOf('r8-landed')).rule.match[3].value === 'merged-pr',
+        ),
+      );
+      check(
+        'once saved, "save draft" goes',
+        await until(
+          pg,
+          () =>
+            ![...document.querySelectorAll('.cb-rule-actions .kit-btn')]
+              .map((b) => b.textContent)
+              .includes('save draft'),
+        ),
+      );
+
+      // Live: a decision made elsewhere changes the matches under the open
+      // rule (has-decision is false), without a reload, and leaves the
+      // attached line alone.
+      await pg.evaluate(() => {
+        window.__r8NoReload = true;
+      });
+      const m1 = R8_BR('r8-landed', 'feat/m1');
+      const decided = await agent.api('POST', '/api/decide', {
+        keys: [m1],
+        disposition: 'keep',
+      });
+      check('serve decides feat/m1 (keep)', !!decided);
+      check(
+        'the matches update live: "matches now · 1 · 1 via merged pr"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-matches-label')?.textContent ===
+            'matches now \u00b7 1 \u00b7 1 via merged pr',
+        ),
+      );
+      check(
+        'without a reload',
+        await pg.evaluate(() => window.__r8NoReload === true),
+      );
+      check(
+        'a live event for the hidden Attention leaves "rule r8-landed" attached',
+        (await r8Read.attached(pg)) === 'rule r8-landed',
+      );
+
+      // propose once: the current matches become proposals.
+      await pg.click('.cb-rule-actions .kit-btn:has-text("propose once")');
+      check(
+        'propose once says what it proposed',
+        await until(pg, () =>
+          (
+            document.querySelector('.cb-rule-note')?.textContent ?? ''
+          ).startsWith('1 match proposed'),
+        ),
+      );
+      checkList(
+        'serve has the match as a pending proposal from rule:r8-landed',
+        await proposedBy('r8-landed'),
+        [R8_BR('r8-landed', 'feat/m2')],
+      );
+    } finally {
+      stopPresent();
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: rules — a long match list pages ---------------------------
+  console.log('\nscenario: rules — a long match list pages at 200');
+  {
+    await agent.api('POST', '/api/rules/draft', R8_MANY);
+    const pg = await context.newPage();
+    try {
+      await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.goto(serveHandle.url + '#/rules/r8-many', {
+        waitUntil: 'domcontentloaded',
+      });
+      check(
+        '203 matches render 200 rows and "… 3 more"',
+        await until(
+          pg,
+          () =>
+            document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+              .length === 200 &&
+            document.querySelector('.cb-mr-more .cb-mr-k')?.textContent ===
+              '\u2026 3 more',
+          undefined,
+          8000,
+        ),
+      );
+      await pg.click('.cb-mr-more .cb-link');
+      check(
+        '"show 3 more" loads the rest, and the more row goes',
+        await until(
+          pg,
+          () =>
+            document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+              .length === 203 && !document.querySelector('.cb-mr-more'),
+        ),
+      );
+      const keys = await r8Read.ticked(pg);
+      check(
+        'the 203 rows are 203 different branches',
+        new Set(keys).size === 203,
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: rules — activate proposes ---------------------------------
+  console.log('\nscenario: rules — activate proposes');
+  {
+    const sid = `probe-r8-agent-${Date.now()}`;
+    await agent.presence(sid, 'pi \u00b7 r8', '/home/court/r8', 'pi');
+    const drafted = await agent.ruleDraft(sid, R8_AGENT);
+    check(
+      `the agent drafts r8-agent (${drafted?.rule?.created_by})`,
+      drafted?.rule?.created_by === `pi:${sid}` &&
+        drafted?.rule?.status === 'draft',
+    );
+    let refused = '';
+    try {
+      await agent.ruleDraft(sid, { ...R8_AGENT, status: 'active' });
+    } catch (err) {
+      refused = String(err.message);
+    }
+    check(
+      'serve refuses the agent activating it',
+      refused.includes('400') &&
+        refused.includes('cannot set status to active'),
+    );
+    check(
+      'so it is still a draft',
+      (await ruleOf('r8-agent')).rule.status === 'draft',
+    );
+
+    const pg = await context.newPage();
+    try {
+      await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.goto(serveHandle.url + '#/rules/r8-agent', {
+        waitUntil: 'domcontentloaded',
+      });
+      await until(
+        pg,
+        () => document.querySelector('.cb-rule')?.dataset.rule === 'r8-agent',
+        undefined,
+        8000,
+      );
+      const row = await pg.$eval('.kit-row[data-rule="r8-agent"]', (e) => ({
+        sub: e.querySelector('.kit-sub')?.textContent ?? '',
+        pill: e.querySelector('.kit-meta').textContent,
+      }));
+      check(
+        `the agent's draft shows its author in the list ("${row.sub}")`,
+        row.sub === 'drafted by pi \u00b7 awaiting your review' &&
+          row.pill === 'draft',
+      );
+      const agentColour = await cssColor(pg, 'var(--kit-agent)');
+      const by = await pg.$eval(
+        '.cb-rule .kit-facts > span:last-child b',
+        (e) => ({
+          text: e.textContent,
+          color: getComputedStyle(e).color,
+        }),
+      );
+      check(
+        `the document names its author, in the agent's colour ("by ${by.text}")`,
+        by.text === 'pi' && by.color === agentColour,
+      );
+      check(
+        'and says only Court activates it',
+        (
+          await pg.$eval('.cb-rule > p:not(.kit-kick)', (e) => e.textContent)
+        ).startsWith(
+          'pi drafted this rule. It proposes nothing until you activate it, and only you can.',
+        ),
+      );
+      check(
+        'the composer attaches "rule r8-agent"',
+        (await r8Read.attached(pg)) === 'rule r8-agent',
+      );
+
+      // A hidden Rules does not touch the attached line: show Attention, then
+      // the agent edits its draft (a live rules event).
+      await pg.evaluate(() => {
+        location.hash = '#/attention/new';
+      });
+      check(
+        'on Attention the attached line is Attention\'s ("nothing")',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === 'nothing',
+        ),
+      );
+      await agent.ruleDraft(sid, {
+        ...R8_AGENT,
+        name: 'Merged agent branches \u2192 delete (edited)',
+      });
+      check(
+        'the hidden Rules list takes the live edit',
+        await until(pg, () =>
+          [...document.querySelectorAll('.cb-rules-list .kit-title')]
+            .map((e) => e.textContent)
+            .includes('Merged agent branches \u2192 delete (edited)'),
+        ),
+      );
+      check(
+        'and the attached line stays "nothing"',
+        (await r8Read.attached(pg)) === 'nothing',
+      );
+      check(
+        "and the primary stays Attention's (none)",
+        (await r8Read.primary(pg)) === '',
+      );
+
+      // A rule still loading when Rules is left: its answer, arriving under
+      // Attention, must not reach the attached line or the primary.
+      const slowRule = /\/api\/rule\?/;
+      const hold = async (route) => {
+        await sleep(800);
+        await route.continue();
+      };
+      await pg.route(slowRule, hold);
+      await pg.evaluate(() => {
+        location.hash = '#/rules/r8-stale';
+      });
+      await sleep(150);
+      await pg.evaluate(() => {
+        location.hash = '#/attention/new';
+      });
+      await sleep(1500);
+      check(
+        'a rule that finishes loading after Rules is left attaches nothing',
+        (await r8Read.attached(pg)) === 'nothing' &&
+          (await r8Read.primary(pg)) === '',
+      );
+      await pg.unroute(slowRule, hold);
+
+      await pg.evaluate(() => {
+        location.hash = '#/rules/r8-agent';
+      });
+      check(
+        'back on Rules: "rule r8-agent" and "Activate"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === 'rule r8-agent' &&
+            document.querySelector('.kit-primary')?.textContent === 'Activate',
+        ),
+      );
+      checkList(
+        'nothing is proposed from r8-agent yet',
+        await proposedBy('r8-agent'),
+        [],
+      );
+      await pg.click('.kit-primary');
+      check(
+        "Court's Activate activates it",
+        await eventually(
+          async () => (await ruleOf('r8-agent')).rule.status === 'active',
+        ),
+      );
+      checkList(
+        'activate turns its matches into pending proposals (serve)',
+        await proposedBy('r8-agent'),
+        [R8_BR('r8-agent', 'feat/g1'), R8_BR('r8-agent', 'feat/g2')],
+      );
+      const ok = await cssColor(pg, 'var(--kit-ok)');
+      check(
+        'the rule shows as active: pill in the ok colour, primary "Deactivate", "2 pending"',
+        await until(
+          pg,
+          ([okc]) => {
+            const r = document.querySelector('.kit-row[data-rule="r8-agent"]');
+            const m = r?.querySelector('.kit-meta');
+            return (
+              m?.textContent === 'active' &&
+              getComputedStyle(m).color === okc &&
+              r.querySelector('.kit-kicker').textContent === '2 pending' &&
+              document.querySelector('.kit-primary')?.textContent ===
+                'Deactivate'
+            );
+          },
+          [ok],
+        ),
+      );
+      check(
+        "an active rule's conditions are read-only (no + condition)",
+        !(await pg.$('.cb-rule .cb-cond-add')) &&
+          !(await pg.$('.cb-rule input.cb-cond-v, .cb-rule select')),
+      );
+
+      await pg.evaluate(() => {
+        location.hash = '#/attention/proposed';
+      });
+      checkList(
+        "the page lists them as proposals in Attention's proposed view",
+        await (async () => {
+          await until(
+            pg,
+            () =>
+              [
+                ...document.querySelectorAll(
+                  '.kit-list:not(.cb-rules-list) .kit-row .kit-kicker',
+                ),
+              ].filter((e) => e.textContent.includes('r8-agent')).length === 2,
+          );
+          return pg.$$eval('.kit-list:not(.cb-rules-list) .kit-row', (els) =>
+            els
+              .filter((e) =>
+                e.querySelector('.kit-kicker').textContent.includes('r8-agent'),
+              )
+              .map(
+                (e) =>
+                  `${e.querySelector('.kit-kicker').textContent} | ${e.querySelector('.kit-sub')?.textContent}`,
+              )
+              .sort(),
+          );
+        })(),
+        [
+          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule proposes delete',
+          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule proposes delete',
+        ],
+      );
+
+      await pg.evaluate(() => {
+        location.hash = '#/rules/r8-agent';
+      });
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
+      );
+      await pg.click('.kit-primary');
+      check(
+        'Deactivate puts it back to a draft',
+        await eventually(
+          async () => (await ruleOf('r8-agent')).rule.status === 'draft',
+        ),
+      );
+      check(
+        'and the primary is "Activate" again',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.kit-primary')?.textContent === 'Activate',
+        ),
+      );
+    } finally {
+      await pg.close();
+    }
   }
 }
 
@@ -1807,11 +2981,12 @@ async function keyScopeScenariosOn(context, serveHandle) {
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 260;
+const MIN_CHECKS = 354;
 
 // PROBE_ONLY runs one group of scenarios, for working on them locally. Under
 // CI (the CI env var is set) it is refused: CI always runs the whole probe.
 const only = process.env.PROBE_ONLY ?? '';
+const keyClashes = [];
 const underCI = !!process.env.CI;
 
 async function run() {
@@ -1851,6 +3026,18 @@ async function run() {
     process.exit(1);
   }
 
+  // Every context the probe opens watches its pages' consoles for a section
+  // key clash (app.ts reports one there rather than failing to show).
+  const newContext = browser.newContext.bind(browser);
+  browser.newContext = async (...args) => {
+    const c = await newContext(...args);
+    c.on('console', (msg) => {
+      if (msg.type() === 'error' && msg.text().includes('key clash')) {
+        keyClashes.push(msg.text());
+      }
+    });
+    return c;
+  };
   const context = await browser.newContext();
   const page = await context.newPage();
   ran = true;
@@ -1864,6 +3051,11 @@ async function run() {
     // PROBE_ONLY=keys runs only the section-key scenario (its own serve).
     if (process.env.PROBE_ONLY === 'keys') {
       await keyScopeScenarios(context);
+      return;
+    }
+    // PROBE_ONLY=rules runs only the Rules scenarios (their own serve).
+    if (process.env.PROBE_ONLY === 'rules') {
+      await rulesScenarios(context);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -6104,6 +7296,9 @@ async function run() {
     // ---- section keys (their own seeded serve too) --------------------------
     await keyScopeScenarios(context);
 
+    // ---- Task 8: Rules (its own seeded serve) -------------------------------
+    await rulesScenarios(context);
+
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');
 
@@ -6443,6 +7638,13 @@ async function run() {
     console.error('probe: unexpected error:', err);
     fails++;
   } finally {
+    console.log('\ninvariant: no section key clashed');
+    check(
+      keyClashes.length
+        ? `no section key clashed — ${keyClashes.join(' | ')}`
+        : 'no section key clashed (no "key clash" on any page\'s console)',
+      keyClashes.length === 0,
+    );
     await context.close();
     await browser.close();
     cleanup();

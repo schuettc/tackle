@@ -15,6 +15,7 @@ import {
   type Chip,
   type ListHandle,
   type KeyBinding,
+  type Primary,
 } from '/_kit/kit.js';
 import type {
   SummaryView,
@@ -524,7 +525,20 @@ export function makeAttention(ctx: Ctx): Section {
 
   // Wire selection → primary button and foot count (Task 4). Its "d" key is
   // one of this section's keys (Section.keys), live only while it is shown.
-  const decideKey = wireSelection(ctx, handle);
+  // The bar's primary is the active section's: wireSelection's "Decide N" is
+  // kept here and reaches the bar only while Attention is shown (app.ts asks
+  // primary() on show).
+  let decidePrimary: Primary | null = null;
+  const decideKey = wireSelection(
+    {
+      ...ctx,
+      setPrimary(p) {
+        decidePrimary = p;
+        if (active) ctx.setPrimary(p);
+      },
+    },
+    handle,
+  );
 
   // Also update proposal bulk buttons and select-all visibility when selection changes.
   selection.onChange((ids) => {
@@ -580,24 +594,17 @@ export function makeAttention(ctx: Ctx): Section {
     },
   };
 
-  // Register / to focus the search field (kit v0.11.0).
-  // createKeys() in app.ts is called before sections are created, so we
-  // register this binding here rather than via the list option.
-  if (typeof handle.focusSearch === 'function') {
-    const focusFn = handle.focusSearch.bind(handle);
-    try {
-      ctx.keys.register({
-        keys: '/',
-        label: 'search',
-        group: 'family',
-        run() {
-          focusFn();
-        },
-      });
-    } catch {
-      // Already registered (e.g. createKeys was given this list).
-    }
-  }
+  // "/" focuses the search field (kit v0.11.0). It is one of this section's
+  // keys (Section.keys), bound only while Attention is shown: on #/rules the
+  // field is hidden, and Rules may bind "/" for itself.
+  const searchKey: KeyBinding = {
+    keys: '/',
+    label: 'search',
+    group: 'page',
+    run() {
+      handle.focusSearch?.();
+    },
+  };
 
   // Load summary for initial counts.
   void ctx.api
@@ -735,7 +742,7 @@ export function makeAttention(ctx: Ctx): Section {
     hide() {
       active = false;
     },
-    keys: [decideKey, acceptKey, rejectKey],
+    keys: [decideKey, acceptKey, rejectKey, searchKey],
     onLive(type: string, data: unknown) {
       if (type === 'index') {
         // One reload per index event: apply counts from the event payload and
@@ -811,7 +818,7 @@ export function makeAttention(ctx: Ctx): Section {
       }
     },
     primary() {
-      return null;
+      return decidePrimary;
     },
   };
 }

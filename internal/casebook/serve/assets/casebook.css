@@ -753,3 +753,224 @@
 .cb-worked-at {
   flex: none;
 }
+.kit-app > .kit-list[hidden],
+.kit-app > .kit-read[hidden] {
+  display: none;
+}
+.cb-rules-list .kit-meta.kit-pill {
+  align-self: start;
+  margin-top: 2px;
+  padding: 1px 7px;
+}
+.cb-cond + .cb-cond {
+  border-top: 1px solid var(--kit-line);
+}
+.cb-conds .kit-tr,
+.cb-propose .kit-tr {
+  grid-template-columns: 120px 96px minmax(0, 1fr) auto;
+}
+.cb-cond-f,
+.cb-cond-o {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+}
+.cb-cond-v {
+  font: 13px var(--kit-mono);
+  color: var(--kit-fg);
+  overflow-wrap: anywhere;
+}
+.cb-cond-v.cb-danger {
+  color: var(--kit-danger);
+}
+select.cb-cond-o,
+select.cb-cond-v,
+input.cb-cond-v {
+  width: 100%;
+  min-width: 0;
+  margin: -3px 0 -3px -7px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  outline: none;
+}
+select.cb-cond-o,
+select.cb-cond-v {
+  appearance: none;
+  cursor: pointer;
+}
+select.cb-cond-o {
+  color: var(--kit-muted);
+}
+select.cb-cond-o:hover,
+select.cb-cond-v:hover,
+input.cb-cond-v:hover,
+input.cb-cond-v:focus {
+  border-color: var(--kit-line);
+}
+select.cb-cond-o:focus-visible,
+select.cb-cond-v:focus-visible,
+input.cb-cond-v:focus-visible {
+  border-color: var(--kit-signal);
+}
+input.cb-cond-v::placeholder {
+  color: var(--kit-muted);
+}
+.cb-cond-rm {
+  font: 13px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.cb-cond-rm:hover {
+  color: var(--kit-fg);
+}
+.cb-cond-err {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-signal);
+  padding: 0 14px 9px;
+}
+.cb-cond[data-invalid] .cb-cond-v {
+  color: var(--kit-signal);
+}
+.cb-cond-add {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-signal);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--kit-line);
+  padding: 9px 14px;
+  cursor: pointer;
+}
+.cb-cond-rows:empty + .cb-cond-err[hidden] + .cb-cond-add {
+  border-top: 0;
+}
+.cb-cond-menu {
+  border-top: 1px solid var(--kit-line);
+  max-height: 320px;
+  overflow: auto;
+  padding: 6px 0;
+}
+.cb-cond-menu-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 14px;
+}
+.cb-cond-menu-f {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+}
+.cb-cond-menu-ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.cb-cond-menu-op.kit-chip:hover,
+.cb-cond-menu-op.kit-chip:focus-visible {
+  color: var(--kit-fg);
+  background: var(--kit-signal-soft);
+  border-color: transparent;
+}
+.cb-matches-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cb-matches-view {
+  display: flex;
+  gap: 6px;
+}
+.cb-matches-view .kit-chip {
+  font-size: 11.5px;
+  padding: 0 7px;
+}
+.cb-mr {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 14px;
+  border-top: 1px solid var(--kit-line);
+  font-size: 14px;
+}
+.cb-mr:first-child {
+  border-top: 0;
+}
+.cb-mr .kit-box {
+  margin-top: 0;
+  cursor: pointer;
+}
+.cb-mr.on .kit-box {
+  background: var(--kit-signal);
+  border-color: var(--kit-signal);
+}
+.cb-mr-k {
+  font: 12.5px var(--kit-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-mr-w {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-mr.x .cb-mr-k {
+  color: var(--kit-muted);
+  text-decoration: line-through;
+}
+.cb-mr-more .cb-mr-k,
+.cb-mr-wait .cb-mr-k {
+  color: var(--kit-muted);
+}
+.cb-mgroup {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--kit-line);
+  background: var(--kit-panel);
+}
+.cb-mgroup:first-child {
+  border-top: 0;
+}
+.cb-mgroup-repo {
+  font: 12.5px var(--kit-mono);
+  font-weight: 600;
+}
+.cb-link {
+  font: 12px var(--kit-mono);
+  color: var(--kit-signal);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cb-rule-actions {
+  margin-top: 18px;
+}
+.cb-rule-note {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 10px 0 0;
+}
+.cb-rule-note:empty {
+  display: none;
+}
+.cb-by-agent,
+.kit-facts b.cb-by-agent {
+  color: var(--kit-agent);
+}

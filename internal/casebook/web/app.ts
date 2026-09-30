@@ -23,6 +23,7 @@ import {
 } from '/_kit/kit.js';
 import type { Attached, SummaryView } from './wire.d.ts';
 import { onRoute, dispatchCurrent, go, type Route } from './router.ts';
+import { makeKeyBinder } from './section-keys.ts';
 
 // ---- public contracts -------------------------------------------------------
 
@@ -64,18 +65,25 @@ export interface Section {
    * state (its selection, its counts) stays current for when it comes back.
    */
   onLive(type: string, data: unknown): void;
+  /**
+   * primary is the bar's one filled button for this section now. app.ts sets
+   * it after show(); while active, a section calls ctx.setPrimary when it
+   * changes, and never while hidden.
+   */
   primary(): Primary | null;
   /**
-   * keys are the section's own keys (Attention's a / r / d; Rules and Apply
-   * their own). app.ts registers them with ctx.keys when the section is shown
-   * and unregisters them when another section is shown, so they act only in
+   * keys are the section's own keys (Attention's a / r / d and its /
+   * search; Rules' a, activate; Apply its own). app.ts registers them with
+   * ctx.keys when the section is shown and unregisters them when another
+   * section is shown, so they act only in
    * the active section: a hidden section keeps its open item and selection,
    * and a key must not reach them. It also lets two sections bind the same
    * key, which the kit's registry otherwise refuses (a clash throws).
    *
    * A section never calls ctx.keys.register for a key of its own: that binds
-   * it page-wide. ctx.keys.register is for page-wide keys (the dock's, and
-   * family keys like /).
+   * it page-wide. ctx.keys.register is for page-wide keys (the dock's). A key
+   * that clashes when its section is shown is reported on the console; the
+   * probe fails on that, and the section still shows.
    */
   keys?: KeyBinding[];
 }
@@ -304,18 +312,13 @@ export function boot(): void {
   // ---- section keys ---------------------------------------------------------
 
   // Only the active section's keys are registered (Section.keys). A route
-  // within the same section keeps them; a route to another section swaps them.
-  let keyedSection: Section | undefined;
-  let unbindSectionKeys: Array<() => void> = [];
-  function bindSectionKeys(sec: Section | undefined): void {
-    if (sec === keyedSection) return;
-    for (const unbind of unbindSectionKeys) unbind();
-    unbindSectionKeys = [];
-    keyedSection = sec;
-    for (const b of sec?.keys ?? []) {
-      unbindSectionKeys.push(ctx.keys.register(b));
-    }
-  }
+  // within the same section keeps them; a route to another section swaps
+  // them. A clash is reported on the console (the probe fails on it) and the
+  // section still shows.
+  const bindSectionKeys = makeKeyBinder(
+    (b) => ctx.keys.register(b),
+    (m) => console.error(m),
+  );
 
   // ---- routing --------------------------------------------------------------
 
@@ -342,9 +345,12 @@ export function boot(): void {
     bindSectionKeys(activeSec);
     if (activeSec) {
       activeSec.show(r.sub);
+      // The bar's primary follows the active section.
+      ctx.setPrimary(activeSec.primary());
     } else {
-      // A section that isn't built yet (Rules before Task 8, Apply before
-      // Task 9) has no context: nothing is attached while it is shown.
+      ctx.setPrimary(null);
+      // A section that isn't built yet (Apply before Task 9) has no
+      // context: nothing is attached while it is shown.
       ctx.setAttached({});
     }
   });
@@ -355,9 +361,9 @@ export function boot(): void {
     .get<SummaryView>('/summary')
     .then((s) => {
       const counts = s.counts ?? {};
-      // 'all' is the attention total; rules/apply counts arrive in later tasks.
+      // 'all' is the attention total. The Rules section counts its rules
+      // itself (the summary has no rules count); apply arrives with Task 9.
       handle.setCount('attention', counts['all'] ?? 0);
-      handle.setCount('rules', counts['rules'] ?? 0);
       handle.setCount('apply', counts['apply'] ?? 0);
 
       const minsAgo = s.synced_at
@@ -383,7 +389,6 @@ export function boot(): void {
       .then((s) => {
         const counts = s.counts ?? {};
         handle.setCount('attention', counts['all'] ?? 0);
-        handle.setCount('rules', counts['rules'] ?? 0);
         handle.setCount('apply', counts['apply'] ?? 0);
       })
       .catch(() => {});

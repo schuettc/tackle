@@ -192,5 +192,22 @@ export function createAgent(base, token) {
     async moveSession(from, to) {
       return call('POST', '/api/sessions/move', { session: from, target: to });
     },
+
+    /**
+     * POST /api/agent/rule-draft — the agent drafts (or edits its own) rule.
+     * @param {string} session — the session id
+     * @param {object} rule — a rules.Rule (id, name, match, propose, …)
+     */
+    async ruleDraft(session, rule) {
+      return call('POST', '/api/agent/rule-draft', { session, rule });
+    },
+
+    /**
+     * api calls any page route with the token, for a scenario's fixture and
+     * for reading serve's state back (e.g. api('GET', '/api/rule?id=x')).
+     */
+    async api(method, path, body) {
+      return call(method, path, body);
+    },
   };
 }
