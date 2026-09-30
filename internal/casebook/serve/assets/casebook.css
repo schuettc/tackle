@@ -1299,3 +1299,26 @@ textarea.cb-needs-edit:focus {
 .cb-steps-more .cb-step-k {
   color: var(--kit-muted);
 }
+.kit-app {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.kit-app > .kit-list,
+.kit-app > .kit-read,
+.kit-app > .kit-rail {
+  grid-row: 3;
+}
+.kit-app > .cb-down {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 18px;
+  font: 13px var(--kit-mono);
+  color: var(--kit-danger);
+  background: color-mix(in srgb, var(--kit-danger) 8%, var(--kit-bg));
+  border-bottom: 1px solid var(--kit-danger);
+}
+.kit-app > .cb-down[hidden] {
+  display: none;
+}

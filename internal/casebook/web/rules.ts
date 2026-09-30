@@ -1556,13 +1556,17 @@ export function makeRules(ctx: Ctx): Section {
     },
   };
 
+  const ruleKeys: KeyBinding[] = [activateKey];
+
   void loadList();
 
   return {
     id: 'rules',
     list: handle.el,
     read: readEl,
-    keys: [activateKey],
+    // Rule rows can't be selected: the list keys here move and open.
+    listKeys: () => ({ nav: handle, selects: false }),
+    keys: () => ruleKeys,
     show(sub: string) {
       active = true;
       const id = sub;

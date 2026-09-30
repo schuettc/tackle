@@ -1290,6 +1290,8 @@ export function makeApply(ctx: Ctx): Section {
     },
   };
 
+  const applyKeys: KeyBinding[] = [approveKey, pauseKey];
+
   function close(): void {
     jobSeq.next(); // a reply on its way no longer draws
     openId = null;
@@ -1321,7 +1323,8 @@ export function makeApply(ctx: Ctx): Section {
     id: 'apply',
     list: handle.el,
     read: readEl,
-    keys: [approveKey, pauseKey],
+    listKeys: () => ({ nav: handle, selects: true }),
+    keys: () => applyKeys,
     show(sub: string) {
       active = true;
       const id = sub ? Number(decodeURIComponent(sub).replace(/^#/, '')) : NaN;

@@ -48,24 +48,89 @@ function dispatchCurrent() {
   fire();
 }
 
-// section-keys.ts
-function makeKeyBinder(register, report) {
-  let bound;
-  let unbinds = [];
-  return (sec) => {
-    if (sec === bound) return;
-    for (const unbind of unbinds) unbind();
-    unbinds = [];
-    bound = sec;
-    for (const b of sec?.keys ?? []) {
-      try {
-        unbinds.push(register(b));
-      } catch (err) {
-        const why = err instanceof Error ? err.message : String(err);
-        report(
-          `[casebook] key clash in section ${sec?.id}: "${b.keys}" (${b.label}): ${why}`
-        );
+// key-layer.ts
+function navKeys(nav) {
+  const ks = [
+    { keys: "j", label: "next", run: () => nav.move(1) },
+    { keys: "↓", label: "next", run: () => nav.move(1) },
+    { keys: "k", label: "previous", run: () => nav.move(-1) },
+    { keys: "↑", label: "previous", run: () => nav.move(-1) },
+    { keys: "o", label: "open", run: () => nav.open() },
+    { keys: "↵", label: "open", run: () => nav.open() }
+  ];
+  if (typeof nav.focusSearch === "function") {
+    const search = nav.focusSearch.bind(nav);
+    ks.push({ keys: "/", label: "search", run: () => search() });
+  }
+  return ks.map((k) => ({ ...k, group: "family" }));
+}
+function makeKeyLayer(create, report) {
+  const page = [];
+  let current = create();
+  let shown;
+  let shownList = null;
+  let shownKeys = [];
+  const clash = (where, b, err) => report(
+    `[casebook] key clash in ${where}: "${b.keys}" (${b.label}): ${err instanceof Error ? err.message : String(err)}`
+  );
+  function rebuild() {
+    current.destroy();
+    const l = shownList;
+    current = create(l && l.selects ? l.nav : void 0);
+    if (l && !l.selects) {
+      for (const b of navKeys(l.nav)) {
+        try {
+          current.register(b);
+        } catch (err) {
+          clash(`section ${shown?.id} (list)`, b, err);
+        }
       }
+    }
+    for (const p of page) {
+      try {
+        p.unbind = current.register(p.b);
+      } catch (err) {
+        p.unbind = null;
+        clash("the page", p.b, err);
+      }
+    }
+    for (const b of shownKeys) {
+      try {
+        current.register(b);
+      } catch (err) {
+        clash(`section ${shown?.id}`, b, err);
+      }
+    }
+  }
+  const same = (a, b) => a.length === b.length && a.every((k, i) => k === b[i]);
+  return {
+    keys: {
+      register(b) {
+        const p = { b, unbind: current.register(b) };
+        page.push(p);
+        return () => {
+          p.unbind?.();
+          p.unbind = null;
+          const i = page.indexOf(p);
+          if (i >= 0) page.splice(i, 1);
+        };
+      },
+      showHelp: (open) => current.showHelp(open),
+      bindings: () => current.bindings(),
+      destroy() {
+        page.length = 0;
+        current.destroy();
+      }
+    },
+    bind(sec) {
+      const l = sec?.listKeys?.() ?? null;
+      const ks = sec?.keys?.() ?? [];
+      if (sec === shown && l?.nav === shownList?.nav && l?.selects === shownList?.selects && same(ks, shownKeys))
+        return;
+      shown = sec;
+      shownList = l;
+      shownKeys = ks;
+      rebuild();
     }
   };
 }
@@ -96,10 +161,14 @@ var booted = false;
 function boot() {
   if (booted) return;
   booted = true;
+  let stale = false;
+  const gated = (input, init) => stale ? Promise.reject(
+    new Error("casebook serve restarted: this tab has stopped")
+  ) : fetch(input, init);
   const api = createApi({
-    onStale(err) {
-      void err;
-      handle.setLive("stale");
+    fetch: gated,
+    onStale() {
+      goStale();
     }
   });
   function svgEl(tag, attrs, ...children) {
@@ -160,8 +229,37 @@ function boot() {
     staleText: "restarted · continued in a new tab"
   });
   initTheme("casebook", handle.themeControl);
+  const retryBtn = h(
+    "button",
+    {
+      class: "kit-btn",
+      type: "button",
+      "data-testid": "down-retry",
+      onclick: () => retry()
+    },
+    "retry"
+  );
+  const banner = h(
+    "div",
+    { class: "cb-down", role: "alert", "data-testid": "down-banner" },
+    h(
+      "span",
+      { class: "cb-down-text" },
+      "disconnected · the casebook server isn’t answering; this page keeps trying"
+    ),
+    retryBtn
+  );
+  banner.hidden = true;
+  let down = false;
+  function setDown(on) {
+    if (down && !on && !stale) loadSummary();
+    down = on;
+    banner.hidden = !on;
+    retryBtn.disabled = false;
+    retryBtn.textContent = "retry";
+  }
   const app = h("div", { class: "kit-app" });
-  app.append(handle.el);
+  app.append(handle.el, banner);
   let currentRoute = { section: "attention", sub: "" };
   const dockHandles = [];
   let lastAttached = {};
@@ -170,10 +268,14 @@ function boot() {
   const agentListeners = [];
   let dockSession = "";
   const dockSessionListeners = [];
+  const layer = makeKeyLayer(
+    (list4) => createKeys(list4 ? { list: list4 } : {}),
+    (m) => console.error(m)
+  );
   const ctx = {
     api,
     bar: handle,
-    keys: createKeys(),
+    keys: layer.keys,
     route: {
       current: () => currentRoute,
       go
@@ -233,22 +335,68 @@ function boot() {
   }
   app.append(rail);
   document.body.append(app);
-  const liveClient = live({
-    events: "/api/events",
-    poll: "/api/state",
-    onEvent(e) {
-      emitLive(e.type, e.data);
-      for (const sec of sections.values()) sec.onLive(e.type, e.data);
-    },
-    onStatus(s) {
-      handle.setLive(s);
-    },
-    fetch: (url, init) => fetch(url, init)
-  });
-  const bindSectionKeys = makeKeyBinder(
-    (b) => ctx.keys.register(b),
-    (m) => console.error(m)
-  );
+  function startLive(cursor) {
+    return live({
+      events: "/api/events",
+      poll: "/api/state",
+      cursor,
+      onEvent(e) {
+        emitLive(e.type, e.data);
+        for (const sec of sections.values()) sec.onLive(e.type, e.data);
+      },
+      onStatus,
+      fetch: async (url, init) => {
+        const res = await gated(url, init);
+        if (res.ok && down && !stale) {
+          setDown(false);
+          handle.setLive("polling");
+        }
+        return res;
+      }
+    });
+  }
+  function onStatus(s) {
+    if (stale) return;
+    switch (s) {
+      case "stale":
+        goStale();
+        return;
+      case "down":
+        setDown(true);
+        handle.setLive("down", "disconnected");
+        return;
+      case "live":
+        setDown(false);
+        handle.setLive("live");
+        return;
+      case "polling":
+        if (!down) handle.setLive("polling");
+        return;
+    }
+  }
+  function retry() {
+    if (stale) return;
+    const cursor = liveClient.cursor();
+    liveClient.stop();
+    retryBtn.disabled = true;
+    retryBtn.textContent = "retrying…";
+    liveClient = startLive(cursor);
+  }
+  function goStale() {
+    if (stale) return;
+    stale = true;
+    liveClient?.stop();
+    setDown(false);
+    handle.setLive("stale");
+  }
+  let liveClient = startLive();
+  for (const [k, id, label] of [
+    ["g a", "attention", "go to attention"],
+    ["g r", "rules", "go to rules"],
+    ["g p", "apply", "go to apply"]
+  ]) {
+    ctx.keys.register({ keys: k, label, run: () => go(id) });
+  }
   onRoute((r) => {
     currentRoute = r;
     const sectionId = r.section === "rules" ? "rules" : r.section === "apply" ? "apply" : "attention";
@@ -260,37 +408,52 @@ function boot() {
       if (!active) sec.hide();
     }
     const activeSec = sections.get(sectionId);
-    bindSectionKeys(activeSec);
     if (activeSec) {
       activeSec.show(r.sub);
+      layer.bind(activeSec);
       ctx.setPrimary(activeSec.primary());
     } else {
+      layer.bind(void 0);
       ctx.setPrimary(null);
       ctx.setAttached({});
     }
   });
-  void api.get("/summary").then((s) => {
-    const counts = s.counts ?? {};
-    handle.setCount("attention", counts["all"] ?? 0);
-    handle.setCount("apply", counts["to-apply"] ?? 0);
-    const minsAgo = s.synced_at ? Math.round((Date.now() - new Date(s.synced_at).getTime()) / 6e4) : null;
-    const statusText = minsAgo !== null ? `synced ${minsAgo}m ago · ${s.machine}` : s.machine;
-    handle.setStatus(
-      s.offline_queued > 0 ? `offline · ${s.offline_queued} queued` : statusText,
-      { tone: s.offline_queued > 0 ? "danger" : "muted" }
-    );
-  }).catch(() => {
-  });
-  onLiveEvent("index", () => {
+  let summaryAsked = 0;
+  let summaryShown = 0;
+  let summary = null;
+  function loadSummary() {
+    const mine = ++summaryAsked;
     void api.get("/summary").then((s) => {
+      if (mine < summaryShown) return;
+      summaryShown = mine;
+      summary = s;
       const counts = s.counts ?? {};
       handle.setCount("attention", counts["all"] ?? 0);
       handle.setCount("apply", counts["to-apply"] ?? 0);
+      paintStatus();
     }).catch(() => {
     });
-  });
+  }
+  function paintStatus() {
+    const s = summary;
+    if (!s) return;
+    if (s.offline_queued > 0) {
+      handle.setStatus(`offline · ${s.offline_queued} queued`, {
+        tone: "danger"
+      });
+      return;
+    }
+    const synced = s.synced_at ? Date.parse(s.synced_at) : NaN;
+    const mins = Number.isFinite(synced) ? Math.max(0, Math.floor((Date.now() - synced) / 6e4)) : null;
+    handle.setStatus(
+      mins !== null ? `synced ${mins}m ago · ${s.machine}` : s.machine,
+      { tone: "muted" }
+    );
+  }
+  setInterval(paintStatus, 15e3);
+  loadSummary();
+  onLiveEvent("index", loadSummary);
   dispatchCurrent();
-  void liveClient;
 }
 
 // apply.ts
@@ -1784,6 +1947,7 @@ function makeApply(ctx) {
       pauseOrResume();
     }
   };
+  const applyKeys = [approveKey, pauseKey];
   function close() {
     jobSeq.next();
     openId = null;
@@ -1810,7 +1974,8 @@ function makeApply(ctx) {
     id: "apply",
     list: handle.el,
     read: readEl,
-    keys: [approveKey, pauseKey],
+    listKeys: () => ({ nav: handle, selects: true }),
+    keys: () => applyKeys,
     show(sub) {
       active = true;
       const id = sub ? Number(decodeURIComponent(sub).replace(/^#/, "")) : NaN;
@@ -3047,14 +3212,8 @@ function makeAttention(ctx) {
       });
     }
   };
-  const searchKey = {
-    keys: "/",
-    label: "search",
-    group: "page",
-    run() {
-      handle.focusSearch?.();
-    }
-  };
+  const listKeys = [decideKey, acceptKey, rejectKey];
+  const boardKeys = [decideKey];
   void ctx.api.get("/summary").then((s) => {
     applyCounts(s.counts);
   }).catch(() => {
@@ -3146,7 +3305,12 @@ function makeAttention(ctx) {
     hide() {
       active = false;
     },
-    keys: [decideKey, acceptKey, rejectKey, searchKey],
+    // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
+    // to this list while it shows. The board is not a list: it has no
+    // cursor, and its cards hide the reading column, so there only "d"
+    // (the shared selection) works.
+    listKeys: () => boardHandle ? null : { nav: handle, selects: true },
+    keys: () => boardHandle ? boardKeys : listKeys,
     onLive(type, data) {
       if (type === "index") {
         const s = data;
@@ -6049,12 +6213,15 @@ function makeRules(ctx) {
       if (p?.label === "Activate") p.run();
     }
   };
+  const ruleKeys = [activateKey];
   void loadList();
   return {
     id: "rules",
     list: handle.el,
     read: readEl,
-    keys: [activateKey],
+    // Rule rows can't be selected: the list keys here move and open.
+    listKeys: () => ({ nav: handle, selects: false }),
+    keys: () => ruleKeys,
     show(sub) {
       active = true;
       const id = sub;

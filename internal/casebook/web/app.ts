@@ -15,6 +15,7 @@ import {
   createKeys,
   type Keys,
   type KeyBinding,
+  type ListNav,
   live,
   type LiveStatus,
   initTheme,
@@ -23,7 +24,7 @@ import {
 } from '/_kit/kit.js';
 import type { Attached, SummaryView } from './wire.d.ts';
 import { onRoute, dispatchCurrent, go, type Route } from './router.ts';
-import { makeKeyBinder } from './section-keys.ts';
+import { makeKeyLayer } from './key-layer.ts';
 
 // ---- public contracts -------------------------------------------------------
 
@@ -90,20 +91,27 @@ export interface Section {
    */
   primary(): Primary | null;
   /**
-   * keys are the section's own keys (Attention's a / r / d and its /
-   * search; Rules' a, activate; Apply its own). app.ts registers them with
-   * ctx.keys when the section is shown and unregisters them when another
-   * section is shown, so they act only in
-   * the active section: a hidden section keeps its open item and selection,
-   * and a key must not reach them. It also lets two sections bind the same
-   * key, which the kit's registry otherwise refuses (a clash throws).
+   * keys are the section's own keys that work now (Attention's d, a / r;
+   * Rules' a, activate; Apply's a and p). app.ts asks after every show() and
+   * binds them while the section is shown, and only then: a hidden section
+   * keeps its open item and selection, and a key must not reach them. It
+   * also lets two sections bind the same key, which the kit's registry
+   * otherwise refuses (a clash throws). Return the same array while nothing
+   * changed.
    *
    * A section never calls ctx.keys.register for a key of its own: that binds
    * it page-wide. ctx.keys.register is for page-wide keys (the dock's). A key
    * that clashes when its section is shown is reported on the console; the
    * probe fails on that, and the section still shows.
    */
-  keys?: KeyBinding[];
+  keys?(): KeyBinding[];
+  /**
+   * listKeys is the list the family's list keys drive while the section shows
+   * (createKeys({list}): j/↓ k/↑ o/↵, x ⇧x when its rows select, / when it
+   * has a search field), or null when none is shown (Attention's board).
+   * app.ts asks after every show(), like keys.
+   */
+  listKeys?(): { nav: ListNav; selects: boolean } | null;
 }
 
 export interface DockHandle {
@@ -158,10 +166,21 @@ export function boot(): void {
 
   // ---- API client -----------------------------------------------------------
 
+  // A restarted serve no longer knows this tab's token (spec §2.4): the first
+  // 401, from the API or the live poll, makes the tab stale. It says so in the
+  // live pill, and stops: no stream, no polls, and no API call leaves it
+  // again (serve has reopened the page in a new tab).
+  let stale = false;
+  const gated = (input: RequestInfo | URL, init?: RequestInit) =>
+    stale
+      ? Promise.reject(
+          new Error('casebook serve restarted: this tab has stopped'),
+        )
+      : fetch(input, init);
   const api = createApi({
-    onStale(err) {
-      void err;
-      handle.setLive('stale');
+    fetch: gated,
+    onStale() {
+      goStale();
     },
   });
 
@@ -240,11 +259,48 @@ export function boot(): void {
 
   initTheme('casebook', handle.themeControl);
 
+  // ---- disconnected -----------------------------------------------------------
+
+  // serve isn't answering (spec §2.4): the pill says "disconnected", and a
+  // banner under the bar says so across the page, with a retry that
+  // reconnects now rather than at the next poll. Reconnecting clears both.
+  const retryBtn = h(
+    'button',
+    {
+      class: 'kit-btn',
+      type: 'button',
+      'data-testid': 'down-retry',
+      onclick: () => retry(),
+    },
+    'retry',
+  ) as HTMLButtonElement;
+  const banner = h(
+    'div',
+    { class: 'cb-down', role: 'alert', 'data-testid': 'down-banner' },
+    h(
+      'span',
+      { class: 'cb-down-text' },
+      'disconnected \u00b7 the casebook server isn\u2019t answering; this page keeps trying',
+    ),
+    retryBtn,
+  );
+  banner.hidden = true;
+  let down = false;
+  function setDown(on: boolean): void {
+    // Back from down: ask for the bar's counts and status again (one asked
+    // while serve wasn't answering never came).
+    if (down && !on && !stale) loadSummary();
+    down = on;
+    banner.hidden = !on;
+    retryBtn.disabled = false;
+    retryBtn.textContent = 'retry';
+  }
+
   // ---- sections -------------------------------------------------------------
 
-  // The app grid (.kit-app): bar | list+read | rail
+  // The app grid (.kit-app): bar | the disconnected banner | list+read | rail
   const app = h('div', { class: 'kit-app' });
-  app.append(handle.el);
+  app.append(handle.el, banner);
 
   // Build context for section makers
   let currentRoute: Route = { section: 'attention', sub: '' };
@@ -259,10 +315,17 @@ export function boot(): void {
   let dockSession = '';
   const dockSessionListeners: Array<(id: string) => void> = [];
 
+  // The keyboard layer: always the shown section's (its list, its keys),
+  // plus the page-wide keys registered on ctx.keys (key-layer.ts).
+  const layer = makeKeyLayer(
+    (list) => createKeys(list ? { list } : {}),
+    (m) => console.error(m),
+  );
+
   const ctx: Ctx = {
     api,
     bar: handle,
-    keys: createKeys(),
+    keys: layer.keys,
     route: {
       current: () => currentRoute,
       go,
@@ -339,31 +402,84 @@ export function boot(): void {
 
   // ---- live client ----------------------------------------------------------
 
-  const liveClient = live({
-    events: '/api/events',
-    poll: '/api/state',
-    onEvent(e) {
-      emitLive(e.type, e.data);
-      // Every section hears every event; only the active one feeds the
-      // composer's attached line (Section.show/hide).
-      for (const sec of sections.values()) sec.onLive(e.type, e.data);
-    },
-    onStatus(s: LiveStatus) {
-      handle.setLive(s);
-    },
-    fetch: (url, init) => fetch(url, init),
-  });
+  // The stream, polling /api/state?since=<cursor> every 2 s while it is down
+  // (the kit's live()). A poll that answers means serve is back.
+  function startLive(cursor?: string): ReturnType<typeof live> {
+    return live({
+      events: '/api/events',
+      poll: '/api/state',
+      cursor,
+      onEvent(e) {
+        emitLive(e.type, e.data);
+        // Every section hears every event; only the active one feeds the
+        // composer's attached line (Section.show/hide).
+        for (const sec of sections.values()) sec.onLive(e.type, e.data);
+      },
+      onStatus,
+      fetch: async (url, init) => {
+        const res = await gated(url, init);
+        if (res.ok && down && !stale) {
+          setDown(false);
+          handle.setLive('polling');
+        }
+        return res;
+      },
+    });
+  }
 
-  // ---- section keys ---------------------------------------------------------
+  function onStatus(s: LiveStatus): void {
+    if (stale) return;
+    switch (s) {
+      case 'stale':
+        goStale();
+        return;
+      case 'down':
+        setDown(true);
+        handle.setLive('down', 'disconnected');
+        return;
+      case 'live':
+        setDown(false);
+        handle.setLive('live');
+        return;
+      case 'polling':
+        // A stream that failed says "polling" before any poll has answered:
+        // while serve is known to be down, it stays down until one does.
+        if (!down) handle.setLive('polling');
+        return;
+    }
+  }
 
-  // Only the active section's keys are registered (Section.keys). A route
-  // within the same section keeps them; a route to another section swaps
-  // them. A clash is reported on the console (the probe fails on it) and the
-  // section still shows.
-  const bindSectionKeys = makeKeyBinder(
-    (b) => ctx.keys.register(b),
-    (m) => console.error(m),
-  );
+  // retry reconnects now: a new stream from the same cursor, so nothing
+  // missed is lost. If serve is still down, the poll says so again.
+  function retry(): void {
+    if (stale) return;
+    const cursor = liveClient.cursor();
+    liveClient.stop();
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'retrying\u2026';
+    liveClient = startLive(cursor);
+  }
+
+  function goStale(): void {
+    if (stale) return;
+    stale = true;
+    liveClient?.stop();
+    setDown(false);
+    handle.setLive('stale');
+  }
+
+  let liveClient = startLive();
+
+  // ---- keys -----------------------------------------------------------------
+
+  // g a / g r / g p switch sections (spec §3.6), like the bar's controls.
+  for (const [k, id, label] of [
+    ['g a', 'attention', 'go to attention'],
+    ['g r', 'rules', 'go to rules'],
+    ['g p', 'apply', 'go to apply'],
+  ] as const) {
+    ctx.keys.register({ keys: k, label, run: () => go(id) });
+  }
 
   // ---- routing --------------------------------------------------------------
 
@@ -387,62 +503,80 @@ export function boot(): void {
       if (!active) sec.hide();
     }
     const activeSec = sections.get(sectionId);
-    bindSectionKeys(activeSec);
     if (activeSec) {
       activeSec.show(r.sub);
+      // The keyboard layer follows what show() put up (Attention's board
+      // or its list): only the shown section's list and keys are bound.
+      layer.bind(activeSec);
       // The bar's primary follows the active section.
       ctx.setPrimary(activeSec.primary());
     } else {
+      layer.bind(undefined);
       ctx.setPrimary(null);
       // No section for this route: nothing is attached while it is shown.
       ctx.setAttached({});
     }
   });
 
-  // ---- summary (counts) -----------------------------------------------------
+  // ---- summary (counts, status) -------------------------------------------
 
-  void api
-    .get<SummaryView>('/summary')
-    .then((s) => {
-      const counts = s.counts ?? {};
-      // 'all' is the attention total; 'to-apply' the decided items waiting
-      // to be applied. The Rules section counts its rules itself (the
-      // summary has no rules count).
-      handle.setCount('attention', counts['all'] ?? 0);
-      handle.setCount('apply', counts['to-apply'] ?? 0);
-
-      const minsAgo = s.synced_at
-        ? Math.round((Date.now() - new Date(s.synced_at).getTime()) / 60000)
-        : null;
-      const statusText =
-        minsAgo !== null ? `synced ${minsAgo}m ago · ${s.machine}` : s.machine;
-      handle.setStatus(
-        s.offline_queued > 0
-          ? `offline · ${s.offline_queued} queued`
-          : statusText,
-        { tone: s.offline_queued > 0 ? 'danger' : 'muted' },
-      );
-    })
-    .catch(() => {
-      // summary failure is non-fatal; the live client will retry
-    });
-
-  // Refresh summary on index events (rebuild).
-  onLiveEvent('index', () => {
+  // The bar's counts and its status: "synced 4m ago · <machine>", or
+  // "offline · N queued" (danger) while decisions wait to be pushed. Asked
+  // at boot, again whenever the index moves (a decision moves it), so a
+  // decision queued offline shows without a reload, and again on coming back
+  // from down.
+  // An older answer never paints over a newer one; a newer one that fails
+  // leaves the older one standing.
+  let summaryAsked = 0;
+  let summaryShown = 0;
+  let summary: SummaryView | null = null;
+  function loadSummary(): void {
+    const mine = ++summaryAsked;
     void api
       .get<SummaryView>('/summary')
       .then((s) => {
+        if (mine < summaryShown) return;
+        summaryShown = mine;
+        summary = s;
         const counts = s.counts ?? {};
+        // 'all' is the attention total; 'to-apply' the decided items waiting
+        // to be applied. The Rules section counts its rules itself (the
+        // summary has no rules count).
         handle.setCount('attention', counts['all'] ?? 0);
         handle.setCount('apply', counts['to-apply'] ?? 0);
+        paintStatus();
       })
-      .catch(() => {});
-  });
+      .catch(() => {
+        // non-fatal: the next index or decision asks again
+      });
+  }
+  // paintStatus draws the status from the last summary; "synced Nm ago"
+  // follows the clock (no request: a stale tab keeps its words).
+  function paintStatus(): void {
+    const s = summary;
+    if (!s) return;
+    if (s.offline_queued > 0) {
+      handle.setStatus(`offline \u00b7 ${s.offline_queued} queued`, {
+        tone: 'danger',
+      });
+      return;
+    }
+    const synced = s.synced_at ? Date.parse(s.synced_at) : NaN;
+    const mins = Number.isFinite(synced)
+      ? Math.max(0, Math.floor((Date.now() - synced) / 60000))
+      : null;
+    handle.setStatus(
+      mins !== null ? `synced ${mins}m ago \u00b7 ${s.machine}` : s.machine,
+      { tone: 'muted' },
+    );
+  }
+  setInterval(paintStatus, 15000);
+  loadSummary();
+  // A decision rebuilds the index (serve announces "index" after it), so a
+  // decision queued offline shows here too.
+  onLiveEvent('index', loadSummary);
 
   // ---- initial route --------------------------------------------------------
 
   dispatchCurrent();
-
-  // keep live client from being GC'd
-  void liveClient;
 }

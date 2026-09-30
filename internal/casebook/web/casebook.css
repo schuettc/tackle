@@ -1627,3 +1627,34 @@ textarea.cb-needs-edit:focus {
 .cb-steps-more .cb-step-k {
   color: var(--kit-muted);
 }
+
+/* ---- disconnected (spec §2.4) ---------------------------------------------- */
+/*
+ * serve isn't answering: a banner across the page, under the bar, with a
+ * retry. The kit's grid has two rows (bar, content); casebook's has a third
+ * between them for the banner, which is empty (0 high) while it is hidden.
+ * Danger is its colour: an error state, as "offline · N queued" is.
+ */
+.kit-app {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+.kit-app > .kit-list,
+.kit-app > .kit-read,
+.kit-app > .kit-rail {
+  grid-row: 3;
+}
+.kit-app > .cb-down {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 18px;
+  font: 13px var(--kit-mono);
+  color: var(--kit-danger);
+  background: color-mix(in srgb, var(--kit-danger) 8%, var(--kit-bg));
+  border-bottom: 1px solid var(--kit-danger);
+}
+.kit-app > .cb-down[hidden] {
+  display: none;
+}

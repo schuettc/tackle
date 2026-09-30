@@ -361,49 +361,60 @@ export async function startServe(opts = {}) {
   );
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
-  const proc = spawn(bin, SERVE_ARGS, {
-    env: {
-      ...process.env,
-      CASEBOOK_HOME: home,
-      HOME: home,
-      // The fake gh first on PATH (then the git guard); git without Court's
-      // config; a real gh, were it reached, fails closed.
-      PATH: `${join(home, 'bin')}:${process.env.PATH}`,
-      ...HERMETIC_GIT,
-      ...GH_FAIL_CLOSED,
-      GH_CONFIG_DIR: join(home, 'gh'),
-      // Disables browser opening via the test seam in cli/workbench.go.
-      CASEBOOK_NO_BROWSER: '1',
-      // Short stuck threshold so probes can test stuck delivery UI without
-      // waiting 10 minutes. Tests that need this wait 3+ seconds after
-      // picking up a delivery.
-      CASEBOOK_STUCK_AFTER: '2s',
-      // Short left threshold so probes can test left-session UI without
-      // waiting 60 seconds for a session to go left.
-      CASEBOOK_LEFT_AFTER: '3s',
-      // Short watch interval so the left-crossing check fires quickly.
-      CASEBOOK_WATCH_EVERY: '1s',
-    },
-    stdio: 'pipe',
-  });
-
-  let stderr = '';
-  proc.stderr.on('data', (d) => {
-    stderr += String(d);
-  });
-
+  // launch starts serve on the home (again, for restart: the same state
+  // directory, so its database and its remembered port).
+  let proc;
   let exited = false;
-  proc.on('exit', () => {
-    exited = true;
-  });
+  let stderr = '';
+  const launch = () => {
+    exited = false;
+    stderr = '';
+    const p = spawn(bin, SERVE_ARGS, {
+      env: {
+        ...process.env,
+        CASEBOOK_HOME: home,
+        HOME: home,
+        // The fake gh first on PATH (then the git guard); git without Court's
+        // config; a real gh, were it reached, fails closed.
+        PATH: `${join(home, 'bin')}:${process.env.PATH}`,
+        ...HERMETIC_GIT,
+        ...GH_FAIL_CLOSED,
+        GH_CONFIG_DIR: join(home, 'gh'),
+        // Disables browser opening via the test seam in cli/workbench.go:
+        // with it, even a restarted serve that finds a tab was open (which
+        // reopens the page whatever --no-open says) opens nothing.
+        CASEBOOK_NO_BROWSER: '1',
+        // Short stuck threshold so probes can test stuck delivery UI without
+        // waiting 10 minutes. Tests that need this wait 3+ seconds after
+        // picking up a delivery.
+        CASEBOOK_STUCK_AFTER: '2s',
+        // Short left threshold so probes can test left-session UI without
+        // waiting 60 seconds for a session to go left.
+        CASEBOOK_LEFT_AFTER: '3s',
+        // Short watch interval so the left-crossing check fires quickly.
+        CASEBOOK_WATCH_EVERY: '1s',
+      },
+      stdio: 'pipe',
+    });
+    p.stderr.on('data', (d) => {
+      stderr += String(d);
+    });
+    p.on('exit', () => {
+      if (p === proc) exited = true;
+    });
+    proc = p;
+  };
+  const advertOf = async () => {
+    try {
+      return await waitForAdvert(advertPath);
+    } catch (err) {
+      if (!exited) proc.kill();
+      throw new Error(`${String(err)}\nstderr: ${stderr}`);
+    }
+  };
 
-  let adv;
-  try {
-    adv = await waitForAdvert(advertPath);
-  } catch (err) {
-    if (!exited) proc.kill();
-    throw new Error(`${String(err)}\nstderr: ${stderr}`);
-  }
+  launch();
+  let adv = await advertOf();
 
   return {
     url: adv.url,
@@ -423,6 +434,27 @@ export async function startServe(opts = {}) {
       return existsSync(log)
         ? readFileSync(log, 'utf8').split('\n').filter(Boolean)
         : [];
+    },
+    /**
+     * restart stops serve and starts it again on the same home (its database
+     * and its remembered port): the page's token dies with the old one. The
+     * new one's advert is returned; handle.url/base/token follow it.
+     * Reopened says the new serve found a tab had been open and would have
+     * opened the page again (CASEBOOK_NO_BROWSER keeps it from doing so).
+     */
+    async restart() {
+      if (!exited) {
+        const gone = new Promise((r) => proc.once('exit', r));
+        proc.kill();
+        await gone;
+      }
+      rmSync(advertPath, { force: true });
+      launch();
+      adv = await advertOf();
+      this.url = adv.url;
+      this.base = adv.base;
+      this.token = adv.token;
+      return adv;
     },
     stop() {
       if (!exited) proc.kill();

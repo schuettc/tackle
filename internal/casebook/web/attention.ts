@@ -594,17 +594,8 @@ export function makeAttention(ctx: Ctx): Section {
     },
   };
 
-  // "/" focuses the search field (kit v0.11.0). It is one of this section's
-  // keys (Section.keys), bound only while Attention is shown: on #/rules the
-  // field is hidden, and Rules may bind "/" for itself.
-  const searchKey: KeyBinding = {
-    keys: '/',
-    label: 'search',
-    group: 'page',
-    run() {
-      handle.focusSearch?.();
-    },
-  };
+  const listKeys: KeyBinding[] = [decideKey, acceptKey, rejectKey];
+  const boardKeys: KeyBinding[] = [decideKey];
 
   // Load summary for initial counts.
   void ctx.api
@@ -742,7 +733,12 @@ export function makeAttention(ctx: Ctx): Section {
     hide() {
       active = false;
     },
-    keys: [decideKey, acceptKey, rejectKey, searchKey],
+    // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
+    // to this list while it shows. The board is not a list: it has no
+    // cursor, and its cards hide the reading column, so there only "d"
+    // (the shared selection) works.
+    listKeys: () => (boardHandle ? null : { nav: handle, selects: true }),
+    keys: () => (boardHandle ? boardKeys : listKeys),
     onLive(type: string, data: unknown) {
       if (type === 'index') {
         // One reload per index event: apply counts from the event payload and

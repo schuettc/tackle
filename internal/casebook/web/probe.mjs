@@ -19,6 +19,7 @@ import pkg from 'playwright-core';
 import { startServe, gitGuard } from './serve.mjs';
 import { createAgent } from './agent.mjs';
 import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
+import { shellScenarios, stopShellServes } from './probe-shell.mjs';
 
 const { chromium } = pkg;
 
@@ -78,6 +79,7 @@ function cleanup() {
     _invalidServe = null;
   }
   stopApplyServes();
+  stopShellServes();
 }
 
 process.on('SIGTERM', () => {
@@ -4498,7 +4500,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 546;
+const MIN_CHECKS = 628;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -4510,7 +4512,7 @@ const only = process.env.PROBE_ONLY ?? '';
 const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
-const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply'];
+const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell'];
 
 async function run() {
   if (only && !PROBE_GROUPS.includes(only)) {
@@ -4599,6 +4601,12 @@ async function run() {
     // PROBE_ONLY=apply runs only the To apply scenarios (their own serves).
     if (process.env.PROBE_ONLY === 'apply') {
       await applyScenarios(context, applyHelpers);
+      return;
+    }
+    // PROBE_ONLY=shell runs only the keyboard layer and the failure states
+    // (probe-shell.mjs, their own serves).
+    if (process.env.PROBE_ONLY === 'shell') {
+      await shellScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -8852,6 +8860,9 @@ async function run() {
 
     // ---- Task 9: To apply (its own seeded serves) ---------------------------
     await applyScenarios(context, applyHelpers);
+
+    // ---- Task 10: the keyboard layer, the failure states (their own serves)
+    await shellScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');
