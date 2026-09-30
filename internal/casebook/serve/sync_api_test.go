@@ -155,6 +155,13 @@ func TestSyncRouteAnnouncesAFailure(t *testing.T) {
 // is rebuilt from the sync, and its built_at is new.
 func TestSyncRouteRunsTheRealSync(t *testing.T) {
 	r := newRig(t)
+	// Something to plan once the observation is fresh (nothing decided is a
+	// refusal of its own, 422).
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys": []string{"pr:schuettc/hail#3"}, "disposition": "close", "note": "stale",
+	}, nil); c != http.StatusOK {
+		t.Fatalf("decide: %d", c)
+	}
 	stale := time.Now().Add(-2 * time.Hour)
 	r.s.Index.set(r.s.Index.Result(), r.s.Index.Head(), stale)
 	if c := r.do(t, "POST", "/api/apply/plan", map[string]any{"all": true}, nil); c != http.StatusConflict {

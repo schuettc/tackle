@@ -227,6 +227,124 @@ async function applyScenariosIn(context, t) {
     stale.stop();
     serves = serves.filter((s) => s !== stale);
   }
+  const nothing = await ownServe({ seedRepos: [dormant('t10-nothing')] });
+  try {
+    await nothingToPlanScenario(context, t, nothing);
+  } finally {
+    nothing.stop();
+    serves = serves.filter((s) => s !== nothing);
+  }
+}
+
+// nothingToPlanScenario: a tab still offers "Plan all" when another has just
+// planned everything (it hasn't heard yet: its live wire is cut here, so the
+// race is certain). Its press makes no plan: serve refuses, 422, in its own
+// words, and the tab says so without offering "sync first" (a sync wouldn't
+// help) and stops offering "Plan all".
+async function nothingToPlanScenario(context, t, serveHandle) {
+  const { check, checkList, until } = t;
+  console.log(
+    '\nscenario: to apply — plan all with nothing left to plan makes no plan',
+  );
+  const agent = createAgent(serveHandle.base, serveHandle.token);
+  const ITEM = 'repo:schuettc/t10-nothing';
+  await agent.api('POST', '/api/decide', {
+    keys: [ITEM],
+    disposition: 'archive',
+  });
+  const pg = await context.newPage();
+  const errors = [];
+  pg.on('pageerror', (e) => errors.push(String(e)));
+  try {
+    // The tab hears nothing live: the stream and the poll both fail.
+    await pg.route(/\/api\/(events|state)/, (r) => r.abort());
+    await pg.setViewportSize({ width: 1600, height: 900 });
+    await pg.goto(serveHandle.url + '#/apply', {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    });
+    await pg.click('.kit-chip[data-id="ready"]');
+    check(
+      'the tab offers "Plan all" for the one decided item',
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Plan all' &&
+          [...document.querySelectorAll('.cb-apply-foot-btns .kit-btn')]
+            .map((b) => b.textContent)
+            .join(',') === 'plan all 1',
+      ),
+    );
+    // Another tab plans everything first.
+    const other = await agent.api('POST', '/api/apply/plan', { all: true });
+    checkList(
+      'another tab plans it first',
+      (other?.job?.steps ?? []).map((st) => st.key),
+      [ITEM],
+    );
+    const resp = pg.waitForResponse(
+      (r) =>
+        r.url().includes('/api/apply/plan') && r.request().method() === 'POST',
+    );
+    await pg.click('.kit-primary');
+    const r = await resp;
+    const body = await r.json().catch(() => ({}));
+    check(
+      `serve refuses the second plan all (${r.status()}: ${body.error ?? ''})`,
+      r.status() === 422 &&
+        body.error ===
+          'nothing to plan: every decided item is already in a plan or a job',
+    );
+    const jobs = (await agent.api('GET', '/api/jobs')).jobs ?? [];
+    checkList(
+      'it makes no plan: serve has only the first',
+      jobs.map((j) => `#${j.id} ${j.state} ${(j.steps ?? []).length}`),
+      [`#${other.job.id} planned 1`],
+    );
+    const said =
+      !!body.error &&
+      (await until(
+        pg,
+        (w) =>
+          document.querySelector('[data-testid="plan-nothing"]')
+            ?.textContent === w,
+        body.error,
+      ));
+    check(`the tab shows serve's words ("${body.error}")`, said);
+    const state = await pg.evaluate(() => ({
+      refusal: !!document.querySelector('[data-testid="refusal"]'),
+      primary: (() => {
+        const p = document.querySelector('.kit-primary');
+        return p && !p.hidden ? p.textContent : '';
+      })(),
+      foot: [...document.querySelectorAll('.cb-apply-foot-btns .kit-btn')].map(
+        (b) => b.textContent,
+      ),
+      hash: location.hash,
+    }));
+    check(
+      `no "sync first" (a sync wouldn't help), no plan opened (${state.hash})`,
+      !state.refusal &&
+        state.primary !== 'Sync first' &&
+        state.hash === '#/apply',
+    );
+    check(
+      `and "Plan all" is no longer offered: the item is in a plan (primary "${state.primary}", foot ${state.foot.join(', ') || 'none'})`,
+      await until(pg, () => {
+        const p = document.querySelector('.kit-primary');
+        const primary = p && !p.hidden ? p.textContent : '';
+        const foot = [
+          ...document.querySelectorAll('.cb-apply-foot-btns .kit-btn'),
+        ].map((b) => b.textContent);
+        return (
+          primary !== 'Plan all' && !foot.some((f) => f.startsWith('plan all'))
+        );
+      }),
+    );
+    check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
+  } finally {
+    await pg.close();
+  }
 }
 
 async function applyScenariosOn(context, t, serveHandle) {

@@ -40,6 +40,7 @@
 // primary.
 
 import {
+  ApiError,
   list,
   h,
   facts,
@@ -135,6 +136,8 @@ const dangerVerb = (verb: string) =>
 interface Planner {
   planned(v: PlanView): void;
   refused(msg: string): void;
+  /** serve had nothing to plan (422): another tab planned it first. */
+  nothing(msg: string): void;
 }
 let planner: Planner | null = null;
 
@@ -149,7 +152,11 @@ export function buildPlan(ctx: Ctx, what: string[] | 'all'): Promise<void> {
   return ctx.api
     .post<PlanView>('/apply/plan', body)
     .then((v) => planner?.planned(v))
-    .catch((err: unknown) => planner?.refused(message(err)));
+    .catch((err: unknown) =>
+      err instanceof ApiError && err.status === 422
+        ? planner?.nothing(message(err))
+        : planner?.refused(message(err)),
+    );
 }
 
 // ---- keeping focus across a redraw ------------------------------------------
@@ -231,6 +238,9 @@ export function makeApply(ctx: Ctx): Section {
   let courtSession = '';
   let stepsShown = STEPS_PAGE;
   let refusal = '';
+  // serve's words when a plan found nothing to plan (422): shown while
+  // nothing is plannable, no "sync first" (a sync wouldn't help).
+  let nothingNote = '';
   let note = '';
   let busy = false;
   let planning = false;
@@ -769,6 +779,7 @@ export function makeApply(ctx: Ctx): Section {
     if (planning) return;
     planning = true;
     refusal = '';
+    nothingNote = '';
     asked = what;
     void buildPlan(ctx, what).finally(() => {
       planning = false;
@@ -794,6 +805,17 @@ export function makeApply(ctx: Ctx): Section {
       };
       setOpen({ job: v.job, needs_you: [] });
       ctx.route.go('apply', String(v.job.id));
+    },
+    nothing(msg: string) {
+      // What this tab offered was planned elsewhere: say so in serve's
+      // words, and learn what is in a plan now (so "plan all" goes).
+      nothingNote = msg;
+      if (openId === null) drawOverview();
+      void loadJobs().then(() => {
+        if (openId === null) drawOverview();
+        if (active) ctx.setPrimary(primary());
+      });
+      void loadItems();
     },
     refused(msg: string) {
       refusal = msg;
@@ -925,6 +947,18 @@ export function makeApply(ctx: Ctx): Section {
     // Refused, the offer is to sync first (planning again would be refused
     // again): no plan buttons beside it.
     if (refusal) doc.append(refusalCard());
+    else if (nothingNote && !can && !n)
+      doc.append(
+        h(
+          'p',
+          {
+            class: 'cb-apply-note',
+            role: 'status',
+            'data-testid': 'plan-nothing',
+          },
+          nothingNote,
+        ),
+      );
     else if (itemsTotal && (n || can)) {
       const bs: Button[] = [];
       if (n)

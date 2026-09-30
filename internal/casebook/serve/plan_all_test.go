@@ -56,3 +56,54 @@ func TestPlanAllLeavesOutItemsAlreadyInAPlan(t *testing.T) {
 		t.Fatalf("plan all after discarding = %q, want both", keys(again))
 	}
 }
+
+// TestPlanWithNothingToPlanMakesNoPlan: "plan all" when every decided item is
+// already in a plan (another tab planned them a moment ago), or when nothing
+// is decided, or naming no items, makes no plan: serve refuses with 422
+// "nothing to plan…" rather than keeping an empty job.
+func TestPlanWithNothingToPlanMakesNoPlan(t *testing.T) {
+	r := newRig(t)
+	jobs := func() int {
+		js, err := r.s.Apply.List(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(js)
+	}
+	refused := func(name string, body map[string]any, want string) {
+		t.Helper()
+		before := jobs()
+		var out struct {
+			Error string `json:"error"`
+		}
+		if c := r.do(t, "POST", "/api/apply/plan", body, &out); c != http.StatusUnprocessableEntity {
+			t.Fatalf("%s: status %d (%q), want 422", name, c, out.Error)
+		}
+		if out.Error != want {
+			t.Fatalf("%s: error %q, want %q", name, out.Error, want)
+		}
+		if n := jobs(); n != before {
+			t.Fatalf("%s: a refusal made a job: %d jobs, want %d", name, n, before)
+		}
+	}
+
+	refused("nothing decided", map[string]any{"all": true},
+		"nothing to plan: no decided item is waiting to be applied")
+	refused("no keys", map[string]any{"keys": []string{}},
+		"nothing to plan: no decided item is waiting to be applied")
+
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys": []string{"pr:schuettc/hail#3"}, "disposition": "close", "note": "stale",
+	}, nil); c != http.StatusOK {
+		t.Fatalf("decide: %d", c)
+	}
+	var first PlanView
+	if c := r.do(t, "POST", "/api/apply/plan", map[string]any{"all": true}, &first); c != http.StatusOK {
+		t.Fatalf("plan all: %d", c)
+	}
+	if len(first.Job.Steps) == 0 {
+		t.Fatalf("the first plan has no steps")
+	}
+	refused("everything already planned", map[string]any{"all": true},
+		"nothing to plan: every decided item is already in a plan or a job")
+}

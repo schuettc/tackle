@@ -295,6 +295,7 @@ function boot() {
 
 // apply.ts
 import {
+  ApiError,
   list,
   h as h3,
   facts,
@@ -852,7 +853,9 @@ var dangerVerb = (verb) => DANGER_DISPS.has(verb) || verb === "remove";
 var planner = null;
 function buildPlan(ctx, what) {
   const body = what === "all" ? { all: true } : { keys: what };
-  return ctx.api.post("/apply/plan", body).then((v) => planner?.planned(v)).catch((err) => planner?.refused(message(err)));
+  return ctx.api.post("/apply/plan", body).then((v) => planner?.planned(v)).catch(
+    (err) => err instanceof ApiError && err.status === 422 ? planner?.nothing(message(err)) : planner?.refused(message(err))
+  );
 }
 function focusKey(el) {
   const host = el.closest(
@@ -902,6 +905,7 @@ function makeApply(ctx) {
   let courtSession = "";
   let stepsShown = STEPS_PAGE;
   let refusal = "";
+  let nothingNote = "";
   let note = "";
   let busy = false;
   let planning = false;
@@ -1332,6 +1336,7 @@ function makeApply(ctx) {
     if (planning) return;
     planning = true;
     refusal = "";
+    nothingNote = "";
     asked = what;
     void buildPlan(ctx, what).finally(() => {
       planning = false;
@@ -1355,6 +1360,15 @@ function makeApply(ctx) {
       };
       setOpen({ job: v.job, needs_you: [] });
       ctx.route.go("apply", String(v.job.id));
+    },
+    nothing(msg) {
+      nothingNote = msg;
+      if (openId === null) drawOverview();
+      void loadJobs().then(() => {
+        if (openId === null) drawOverview();
+        if (active) ctx.setPrimary(primary());
+      });
+      void loadItems();
     },
     refused(msg) {
       refusal = msg;
@@ -1467,6 +1481,18 @@ function makeApply(ctx) {
       )
     );
     if (refusal) doc.append(refusalCard());
+    else if (nothingNote && !can && !n)
+      doc.append(
+        h3(
+          "p",
+          {
+            class: "cb-apply-note",
+            role: "status",
+            "data-testid": "plan-nothing"
+          },
+          nothingNote
+        )
+      );
     else if (itemsTotal && (n || can)) {
       const bs = [];
       if (n)
@@ -4424,7 +4450,7 @@ import {
   buttons as buttons2,
   card as card5,
   sheet as sheet3,
-  ApiError
+  ApiError as ApiError2
 } from "/_kit/kit.js";
 
 // conditions.ts
@@ -4814,7 +4840,7 @@ var VIEWS3 = [
 function message2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var isConflict = (err) => err instanceof ApiError && err.status === 409;
+var isConflict = (err) => err instanceof ApiError2 && err.status === 409;
 function slug(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
@@ -5308,7 +5334,7 @@ ${dispositions.join(" ")}`;
       if (mine === seq) setPreview({ ...p, page: rows });
     } catch (err) {
       if (mine !== seq) return;
-      if (err instanceof ApiError && err.status === 400)
+      if (err instanceof ApiError2 && err.status === 400)
         setInvalid(err.message);
       else note.textContent = `preview failed: ${message2(err)}`;
     }
@@ -5560,7 +5586,7 @@ ${dispositions.join(" ")}`;
       return true;
     } catch (err) {
       if (isConflict(err)) void afterConflict("saved");
-      else if (err instanceof ApiError && err.status === 400) {
+      else if (err instanceof ApiError2 && err.status === 400) {
         if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
         else note.textContent = err.message;
       } else note.textContent = `not saved: ${message2(err)}`;

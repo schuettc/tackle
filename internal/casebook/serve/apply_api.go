@@ -85,7 +85,8 @@ func (s *Server) buildEnv() apply.Env {
 
 // postApplyPlan is POST /api/apply/plan.
 // Input: {"keys":["..."],"all":true}
-// Returns PlanView or 409 when the index observation is stale.
+// Returns PlanView, 409 when the index observation is stale, or 422 when
+// there is nothing to plan (no job is made).
 func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Keys []string `json:"keys"`
@@ -115,14 +116,20 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 
 	// Filter items: all to-apply or only the requested keys.
 	var items []engine.Item
+	heldOut := 0
 	if in.All {
 		// An item already in a job that hasn't finished (a plan not yet
 		// approved or discarded, or a job approved, running or paused) is
 		// left out: an item is in at most one unfinished job.
 		for _, it := range res.Items {
-			if it.Status == item.StatusToApply && it.Decision != nil && held[it.ID] == nil {
-				items = append(items, it)
+			if it.Status != item.StatusToApply || it.Decision == nil {
+				continue
 			}
+			if held[it.ID] != nil {
+				heldOut++
+				continue
+			}
+			items = append(items, it)
 		}
 	} else {
 		keySet := make(map[string]bool, len(in.Keys))
@@ -161,6 +168,22 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(w, nil, err)
+		return
+	}
+
+	// Nothing to plan makes no plan: an empty job would sit in the list (a
+	// second tab's "plan all" just after the first one planned everything).
+	// A stale observation is refused first (above): after a sync there may
+	// be something to plan.
+	if len(plan.Steps) == 0 {
+		msg := "nothing to plan: no decided item is waiting to be applied"
+		switch {
+		case len(items) > 0:
+			msg = "nothing to plan: the decided items have no steps to apply"
+		case heldOut > 0:
+			msg = "nothing to plan: every decided item is already in a plan or a job"
+		}
+		reply(w, nil, httpError{code: http.StatusUnprocessableEntity, msg: msg})
 		return
 	}
 
