@@ -32,14 +32,14 @@ func (f *checkFake) start(t *testing.T) {
 		b, _ := io.ReadAll(r.Body)
 		if f.status != 0 {
 			w.WriteHeader(f.status)
-			io.WriteString(w, `{"detail":"nope"}`)
+			_, _ = io.WriteString(w, `{"detail":"nope"}`)
 			return
 		}
 		body := string(b)
 		for marker, status := range f.failOn {
 			if strings.Contains(body, marker) {
 				w.WriteHeader(status)
-				io.WriteString(w, `{"detail":"nope"}`)
+				_, _ = io.WriteString(w, `{"detail":"nope"}`)
 				return
 			}
 		}
@@ -55,7 +55,9 @@ func (f *checkFake) start(t *testing.T) {
 				Criteria json.RawMessage `json:"criteria"`
 			} `json:"questions"`
 		}
-		json.Unmarshal(b, &req)
+		if err := json.Unmarshal(b, &req); err != nil {
+			t.Errorf("fake jev: %v", err)
+		}
 		ans := map[string]any{}
 		for k, q := range req.Questions {
 			switch q.Type {
@@ -65,7 +67,9 @@ func (f *checkFake) start(t *testing.T) {
 				ans[k] = map[string]any{"type": "score", "score": 1.0, "confidence": 0.8}
 			case "choice":
 				var opts map[string]string
-				json.Unmarshal(q.Criteria, &opts)
+				if err := json.Unmarshal(q.Criteria, &opts); err != nil {
+					t.Errorf("fake jev criteria: %v", err)
+				}
 				chosen := act
 				if chosen == "" {
 					for o := range opts {
@@ -82,7 +86,7 @@ func (f *checkFake) start(t *testing.T) {
 				ans[k] = map[string]any{"type": "choice", "choice": chosen, "probabilities": probs, "confidence": 0.85}
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": ans})
+		_ = json.NewEncoder(w).Encode(map[string]any{"model": "jev-test", "answers": ans})
 	}))
 	t.Cleanup(srv.Close)
 	t.Setenv("CULL_TYPESAFE_URL", srv.URL)

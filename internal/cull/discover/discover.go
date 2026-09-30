@@ -39,7 +39,7 @@ func Root(p string) (string, error) {
 	cmd.Dir = abs
 	out, err := cmd.Output()
 	if err != nil {
-		return abs, nil
+		return abs, nil //nolint:nilerr // not a git repository: the path itself is the root
 	}
 	return strings.TrimSpace(string(out)), nil
 }
@@ -177,7 +177,7 @@ func Diff(root, base, sub string, exclude []string) (Changes, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git diff base %q: %v: %s", base, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git diff base %q: %w: %s", base, err, strings.TrimSpace(stderr.String()))
 	}
 
 	changes := Changes{}
@@ -242,7 +242,7 @@ func untrackedFiles(root string) ([]string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git ls-files: %v: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("git ls-files: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	var out []string
 	for _, line := range strings.Split(stdout.String(), "\x00") {

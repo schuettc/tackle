@@ -160,32 +160,32 @@ func WriteTable(w io.Writer, r Report) {
 	}
 	sort.Strings(files)
 	for _, f := range files {
-		fmt.Fprintf(w, "%s\n", f)
+		_, _ = fmt.Fprintf(w, "%s\n", f)
 		ts := byFile[f]
 		sort.Slice(ts, func(i, j int) bool { return ts[i].ID < ts[j].ID })
 		for _, t := range ts {
 			if t.Err != "" {
-				fmt.Fprintf(w, "  error  %s  %s\n", t.ID, t.Err)
+				_, _ = fmt.Fprintf(w, "  error  %s  %s\n", t.ID, t.Err)
 				continue
 			}
-			fmt.Fprintf(w, "  %s  %s  %s\n", t.Verdict, t.ID, strings.Join(t.Reasons, ", "))
+			_, _ = fmt.Fprintf(w, "  %s  %s  %s\n", t.Verdict, t.ID, strings.Join(t.Reasons, ", "))
 		}
 		gs := groupsByFile[f]
 		sort.Slice(gs, func(i, j int) bool { return gs[i].ID < gs[j].ID })
 		for _, g := range gs {
 			if g.Err != "" {
-				fmt.Fprintf(w, "  error  %s  %s\n", g.ID, g.Err)
+				_, _ = fmt.Fprintf(w, "  error  %s  %s\n", g.ID, g.Err)
 				continue
 			}
-			fmt.Fprintf(w, "  %s  %d tests: %s\n", g.Verdict, len(g.Members), strings.Join(g.Members, ", "))
+			_, _ = fmt.Fprintf(w, "  %s  %d tests: %s\n", g.Verdict, len(g.Members), strings.Join(g.Members, ", "))
 		}
 	}
 	if len(r.Skipped) > 0 {
 		sk := append([]extract.Skipped(nil), r.Skipped...)
 		sort.Slice(sk, func(i, j int) bool { return sk[i].File < sk[j].File })
-		fmt.Fprintf(w, "skipped\n")
+		_, _ = fmt.Fprintf(w, "skipped\n")
 		for _, s := range sk {
-			fmt.Fprintf(w, "  %s  %s\n", s.File, s.Reason)
+			_, _ = fmt.Fprintf(w, "  %s  %s\n", s.File, s.Reason)
 		}
 	}
 }

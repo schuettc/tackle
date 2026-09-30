@@ -106,17 +106,17 @@ func (c *Client) Evaluate(ctx context.Context, model string, state any, question
 func (c *Client) attempt(ctx context.Context, body []byte) (Response, error) {
 	actx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(actx, http.MethodPost, c.BaseURL+"/v1/systemone", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(actx, http.MethodPost, c.BaseURL+"/v1/systemone", bytes.NewReader(body)) //nolint:gosec // G704: BaseURL is the configured TypeSafe endpoint
 	if err != nil {
 		return Response{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.HTTP.Do(req)
+	res, err := c.HTTP.Do(req) //nolint:gosec // G704: ditto
 	if err != nil {
 		return Response{}, retryable{err}
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	switch {
 	case res.StatusCode == http.StatusOK:
