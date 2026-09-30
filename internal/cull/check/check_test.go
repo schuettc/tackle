@@ -151,7 +151,7 @@ func TestConfigDefaultsAndUnknownKey(t *testing.T) {
 	if found {
 		t.Error("found = true with no .cull.toml")
 	}
-	if cfg.Model != "jev-latest" || cfg.MaxContextBytes != 24000 || cfg.Concurrency != 6 ||
+	if cfg.Model != "jev-latest" || cfg.MaxContextBytes != 64000 || cfg.Concurrency != 6 ||
 		len(cfg.Exclude) != 0 || cfg.TestRubric != rubric.DefaultTest || cfg.GroupRubric != rubric.DefaultGroup || cfg.Egress {
 		t.Fatalf("defaults = %+v", cfg)
 	}

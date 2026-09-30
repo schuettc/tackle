@@ -28,7 +28,7 @@ func init() {
 }
 
 // defaultMaxContext matches pyext.py's MAX_CTX.
-const defaultMaxContext = 24000
+const defaultMaxContext = cases.DefaultMaxContextBytes
 
 // helperEnvFunc is extract.HelperEnv, indirected so tests can observe the
 // environment Tidy computes for the subprocess.

@@ -37,7 +37,7 @@ var judgeFlags = flags("judge", "cull judge [--kind test|group] [--rubric name|p
 		fs.String("model", "jev-latest", "TypeSafe model")
 		fs.Int("concurrency", 6, "parallel Jev calls")
 		fs.Bool("refresh", false, "ignore cached answers")
-		fs.Int("max-context-bytes", 24000, "cap on a group's total test source")
+		fs.Int("max-context-bytes", cases.DefaultMaxContextBytes, "cap on a group's total test source")
 		fs.Bool("egress", false, "allow sending test source to TypeSafe")
 		fs.Bool("dry-run", false, "print each state that would be sent; send nothing")
 	})

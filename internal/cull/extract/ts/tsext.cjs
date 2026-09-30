@@ -25,7 +25,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const MAX_CTX = parseInt(process.env.CULL_MAX_CONTEXT_BYTES || "24000", 10);
+const MAX_CTX = parseInt(process.env.CULL_MAX_CONTEXT_BYTES || "64000", 10);
 
 // ts is the required typescript package; both extractMain and tidyMain set
 // it (from their own tsDir argument) before using any of the helpers
