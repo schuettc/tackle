@@ -71,6 +71,10 @@ const (
 	ViewDue      = "due"      // due, drift, conflict
 	ViewProposed = "proposed" // a proposal is pending
 	ViewAll      = "all"      // all attention
+	// ViewToApply is the To apply section's list: decided items waiting to be
+	// applied (spec §5.1). They aren't attention items; this view reads every
+	// item.
+	ViewToApply = "to-apply"
 )
 
 // Query filters a view.
@@ -111,6 +115,8 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	case ViewProposed:
 		_, ok := pending[it.ID]
 		return ok
+	case ViewToApply:
+		return it.Status == item.StatusToApply && it.Decision != nil
 	}
 	return true
 }
@@ -183,6 +189,9 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	src := x.res.Attention()
+	if q.View == ViewToApply {
+		src = x.res.Items
+	}
 	var out []ItemView
 	for _, it := range src {
 		if !inView(q.View, it, pending) || !matches(q, it) {
@@ -217,6 +226,11 @@ func (x *Index) Counts(pending map[string]propose.Proposal) map[string]int {
 			if inView(v, it, pending) {
 				c[v]++
 			}
+		}
+	}
+	for _, it := range x.res.Items {
+		if inView(ViewToApply, it, pending) {
+			c[ViewToApply]++
 		}
 	}
 	return c
