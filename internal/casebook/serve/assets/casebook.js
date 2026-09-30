@@ -2861,6 +2861,7 @@ function makeAttention(ctx) {
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
   let currentOpenKey = null;
+  let shownDetail = null;
   const viewCounts2 = {};
   let boardHandle = null;
   function renderReadEmpty() {
@@ -2897,6 +2898,7 @@ function makeAttention(ctx) {
   }
   function showReadEmpty() {
     currentOpenKey = null;
+    shownDetail = null;
     readEl.replaceChildren(renderReadEmpty());
     feedAttached();
   }
@@ -3129,6 +3131,8 @@ function makeAttention(ctx) {
     feedAttached();
     try {
       const detail = await ctx.api.get("/item", { key });
+      if (currentOpenKey !== key) return;
+      shownDetail = detail;
       const el = renderItem(ctx, detail, () => {
         void openDetail(key);
       });
@@ -3181,15 +3185,20 @@ function makeAttention(ctx) {
     }
     feedAttached();
   });
+  function shownProposal() {
+    const d = shownDetail;
+    if (!d || d.item.key !== currentOpenKey) return null;
+    const p = d.item.proposal;
+    return p && p.state === "pending" ? p : null;
+  }
   const acceptKey = {
     keys: "a",
     label: "accept proposal",
     group: "page",
     run() {
-      if (!currentOpenKey) return;
-      const it = loadedItems.find((x) => x.key === currentOpenKey);
-      if (!it?.proposal || it.proposal.state !== "pending") return;
-      void ctx.api.post("/proposals/accept", { ids: [it.proposal.id] }).then(() => {
+      const p = shownProposal();
+      if (!p || !currentOpenKey) return;
+      void ctx.api.post("/proposals/accept", { ids: [p.id] }).then(() => {
         selection.deselect([currentOpenKey]);
         void openDetail(currentOpenKey);
         void reload();
@@ -3202,10 +3211,9 @@ function makeAttention(ctx) {
     label: "reject proposal",
     group: "page",
     run() {
-      if (!currentOpenKey) return;
-      const it = loadedItems.find((x) => x.key === currentOpenKey);
-      if (!it?.proposal || it.proposal.state !== "pending") return;
-      openRejectSheet(ctx, [it.proposal.id], () => {
+      const p = shownProposal();
+      if (!p || !currentOpenKey) return;
+      openRejectSheet(ctx, [p.id], () => {
         selection.deselect([currentOpenKey]);
         void openDetail(currentOpenKey);
         void reload();

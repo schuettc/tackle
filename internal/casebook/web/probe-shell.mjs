@@ -414,24 +414,47 @@ async function keyboardScenario(shared, t) {
         );
 
         // a accepts the open item's proposal; r rejects it (its sheet).
+        // An item opening (#/item/<key>) reloads the list too. Here that
+        // reload is held on its way (2.5 s), so a and r are pressed while it
+        // is: they act on the proposal the reading column shows, whatever
+        // the list is doing.
+        let held = 0;
+        let hold = false;
+        await pg.route(/\/api\/items\?/, async (r) => {
+          if (!hold) return r.continue();
+          held++;
+          await new Promise((res) => setTimeout(res, 2500));
+          held--;
+          return r.continue().catch(() => {});
+        });
         const openItem = async (key) => {
+          hold = true;
           await pg.evaluate((k) => {
             location.hash = '#/item/' + encodeURIComponent(k);
           }, key);
-          return until(
+          const shown = await until(
             pg,
-            () => !!document.querySelector('.kit-read .cb-proposal-card'),
-            undefined,
+            (k) =>
+              !!document.querySelector('.kit-read .cb-proposal-card') &&
+              (
+                document.querySelector('.kit-read .cb-kicker')?.textContent ??
+                ''
+              )
+                .replace(/\s+/g, '')
+                .includes(k.replace(/^pr:/, '')),
+            key,
             8000,
           );
+          return shown && held > 0;
         };
         const proposalState = async (key) =>
           ((await item(key))?.proposals ?? []).map((p) => p.state).join(',');
         check(
-          'the open item shows its pending proposal (keep)',
+          'the open item shows its pending proposal (keep), its list reload still on its way',
           await openItem(KB_KEY(41)),
         );
         await press(pg, 'a');
+        hold = false;
         check(
           'a accepts the open proposal: serve has it accepted, and the item decided keep',
           await eventually(async () => {
@@ -443,10 +466,11 @@ async function keyboardScenario(shared, t) {
           }),
         );
         check(
-          'the next open item shows its pending proposal (close)',
+          'the next open item shows its pending proposal (close), its list reload still on its way',
           await openItem(KB_KEY(42)),
         );
         await press(pg, 'r');
+        hold = false;
         const rejectSheet = (await until(
           pg,
           () => !!document.querySelector('.kit-sheet'),

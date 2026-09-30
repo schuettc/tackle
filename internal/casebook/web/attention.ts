@@ -129,6 +129,8 @@ export function makeAttention(ctx: Ctx): Section {
   // currentOpenKey is the key of the item currently shown in the reading column;
   // used by the 'a' and 'r' key bindings.
   let currentOpenKey: string | null = null;
+  // The detail the reading column shows (its item is currentOpenKey).
+  let shownDetail: ItemDetailView | null = null;
   const viewCounts: Record<string, number> = {}; // last known counts per view chip id
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
@@ -184,6 +186,7 @@ export function makeAttention(ctx: Ctx): Section {
   // Show the empty reading-column state (replaces any open item detail).
   function showReadEmpty(): void {
     currentOpenKey = null;
+    shownDetail = null;
     readEl.replaceChildren(renderReadEmpty());
     feedAttached();
   }
@@ -478,6 +481,9 @@ export function makeAttention(ctx: Ctx): Section {
     feedAttached();
     try {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
+      // Another item opened meanwhile: this answer is no longer shown.
+      if (currentOpenKey !== key) return;
+      shownDetail = detail;
       const el = renderItem(ctx, detail, () => {
         // Re-render after accept/reject/change from the proposal card.
         void openDetail(key);
@@ -555,6 +561,16 @@ export function makeAttention(ctx: Ctx): Section {
     feedAttached();
   });
 
+  // shownProposal is the pending proposal the reading column shows: what a
+  // and r act on. Not the list's row (the list may be reloading, its rows
+  // gone until the answer comes).
+  function shownProposal() {
+    const d = shownDetail;
+    if (!d || d.item.key !== currentOpenKey) return null;
+    const p = d.item.proposal;
+    return p && p.state === 'pending' ? p : null;
+  }
+
   // 'a' and 'r' accept/reject the open item's proposal. Like "d", they are
   // Section.keys: app.ts registers them only while Attention is shown, so on
   // #/rules they cannot reach the open item Attention keeps while hidden, and
@@ -564,11 +580,10 @@ export function makeAttention(ctx: Ctx): Section {
     label: 'accept proposal',
     group: 'page',
     run() {
-      if (!currentOpenKey) return;
-      const it = loadedItems.find((x) => x.key === currentOpenKey);
-      if (!it?.proposal || it.proposal.state !== 'pending') return;
+      const p = shownProposal();
+      if (!p || !currentOpenKey) return;
       void ctx.api
-        .post('/proposals/accept', { ids: [it.proposal.id] })
+        .post('/proposals/accept', { ids: [p.id] })
         .then(() => {
           selection.deselect([currentOpenKey!]);
           void openDetail(currentOpenKey!);
@@ -583,10 +598,9 @@ export function makeAttention(ctx: Ctx): Section {
     label: 'reject proposal',
     group: 'page',
     run() {
-      if (!currentOpenKey) return;
-      const it = loadedItems.find((x) => x.key === currentOpenKey);
-      if (!it?.proposal || it.proposal.state !== 'pending') return;
-      openRejectSheet(ctx, [it.proposal.id], () => {
+      const p = shownProposal();
+      if (!p || !currentOpenKey) return;
+      openRejectSheet(ctx, [p.id], () => {
         selection.deselect([currentOpenKey!]);
         void openDetail(currentOpenKey!);
         void reload();
