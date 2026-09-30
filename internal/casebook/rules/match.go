@@ -224,7 +224,7 @@ func compileRule(r Rule) (compiledRule, error) {
 		if c.Op == "matches" {
 			re, err := regexp.Compile(c.Value)
 			if err != nil {
-				return compiledRule{}, fmt.Errorf("condition %d: matches: %w", i, err)
+				return compiledRule{}, fmt.Errorf("condition %d: matches: %w", i+1, err)
 			}
 			regs[i] = regexEntry{field: c.Field, re: re}
 		}

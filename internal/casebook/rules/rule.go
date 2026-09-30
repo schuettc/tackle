@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
 )
 
@@ -93,21 +95,6 @@ func Encode(r Rule) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// allDispositions is the set of all dispositions that exist across all item kinds.
-var allDispositions = func() []string {
-	seen := map[item.Disposition]bool{}
-	for _, k := range []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree} {
-		for _, d := range item.Allowed(k) {
-			seen[d] = true
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for d := range seen {
-		out = append(out, string(d))
-	}
-	return out
-}()
-
 // SameMeaning reports whether a and b match the same items and propose the
 // same thing: the same conditions, in order, and the same [propose]. That is
 // what edited_at dates (spec §4.1); a rename or an exclusion is not an edit.
@@ -144,46 +131,140 @@ func (r Rule) ValidateStructure() error {
 }
 
 // ValidateConditions checks every condition, naming the first bad one.
+// Conditions are numbered from 1, as Court and the agent count them.
 func ValidateConditions(match []Condition) error {
 	for i, c := range match {
 		if err := ValidateCondition(c); err != nil {
-			return fmt.Errorf("condition %d: %w", i, err)
+			return fmt.Errorf("condition %d: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-// Validate reports any structural errors in r.
+// Validate reports why r can't be activated or evaluated, nil when it can.
 // It checks:
 //   - id non-empty and matches ^[a-z0-9-]+$
 //   - status is "draft" or "active"
-//   - every Condition passes ValidateCondition
-//   - RuleAction.Disposition is a valid item.Disposition
-//   - wait/watch dispositions require a non-empty Until
+//   - every Condition passes ValidateCondition (numbered from 1)
+//   - the proposal: a disposition valid for every kind of item the rule
+//     can match (Dispositions), and an until that parses (wait and watch
+//     need one). Every proposal is validated as a decision for its item,
+//     so a rule that passes here never has a proposal refused for these
+//     fields: it can't be active and silently propose nothing.
 func (r Rule) Validate() error {
 	if r.ID == "" {
 		return fmt.Errorf("rule id is required")
 	}
-	if !idRe.MatchString(r.ID) {
-		return fmt.Errorf("rule id %q must match ^[a-z0-9-]+$", r.ID)
+	if err := r.ValidateStructure(); err != nil {
+		return err
 	}
-	if !slices.Contains(validStatuses, r.Status) {
-		return fmt.Errorf("rule status %q is not valid (want draft or active)", r.Status)
+	if err := ValidateConditions(r.Match); err != nil {
+		return err
 	}
-	for i, c := range r.Match {
-		if err := ValidateCondition(c); err != nil {
-			return fmt.Errorf("condition %d: %w", i, err)
-		}
-	}
-	if r.Propose.Disposition == "" {
+	return ValidateProposal(r.Match, r.Propose)
+}
+
+// ValidateProposal checks p for a rule with conditions match.
+func ValidateProposal(match []Condition, p RuleAction) error {
+	d := p.Disposition
+	if d == "" {
 		return fmt.Errorf("propose: no disposition yet (what the rule proposes)")
 	}
-	if !slices.Contains(allDispositions, r.Propose.Disposition) {
-		return fmt.Errorf("propose.disposition %q is not a valid disposition", r.Propose.Disposition)
+	if !slices.Contains(dispositionNames(), d) {
+		return fmt.Errorf("propose: %q is not a disposition (%s)", d, strings.Join(dispositionNames(), ", "))
 	}
-	if (r.Propose.Disposition == string(item.Wait) || r.Propose.Disposition == string(item.Watch)) &&
-		r.Propose.Until == "" {
-		return fmt.Errorf("propose.disposition %q requires a non-empty until", r.Propose.Disposition)
+	kinds := Kinds(match)
+	if len(kinds) == 0 {
+		return fmt.Errorf("propose: the kind conditions leave no kind of item to match")
+	}
+	if allowed := Dispositions(match); !slices.Contains(allowed, d) {
+		return fmt.Errorf("propose: %s can't be proposed for %s (allowed: %s)", d, kindsText(kinds), strings.Join(allowed, ", "))
+	}
+	if (d == string(item.Wait) || d == string(item.Watch)) && strings.TrimSpace(p.Until) == "" {
+		return fmt.Errorf("propose: %s needs an until", d)
+	}
+	if p.Until != "" {
+		if _, err := item.ParseUntil(p.Until); err != nil {
+			return fmt.Errorf("propose: %w", err)
+		}
 	}
 	return nil
+}
+
+// kindsText names the kinds a rule can match, for a message.
+func kindsText(kinds []item.Kind) string {
+	if len(kinds) == len(allKinds) {
+		return "every kind of item (the rule has no kind condition)"
+	}
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = string(k)
+	}
+	if len(names) == 1 {
+		return "a " + names[0]
+	}
+	return "kind " + strings.Join(names, ", ")
+}
+
+func dispositionNames() []string {
+	out := make([]string, len(dispositionOrder))
+	for i, d := range dispositionOrder {
+		out[i] = string(d)
+	}
+	return out
+}
+
+// allKinds is every kind of item, in the vocabulary's order.
+var allKinds = []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
+
+// dispositionOrder is the order dispositions are listed in.
+var dispositionOrder = []item.Disposition{item.Keep, item.Archive, item.Close, item.Delete, item.Merge, item.Wait, item.Watch, item.Ignore}
+
+// Kinds lists the kinds of item match can match, as its kind conditions
+// say: every kind when it has none. Other fields aren't read (a condition
+// that only some kinds have a value for still leaves the others possible:
+// "is-not" and "not-in" match an empty value).
+func Kinds(match []Condition) []item.Kind {
+	out := []item.Kind{}
+	for _, k := range allKinds {
+		f := engine.Fields{Kind: string(k)}
+		ok := true
+		for _, c := range match {
+			if c.Field != "kind" {
+				continue
+			}
+			if m, err := c.Eval(f); err != nil || !m {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// Dispositions lists what a rule with these conditions may propose: the
+// dispositions valid for every kind of item it can match (Kinds), so each
+// of its proposals is a valid decision for its item.
+func Dispositions(match []Condition) []string {
+	kinds := Kinds(match)
+	out := []string{}
+	if len(kinds) == 0 {
+		return out
+	}
+	for _, d := range dispositionOrder {
+		all := true
+		for _, k := range kinds {
+			if !slices.Contains(item.Allowed(k), d) {
+				all = false
+				break
+			}
+		}
+		if all {
+			out = append(out, string(d))
+		}
+	}
+	return out
 }

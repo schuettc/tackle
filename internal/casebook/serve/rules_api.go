@@ -49,7 +49,7 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 	ru, err := s.App.Repo.ReadRule(id)
 	var fe *store.RuleFileError
 	if errors.As(err, &fe) {
-		reply(w, RuleDetailView{Rule: unreadableRule(id), Matches: emptyPreview(), Invalid: fe.Error()}, nil)
+		reply(w, RuleDetailView{Rule: unreadableRule(id), Matches: emptyPreview(nil), Invalid: fe.Error()}, nil)
 		return
 	}
 	if err != nil {
@@ -117,8 +117,11 @@ func invalidReason(ru rules.Rule) string {
 	return ""
 }
 
-func emptyPreview() MatchPreview {
-	return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{}}
+// emptyPreview is the preview of a rule that isn't previewed: no matches,
+// and what it may propose.
+func emptyPreview(match []rules.Condition) MatchPreview {
+	return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{},
+		Dispositions: rules.Dispositions(match)}
 }
 
 // postRulesDraft handles POST /api/rules/draft.
@@ -142,12 +145,12 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		by = "court"
 	}
 
-	// Validate conditions and proposal before touching disk.
-	for i, c := range in.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	// Conditions serve refuses are refused before touching disk; the
+	// proposal may be unfinished (a new rule), and the rule then shows as
+	// not valid until it is.
+	if err := rules.ValidateConditions(in.Match); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
 	}
 
 	now := s.Now()
@@ -228,11 +231,9 @@ func (s *Server) postRulesPreview(w http.ResponseWriter, r *http.Request) {
 
 	// Validate each condition. This produces a clear 400 for invalid regex,
 	// unknown field, and invalid value before we ever run MatchAll.
-	for i, c := range in.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	if err := rules.ValidateConditions(in.Match); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
 	}
 
 	q := r.URL.Query()
@@ -546,11 +547,9 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	in.Rule.Status = rules.StatusDraft
 
 	// Validate conditions.
-	for i, c := range in.Rule.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	if err := rules.ValidateConditions(in.Rule.Match); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
 	}
 
 	by := source(sess)
@@ -612,7 +611,7 @@ func (s *Server) ruleDetail(ctx context.Context, ru rules.Rule) RuleDetailView {
 	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
 	// Conditions serve refuses are never previewed: a bad value would read
 	// as "0 matches" (or match as something it doesn't say).
-	matches := emptyPreview()
+	matches := emptyPreview(ru.Match)
 	if rules.ValidateConditions(ru.Match) == nil {
 		matches = buildPreview(ru, s.Index.Result(), s.Now(), 0, 200)
 	}
@@ -657,7 +656,7 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 		// MatchAll errors are returned as 400 by callers that validate first;
 		// here we return an empty preview so callers that embed the preview
 		// still get a valid response.
-		return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{}}
+		return emptyPreview(r.Match)
 	}
 
 	// Count by reason.
@@ -751,9 +750,10 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 	}
 
 	return MatchPreview{
-		Total:    total,
-		ByReason: reasons,
-		Groups:   groups,
-		Page:     rows,
+		Total:        total,
+		ByReason:     reasons,
+		Groups:       groups,
+		Page:         rows,
+		Dispositions: rules.Dispositions(r.Match),
 	}
 }

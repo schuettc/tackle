@@ -61,12 +61,12 @@ func TestInvalidRuleIsShownRefusedAndRecoverable(t *testing.T) {
 	if row == nil {
 		t.Fatal("the invalid rule is not listed")
 	}
-	if !strings.HasPrefix(row.Invalid, "condition 1: ") {
-		t.Errorf("list row invalid = %q, want serve's message naming condition 1", row.Invalid)
+	if !strings.HasPrefix(row.Invalid, "condition 2: ") {
+		t.Errorf("list row invalid = %q, want serve's message naming condition 2", row.Invalid)
 	}
 
 	d := ruleDetail(t, r, "bad-bot")
-	if !strings.HasPrefix(d.Invalid, "condition 1: ") || !strings.Contains(d.Invalid, `"yes"`) {
+	if !strings.HasPrefix(d.Invalid, "condition 2: ") || !strings.Contains(d.Invalid, `"yes"`) {
 		t.Errorf("detail invalid = %q", d.Invalid)
 	}
 	if d.Matches.Total != 0 || len(d.Matches.Page) != 0 {
@@ -90,7 +90,7 @@ func TestInvalidRuleIsShownRefusedAndRecoverable(t *testing.T) {
 	if err != nil || ru == nil || ru.Status != rules.StatusDraft || ru.Match[1].Value != "yes" {
 		t.Fatalf("after deactivate: %+v %v", ru, err)
 	}
-	if !strings.HasPrefix(off.Invalid, "condition 1: ") {
+	if !strings.HasPrefix(off.Invalid, "condition 2: ") {
 		t.Errorf("deactivate's reply invalid = %q", off.Invalid)
 	}
 
@@ -120,7 +120,10 @@ func TestInvalidActiveRuleCanBeSavedFixed(t *testing.T) {
 	writeRuleFile(t, r, "bad-bot", badBotActive)
 	fixed := map[string]any{
 		"id": "bad-bot", "name": "Bot PRs", "status": "draft",
-		"match":   []map[string]any{{"field": "bot", "op": "is", "value": "true"}},
+		"match": []map[string]any{
+			{"field": "kind", "op": "is", "value": "pr"},
+			{"field": "bot", "op": "is", "value": "true"},
+		},
 		"propose": map[string]any{"disposition": "close"},
 	}
 	var saved RuleDetailView

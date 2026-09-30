@@ -67,7 +67,7 @@ func TestActivateAndSaveRefuseAStaleVersion(t *testing.T) {
 		"name":    "Dormant repos",
 		"status":  "draft",
 		"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
-		"propose": map[string]any{"disposition": "archive"},
+		"propose": map[string]any{"disposition": "close"},
 	}
 	if code := r.do(t, "POST", "/api/rules/draft?version="+seen.Version, body, nil); code != 409 {
 		t.Fatalf("save from a stale version: want 409, got %d", code)

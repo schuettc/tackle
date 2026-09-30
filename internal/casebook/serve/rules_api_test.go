@@ -163,8 +163,8 @@ func TestPreviewRejectsBadCountAndDuration(t *testing.T) {
 			t.Errorf("%v: want 400, got %d (%v)", c, code, out)
 			continue
 		}
-		if msg, _ := out["error"].(string); !strings.HasPrefix(msg, "condition 1: ") {
-			t.Errorf("%v: error %q does not name condition 1", c, msg)
+		if msg, _ := out["error"].(string); !strings.HasPrefix(msg, "condition 2: ") {
+			t.Errorf("%v: error %q does not name condition 2", c, msg)
 		}
 	}
 }

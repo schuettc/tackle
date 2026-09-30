@@ -112,19 +112,19 @@ func TestAgentUnchangedRedraftKeepsEditedAt(t *testing.T) {
 	r := newRig(t)
 	c := useClock(r)
 	r.attach(t, "s1")
-	body := func(name string, match string) map[string]any {
+	body := func(name string, op string) map[string]any {
 		return map[string]any{
 			"session": "s1",
 			"rule": map[string]any{
 				"id":      "agent-keep",
 				"name":    name,
 				"status":  "draft",
-				"match":   []map[string]any{{"field": "kind", "op": "is", "value": match}},
+				"match":   []map[string]any{{"field": "kind", "op": op, "value": "repo"}},
 				"propose": map[string]any{"disposition": "archive"},
 			},
 		}
 	}
-	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "repo"), nil); code != 200 {
+	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "is"), nil); code != 200 {
 		t.Fatalf("agent create %d", code)
 	}
 	made := diskEditedAt(t, r, "agent-keep")
@@ -132,7 +132,7 @@ func TestAgentUnchangedRedraftKeepsEditedAt(t *testing.T) {
 	proposeOnceAndReject(t, r, "agent-keep")
 	c.add(time.Minute)
 	for _, name := range []string{"Repos", "Repos (renamed)"} {
-		if code := r.do(t, "POST", "/api/agent/rule-draft", body(name, "repo"), nil); code != 200 {
+		if code := r.do(t, "POST", "/api/agent/rule-draft", body(name, "is"), nil); code != 200 {
 			t.Fatalf("agent re-draft %d", code)
 		}
 		if got := diskEditedAt(t, r, "agent-keep"); !got.Equal(made) {
@@ -143,7 +143,7 @@ func TestAgentUnchangedRedraftKeepsEditedAt(t *testing.T) {
 	if n := reproposed(t, r, "agent-keep"); n != 0 {
 		t.Errorf("after the agent's unchanged re-drafts, %d rejected items were proposed again", n)
 	}
-	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "branch"), nil); code != 200 {
+	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "in"), nil); code != 200 {
 		t.Fatalf("agent edit %d", code)
 	}
 	if got := diskEditedAt(t, r, "agent-keep"); !got.After(made) {

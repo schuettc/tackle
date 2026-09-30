@@ -200,6 +200,9 @@ type MatchPreview struct {
 	ByReason []ReasonCount `json:"by_reason"`
 	Groups   []RepoGroup   `json:"groups"`
 	Page     []MatchRow    `json:"page"`
+	// Dispositions is what the rule may propose: those valid for every kind
+	// of item its conditions can match (rules.Dispositions).
+	Dispositions []string `json:"dispositions"`
 }
 
 // ReasonCount is one reason bucket inside a MatchPreview.

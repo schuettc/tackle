@@ -141,6 +141,7 @@ export interface MatchPreview {
   by_reason: ReasonCount[] | null;
   groups: RepoGroup[] | null;
   page: MatchRow[] | null;
+  dispositions: string[] | null;
 }
 
 export interface ReasonCount {

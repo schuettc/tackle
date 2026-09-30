@@ -115,6 +115,8 @@ by = "court"
 at = 2026-09-27T10:05:00Z
 ```
 
+`[propose]` must be a decision valid for every kind of item the rule can match, as its `kind` conditions say (with none, every kind: only `keep`, `wait` and `ignore`): a `disposition` that kind allows (§Decisions), and an `until` that parses (`wait` and `watch` need one). A rule that breaks this is not valid: it can't be activated, and an active one is skipped with a notice.
+
 `status` is `draft` (no effect) or `active` (proposes matches after every sync). `edited_at` is updated on every edit of `[[match]]` or `[propose]`; §4.2 uses it to decide whether to re-propose items that were previously rejected.
 
 Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `rule <id> deactivated by <who>`.
