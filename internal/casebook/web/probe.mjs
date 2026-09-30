@@ -151,6 +151,30 @@ async function eventually(fn, timeout = 5000) {
   }
 }
 
+// clickLifecycle clicks a rule's primary (Activate or Deactivate) and
+// returns serve's reply to it. serve announces the change before it replies,
+// so the page can show the next primary while this request is still in
+// flight: a probe that waits on serve's state alone, then clicks, clicks
+// during the request. Waiting on the reply is what "done" means.
+async function clickLifecycle(pg, verb) {
+  const reply = lifecycleReply(pg, verb);
+  await pg.click('.kit-primary');
+  return reply;
+}
+
+// lifecycleReply is serve's reply to the next Activate or Deactivate the page
+// posts (null if none comes within 10 s).
+function lifecycleReply(pg, verb) {
+  return pg
+    .waitForResponse(
+      (r) =>
+        r.url().includes(`/api/rules/${verb}`) &&
+        r.request().method() === 'POST',
+      { timeout: 10000 },
+    )
+    .catch(() => null);
+}
+
 // workedText formats worked_ms the way serve's workedBody does.
 function workedText(ms) {
   const s = Math.round(ms / 1000);
@@ -3081,12 +3105,13 @@ async function rulesScenariosOn(context, serveHandle) {
         await proposedBy('r8-agent'),
         [],
       );
-      await pg.click('.kit-primary');
+      const agentActivated = await clickLifecycle(pg, 'activate');
       check(
         "Court's Activate activates it",
-        await eventually(
-          async () => (await ruleOf('r8-agent')).rule.status === 'active',
-        ),
+        agentActivated?.status() === 200 &&
+          (await eventually(
+            async () => (await ruleOf('r8-agent')).rule.status === 'active',
+          )),
       );
       checkList(
         'activate turns its matches into pending proposals (serve)',
@@ -3162,12 +3187,13 @@ async function rulesScenariosOn(context, serveHandle) {
         () =>
           document.querySelector('.kit-primary')?.textContent === 'Deactivate',
       );
-      await pg.click('.kit-primary');
+      const agentDeactivated = await clickLifecycle(pg, 'deactivate');
       check(
         'Deactivate puts it back to a draft',
-        await eventually(
-          async () => (await ruleOf('r8-agent')).rule.status === 'draft',
-        ),
+        agentDeactivated?.status() === 200 &&
+          (await eventually(
+            async () => (await ruleOf('r8-agent')).rule.status === 'draft',
+          )),
       );
       check(
         'and the primary is "Activate" again',
@@ -3547,6 +3573,39 @@ async function rulesScenariosOn(context, serveHandle) {
       // Fixed: archive, no until.
       await pg.fill('[data-testid="propose"] input[aria-label="until"]', '');
       await chips();
+      // A live preview while the menu is open (something is decided
+      // elsewhere: the index moves and the rule's matches are previewed
+      // again, offering the same dispositions) leaves the menu open, its
+      // chips as they were and Court's focus where it was.
+      const openFocus = await pg.evaluateHandle(() => document.activeElement);
+      const livePreview = pg
+        .waitForResponse((r) => r.url().includes('/api/rules/preview'), {
+          timeout: 8000,
+        })
+        .catch(() => null);
+      await agent.api('POST', '/api/decide', {
+        keys: [R8_BR('r8-many', 'feat/n150')],
+        disposition: 'keep',
+      });
+      const livePreviewed = await livePreview;
+      await pg.evaluate(
+        () =>
+          new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r)),
+          ),
+      );
+      check(
+        `a live preview (${livePreviewed?.status()}) while the disposition menu is open leaves it open, with Court's focus on the same chip`,
+        !!livePreviewed &&
+          (await pg.evaluate(
+            (f) =>
+              !document.querySelector('.cb-disp-menu').hidden &&
+              f.matches('.cb-disp-opt') &&
+              f.isConnected &&
+              document.activeElement === f,
+            openFocus,
+          )),
+      );
       await pg.click('.cb-disp-opt[data-disp="archive"]');
       check(
         'the until row showed for wait, not for archive',
@@ -3822,24 +3881,29 @@ async function rulesScenariosOn(context, serveHandle) {
               ?.value === 'schuettc/r8-other',
         ),
       );
-      await pg.click('.kit-primary');
+      const archActivated = await clickLifecycle(pg, 'activate');
       check(
         'Activate then activates what is shown: keep',
-        await eventually(async () => {
-          const r = await ruleOf('r8-arch');
-          return (
-            r.rule.status === 'active' && r.rule.propose.disposition === 'keep'
-          );
-        }),
+        archActivated?.status() === 200 &&
+          (await eventually(async () => {
+            const r = await ruleOf('r8-arch');
+            return (
+              r.rule.status === 'active' &&
+              r.rule.propose.disposition === 'keep'
+            );
+          })),
       );
       await until(
         pg,
         () =>
           document.querySelector('.kit-primary')?.textContent === 'Deactivate',
       );
-      await pg.click('.kit-primary'); // Deactivate
-      await eventually(
-        async () => (await ruleOf('r8-arch')).rule.status === 'draft',
+      check(
+        'Deactivate (after the Activate replied) puts r8-arch back to a draft',
+        (await clickLifecycle(pg, 'deactivate'))?.status() === 200 &&
+          (await eventually(
+            async () => (await ruleOf('r8-arch')).rule.status === 'draft',
+          )),
       );
 
       // A change the page hasn't heard of yet (its live reads held): serve
@@ -3997,6 +4061,28 @@ async function rulesScenariosOn(context, serveHandle) {
             ),
         ),
       );
+      // serve announces an activate before it replies, so the page shows
+      // Deactivate while the Activate is still in flight. Court's click
+      // then is not dropped: it waits for the reply and runs after it.
+      // (The Activate's reply is held here, so the click is certain to
+      // land during it.)
+      let releaseActivate;
+      const activateHeld = new Promise((r) => {
+        releaseActivate = r;
+      });
+      const activates = /\/api\/rules\/activate/;
+      const holdActivate = async (route) => {
+        const resp = await route.fetch();
+        await activateHeld;
+        await route.fulfill({ response: resp });
+      };
+      await pg.route(activates, holdActivate);
+      let deactivatePosts = 0;
+      const countDeactivate = (r) => {
+        if (r.url().includes('/api/rules/deactivate')) deactivatePosts++;
+      };
+      pg.on('request', countDeactivate);
+      const raceActivated = lifecycleReply(pg, 'activate');
       await pg.click('.kit-primary');
       check(
         'and Activate activates his copy at once',
@@ -4008,18 +4094,43 @@ async function rulesScenariosOn(context, serveHandle) {
           );
         }),
       );
-      // Deactivate, once the page shows it active.
-      await until(
-        pg,
-        () =>
-          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
-      );
-      await pg.click('.kit-primary');
       check(
-        'Deactivate puts it back to a draft, editable again',
-        (await eventually(
-          async () => (await ruleOf('r8-race')).rule.status === 'draft',
-        )) &&
+        'serve announced it before replying: the page shows Deactivate while the Activate is in flight',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.kit-primary')?.textContent ===
+            'Deactivate',
+        ),
+      );
+      const raceDeactivated = lifecycleReply(pg, 'deactivate');
+      await pg.click('.kit-primary'); // during the Activate
+      // Two frames: a click that was going to post would have by now.
+      await pg.evaluate(
+        () =>
+          new Promise((r) =>
+            requestAnimationFrame(() => requestAnimationFrame(r)),
+          ),
+      );
+      check(
+        `Deactivate clicked during the Activate waits for its reply (${deactivatePosts} posted early)`,
+        deactivatePosts === 0 &&
+          (await ruleOf('r8-race')).rule.status === 'active',
+      );
+      releaseActivate();
+      const raceA = await raceActivated;
+      const raceD = await raceDeactivated;
+      // Unrouted only once nothing is in flight: requests caught mid-unroute
+      // can be left hanging (Playwright), which is the probe, not the page.
+      await pg.unroute(activates, holdActivate);
+      pg.off('request', countDeactivate);
+      check(
+        `the Deactivate then runs, and puts it back to a draft, editable again (activate ${raceA?.status()}, deactivate ${raceD?.status()})`,
+        raceA?.status() === 200 &&
+          raceD?.status() === 200 &&
+          (await eventually(
+            async () => (await ruleOf('r8-race')).rule.status === 'draft',
+          )) &&
           (await until(
             pg,
             () =>
@@ -4309,17 +4420,18 @@ async function invalidRulesScenariosOn(context, serveHandle) {
         document.querySelector('.cb-rule')?.dataset.rule === 'r8-bad2' &&
         document.querySelector('.kit-primary')?.textContent === 'Deactivate',
     );
-    await pg.click('.kit-primary');
+    const bad2Deactivated = await clickLifecycle(pg, 'deactivate');
     check(
       'Deactivate works on an invalid rule, and keeps it (and its value)',
-      await eventually(async () => {
-        const r = await ruleOf('r8-bad2');
-        return (
-          r.rule.status === 'draft' &&
-          r.rule.match[1].value === 'lots' &&
-          r.invalid.startsWith('condition 2: ')
-        );
-      }),
+      bad2Deactivated?.status() === 200 &&
+        (await eventually(async () => {
+          const r = await ruleOf('r8-bad2');
+          return (
+            r.rule.status === 'draft' &&
+            r.rule.match[1].value === 'lots' &&
+            r.invalid.startsWith('condition 2: ')
+          );
+        })),
     );
     check(
       'the page: a draft, still not valid, no longer skipped',
@@ -4386,7 +4498,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 532;
+const MIN_CHECKS = 536;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,

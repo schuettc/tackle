@@ -162,7 +162,16 @@ export function renderRule(
   let grouped = false;
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let busy = false;
+  // One request at a time (Activate, Deactivate, propose once), in the order
+  // Court asked. serve announces a change before it replies, so the page can
+  // show the next primary while a request is still in flight; a click on it
+  // then waits for the reply and runs after it. No click is dropped.
+  let queue: Promise<void> = Promise.resolve();
+  const inTurn = (task: () => Promise<void>): Promise<void> => {
+    const run = queue.then(task);
+    queue = run.catch(() => {});
+    return run;
+  };
 
   const doc = h('article', { class: 'cb-rule', 'data-rule': id });
   const el = h('div', { class: 'kit-doc' }, doc);
@@ -374,11 +383,19 @@ export function renderRule(
       edited();
       pick.focus();
     };
+    // The chips drawn: a preview that offers the same ones leaves them (and
+    // Court's focus in an open menu) alone.
+    let chipsFor = '';
     drawChoices = () => {
       const cur = workPropose.disposition;
       pick.textContent = cur || 'choose\u2026';
       pick.dataset.value = cur;
       pick.classList.toggle('cb-danger', DANGER_DISPS.has(cur));
+      whyEl.textContent = kindHint(work, dispositions, allDispositions);
+      drawProposeErr();
+      const sig = `${cur}\n${dispositions.join(' ')}`;
+      if (sig === chipsFor) return;
+      chipsFor = sig;
       menuChips.replaceChildren(
         ...dispositions.map((d) =>
           h(
@@ -400,8 +417,6 @@ export function renderRule(
           ),
         ),
       );
-      whyEl.textContent = kindHint(work, dispositions, allDispositions);
-      drawProposeErr();
     };
     const text = (field: 'until' | 'note', placeholder: string) => {
       const input = h('input', {
@@ -1010,8 +1025,15 @@ export function renderRule(
     }
   }
 
-  async function lifecycle(verb: 'activate' | 'deactivate'): Promise<void> {
-    if (busy) return;
+  function lifecycle(verb: 'activate' | 'deactivate'): Promise<void> {
+    return inTurn(() => lifecycleNow(verb));
+  }
+
+  async function lifecycleNow(verb: 'activate' | 'deactivate'): Promise<void> {
+    // A click queued behind a request that already did what it asks (a
+    // double click on Activate) has nothing left to do.
+    if (verb === 'deactivate' && isDraft()) return;
+    if (verb === 'activate' && !isDraft() && !dirty()) return;
     if (verb === 'activate' && conflict) {
       refuseActivate();
       return;
@@ -1020,7 +1042,6 @@ export function renderRule(
       refuseInvalid();
       return;
     }
-    busy = true;
     try {
       if (verb === 'activate' && dirty() && !(await save())) return;
       // A saved copy serve holds as invalid can't be activated: the card
@@ -1039,14 +1060,14 @@ export function renderRule(
     } catch (err) {
       if (isConflict(err)) void afterConflict(`${verb}d`);
       else note.textContent = `not ${verb}d: ${message(err)}`;
-    } finally {
-      busy = false;
     }
   }
 
-  async function proposeOnce(): Promise<void> {
-    if (busy) return;
-    busy = true;
+  function proposeOnce(): Promise<void> {
+    return inTurn(proposeOnceNow);
+  }
+
+  async function proposeOnceNow(): Promise<void> {
     try {
       if (dirty() && !(await save())) return;
       const r = await ctx.api.post<ProposeResult>('/rules/propose-once', {
@@ -1069,8 +1090,6 @@ export function renderRule(
       hooks.saved();
     } catch (err) {
       note.textContent = `not proposed: ${message(err)}`;
-    } finally {
-      busy = false;
     }
   }
 

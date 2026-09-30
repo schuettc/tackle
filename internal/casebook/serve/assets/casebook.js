@@ -4811,7 +4811,13 @@ function renderRule(ctx, detail, hooks) {
   let grouped = false;
   let seq = 0;
   let timer = null;
-  let busy = false;
+  let queue = Promise.resolve();
+  const inTurn = (task) => {
+    const run = queue.then(task);
+    queue = run.catch(() => {
+    });
+    return run;
+  };
   const doc = h12("article", { class: "cb-rule", "data-rule": id });
   const el = h12("div", { class: "kit-doc" }, doc);
   const dirty = () => !sameConditions(work, base.match ?? []) || !sameAction(workPropose, base.propose);
@@ -4988,11 +4994,18 @@ function renderRule(ctx, detail, hooks) {
       edited();
       pick.focus();
     };
+    let chipsFor = "";
     drawChoices = () => {
       const cur = workPropose.disposition;
       pick.textContent = cur || "choose…";
       pick.dataset.value = cur;
       pick.classList.toggle("cb-danger", DANGER_DISPS.has(cur));
+      whyEl.textContent = kindHint(work, dispositions, allDispositions);
+      drawProposeErr();
+      const sig = `${cur}
+${dispositions.join(" ")}`;
+      if (sig === chipsFor) return;
+      chipsFor = sig;
       menuChips.replaceChildren(
         ...dispositions.map(
           (d) => h12(
@@ -5011,8 +5024,6 @@ function renderRule(ctx, detail, hooks) {
           )
         )
       );
-      whyEl.textContent = kindHint(work, dispositions, allDispositions);
-      drawProposeErr();
     };
     const text = (field, placeholder2) => {
       const input = h12("input", {
@@ -5534,8 +5545,12 @@ function renderRule(ctx, detail, hooks) {
       return false;
     }
   }
-  async function lifecycle(verb) {
-    if (busy) return;
+  function lifecycle(verb) {
+    return inTurn(() => lifecycleNow(verb));
+  }
+  async function lifecycleNow(verb) {
+    if (verb === "deactivate" && isDraft()) return;
+    if (verb === "activate" && !isDraft() && !dirty()) return;
     if (verb === "activate" && conflict) {
       refuseActivate();
       return;
@@ -5544,7 +5559,6 @@ function renderRule(ctx, detail, hooks) {
       refuseInvalid();
       return;
     }
-    busy = true;
     try {
       if (verb === "activate" && dirty() && !await save()) return;
       if (verb === "activate" && saved.invalid) {
@@ -5560,13 +5574,12 @@ function renderRule(ctx, detail, hooks) {
     } catch (err) {
       if (isConflict(err)) void afterConflict(`${verb}d`);
       else note.textContent = `not ${verb}d: ${message2(err)}`;
-    } finally {
-      busy = false;
     }
   }
-  async function proposeOnce() {
-    if (busy) return;
-    busy = true;
+  function proposeOnce() {
+    return inTurn(proposeOnceNow);
+  }
+  async function proposeOnceNow() {
     try {
       if (dirty() && !await save()) return;
       const r = await ctx.api.post("/rules/propose-once", {
@@ -5589,8 +5602,6 @@ function renderRule(ctx, detail, hooks) {
       hooks.saved();
     } catch (err) {
       note.textContent = `not proposed: ${message2(err)}`;
-    } finally {
-      busy = false;
     }
   }
   function drawActions() {
