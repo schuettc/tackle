@@ -25,6 +25,22 @@ type Runner struct {
 	Gh     observe.Runner
 	RunGit func(ctx context.Context, dir string, args ...string) (string, error)
 	Now    func() time.Time
+	// Notify announces what the lane does, as it does it, so the page follows
+	// a job live: "job" {id, state} when the job starts running, "step" {id,
+	// job_id, state} for each move of a step, and "needs_you" with the card a
+	// failed step opens. nil announces nothing.
+	Notify func(ctx context.Context, kind string, payload any)
+}
+
+func (r Runner) notify(ctx context.Context, kind string, payload any) {
+	if r.Notify != nil {
+		r.Notify(ctx, kind, payload)
+	}
+}
+
+// step announces a step's new state.
+func (r Runner) step(ctx context.Context, st JobStep, state StepState) {
+	r.notify(ctx, "step", map[string]any{"id": st.ID, "job_id": st.JobID, "state": state})
 }
 
 func (r Runner) now() time.Time {
@@ -143,7 +159,9 @@ func (r Runner) Observe(ctx context.Context, step JobStep) item.Observed {
 func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env, pause func() bool) error {
 	// Move the job to running so ClaimNext keeps handing out steps; ignore an
 	// invalid transition (it may already be running).
-	_ = s.SetJobState(ctx, job.ID, JobRunning)
+	if err := s.SetJobState(ctx, job.ID, JobRunning); err == nil {
+		r.notify(ctx, "job", map[string]any{"id": job.ID, "state": JobRunning})
+	}
 
 	for {
 		if pause != nil && pause() {
@@ -156,6 +174,7 @@ func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env,
 		if !ok {
 			return nil
 		}
+		r.step(ctx, step, StepRunning)
 
 		res, err := r.RunStep(ctx, step, env)
 		if err != nil {
@@ -167,13 +186,17 @@ func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env,
 			if err := s.SetStepState(ctx, step.ID, StepSkipped, res.Detail); err != nil {
 				return err
 			}
+			r.step(ctx, step, StepSkipped)
 		case StepFailed:
 			if err := s.SetStepState(ctx, step.ID, StepFailed, res.Detail); err != nil {
 				return err
 			}
-			if _, err := s.OpenNeedsYou(ctx, job.ID, step.ID, "failed", res.Detail, ""); err != nil {
+			r.step(ctx, step, StepFailed)
+			card, err := s.OpenNeedsYou(ctx, job.ID, step.ID, "failed", res.Detail, "")
+			if err != nil {
 				return err
 			}
+			r.notify(ctx, "needs_you", card)
 		case StepReported:
 			if res.Restore != "" {
 				if err := s.SetStepRestore(ctx, step.ID, res.Restore); err != nil {
@@ -183,6 +206,7 @@ func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env,
 			if err := s.SetStepState(ctx, step.ID, StepReported, ""); err != nil {
 				return err
 			}
+			r.step(ctx, step, StepReported)
 			// Step 5: verify by re-observing just this key.
 			obs := r.Observe(ctx, step)
 			switch Verify(step, obs) {
@@ -190,10 +214,12 @@ func (s *Store) RunCasebookLane(ctx context.Context, job Job, r Runner, env Env,
 				if err := s.SetStepState(ctx, step.ID, StepVerified, ""); err != nil {
 					return err
 				}
+				r.step(ctx, step, StepVerified)
 			case StepFailed:
 				if err := s.SetStepState(ctx, step.ID, StepFailed, DetailDrift); err != nil {
 					return err
 				}
+				r.step(ctx, step, StepFailed)
 			}
 		}
 

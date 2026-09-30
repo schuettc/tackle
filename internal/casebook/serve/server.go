@@ -187,6 +187,7 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 		Gh:     a.Gh,
 		RunGit: gitx.Run,
 		Now:    s.Now,
+		Notify: s.publish,
 	}
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
