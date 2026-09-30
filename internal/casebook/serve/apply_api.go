@@ -176,10 +176,18 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Validate session if provided.
+	// Validate session if provided: it must be known, and present. The plan's
+	// outward steps (archive, close, anything that posts) go to the session
+	// Court names, so one that has left can't take them. (A plan with
+	// agent-lane steps and no session at all is the store's refusal.)
 	if in.Session != "" {
 		if _, err := s.session(ctx, in.Session); err != nil {
 			reply(w, nil, err)
+			return
+		}
+		if !s.present(ctx, in.Session) {
+			reply(w, nil, httpError{code: http.StatusConflict,
+				msg: fmt.Sprintf("session %q has left; approving outward steps needs a session that is here", in.Session)})
 			return
 		}
 	}
@@ -238,6 +246,21 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 	// Return the job with its open needs-you cards.
 	cards, _ := s.Apply.NeedsYouFor(ctx, job.ID)
 	reply(w, JobView{Job: job, NeedsYou: cards}, nil)
+}
+
+// present reports whether a session is here now (seen within the left
+// threshold), by the same rule GET /api/sessions marks one left.
+func (s *Server) present(ctx context.Context, id string) bool {
+	sessions, err := s.Queue.Sessions(ctx)
+	if err != nil {
+		return false
+	}
+	for _, sess := range sessions {
+		if sess.ID == id {
+			return !sess.Left
+		}
+	}
+	return false
 }
 
 // getJobs is GET /api/jobs.
