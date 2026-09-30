@@ -164,10 +164,20 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
+  // feedAttached tells the composer what goes with the next message: the
+  // selection's keys, or the open item when nothing is selected.
+  function feedAttached(): void {
+    const ids = selection.ids();
+    if (ids.length > 0) ctx.setAttached({ keys: ids });
+    else if (currentOpenKey) ctx.setAttached({ open: currentOpenKey });
+    else ctx.setAttached({});
+  }
+
   // Show the empty reading-column state (replaces any open item detail).
   function showReadEmpty(): void {
     currentOpenKey = null;
     readEl.replaceChildren(renderReadEmpty());
+    feedAttached();
   }
 
   // Initialise the reading column with the empty state so it is never blank.
@@ -457,6 +467,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   async function openDetail(key: string): Promise<void> {
     currentOpenKey = key;
+    feedAttached();
     try {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
       const el = renderItem(ctx, detail, () => {
@@ -519,6 +530,7 @@ export function makeAttention(ctx: Ctx): Section {
         selAll.hidden = allSelected;
       }
     }
+    feedAttached();
   });
 
   // Register 'a' and 'r' keys to accept/reject the open item's proposal.
@@ -659,6 +671,8 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- show(sub) -- router hook --------------------------------------------
 
   function show(sub: string): void {
+    // Coming back from another section: the composer shows Attention's context.
+    feedAttached();
     if (sub === 'board') {
       // Restore search text from URL so getBoardFilters() picks it up.
       const urlQ = getUrlQ();

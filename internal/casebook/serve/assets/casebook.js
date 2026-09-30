@@ -141,6 +141,8 @@ function boot() {
   const app = h("div", { class: "kit-app" });
   app.append(handle.el);
   let currentRoute = { section: "attention", sub: "" };
+  const dockHandles = [];
+  let lastAttached = {};
   const ctx = {
     api,
     bar: handle,
@@ -152,6 +154,10 @@ function boot() {
     on: onLiveEvent,
     setPrimary(p) {
       handle.setPrimary(p);
+    },
+    setAttached(a) {
+      lastAttached = a;
+      for (const d of dockHandles) d.setAttached(a);
     }
   };
   const sections = /* @__PURE__ */ new Map();
@@ -168,9 +174,10 @@ function boot() {
     app.append(list2, read);
   }
   const rail = h("div", { class: "kit-rail" });
-  const dockHandles = [];
   for (const make of dockMakers) {
-    dockHandles.push(make(ctx));
+    const d = make(ctx);
+    d.setAttached(lastAttached);
+    dockHandles.push(d);
   }
   if (dockHandles.length > 0) {
     for (const d of dockHandles) rail.append(d.el);
@@ -888,7 +895,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
     const titleEl = h5("div", { class: "cb-card-title" });
     titleEl.textContent = it.title ?? displayKey;
-    const card3 = h5(
+    const card4 = h5(
       "div",
       {
         // Use .kit-card for background/border/radius from the kit;
@@ -904,19 +911,19 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     if (age) {
       const ageEl = h5("div", { class: "cb-card-age" });
       ageEl.textContent = age;
-      card3.append(ageEl);
+      card4.append(ageEl);
     }
     if (it.proposal) {
       const propEl = h5("div", { class: "cb-card-prop" });
       propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
-      card3.append(propEl);
+      card4.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {
       e.stopPropagation();
       onOpen?.(it.key, laneId);
       ctx.route.go("item", it.key);
     });
-    card3.addEventListener("click", (e) => {
+    card4.addEventListener("click", (e) => {
       const state = laneState.get(laneId);
       const orderedIds = state?.items.map((i) => i.key) ?? [];
       if (e.shiftKey) {
@@ -930,14 +937,14 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
         sel.toggle(it.key);
       }
     });
-    card3.addEventListener("keydown", (e) => {
+    card4.addEventListener("keydown", (e) => {
       if (e.key === "o" || e.key === "Enter") {
         e.preventDefault();
         onOpen?.(it.key, laneId);
         ctx.route.go("item", it.key);
       }
     });
-    return card3;
+    return card4;
   }
   function repaintLane(laneId) {
     const rowsEl = laneRowsEl.get(laneId);
@@ -959,12 +966,12 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
       if (!rowsEl) continue;
       const state = laneState.get(laneId);
       const cards = rowsEl.querySelectorAll(".kit-card");
-      cards.forEach((card3, i) => {
+      cards.forEach((card4, i) => {
         const it = state.items[i];
         if (!it) return;
         const selected = sel.has(it.key);
-        card3.classList.toggle("on", selected);
-        card3.querySelector(".kit-box")?.classList.toggle("on", selected);
+        card4.classList.toggle("on", selected);
+        card4.querySelector(".kit-box")?.classList.toggle("on", selected);
       });
     }
   }
@@ -1136,9 +1143,16 @@ function makeAttention(ctx) {
       countEl.textContent = pluralize(totalItemsForView, "item");
     }
   }
+  function feedAttached() {
+    const ids = selection.ids();
+    if (ids.length > 0) ctx.setAttached({ keys: ids });
+    else if (currentOpenKey) ctx.setAttached({ open: currentOpenKey });
+    else ctx.setAttached({});
+  }
   function showReadEmpty() {
     currentOpenKey = null;
     readEl.replaceChildren(renderReadEmpty());
+    feedAttached();
   }
   showReadEmpty();
   function buildFoot() {
@@ -1366,6 +1380,7 @@ function makeAttention(ctx) {
   }
   async function openDetail(key) {
     currentOpenKey = key;
+    feedAttached();
     try {
       const detail = await ctx.api.get("/item", { key });
       const el = renderItem(ctx, detail, () => {
@@ -1408,6 +1423,7 @@ function makeAttention(ctx) {
         selAll.hidden = allSelected;
       }
     }
+    feedAttached();
   });
   ctx.keys.register({
     keys: "a",
@@ -1505,6 +1521,7 @@ function makeAttention(ctx) {
     if (kitFoot) kitFoot.hidden = false;
   }
   function show(sub) {
+    feedAttached();
     if (sub === "board") {
       const urlQ2 = getUrlQ();
       if (urlQ2 !== filters.q) {
@@ -1592,7 +1609,7 @@ function makeAttention(ctx) {
 }
 
 // dock.ts
-import { h as h7, card as card2 } from "/_kit/kit.js";
+import { h as h9, card as card3 } from "/_kit/kit.js";
 
 // time-utils.ts
 function ageMs(ts) {
@@ -1604,13 +1621,545 @@ function fmtAge(ts) {
   if (s < 60) return "now";
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
-  const h8 = Math.floor(m / 60);
-  if (h8 < 24) return `${h8}h`;
-  const d = Math.floor(h8 / 24);
+  const h10 = Math.floor(m / 60);
+  if (h10 < 24) return `${h10}h`;
+  const d = Math.floor(h10 / 24);
   if (d < 30) return `${d}d`;
   const mo = Math.floor(d / 30);
   if (mo < 12) return `${mo}mo`;
   return `${Math.floor(mo / 12)}y`;
+}
+
+// thread.ts
+function threadOrder(ms) {
+  const out = [];
+  const placed = /* @__PURE__ */ new Set();
+  for (const m of ms) {
+    if (!m.batch_id) {
+      out.push(m);
+      continue;
+    }
+    if (placed.has(m.batch_id)) continue;
+    placed.add(m.batch_id);
+    out.push(
+      ...ms.filter((x) => x.batch_id === m.batch_id).sort((a, b) => (a.batch_pos ?? 0) - (b.batch_pos ?? 0))
+    );
+  }
+  return out;
+}
+
+// composer.ts
+import { h as h7 } from "/_kit/kit.js";
+
+// attached.ts
+var KIND_PLURAL = { branch: "branches" };
+function isEmpty(a) {
+  return !a.keys?.length && !a.open && !a.rule && !a.job;
+}
+function attachedLabel(a) {
+  const parts = [];
+  const keys = a.keys ?? [];
+  if (keys.length === 1) {
+    parts.push(keyWithoutKind(keys[0]));
+  } else if (keys.length > 1) {
+    const kinds = new Set(keys.map(kindFromKey));
+    const kind = kinds.size === 1 ? [...kinds][0] : "";
+    const noun = kind ? pluralize(keys.length, kind, KIND_PLURAL[kind]) : pluralize(keys.length, "item");
+    parts.push(`${noun} selected`);
+  }
+  if (a.open && !(keys.length === 1 && keys[0] === a.open)) {
+    parts.push(keyWithoutKind(a.open));
+  }
+  if (a.rule) parts.push(`rule ${a.rule}`);
+  if (a.job) parts.push(`job #${a.job}`);
+  return parts.join(" · ");
+}
+function attachedText(a) {
+  const words = [...a.keys ?? []];
+  if (a.open && !(a.keys?.length === 1 && a.keys[0] === a.open)) {
+    words.push(`open ${a.open}`);
+  }
+  if (a.rule) words.push(`rule ${a.rule}`);
+  if (a.job) words.push(`job ${a.job}`);
+  return words.join(" ");
+}
+function parseAttached(text) {
+  const words = text.split(/[\s,]+/).map((w) => w.trim()).filter(Boolean);
+  const out = {};
+  const keys = [];
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const next = words[i + 1];
+    if ((w === "rule" || w === "job" || w === "open") && next) {
+      if (w === "rule") out.rule = next;
+      else if (w === "job") out.job = next.replace(/^#/, "");
+      else if (isKey(next)) out.open = next;
+      i++;
+      continue;
+    }
+    if (isKey(w) && !keys.includes(w)) keys.push(w);
+  }
+  if (keys.length) out.keys = keys;
+  return out;
+}
+function isKey(w) {
+  return /^[a-z]+:\S+$/.test(w);
+}
+function sameAttached(a, b) {
+  return attachedText(a) === attachedText(b);
+}
+
+// composer.ts
+function threadName(body) {
+  const words = body.split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
+  return words.length > 40 ? words.slice(0, 39) + "…" : words;
+}
+function makeComposer(ctx, dock) {
+  let context = {};
+  let override = null;
+  let sending = false;
+  const effective = () => override ?? context;
+  const value = h7("span", {
+    class: "cb-comp-attached-value",
+    contenteditable: "true",
+    role: "textbox",
+    "aria-label": "attached",
+    spellcheck: false,
+    "data-testid": "composer-attached"
+  });
+  const line = h7(
+    "div",
+    { class: "cb-comp-attached" },
+    h7("span", { class: "cb-comp-attached-prefix" }, "attached: "),
+    value
+  );
+  let editing = false;
+  function renderAttached() {
+    if (editing) return;
+    const a = effective();
+    value.textContent = isEmpty(a) ? "nothing" : attachedLabel(a);
+    value.toggleAttribute("data-empty", isEmpty(a));
+    value.toggleAttribute("data-edited", override !== null);
+  }
+  value.addEventListener("focus", () => {
+    if (editing) return;
+    editing = true;
+    value.textContent = attachedText(effective());
+    value.removeAttribute("data-empty");
+    const range = document.createRange();
+    range.selectNodeContents(value);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  });
+  function commit() {
+    if (!editing) return;
+    editing = false;
+    const parsed = parseAttached(value.textContent ?? "");
+    override = sameAttached(parsed, context) ? null : parsed;
+    renderAttached();
+  }
+  function revert() {
+    editing = false;
+    renderAttached();
+  }
+  value.addEventListener("blur", commit);
+  value.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+      value.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      revert();
+      value.blur();
+    }
+  });
+  const input = h7("textarea", {
+    class: "cb-comp-input",
+    rows: 1,
+    placeholder: "Message the agent…",
+    "aria-label": "message",
+    "data-testid": "composer-input"
+  });
+  function fit() {
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  }
+  input.addEventListener("input", fit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    if (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    void send(false);
+  });
+  const note = h7("span", { class: "cb-comp-note", role: "status" });
+  const footer = h7(
+    "div",
+    { class: "cb-comp-foot" },
+    h7("span", {}, "↵ send · ⌘↵ add to batch"),
+    note
+  );
+  const el = h7(
+    "div",
+    { class: "cb-comp", "data-testid": "composer" },
+    line,
+    input,
+    footer
+  );
+  async function threadFor(body) {
+    const current = dock.currentThread();
+    if (current) return current;
+    const session = dock.currentSession();
+    if (!session) return 0;
+    const t = await ctx.api.post("/threads", {
+      session,
+      name: threadName(body)
+    });
+    dock.threadCreated(t);
+    return t.id;
+  }
+  async function send(batch) {
+    const body = input.value.trim();
+    if (!body || sending) return;
+    sending = true;
+    note.textContent = "";
+    try {
+      const thread = await threadFor(body);
+      if (!thread) {
+        note.textContent = "no agent session";
+        return;
+      }
+      await ctx.api.post("/messages", {
+        thread,
+        body,
+        attached: effective(),
+        batch
+      });
+      input.value = "";
+      fit();
+      override = null;
+      renderAttached();
+    } catch (err) {
+      note.textContent = "not sent";
+      console.error("[composer] send:", err);
+    } finally {
+      sending = false;
+    }
+  }
+  renderAttached();
+  return {
+    el,
+    input,
+    setAttached(a) {
+      context = a;
+      renderAttached();
+    },
+    setAgent(name) {
+      input.placeholder = `Message ${name || "the agent"}…`;
+    },
+    focus() {
+      input.focus();
+    },
+    addToBatch() {
+      void send(true);
+    }
+  };
+}
+
+// progress.ts
+import { h as h8, card as card2, fold as fold2 } from "/_kit/kit.js";
+function makeBatchTray(ctx) {
+  let thread = 0;
+  let batch = 0;
+  let drafts = [];
+  let loadSeq = 0;
+  const label = h8("span", { class: "kit-card-head cb-batch-label" });
+  const sendBtn = h8("button", {
+    class: "kit-btn fill cb-batch-send",
+    "data-testid": "batch-send",
+    onclick() {
+      void sendBatch();
+    }
+  });
+  const list2 = h8("div", { class: "cb-batch-drafts" });
+  const el = card2({
+    body: h8(
+      "div",
+      {},
+      h8("div", { class: "cb-batch-head" }, label, sendBtn),
+      list2
+    )
+  });
+  el.classList.add("cb-batch");
+  el.setAttribute("data-testid", "batch-tray");
+  el.hidden = true;
+  function render() {
+    el.hidden = drafts.length === 0;
+    if (!drafts.length) {
+      list2.replaceChildren();
+      return;
+    }
+    label.textContent = `batch · ${pluralize(drafts.length, "draft")}`;
+    sendBtn.textContent = `send ${drafts.length}`;
+    list2.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
+  }
+  function actionBtn(text, action, aria, run, disabled = false) {
+    return h8(
+      "button",
+      {
+        class: "cb-batch-act",
+        "data-action": action,
+        "aria-label": aria,
+        disabled,
+        onclick: run
+      },
+      text
+    );
+  }
+  function draftRow(d, i) {
+    const text = h8("span", { class: "cb-batch-text" }, d.body);
+    const row = h8(
+      "div",
+      { class: "cb-batch-draft", "data-draft-id": String(d.id) },
+      text,
+      h8(
+        "span",
+        { class: "cb-batch-acts" },
+        actionBtn(
+          "edit",
+          "edit",
+          `edit draft ${i + 1}`,
+          () => editDraft(d, text)
+        ),
+        actionBtn(
+          "↑",
+          "up",
+          `move draft ${i + 1} up`,
+          () => void move(i, -1),
+          i === 0
+        ),
+        actionBtn(
+          "↓",
+          "down",
+          `move draft ${i + 1} down`,
+          () => void move(i, 1),
+          i === drafts.length - 1
+        ),
+        actionBtn(
+          "×",
+          "remove",
+          `remove draft ${i + 1}`,
+          () => void remove(d.id)
+        )
+      )
+    );
+    return row;
+  }
+  function editDraft(d, text) {
+    const field = h8("input", {
+      class: "kit-note cb-batch-edit",
+      value: d.body,
+      "aria-label": "edit draft"
+    });
+    let done = false;
+    const finish = (commit) => {
+      if (done) return;
+      done = true;
+      const body = field.value.trim();
+      if (commit && body && body !== d.body) {
+        d.body = body;
+        void ctx.api.post("/drafts/edit", { id: d.id, body }).catch((err) => {
+          console.error("[batch] edit:", err);
+          void reload();
+        });
+      }
+      render();
+    };
+    field.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        finish(true);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        finish(false);
+      }
+    });
+    field.addEventListener("blur", () => finish(true));
+    text.replaceWith(field);
+    field.focus();
+    field.select();
+  }
+  async function move(i, delta) {
+    const j = i + delta;
+    if (j < 0 || j >= drafts.length) return;
+    const next = [...drafts];
+    [next[i], next[j]] = [next[j], next[i]];
+    drafts = next;
+    render();
+    try {
+      await ctx.api.post("/batches/reorder", {
+        batch,
+        ids: drafts.map((d) => d.id)
+      });
+    } catch (err) {
+      console.error("[batch] reorder:", err);
+      await reload();
+    }
+  }
+  async function remove(id) {
+    drafts = drafts.filter((d) => d.id !== id);
+    render();
+    try {
+      await ctx.api.post("/drafts/remove", { id });
+    } catch (err) {
+      console.error("[batch] remove:", err);
+      await reload();
+    }
+  }
+  async function sendBatch() {
+    if (!batch || !drafts.length) return;
+    const sent = batch;
+    drafts = [];
+    render();
+    try {
+      await ctx.api.post("/batches/send", { batch: sent });
+    } catch (err) {
+      console.error("[batch] send:", err);
+      await reload();
+    }
+  }
+  async function load(t) {
+    thread = t;
+    const seq = ++loadSeq;
+    if (!t) {
+      batch = 0;
+      drafts = [];
+      render();
+      return;
+    }
+    try {
+      const mv = await ctx.api.get("/messages", {
+        thread: String(t)
+      });
+      if (seq !== loadSeq) return;
+      batch = mv.batch;
+      drafts = mv.drafts ?? [];
+      render();
+    } catch (err) {
+      console.error("[batch] load:", err);
+    }
+  }
+  function reload() {
+    return load(thread);
+  }
+  return { el, load, reload };
+}
+var NO_PROGRESS_MS = 4 * 60 * 1e3;
+function fmtAgo(ms) {
+  const s = Math.max(0, Math.floor(ms / 1e3));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
+function countText(n, total) {
+  return n && total ? ` · ${n} of ${total}` : "";
+}
+function makeProgressLine() {
+  let prog = null;
+  let at = 0;
+  const text = h8("span", { class: "cb-prog-text" });
+  const age = h8("span", { class: "cb-prog-age" });
+  const fill = h8("span", { class: "cb-prog-fill" });
+  const bar2 = h8("div", { class: "cb-prog-bar", role: "progressbar" }, fill);
+  const el = h8(
+    "div",
+    { class: "cb-prog", "data-testid": "progress-line" },
+    h8(
+      "div",
+      { class: "cb-prog-row" },
+      h8("span", { class: "cb-prog-dot" }),
+      text,
+      age
+    ),
+    bar2
+  );
+  el.hidden = true;
+  function render() {
+    el.hidden = !prog;
+    if (!prog) return;
+    const since = Date.now() - at;
+    text.textContent = prog.text + countText(prog.n, prog.total);
+    const quiet = since >= NO_PROGRESS_MS;
+    el.toggleAttribute("data-quiet", quiet);
+    age.textContent = quiet ? `no progress for ${Math.floor(since / 6e4)}m` : fmtAgo(since);
+    const n = prog.n ?? 0;
+    const total = prog.total ?? 0;
+    bar2.hidden = !(n && total);
+    if (n && total) {
+      fill.style.width = `${Math.min(100, n / total * 100)}%`;
+      bar2.setAttribute("aria-valuenow", String(n));
+      bar2.setAttribute("aria-valuemax", String(total));
+    }
+  }
+  return {
+    el,
+    set(p, when) {
+      prog = p;
+      at = when;
+      render();
+    },
+    clear() {
+      prog = null;
+      render();
+    },
+    tick: render
+  };
+}
+function makeWaitingStrip() {
+  const count = h8("span", {});
+  const el = h8(
+    "div",
+    { class: "cb-wait", "data-testid": "waiting-strip" },
+    h8("span", { class: "cb-wait-word" }, "waiting"),
+    count
+  );
+  el.hidden = true;
+  return {
+    el,
+    setQueued(n) {
+      el.hidden = n <= 0;
+      count.textContent = ` · ${n} queued for the end of this turn`;
+    }
+  };
+}
+function clock(ts) {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false
+  });
+}
+function workedFold(msg) {
+  const lines = msg.worked?.lines ?? [];
+  const history2 = h8(
+    "ol",
+    { class: "cb-worked-lines" },
+    ...lines.map(
+      (l) => h8(
+        "li",
+        { class: "cb-worked-line" },
+        h8("span", { class: "cb-worked-at" }, clock(l.at)),
+        h8("span", {}, l.text + countText(l.n, l.total))
+      )
+    )
+  );
+  const el = fold2(msg.body, history2);
+  el.classList.add("cb-worked");
+  el.setAttribute("data-testid", "worked");
+  return el;
 }
 
 // dock.ts
@@ -1643,8 +2192,8 @@ function sessionLabel(s) {
   return cwd ? `${harness} · ${cwd}` : harness;
 }
 function renderAgentBody(msg) {
-  const wrap = h7("div", { class: "cb-dock-body" });
-  const bodyP = h7("p", { class: "cb-dock-bodytext" });
+  const wrap = h9("div", { class: "cb-dock-body" });
+  const bodyP = h9("p", { class: "cb-dock-bodytext" });
   bodyP.textContent = msg.body;
   wrap.append(bodyP);
   const { attached } = msg;
@@ -1653,7 +2202,7 @@ function renderAgentBody(msg) {
     if (attached.keys && attached.keys.length > 0) {
       const shown = attached.keys.slice(0, 5);
       for (const k of shown) {
-        const a = h7("a", {
+        const a = h9("a", {
           class: "cb-dock-link",
           href: "#",
           onclick(e) {
@@ -1666,7 +2215,7 @@ function renderAgentBody(msg) {
       }
       if (attached.keys.length > 5) {
         links.push(
-          h7(
+          h9(
             "span",
             { class: "cb-dock-link-more" },
             `+${attached.keys.length - 5} more`
@@ -1676,7 +2225,7 @@ function renderAgentBody(msg) {
     }
     if (attached.open) {
       const k = attached.open;
-      const a = h7("a", {
+      const a = h9("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -1689,7 +2238,7 @@ function renderAgentBody(msg) {
     }
     if (attached.rule) {
       const id = attached.rule;
-      const a = h7("a", {
+      const a = h9("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -1702,7 +2251,7 @@ function renderAgentBody(msg) {
     }
     if (attached.job) {
       const id = attached.job;
-      const a = h7("a", {
+      const a = h9("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -1714,34 +2263,35 @@ function renderAgentBody(msg) {
       links.push(a);
     }
     if (links.length > 0) {
-      const linkRow = h7("div", { class: "cb-dock-links" }, ...links);
+      const linkRow = h9("div", { class: "cb-dock-links" }, ...links);
       wrap.append(linkRow);
     }
   }
   return wrap;
 }
-function renderMsgCard(msg, delivery, sessions, ctx) {
+function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
+  if (msg.state === "worked") return workedFold(msg);
   const isAgent = msg.author !== "court";
-  const authorLabel = isAgent ? "PI" : "YOU";
+  const authorLabel = isAgent ? agentName.toUpperCase() : "YOU";
   const age = fmtAge(msg.created_at);
-  const headEl = h7(
+  const headEl = h9(
     "div",
     { class: "cb-dock-ch" },
-    h7(
+    h9(
       "span",
       {
         class: isAgent ? "cb-dock-ch-name cb-dock-ch-agent" : "cb-dock-ch-name"
       },
       authorLabel
     ),
-    h7("span", { class: "cb-dock-ch-age" }, age)
+    h9("span", { class: "cb-dock-ch-age" }, age)
   );
   let bodyContent;
   if (isAgent) {
     bodyContent = renderAgentBody(msg);
   } else {
-    const bodyEl = h7("div", { class: "cb-dock-body" });
-    const bodyP = h7("p", { class: "cb-dock-bodytext" });
+    const bodyEl = h9("div", { class: "cb-dock-body" });
+    const bodyP = h9("p", { class: "cb-dock-bodytext" });
     bodyP.textContent = msg.body;
     bodyEl.append(bodyP);
     bodyContent = bodyEl;
@@ -1760,7 +2310,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
       "interrupted"
     ];
     if (validStates.includes(msg.state)) {
-      stateEl = h7("div", {
+      stateEl = h9("div", {
         class: "cb-dock-state",
         "data-state": msg.state,
         style: `color:${stateColor(msg.state)}`
@@ -1768,7 +2318,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
       stateEl.textContent = stateLabel(msg);
     }
   }
-  const fullBody = h7(
+  const fullBody = h9(
     "div",
     { class: "cb-dock-card-body" },
     headEl,
@@ -1782,12 +2332,12 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
       const ageStr = ageText === "now" ? "just now" : `${ageText} ago`;
       stateEl.textContent = "";
       stateEl.setAttribute("data-state", "stuck");
-      const stuckBold = h7("strong", { style: "font-weight:600" });
+      const stuckBold = h9("strong", { style: "font-weight:600" });
       stuckBold.textContent = "stuck";
       stateEl.append(`delivered ${ageStr} · `, stuckBold);
     }
     const d = delivery;
-    const releaseBtn = h7("button", {
+    const releaseBtn = h9("button", {
       class: "kit-btn",
       "data-action": "release",
       onclick() {
@@ -1796,7 +2346,7 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
     });
     releaseBtn.textContent = "release";
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
-    const moveBtn = h7("button", {
+    const moveBtn = h9("button", {
       class: "kit-btn",
       "data-action": "move",
       onclick() {
@@ -1804,9 +2354,9 @@ function renderMsgCard(msg, delivery, sessions, ctx) {
       }
     });
     moveBtn.textContent = "move to another session";
-    fullBody.append(h7("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
+    fullBody.append(h9("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
   }
-  const el = card2({
+  const el = card3({
     edge: isAgent ? "agent" : "signal",
     body: fullBody
   });
@@ -1831,7 +2381,7 @@ async function moveDelivery(ctx, id, sessionId) {
 }
 function openMoveSheet(ctx, delivery, targets) {
   const items = targets.map((s) => {
-    const el = h7("button", { class: "cb-dock-pick-item" });
+    const el = h9("button", { class: "cb-dock-pick-item" });
     el.textContent = sessionLabel(s);
     el.onclick = () => {
       void moveDelivery(ctx, delivery.id, s.id);
@@ -1840,16 +2390,16 @@ function openMoveSheet(ctx, delivery, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h7(
+    const noOther = h9(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h7("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h9("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet3 = {
-    el: h7("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h9("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -1876,7 +2426,7 @@ async function moveSession(ctx, fromSession, toSession) {
 }
 function openSessionMoveSheet(ctx, fromSession, targets) {
   const items = targets.map((s) => {
-    const el = h7("button", { class: "cb-dock-pick-item" });
+    const el = h9("button", { class: "cb-dock-pick-item" });
     el.textContent = sessionLabel(s);
     el.onclick = () => {
       void moveSession(ctx, fromSession, s.id);
@@ -1885,16 +2435,16 @@ function openSessionMoveSheet(ctx, fromSession, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h7(
+    const noOther = h9(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h7("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h9("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet3 = {
-    el: h7("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h9("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -1914,7 +2464,7 @@ function buildSessionPicker(sessions, currentId, onSelect) {
     const busy = s.busy ? " · busy" : " · idle";
     const stale = s.left ? " · left" : "";
     const label = sessionLabel(s) + busy + stale;
-    const el = h7("button", {
+    const el = h9("button", {
       class: "cb-dock-pick-item" + (s.id === currentId ? " cb-dock-pick-item--on" : "")
     });
     el.textContent = label;
@@ -1924,7 +2474,7 @@ function buildSessionPicker(sessions, currentId, onSelect) {
     };
     return el;
   });
-  const picker = h7(
+  const picker = h9(
     "div",
     { class: "cb-dock-picker", role: "listbox" },
     ...items
@@ -1953,9 +2503,9 @@ function makeDock(ctx) {
   let messages = [];
   let currentDelivery = null;
   let lastUsedSessionId = "";
-  const sessionDot = h7("span", { class: "cb-dock-dot" });
-  const sessionLabelEl = h7("span", { class: "cb-dock-session-label" });
-  const sessionPickerBtn = h7("button", {
+  const sessionDot = h9("span", { class: "cb-dock-dot" });
+  const sessionLabelEl = h9("span", { class: "cb-dock-session-label" });
+  const sessionPickerBtn = h9("button", {
     class: "cb-dock-agent-btn",
     "aria-label": "pick agent session",
     onclick(e) {
@@ -1973,26 +2523,49 @@ function makeDock(ctx) {
     }
   });
   sessionPickerBtn.textContent = "AGENT ▾";
-  const leftStatusRow = h7("div", { class: "cb-dock-left-row" });
+  const leftStatusRow = h9("div", { class: "cb-dock-left-row" });
   leftStatusRow.hidden = true;
-  const sessionHeader = h7(
+  const sessionHeader = h9(
     "div",
     { class: "cb-dock-header" },
-    h7(
+    h9(
       "div",
       { class: "cb-dock-header-row" },
-      h7("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
+      h9("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
       sessionPickerBtn
     ),
     leftStatusRow
   );
-  const threadChips = h7("div", { class: "cb-dock-threads" });
-  const messageArea = h7("div", {
+  const threadChips = h9("div", { class: "cb-dock-threads" });
+  const messageArea = h9("div", {
     class: "cb-dock-messages",
     "data-testid": "dock-messages"
   });
-  const rail = h7("div", { class: "cb-dock-inner" });
-  rail.append(sessionHeader, threadChips, messageArea);
+  const batchTray = makeBatchTray(ctx);
+  const progLine = makeProgressLine();
+  const waitStrip = makeWaitingStrip();
+  const composer = makeComposer(ctx, {
+    currentThread: () => currentThreadId,
+    currentSession: () => currentSessionId,
+    threadCreated(t) {
+      threads = [...threads, t];
+      currentThreadId = t.id;
+      renderThreadChips();
+      void batchTray.load(t.id);
+    }
+  });
+  const rail = h9("div", { class: "cb-dock-inner" });
+  rail.append(
+    sessionHeader,
+    threadChips,
+    messageArea,
+    progLine.el,
+    waitStrip.el,
+    composer.el
+  );
+  function agentName() {
+    return sessions.find((s) => s.id === currentSessionId)?.harness || "agent";
+  }
   function renderHeader() {
     const sess = sessions.find((s) => s.id === currentSessionId);
     if (!sess) {
@@ -2007,7 +2580,7 @@ function makeDock(ctx) {
     sessionLabelEl.textContent = sessionLabel(sess);
     if (stale) {
       leftStatusRow.textContent = "";
-      const moveLink = h7("button", {
+      const moveLink = h9("button", {
         class: "cb-dock-move-link",
         "data-testid": "dock-move-link",
         onclick(e) {
@@ -2017,12 +2590,12 @@ function makeDock(ctx) {
         }
       });
       moveLink.textContent = "move to…";
-      const parts = [h7("span", {}, "left")];
+      const parts = [h9("span", {}, "left")];
       if (sess.queued > 0) {
-        parts.push(h7("span", { class: "cb-dock-sep" }, "·"));
-        parts.push(h7("span", {}, `${sess.queued} queued`));
+        parts.push(h9("span", { class: "cb-dock-sep" }, "·"));
+        parts.push(h9("span", {}, `${sess.queued} queued`));
       }
-      parts.push(h7("span", { class: "cb-dock-sep" }, "·"));
+      parts.push(h9("span", { class: "cb-dock-sep" }, "·"));
       parts.push(moveLink);
       leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
@@ -2036,7 +2609,7 @@ function makeDock(ctx) {
   function renderThreadChips() {
     threadChips.innerHTML = "";
     for (const t of threads) {
-      const chip = h7("button", {
+      const chip = h9("button", {
         class: "kit-chip" + (t.id === currentThreadId ? " on" : ""),
         "data-thread": String(t.id),
         onclick() {
@@ -2046,7 +2619,7 @@ function makeDock(ctx) {
       chip.textContent = t.name;
       threadChips.append(chip);
     }
-    const addChip = h7("button", {
+    const addChip = h9("button", {
       class: "kit-chip cb-dock-add",
       "data-testid": "dock-add-thread",
       onclick() {
@@ -2057,16 +2630,17 @@ function makeDock(ctx) {
     threadChips.append(addChip);
   }
   function renderMessages() {
-    messageArea.innerHTML = "";
+    messageArea.replaceChildren();
     if (messages.length === 0) {
-      const empty = h7("p", { class: "cb-dock-empty" }, "no messages");
+      const empty = h9("p", { class: "cb-dock-empty" }, "no messages");
       messageArea.append(empty);
-      return;
     }
+    const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx);
+      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
       messageArea.append(el);
     }
+    messageArea.append(batchTray.el);
     messageArea.scrollTop = messageArea.scrollHeight;
   }
   async function loadSessions() {
@@ -2075,12 +2649,16 @@ function makeDock(ctx) {
       sessions = sv.sessions ?? [];
       if (!currentSessionId && sessions.length > 0) {
         currentSessionId = lastUsedSessionId ? sessions.find((s) => s.id === lastUsedSessionId)?.id ?? sessions[0].id : sessions[0].id;
+        updateSessionParts();
         await loadThreads();
+        await loadProgress();
       } else {
         renderHeader();
         await loadDelivery();
+        updateSessionParts();
       }
       renderHeader();
+      updateSessionParts();
     } catch (err) {
       console.error("[dock] loadSessions:", err);
     }
@@ -2098,6 +2676,7 @@ function makeDock(ctx) {
       renderThreadChips();
       await loadMessages();
       await loadDelivery();
+      await batchTray.load(currentThreadId);
     } catch (err) {
       console.error("[dock] loadThreads:", err);
     }
@@ -2112,7 +2691,7 @@ function makeDock(ctx) {
       const mv = await ctx.api.get("/messages", {
         thread: String(currentThreadId)
       });
-      messages = mv.messages ?? [];
+      messages = threadOrder(mv.messages ?? []);
       renderMessages();
     } catch (err) {
       console.error("[dock] loadMessages:", err);
@@ -2130,16 +2709,43 @@ function makeDock(ctx) {
       console.error("[dock] loadDelivery:", err);
     }
   }
+  async function loadProgress() {
+    const sid = currentSessionId;
+    if (!sid) {
+      progLine.clear();
+      return;
+    }
+    try {
+      const pv = await ctx.api.get("/session/progress", {
+        session: sid
+      });
+      if (sid !== currentSessionId) return;
+      if (pv.progress) {
+        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+      } else {
+        progLine.clear();
+      }
+    } catch (err) {
+      console.error("[dock] loadProgress:", err);
+    }
+  }
+  function updateSessionParts() {
+    const sess = sessions.find((s) => s.id === currentSessionId);
+    waitStrip.setQueued(sess?.queued ?? 0);
+    composer.setAgent(sess?.harness ?? "");
+  }
   async function switchSession(id) {
     currentSessionId = id;
     currentThreadId = 0;
     threads = [];
     messages = [];
     currentDelivery = null;
+    progLine.clear();
     renderHeader();
     renderThreadChips();
     renderMessages();
-    await loadThreads();
+    updateSessionParts();
+    await Promise.all([loadThreads(), loadProgress()]);
   }
   async function switchThread(id) {
     currentThreadId = id;
@@ -2149,6 +2755,7 @@ function makeDock(ctx) {
     renderMessages();
     await loadMessages();
     await loadDelivery();
+    await batchTray.load(id);
   }
   async function newThread() {
     const sessId = lastUsedSessionId || currentSessionId;
@@ -2164,6 +2771,7 @@ function makeDock(ctx) {
       currentDelivery = null;
       renderThreadChips();
       renderMessages();
+      await batchTray.load(t.id);
     } catch (err) {
       console.error("[dock] newThread:", err);
     }
@@ -2174,13 +2782,6 @@ function makeDock(ctx) {
   ctx.on("thread", (data) => {
     void loadThreads();
     void data;
-  });
-  ctx.on("message", (data) => {
-    const d = data;
-    const tid = d.thread_id ?? d.thread;
-    if (tid === currentThreadId) {
-      void loadMessages();
-    }
   });
   ctx.on("messages", (data) => {
     const d = data;
@@ -2196,14 +2797,63 @@ function makeDock(ctx) {
     const isOurs = !d.session || d.session === currentSessionId || d.from === currentSessionId || d.id !== void 0 && currentDelivery?.id === d.id;
     if (isOurs) {
       void loadMessages().then(() => loadDelivery());
+      void loadSessions();
+    }
+  });
+  ctx.on("progress", (data) => {
+    const p = data;
+    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+  });
+  ctx.on("settled", (data) => {
+    const d = data;
+    if (d.session !== currentSessionId) return;
+    progLine.clear();
+    void loadMessages();
+    void loadSessions();
+  });
+  ctx.on("drafts", () => {
+    void batchTray.reload();
+  });
+  ctx.on("batch", () => {
+    void batchTray.reload();
+    void loadMessages();
+    void loadSessions();
+  });
+  ctx.on("message", (data) => {
+    const m = data;
+    if (m.thread_id === currentThreadId) {
+      void loadMessages();
+      if (m.state === "draft") void batchTray.reload();
+    }
+    void loadSessions();
+  });
+  setInterval(() => progLine.tick(), 1e3);
+  ctx.keys.register({
+    keys: ".",
+    label: "focus the composer",
+    group: "agent",
+    run() {
+      composer.focus();
+    }
+  });
+  ctx.keys.register({
+    keys: "⌘↵",
+    label: "add to batch",
+    group: "agent",
+    inField: true,
+    run(e) {
+      if (e.target !== composer.input) return false;
+      composer.addToBatch();
     }
   });
   void loadSessions();
   return {
     el: rail,
-    setAttached() {
+    setAttached(a) {
+      composer.setAttached(a);
     },
     focusComposer() {
+      composer.focus();
     },
     currentThread() {
       return currentThreadId;

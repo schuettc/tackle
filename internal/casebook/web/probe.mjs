@@ -110,6 +110,1040 @@ async function chipCountsMatchLists(pg, base, token, label) {
   check(`${label}: view chip counts match list totals`, allMatch);
 }
 
+// ---- Task 7: the composer, the batch tray, the progress line, the waiting strip
+
+// until waits for a condition in the page and reports whether it held.
+async function until(pg, fn, arg, timeout = 6000) {
+  try {
+    await pg.waitForFunction(fn, arg, { timeout, polling: 50 });
+    return true;
+  } catch (err) {
+    if (err?.name === 'TimeoutError') return false;
+    throw err;
+  }
+}
+
+// eventually polls a check in node until it holds (serve-side state).
+async function eventually(fn, timeout = 5000) {
+  const end = Date.now() + timeout;
+  for (;;) {
+    if (await fn()) return true;
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+// workedText formats worked_ms the way serve's workedBody does.
+function workedText(ms) {
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
+  const sec = s % 60;
+  if (h > 0) return `worked for ${h}h ${m}m ${sec}s`;
+  if (m > 0) return `worked for ${m}m ${sec}s`;
+  return `worked for ${sec}s`;
+}
+
+// dockFixture creates a session with one thread; each scenario owns its own.
+async function dockFixture(serveHandle, name, harness = 'pi') {
+  const agent = createAgent(serveHandle.base, serveHandle.token);
+  const sid = `probe-t7-${name}-${Date.now()}`;
+  const label = `${harness} \u00b7 ${name}`;
+  await agent.presence(sid, label, `/home/court/${name}`, harness);
+  const thread = await agent.newThread(sid, name);
+  return { agent, sid, label, thread };
+}
+
+// openDock opens the page (at an optional hash) and waits until the dock
+// shows the fixture's session with its thread loaded.
+async function openDock(context, serveHandle, fx, opts = {}) {
+  const pg = await context.newPage();
+  await pg.setViewportSize({ width: 1600, height: 900 });
+  if (opts.clock) await pg.clock.install({ time: Date.now() });
+  await pg.goto(serveHandle.url + (opts.hash ?? ''), {
+    waitUntil: 'domcontentloaded',
+    timeout: 15000,
+  });
+  const shown = await until(
+    pg,
+    ([label, thread]) =>
+      document.querySelector('.cb-dock-session-label')?.textContent === label &&
+      !!document.querySelector(`.cb-dock-threads [data-thread="${thread}"].on`),
+    [fx.label, fx.thread.id],
+    10000,
+  );
+  if (!shown) throw new Error(`the dock did not show session ${fx.label}`);
+  return pg;
+}
+
+// typeAndSend types into the composer and presses ↵ or ⌘↵.
+async function compose(pg, text, keys = 'Enter') {
+  await pg.click('[data-testid="composer-input"]');
+  await pg.keyboard.type(text);
+  await pg.keyboard.press(keys);
+}
+
+// cssColor resolves a CSS colour expression to its computed rgb() string.
+async function cssColor(pg, expr, prop = 'color') {
+  return pg.evaluate(
+    ([e, p]) => {
+      const d = document.createElement('div');
+      d.style.setProperty(p, e);
+      document.body.append(d);
+      const v = getComputedStyle(d).getPropertyValue(p);
+      d.remove();
+      return v;
+    },
+    [expr, prop],
+  );
+}
+
+// dockCardTexts lists the message cards' body texts, in order.
+async function dockCardTexts(pg) {
+  return pg.$$eval('[data-testid="dock-messages"] .cb-dock-card', (els) =>
+    els.map((e) => e.querySelector('.cb-dock-bodytext')?.textContent ?? ''),
+  );
+}
+
+// trayTexts lists the batch tray's drafts, in order.
+async function trayTexts(pg) {
+  return pg.$$eval('[data-testid="batch-tray"] .cb-batch-draft', (els) =>
+    els.map((e) => e.querySelector('.cb-batch-text')?.textContent ?? ''),
+  );
+}
+
+// draftBodies reads a thread's draft batch from serve.
+async function draftBodies(agent, thread) {
+  const mv = await agent.messages(thread);
+  return (mv.drafts ?? []).map((m) => m.body);
+}
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+async function composerScenarios(context, serveHandle) {
+  // ---- scenario: ↵ sends, ⌘↵ adds to the batch ----------------------------
+  console.log('\nscenario: the composer — ↵ sends, ⌘↵ adds to the batch');
+  {
+    const fx = await dockFixture(serveHandle, 'compose');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      const comp = await pg.$eval('[data-testid="composer"]', (el) => ({
+        placeholder: el.querySelector('textarea').placeholder,
+        foot: el.querySelector('.cb-comp-foot').textContent,
+        shadow: getComputedStyle(el).boxShadow,
+      }));
+      check(
+        'the input names the session\'s agent: "Message pi…"',
+        comp.placeholder === 'Message pi\u2026',
+      );
+      check(
+        'the footer reads "↵ send · ⌘↵ add to batch"',
+        comp.foot === '\u21b5 send \u00b7 \u2318\u21b5 add to batch',
+      );
+      const lift = await cssColor(pg, 'var(--kit-lift)', 'box-shadow');
+      check(
+        `the composer's box-shadow is the kit lift (${comp.shadow})`,
+        comp.shadow !== 'none' && comp.shadow === lift,
+      );
+      const raised = await pg.$$eval(
+        '.kit-rail *',
+        (els) =>
+          els.filter((e) => getComputedStyle(e).boxShadow !== 'none').length,
+      );
+      check("the composer is the rail's one raised surface", raised === 1);
+
+      // ↵ sends: a card appears and the agent receives it on its own.
+      await compose(pg, 'send this now');
+      check(
+        '↵ sends: the message appears as a card in the thread',
+        await until(pg, () =>
+          [...document.querySelectorAll('.cb-dock-card .cb-dock-bodytext')]
+            .map((e) => e.textContent)
+            .includes('send this now'),
+        ),
+      );
+      check(
+        '↵ clears the input',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-input"]').value ===
+            '',
+        ),
+      );
+      const d1 = await fx.agent.wait(fx.sid);
+      const got1 = (d1?.delivery?.messages ?? []).map((m) => [
+        m.body,
+        m.batch_id ?? 0,
+      ]);
+      check(
+        `↵: the agent receives the message unbatched (${JSON.stringify(got1)})`,
+        same(got1, [['send this now', 0]]),
+      );
+      await fx.agent.settled(fx.sid, [d1.delivery.id]);
+
+      // ⌘↵ drafts: the tray shows it, the thread doesn't, the agent doesn't.
+      await compose(pg, 'hold this for later', 'Meta+Enter');
+      check(
+        '⌘↵ adds to the batch: the tray lists it with "send 1"',
+        await until(
+          pg,
+          () =>
+            !document.querySelector('[data-testid="batch-tray"]').hidden &&
+            document.querySelector('[data-testid="batch-send"]').textContent ===
+              'send 1' &&
+            document.querySelector('.cb-batch-text')?.textContent ===
+              'hold this for later',
+        ),
+      );
+      check(
+        '⌘↵ clears the input',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="composer-input"]').value ===
+            '',
+        ),
+      );
+      check(
+        '⌘↵: the draft is not a message card',
+        !(await dockCardTexts(pg)).includes('hold this for later'),
+      );
+      check(
+        '⌘↵: serve holds it as a draft',
+        same(await draftBodies(fx.agent, fx.thread.id), [
+          'hold this for later',
+        ]),
+      );
+      const d2 = await fx.agent.wait(fx.sid);
+      check('⌘↵: nothing is delivered to the agent', d2 === null);
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the composer stays pinned under 30 cards -----------------
+  console.log('\nscenario: the composer stays pinned under 30 message cards');
+  {
+    const fx = await dockFixture(serveHandle, 'pinned');
+    for (let i = 1; i <= 30; i++) {
+      await fx.agent.postMessage(fx.thread.id, `card ${i}`);
+    }
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      await until(
+        pg,
+        () => document.querySelectorAll('.cb-dock-card').length === 30,
+      );
+      const g = await pg.evaluate(() => {
+        const rail = document
+          .querySelector('.kit-rail')
+          .getBoundingClientRect();
+        const comp = document
+          .querySelector('[data-testid="composer"]')
+          .getBoundingClientRect();
+        const area = document.querySelector('[data-testid="dock-messages"]');
+        return {
+          cards: document.querySelectorAll('.cb-dock-card').length,
+          railBottom: rail.bottom,
+          compTop: comp.top,
+          compBottom: comp.bottom,
+          compMargin: parseFloat(
+            getComputedStyle(document.querySelector('.cb-comp')).marginBottom,
+          ),
+          areaBottom: area.getBoundingClientRect().bottom,
+          scrolls: area.scrollHeight > area.clientHeight,
+          docScroll:
+            document.scrollingElement.scrollHeight - window.innerHeight,
+          vh: window.innerHeight,
+        };
+      });
+      check(`30 message cards render (${g.cards})`, g.cards === 30);
+      check(
+        `the composer's bottom edge sits at the rail's bottom (rail ${g.railBottom}, composer ${g.compBottom} + margin ${g.compMargin})`,
+        Math.abs(g.railBottom - g.compMargin - g.compBottom) < 1 &&
+          g.railBottom === g.vh,
+      );
+      check(
+        'the composer is fully on screen',
+        g.compTop >= 0 && g.compBottom <= g.vh,
+      );
+      check(
+        'the message cards scroll above it, the page does not',
+        g.scrolls && g.areaBottom <= g.compTop && g.docScroll <= 0,
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the batch tray — edit, reorder, remove, send ---------------
+  console.log(
+    '\nscenario: the batch tray — edit, reorder and remove reach the agent',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'batch');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      for (const [i, text] of ['alpha', 'bravo', 'charlie'].entries()) {
+        await compose(pg, text, 'Meta+Enter');
+        await until(
+          pg,
+          (n) => document.querySelectorAll('.cb-batch-draft').length === n,
+          i + 1,
+        );
+      }
+      const head = await pg.$eval('[data-testid="batch-tray"]', (el) => ({
+        label: el.querySelector('.cb-batch-label').innerText,
+        send: el.querySelector('[data-testid="batch-send"]').textContent,
+        sendFilled: el
+          .querySelector('[data-testid="batch-send"]')
+          .classList.contains('fill'),
+        border: getComputedStyle(el).borderTopStyle,
+      }));
+      check(
+        `the tray reads "BATCH · 3 DRAFTS" (${head.label})`,
+        head.label === 'BATCH \u00b7 3 DRAFTS',
+      );
+      check(
+        'the tray has a filled "send 3"',
+        head.send === 'send 3' && head.sendFilled,
+      );
+      check('the tray is a dashed card', head.border === 'dashed');
+      check(
+        'the tray lists the drafts in order',
+        same(await trayTexts(pg), ['alpha', 'bravo', 'charlie']),
+      );
+
+      // Edit bravo.
+      await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.type('bravo, edited');
+      await pg.keyboard.press('Enter');
+      check(
+        'edit: the tray shows the edited draft',
+        await until(
+          pg,
+          () =>
+            [...document.querySelectorAll('.cb-batch-text')][1]?.textContent ===
+            'bravo, edited',
+        ),
+      );
+      check(
+        'edit: serve holds the edited text',
+        await eventually(async () =>
+          same(await draftBodies(fx.agent, fx.thread.id), [
+            'alpha',
+            'bravo, edited',
+            'charlie',
+          ]),
+        ),
+      );
+
+      // Move charlie to the top.
+      await pg.click('.cb-batch-draft:nth-child(3) [data-action="up"]');
+      await until(
+        pg,
+        () =>
+          [...document.querySelectorAll('.cb-batch-text')][1]?.textContent ===
+          'charlie',
+      );
+      await pg.click('.cb-batch-draft:nth-child(2) [data-action="up"]');
+      check(
+        'reorder: the tray shows charlie first',
+        await until(
+          pg,
+          () =>
+            [...document.querySelectorAll('.cb-batch-text')]
+              .map((e) => e.textContent)
+              .join('|') === 'charlie|alpha|bravo, edited',
+        ),
+      );
+      check(
+        'reorder: serve holds the new order',
+        await eventually(async () =>
+          same(await draftBodies(fx.agent, fx.thread.id), [
+            'charlie',
+            'alpha',
+            'bravo, edited',
+          ]),
+        ),
+      );
+
+      // Remove alpha.
+      await pg.click('.cb-batch-draft:nth-child(2) [data-action="remove"]');
+      check(
+        'remove: the tray drops it and reads "send 2"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="batch-send"]').textContent ===
+              'send 2' &&
+            [...document.querySelectorAll('.cb-batch-text')]
+              .map((e) => e.textContent)
+              .join('|') === 'charlie|bravo, edited',
+        ),
+      );
+      check(
+        'remove: serve drops the draft',
+        await eventually(async () =>
+          same(await draftBodies(fx.agent, fx.thread.id), [
+            'charlie',
+            'bravo, edited',
+          ]),
+        ),
+      );
+
+      // send 2: the tray clears; the drafts become queued cards.
+      await pg.click('[data-testid="batch-send"]');
+      check(
+        'send N: the tray clears',
+        await until(
+          pg,
+          () => document.querySelector('[data-testid="batch-tray"]').hidden,
+        ),
+      );
+      check(
+        'send N: the drafts become queued cards, in order',
+        await until(pg, () => {
+          const cards = [...document.querySelectorAll('.cb-dock-card')].map(
+            (c) => [
+              c.querySelector('.cb-dock-bodytext')?.textContent,
+              c.querySelector('.cb-dock-state')?.dataset.state,
+            ],
+          );
+          return (
+            JSON.stringify(cards) ===
+            JSON.stringify([
+              ['charlie', 'queued'],
+              ['bravo, edited', 'queued'],
+            ])
+          );
+        }),
+      );
+      const d = await fx.agent.wait(fx.sid);
+      const msgs = d?.delivery?.messages ?? [];
+      check(
+        `send N: the agent receives the batch in its order, edited, without the removed draft (${JSON.stringify(msgs.map((m) => m.body))})`,
+        same(
+          msgs.map((m) => m.body),
+          ['charlie', 'bravo, edited'],
+        ),
+      );
+      check(
+        'send N: the batch arrives as one unit (one delivery, one batch id)',
+        msgs.length === 2 &&
+          !!msgs[0].batch_id &&
+          msgs[0].batch_id === msgs[1].batch_id,
+      );
+      const text = d?.text ?? '';
+      check(
+        "the agent's delivery text lists the edited order and not the removed draft",
+        text.indexOf('charlie') >= 0 &&
+          text.indexOf('charlie') < text.indexOf('bravo, edited') &&
+          !text.includes('alpha'),
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the queued message waits for the turn --------------------
+  console.log('\nscenario: the queued message waits for the turn');
+  {
+    const fx = await dockFixture(serveHandle, 'queued');
+    await fx.agent.postMessage(fx.thread.id, 'first, starts the turn');
+    const d1 = await fx.agent.wait(fx.sid);
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      check(
+        'no waiting strip while nothing is queued',
+        await pg.$eval('[data-testid="waiting-strip"]', (e) => e.hidden),
+      );
+      await compose(pg, 'while you work, one');
+      check(
+        'a message sent while the agent is busy shows queued',
+        await until(pg, () =>
+          [...document.querySelectorAll('.cb-dock-card')].some(
+            (c) =>
+              c.querySelector('.cb-dock-bodytext')?.textContent ===
+                'while you work, one' &&
+              c.querySelector('.cb-dock-state')?.dataset.state === 'queued',
+          ),
+        ),
+      );
+      check(
+        'the waiting strip reads "waiting · 1 queued for the end of this turn"',
+        await until(pg, () => {
+          const s = document.querySelector('[data-testid="waiting-strip"]');
+          return (
+            !s.hidden &&
+            s.offsetHeight > 0 &&
+            s.textContent === 'waiting \u00b7 1 queued for the end of this turn'
+          );
+        }),
+      );
+      const wordColor = await pg.$eval(
+        '.cb-wait-word',
+        (e) => getComputedStyle(e).color,
+      );
+      check(
+        '"waiting" is in the wait colour',
+        wordColor === (await cssColor(pg, 'var(--kit-wait)')),
+      );
+      await compose(pg, 'while you work, two');
+      check(
+        'the waiting strip counts 2 queued',
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="waiting-strip"]')
+              .textContent ===
+            'waiting \u00b7 2 queued for the end of this turn',
+        ),
+      );
+      await fx.agent.settled(fx.sid, [d1.delivery.id]);
+      const d2 = await fx.agent.wait(fx.sid);
+      check(
+        'at the end of the turn both go out together, in order',
+        same(
+          (d2?.delivery?.messages ?? []).map((m) => m.body),
+          ['while you work, one', 'while you work, two'],
+        ),
+      );
+      check(
+        'the waiting strip leaves once they are delivered',
+        await until(
+          pg,
+          () => document.querySelector('[data-testid="waiting-strip"]').hidden,
+        ),
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the progress line (an advancing clock) -------------------
+  console.log('\nscenario: the progress line updates, ages and goes quiet');
+  {
+    const fx = await dockFixture(serveHandle, 'progress');
+    await fx.agent.postMessage(fx.thread.id, 'check CI on the 4 PRs');
+    await fx.agent.wait(fx.sid);
+    // Playwright's clock belongs to the whole browser context, so the
+    // advancing clock gets a context of its own.
+    const clockContext = await context.browser().newContext();
+    const pg = await openDock(clockContext, serveHandle, fx, { clock: true });
+    try {
+      const line = () =>
+        pg.$eval('[data-testid="progress-line"]', (el) => {
+          const fill = el
+            .querySelector('.cb-prog-fill')
+            .getBoundingClientRect();
+          const bar = el.querySelector('.cb-prog-bar');
+          return {
+            hidden: el.hidden || el.offsetHeight === 0,
+            text: el.querySelector('.cb-prog-text').textContent,
+            age: el.querySelector('.cb-prog-age').textContent,
+            ratio: bar.hidden
+              ? null
+              : fill.width / bar.getBoundingClientRect().width,
+            barShown: !bar.hidden && bar.offsetHeight > 0,
+            dot: getComputedStyle(el.querySelector('.cb-prog-dot'))
+              .backgroundColor,
+            ground: getComputedStyle(el).backgroundColor,
+          };
+        });
+      check('no progress line before the agent reports', (await line()).hidden);
+
+      await fx.agent.progress(fx.sid, 'checking CI on #671', 2, 4);
+      check(
+        'the progress line shows "checking CI on #671 · 2 of 4"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-text')?.textContent ===
+            'checking CI on #671 \u00b7 2 of 4',
+        ),
+      );
+      let l = await line();
+      check(
+        `the bar's width is n/total: 2 of 4 fills half (${l.ratio?.toFixed(3)})`,
+        l.barShown && Math.abs(l.ratio - 0.5) < 0.01,
+      );
+      check(
+        'the dot is the agent colour, on the agent wash',
+        l.dot === (await cssColor(pg, 'var(--kit-agent)')) &&
+          l.ground ===
+            (await cssColor(pg, 'var(--kit-agent-soft)', 'background-color')),
+      );
+
+      await pg.clock.fastForward(8000);
+      check(
+        'after 8s the line reads "8s ago"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-age')?.textContent === '8s ago',
+        ),
+      );
+
+      await fx.agent.progress(fx.sid, 'checking CI on #672', 3, 4);
+      check(
+        'a new update resets the age and moves the bar to 3 of 4',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-text')?.textContent ===
+              'checking CI on #672 \u00b7 3 of 4' &&
+            document.querySelector('.cb-prog-age')?.textContent === '0s ago',
+        ),
+      );
+      l = await line();
+      check(
+        `the bar fills three quarters (${l.ratio?.toFixed(3)})`,
+        Math.abs(l.ratio - 0.75) < 0.01,
+      );
+
+      await pg.clock.fastForward('03:50');
+      check(
+        'at 3m50s it still reads its age',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-age')?.textContent === '3m ago',
+        ),
+      );
+      await pg.clock.fastForward(10000);
+      check(
+        'after 4 minutes without an update it reads "no progress for 4m"',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-age')?.textContent ===
+            'no progress for 4m',
+        ),
+      );
+
+      await fx.agent.progress(fx.sid, 'writing the summary');
+      check(
+        'without n of total there is no bar',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-prog-text')?.textContent ===
+              'writing the summary' &&
+            document.querySelector('.cb-prog-bar').hidden,
+        ),
+      );
+    } finally {
+      await pg.close();
+      await clockContext.close();
+    }
+
+    // A page opened now shows the current line from serve.
+    const pg2 = await openDock(context, serveHandle, fx);
+    try {
+      check(
+        'a page opened mid-turn shows the current line, aged from its update',
+        await until(
+          pg2,
+          () =>
+            document.querySelector('.cb-prog-text')?.textContent ===
+              'writing the summary' &&
+            /^\d+s ago$/.test(
+              document.querySelector('.cb-prog-age')?.textContent ?? '',
+            ),
+        ),
+      );
+    } finally {
+      await pg2.close();
+    }
+  }
+
+  // ---- scenario: worked for Xm Ys folds into the thread --------------------
+  console.log('\nscenario: on settled the line folds into the thread');
+  {
+    const fx = await dockFixture(serveHandle, 'worked');
+    await fx.agent.postMessage(fx.thread.id, 'merge the 4 bumps');
+    const d = await fx.agent.wait(fx.sid);
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      const steps = [
+        ['reading the 4 PRs'],
+        ['checking CI on #671', 1, 2],
+        ['checking CI on #672', 2, 2],
+      ];
+      for (const [text, n, total] of steps) {
+        await fx.agent.progress(fx.sid, text, n, total);
+      }
+      await until(
+        pg,
+        () =>
+          document.querySelector('.cb-prog-text')?.textContent ===
+          'checking CI on #672 \u00b7 2 of 2',
+      );
+      const res = await fx.agent.settled(fx.sid, [d.delivery.id]);
+      const want = workedText(res.worked_ms);
+      check(
+        'on settled the progress line leaves',
+        await until(
+          pg,
+          () => document.querySelector('[data-testid="progress-line"]').hidden,
+        ),
+      );
+      check(
+        `the thread gains a closed "${want}" fold after the message`,
+        await until(
+          pg,
+          (w) => {
+            const area = document.querySelector(
+              '[data-testid="dock-messages"]',
+            );
+            const f = area.querySelector('[data-testid="worked"]');
+            if (!f) return false;
+            const cards = [...area.children];
+            return (
+              f.querySelector('summary').textContent === w &&
+              !f.open &&
+              cards.indexOf(f) >
+                cards.indexOf(area.querySelector('.cb-dock-card')) &&
+              !f.querySelector('.cb-worked-line').checkVisibility()
+            );
+          },
+          want,
+        ),
+      );
+      await pg.click('[data-testid="worked"] summary');
+      const hist = await pg.$$eval(
+        '[data-testid="worked"] .cb-worked-line',
+        (els) =>
+          els.map((e) => ({
+            text: e.lastElementChild.textContent,
+            shown: e.checkVisibility(),
+          })),
+      );
+      check(
+        `it expands to the line's history, in order (${JSON.stringify(hist.map((h) => h.text))})`,
+        hist.every((h) => h.shown) &&
+          same(
+            hist.map((h) => h.text),
+            [
+              'reading the 4 PRs',
+              'checking CI on #671 \u00b7 1 of 2',
+              'checking CI on #672 \u00b7 2 of 2',
+            ],
+          ),
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the attached line ---------------------------------------
+  console.log(
+    '\nscenario: the attached line reflects the selection, the open item and editing it',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'attached');
+    const pg = await openDock(context, serveHandle, fx, {
+      hash: '#/attention/waiting',
+    });
+    const value = () =>
+      pg.$eval('[data-testid="composer-attached"]', (e) => ({
+        text: e.textContent,
+        edited: e.hasAttribute('data-edited'),
+        color: getComputedStyle(e).color,
+      }));
+    const sendAndReceive = async (text) => {
+      await compose(pg, text);
+      const d = await fx.agent.wait(fx.sid);
+      const m = (d?.delivery?.messages ?? []).find((x) => x.body === text);
+      if (d) await fx.agent.settled(fx.sid, [d.delivery.id]);
+      return m?.attached ?? null;
+    };
+    try {
+      await pg.waitForSelector('.kit-row .kit-box');
+      check(
+        'nothing selected or open: "attached: nothing"',
+        (await value()).text === 'nothing',
+      );
+
+      // Pick four rows of one kind from the rendered list.
+      const resp = await fetch(
+        `${serveHandle.base}/api/items?view=waiting&limit=200`,
+        { headers: { 'X-Local-Token': serveHandle.token } },
+      );
+      const items = (await resp.json()).items ?? [];
+      const titles = await pg.$$eval('.kit-row .kit-title', (els) =>
+        els.map((e) => e.textContent),
+      );
+      const byKind = {};
+      items.forEach((it, i) => (byKind[it.kind] ??= []).push(i));
+      const [kind, idx] = Object.entries(byKind).sort(
+        (a, b) => b[1].length - a[1].length,
+      )[0];
+      // Four of one kind, then a fifth row of another kind.
+      const extra = items.findIndex((it) => it.kind !== kind);
+      const pick = [...idx.slice(0, 4), extra];
+      const keys = pick.map((i) => items[i].key);
+      check(
+        `the picked rows are serve's items (4 of ${kind}, then a ${items[extra]?.kind})`,
+        idx.length >= 4 &&
+          extra >= 0 &&
+          pick.every(
+            (i) =>
+              titles[i] ===
+              (items[i].title ||
+                items[i].key.slice(items[i].key.indexOf(':') + 1)),
+          ),
+      );
+      const plural = kind === 'branch' ? 'branches' : `${kind}s`;
+      const boxes = await pg.$$('.kit-row .kit-box');
+      for (const i of pick.slice(0, 4)) await boxes[i].click();
+      const want4 = `4 ${plural} selected`;
+      check(
+        `selecting 4 shows "attached: ${want4}"`,
+        await until(
+          pg,
+          (w) =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === w,
+          want4,
+        ),
+      );
+      const v = await value();
+      check(
+        'the value is in the signal colour',
+        v.color === (await cssColor(pg, 'var(--kit-signal)')),
+      );
+      const a1 = await sendAndReceive('merge these if CI is green');
+      check(
+        `the agent receives the 4 selected keys (${JSON.stringify(a1)})`,
+        same([...(a1?.keys ?? [])].sort(), keys.slice(0, 4).sort()),
+      );
+
+      // Edit: keep only the first two keys. Headless Chrome withholds focus
+      // events without window focus, so the probe dispatches them.
+      const attachedSel = '[data-testid="composer-attached"]';
+      await pg.click(attachedSel);
+      await pg.$eval(attachedSel, (e) =>
+        e.dispatchEvent(new FocusEvent('focus')),
+      );
+      const editForm = await pg.$eval(attachedSel, (e) => e.textContent);
+      check(
+        'editing shows the attached keys themselves',
+        same(editForm.split(' ').sort(), keys.slice(0, 4).sort()),
+      );
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.type(`${keys[0]} ${keys[1]}`);
+      await pg.keyboard.press('Enter');
+      const want2 = `2 ${plural} selected`;
+      check(
+        `↵ commits the edit: "attached: ${want2}"`,
+        (await value()).text === want2 && (await value()).edited,
+      );
+      await boxes[pick[4]].click();
+      await pg.waitForTimeout(200);
+      check(
+        'the edit holds while the selection changes',
+        (await value()).text === want2,
+      );
+      const a2 = await sendAndReceive('just these two');
+      check(
+        `the agent receives the edited attachment (${JSON.stringify(a2)})`,
+        same(a2?.keys, [keys[0], keys[1]]),
+      );
+      // The fifth row is another kind: the count says items.
+      const want5 = '5 items selected';
+      check(
+        `after sending, the line follows the page again ("${want5}")`,
+        await until(
+          pg,
+          (w) => {
+            const e = document.querySelector(
+              '[data-testid="composer-attached"]',
+            );
+            return e.textContent === w && !e.hasAttribute('data-edited');
+          },
+          want5,
+        ),
+      );
+
+      // Esc reverts an edit.
+      await pg.click(attachedSel);
+      await pg.$eval(attachedSel, (e) =>
+        e.dispatchEvent(new FocusEvent('focus')),
+      );
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.type('rule nonsense');
+      await pg.keyboard.press('Escape');
+      check('Esc reverts the edit', (await value()).text === want5);
+
+      // Emptying it and leaving the field attaches nothing.
+      await pg.click(attachedSel);
+      await pg.$eval(attachedSel, (e) =>
+        e.dispatchEvent(new FocusEvent('focus')),
+      );
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.press('Backspace');
+      await pg.$eval(attachedSel, (e) =>
+        e.dispatchEvent(new FocusEvent('blur')),
+      );
+      check(
+        'an emptied line, on leaving it, reads "nothing"',
+        (await value()).text === 'nothing' && (await value()).edited,
+      );
+      const a3 = await sendAndReceive('no context for this one');
+      check(
+        `the agent receives nothing attached (${JSON.stringify(a3)})`,
+        a3 !== null && !a3.keys && !a3.open && !a3.rule && !a3.job,
+      );
+
+      // The open item, with nothing selected.
+      for (const b of await pg.$$('.kit-row .kit-box[aria-checked="true"]')) {
+        await b.click();
+      }
+      const openKey = items[pick[0]].key;
+      await pg.click(`.kit-row:nth-child(${pick[0] + 1}) .kit-title`);
+      const wantOpen = openKey.slice(openKey.indexOf(':') + 1);
+      check(
+        `opening an item shows it without its kind ("${wantOpen}")`,
+        await until(
+          pg,
+          (w) =>
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent === w,
+          wantOpen,
+        ),
+      );
+      const a4 = await sendAndReceive('what is blocking this one?');
+      check(
+        `the agent receives the open item (${JSON.stringify(a4)})`,
+        a4?.open === openKey && !a4?.keys,
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: . focuses the composer; the keys are listed ---------------
+  console.log('\nscenario: . focuses the composer');
+  {
+    const fx = await dockFixture(serveHandle, 'keys', 'claude');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      check(
+        'a claude session\'s composer reads "Message claude…"',
+        (await pg.$eval(
+          '[data-testid="composer-input"]',
+          (e) => e.placeholder,
+        )) === 'Message claude\u2026',
+      );
+      await pg.evaluate(() => document.activeElement?.blur());
+      await pg.keyboard.press('.');
+      const f = await pg.evaluate(() => ({
+        id: document.activeElement?.getAttribute('data-testid'),
+        value: document.querySelector('[data-testid="composer-input"]').value,
+      }));
+      check(
+        '. focuses the composer (and types nothing)',
+        f.id === 'composer-input' && f.value === '',
+      );
+      await pg.evaluate(() => document.activeElement?.blur());
+      await pg.keyboard.press('?');
+      const help = await pg.$eval('.kit-sheet', (e) => e.textContent);
+      check(
+        'the ? overlay lists "focus the composer" and "add to batch"',
+        help.includes('focus the composer') && help.includes('add to batch'),
+      );
+      await pg.keyboard.press('Escape');
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the rail at 1600x900, light and dark ----------------------
+  console.log(
+    '\nscenario: the rail at 1600×900 — /tmp/t7-light.png, /tmp/t7-dark.png',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'tools-workspace');
+    const { agent, sid, thread } = fx;
+    await agent.postMessage(
+      thread.id,
+      'Propose decisions for the 40 chime PRs.',
+    );
+    const d = await agent.wait(sid);
+    await agent.reply(
+      sid,
+      [d.delivery.messages[0].id],
+      'answered',
+      "Done: 38 close, 2 keep (they have human reviewers). They're in proposed.",
+    );
+    await agent.settled(sid, [d.delivery.id]);
+    await agent.postMessage(
+      thread.id,
+      'Merge the 4 bettor-help bumps if CI is green.',
+    );
+    await agent.wait(sid);
+    await agent.postMessage(thread.id, 'Then look at the stale branches.');
+    await agent.postMessage(
+      thread.id,
+      'These 4 dependabot PRs: merge if CI is green, else close',
+      {},
+      true,
+    );
+    await agent.postMessage(
+      thread.id,
+      'Make a standing rule for dependabot minor/patch',
+      {},
+      true,
+    );
+    await agent.progress(sid, 'checking CI on #671', 2, 4);
+    const pg = await openDock(context, serveHandle, fx, {
+      hash: '#/attention/waiting',
+    });
+    try {
+      await pg.waitForSelector('.kit-row .kit-box');
+      const boxes = await pg.$$('.kit-row .kit-box');
+      for (const b of boxes.slice(0, 4)) await b.click();
+      await until(
+        pg,
+        () =>
+          !document.querySelector('[data-testid="batch-tray"]').hidden &&
+          !document.querySelector('[data-testid="progress-line"]').hidden &&
+          !document.querySelector('[data-testid="waiting-strip"]').hidden &&
+          /^4 .* selected$/.test(
+            document.querySelector('[data-testid="composer-attached"]')
+              .textContent,
+          ),
+      );
+      const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
+      for (const theme of ['light', 'dark']) {
+        for (let i = 0; i < 3; i++) {
+          const t = await pg.evaluate(
+            () => document.documentElement.dataset.theme,
+          );
+          if (t === theme) break;
+          await pg.click('button.kit-ctl:has-text("theme")');
+        }
+        const bg = await pg.$eval(
+          'body',
+          (e) => getComputedStyle(e).backgroundColor,
+        );
+        check(
+          `the ${theme} screenshot is ${theme} (body ${bg})`,
+          bg === bgs[theme],
+        );
+        await pg.screenshot({ path: `/tmp/t7-${theme}.png` });
+      }
+      console.log('  screenshots: /tmp/t7-light.png  /tmp/t7-dark.png');
+    } finally {
+      await pg.close();
+    }
+  }
+}
+
 async function run() {
   const browser = await findChrome();
   if (!browser) {
@@ -144,6 +1178,11 @@ async function run() {
   const page = await context.newPage();
 
   try {
+    // The Task 7 scenarios run first: the attached-line scenario selects
+    // Attention rows, and later scenarios decide many of the fixture's items.
+    // PROBE_ONLY=composer runs only these.
+    await composerScenarios(context, serveHandle);
+    if (process.env.PROBE_ONLY === 'composer') return;
     // Navigate to the page with the ?t= token URL.
     // 'domcontentloaded' is used instead of 'networkidle' because the SSE
     // stream (/api/events) is an infinite connection that never goes idle.
@@ -4719,9 +5758,9 @@ async function run() {
     await browser.close();
     cleanup();
   }
-
-  console.log(`\nprobe: ${passes} passed, ${fails} failed`);
-  if (fails > 0) process.exit(1);
 }
 
-void run();
+void run().then(() => {
+  console.log(`\nprobe: ${passes} passed, ${fails} failed`);
+  if (fails > 0) process.exit(1);
+});

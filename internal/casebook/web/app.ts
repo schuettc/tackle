@@ -20,7 +20,7 @@ import {
   h,
   type Primary,
 } from '/_kit/kit.js';
-import type { SummaryView } from './wire.d.ts';
+import type { Attached, SummaryView } from './wire.d.ts';
 import { onRoute, dispatchCurrent, go, type Route } from './router.ts';
 
 // ---- public contracts -------------------------------------------------------
@@ -32,6 +32,13 @@ export interface Ctx {
   route: Router;
   on(type: string, cb: (data: unknown) => void): void;
   setPrimary(p: Primary | null): void;
+  /**
+   * setAttached sets what goes with Court's next message: the composer's
+   * `attached:` line. Each section calls it when its context changes and
+   * when it is shown: Attention with the selection's keys (or the open item),
+   * Rules (Task 8) with {rule: id}, Apply (Task 9) with {job: id}.
+   */
+  setAttached(a: Attached): void;
 }
 
 export interface Router {
@@ -50,7 +57,7 @@ export interface Section {
 
 export interface DockHandle {
   el: HTMLElement;
-  setAttached(a: import('./wire.d.ts').Attached): void;
+  setAttached(a: Attached): void;
   focusComposer(): void;
   currentThread(): number;
   currentSession(): string;
@@ -191,6 +198,11 @@ export function boot(): void {
   // Build context for section makers
   let currentRoute: Route = { section: 'attention', sub: '' };
 
+  // The docks are made after the sections; a section may set what's attached
+  // before then, so the latest value is kept and handed to each dock.
+  const dockHandles: DockHandle[] = [];
+  let lastAttached: Attached = {};
+
   const ctx: Ctx = {
     api,
     bar: handle,
@@ -202,6 +214,10 @@ export function boot(): void {
     on: onLiveEvent,
     setPrimary(p) {
       handle.setPrimary(p);
+    },
+    setAttached(a) {
+      lastAttached = a;
+      for (const d of dockHandles) d.setAttached(a);
     },
   };
 
@@ -230,9 +246,10 @@ export function boot(): void {
 
   const rail = h('div', { class: 'kit-rail' });
 
-  const dockHandles: DockHandle[] = [];
   for (const make of dockMakers) {
-    dockHandles.push(make(ctx));
+    const d = make(ctx);
+    d.setAttached(lastAttached);
+    dockHandles.push(d);
   }
   if (dockHandles.length > 0) {
     for (const d of dockHandles) rail.append(d.el);

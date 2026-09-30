@@ -9,8 +9,9 @@
 //                        agent cards link items/rules/jobs (underlined, open the route)
 //   4. Stuck delivery  — release + move to another session
 //   5. Left session    — pi · <cwd> left · N queued · move to…
-//
-// Task 7 fills the batch tray, progress line, waiting strip and composer below.
+//   6. Batch tray      — the last card in the message area (progress.ts)
+//   7. Progress line, waiting strip, composer — fixed below the message area,
+//      so the composer stays pinned to the bottom of the rail (Task 7).
 
 import { h, card } from '/_kit/kit.js';
 import type {
@@ -22,11 +23,24 @@ import type {
   MessagesView,
   DeliveryView,
   Delivery,
+  Progress,
+  SessionProgressView,
+  SettledResult,
+  Message,
+  Attached,
 } from './wire.d.ts';
 import type { Ctx, DockHandle } from './app.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { fmtAge } from './time-utils.ts';
 import { go } from './router.ts';
+import { threadOrder } from './thread.ts';
+import { makeComposer } from './composer.ts';
+import {
+  makeBatchTray,
+  makeProgressLine,
+  makeWaitingStrip,
+  workedFold,
+} from './progress.ts';
 
 // ---- delivery state display -------------------------------------------------
 
@@ -166,11 +180,15 @@ function renderMsgCard(
   delivery: Delivery | null,
   sessions: Session[],
   ctx: Ctx,
+  agentName: string,
 ): HTMLElement {
+  // A settled turn's progress folds into the thread as `worked for …`.
+  if (msg.state === 'worked') return workedFold(msg);
+
   const isAgent = msg.author !== 'court';
 
   // Build the card header: NAME · age on the right.
-  const authorLabel = isAgent ? 'PI' : 'YOU';
+  const authorLabel = isAgent ? agentName.toUpperCase() : 'YOU';
   const age = fmtAge(msg.created_at);
   const headEl = h(
     'div',
@@ -535,9 +553,39 @@ export function makeDock(ctx: Ctx): DockHandle {
     'data-testid': 'dock-messages',
   });
 
-  // Root rail element.
+  // ---- Task 7: batch tray, progress line, waiting strip, composer ---------
+
+  // The batch tray is the last card in the scrolling message area (mock).
+  const batchTray = makeBatchTray(ctx);
+  const progLine = makeProgressLine();
+  const waitStrip = makeWaitingStrip();
+  const composer = makeComposer(ctx, {
+    currentThread: () => currentThreadId,
+    currentSession: () => currentSessionId,
+    threadCreated(t: Thread) {
+      threads = [...threads, t];
+      currentThreadId = t.id;
+      renderThreadChips();
+      void batchTray.load(t.id);
+    },
+  });
+
+  // Root rail element: the message area scrolls; everything below it is
+  // fixed, so the composer stays pinned to the bottom of the rail.
   const rail = h('div', { class: 'cb-dock-inner' });
-  rail.append(sessionHeader, threadChips, messageArea);
+  rail.append(
+    sessionHeader,
+    threadChips,
+    messageArea,
+    progLine.el,
+    waitStrip.el,
+    composer.el,
+  );
+
+  // agentName is the current session's harness ("pi", "claude").
+  function agentName(): string {
+    return sessions.find((s) => s.id === currentSessionId)?.harness || 'agent';
+  }
 
   // ---- render helpers -------------------------------------------------------
 
@@ -618,16 +666,18 @@ export function makeDock(ctx: Ctx): DockHandle {
   }
 
   function renderMessages() {
-    messageArea.innerHTML = '';
+    messageArea.replaceChildren();
     if (messages.length === 0) {
       const empty = h('p', { class: 'cb-dock-empty' }, 'no messages');
       messageArea.append(empty);
-      return;
     }
+    const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx);
+      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
       messageArea.append(el);
     }
+    // The draft batch is the last card (it hides itself when empty).
+    messageArea.append(batchTray.el);
     // Auto-scroll to the latest message.
     messageArea.scrollTop = messageArea.scrollHeight;
   }
@@ -643,14 +693,18 @@ export function makeDock(ctx: Ctx): DockHandle {
           ? (sessions.find((s) => s.id === lastUsedSessionId)?.id ??
             sessions[0].id)
           : sessions[0].id;
+        updateSessionParts();
         await loadThreads();
+        await loadProgress();
       } else {
         // Refresh the session data for the current one, including the delivery
         // so the dock detects stuck state and the left flag without a reload.
         renderHeader();
         await loadDelivery();
+        updateSessionParts();
       }
       renderHeader();
+      updateSessionParts();
     } catch (err) {
       console.error('[dock] loadSessions:', err);
     }
@@ -669,6 +723,7 @@ export function makeDock(ctx: Ctx): DockHandle {
       renderThreadChips();
       await loadMessages();
       await loadDelivery();
+      await batchTray.load(currentThreadId);
     } catch (err) {
       console.error('[dock] loadThreads:', err);
     }
@@ -684,7 +739,8 @@ export function makeDock(ctx: Ctx): DockHandle {
       const mv = await ctx.api.get<MessagesView>('/messages', {
         thread: String(currentThreadId),
       });
-      messages = mv.messages ?? [];
+      // A batch's cards show in its batch order (the order it is delivered).
+      messages = threadOrder(mv.messages ?? []);
       renderMessages();
     } catch (err) {
       console.error('[dock] loadMessages:', err);
@@ -704,16 +760,49 @@ export function makeDock(ctx: Ctx): DockHandle {
     }
   }
 
+  // loadProgress shows the session's current progress line on load (the
+  // live 'progress' event keeps it current afterwards).
+  async function loadProgress() {
+    const sid = currentSessionId;
+    if (!sid) {
+      progLine.clear();
+      return;
+    }
+    try {
+      const pv = await ctx.api.get<SessionProgressView>('/session/progress', {
+        session: sid,
+      });
+      if (sid !== currentSessionId) return;
+      if (pv.progress) {
+        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+      } else {
+        progLine.clear();
+      }
+    } catch (err) {
+      console.error('[dock] loadProgress:', err);
+    }
+  }
+
+  // updateSessionParts refreshes what depends on the current session's row:
+  // the waiting strip's count and the agent's name in the composer.
+  function updateSessionParts() {
+    const sess = sessions.find((s) => s.id === currentSessionId);
+    waitStrip.setQueued(sess?.queued ?? 0);
+    composer.setAgent(sess?.harness ?? '');
+  }
+
   async function switchSession(id: string) {
     currentSessionId = id;
     currentThreadId = 0;
     threads = [];
     messages = [];
     currentDelivery = null;
+    progLine.clear();
     renderHeader();
     renderThreadChips();
     renderMessages();
-    await loadThreads();
+    updateSessionParts();
+    await Promise.all([loadThreads(), loadProgress()]);
   }
 
   async function switchThread(id: number) {
@@ -724,6 +813,7 @@ export function makeDock(ctx: Ctx): DockHandle {
     renderMessages();
     await loadMessages();
     await loadDelivery();
+    await batchTray.load(id);
   }
 
   async function newThread() {
@@ -740,6 +830,7 @@ export function makeDock(ctx: Ctx): DockHandle {
       currentDelivery = null;
       renderThreadChips();
       renderMessages();
+      await batchTray.load(t.id);
     } catch (err) {
       console.error('[dock] newThread:', err);
     }
@@ -755,15 +846,6 @@ export function makeDock(ctx: Ctx): DockHandle {
     // A new or moved thread — refresh threads for the current session.
     void loadThreads();
     void data; // silence unused warning
-  });
-
-  ctx.on('message', (data: unknown) => {
-    // A new message was posted — if it's for the current thread, reload.
-    const d = data as { thread_id?: number; thread?: number };
-    const tid = d.thread_id ?? d.thread;
-    if (tid === currentThreadId) {
-      void loadMessages();
-    }
   });
 
   ctx.on('messages', (data: unknown) => {
@@ -792,7 +874,73 @@ export function makeDock(ctx: Ctx): DockHandle {
       (d.id !== undefined && currentDelivery?.id === d.id);
     if (isOurs) {
       void loadMessages().then(() => loadDelivery());
+      // Also refresh sessions to update queued count for the waiting strip.
+      void loadSessions();
     }
+  });
+
+  // progress: the agent set its live line. It arrived now, so its age
+  // counts from now in page time.
+  ctx.on('progress', (data: unknown) => {
+    const p = data as Progress;
+    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+  });
+
+  // settled: the turn ended. The line clears; serve has folded it into the
+  // thread as a `worked for …` message, which the reload shows.
+  ctx.on('settled', (data: unknown) => {
+    const d = data as SettledResult;
+    if (d.session !== currentSessionId) return;
+    progLine.clear();
+    void loadMessages();
+    void loadSessions();
+  });
+
+  // drafts: a draft was edited, removed or reordered.
+  ctx.on('drafts', () => {
+    void batchTray.reload();
+  });
+
+  // batch: a batch was sent; its drafts are now queued cards.
+  ctx.on('batch', () => {
+    void batchTray.reload();
+    void loadMessages();
+    void loadSessions();
+  });
+
+  // message: Court posted a message (sent or drafted).
+  ctx.on('message', (data: unknown) => {
+    const m = data as Message;
+    if (m.thread_id === currentThreadId) {
+      void loadMessages();
+      if (m.state === 'draft') void batchTray.reload();
+    }
+    // The queued count may have changed.
+    void loadSessions();
+  });
+
+  // The progress line's age and `no progress for 4m` follow the clock.
+  setInterval(() => progLine.tick(), 1000);
+
+  // ---- keys (spec §3.6) ------------------------------------------------------
+
+  ctx.keys.register({
+    keys: '.',
+    label: 'focus the composer',
+    group: 'agent',
+    run() {
+      composer.focus();
+    },
+  });
+  ctx.keys.register({
+    keys: '\u2318\u21b5',
+    label: 'add to batch',
+    group: 'agent',
+    inField: true,
+    run(e: KeyboardEvent) {
+      if (e.target !== composer.input) return false;
+      composer.addToBatch();
+    },
   });
 
   // ---- initial load ---------------------------------------------------------
@@ -801,11 +949,11 @@ export function makeDock(ctx: Ctx): DockHandle {
   // ---- public interface ----------------------------------------------------
   return {
     el: rail,
-    setAttached() {
-      // Task 7 (composer) uses this. No-op for Task 6.
+    setAttached(a: Attached): void {
+      composer.setAttached(a);
     },
-    focusComposer() {
-      // Task 7 (composer) fills this in.
+    focusComposer(): void {
+      composer.focus();
     },
     currentThread(): number {
       return currentThreadId;

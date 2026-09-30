@@ -25,11 +25,14 @@ export function createAgent(base, token) {
   }
 
   return {
-    /** POST /api/agent/presence */
-    async presence(session, label, cwd) {
+    /**
+     * POST /api/agent/presence
+     * @param {string} [harness] — 'pi' (default) or 'claude'
+     */
+    async presence(session, label, cwd, harness) {
       return call('POST', '/api/agent/presence', {
         id: session,
-        harness: 'pi',
+        harness: harness ?? 'pi',
         label,
         cwd,
         pid: process.pid,
@@ -82,14 +85,23 @@ export function createAgent(base, token) {
      * @param {number} thread — thread id
      * @param {string} body — message body
      * @param {object} [attached] — optional attached data
+     * @param {boolean} [batch] — true drafts it into the thread's batch
      */
-    async postMessage(thread, body, attached) {
+    async postMessage(thread, body, attached, batch) {
       return call('POST', '/api/messages', {
         thread,
         body,
         attached: attached ?? {},
-        batch: false,
+        batch: batch ?? false,
       });
+    },
+
+    /**
+     * GET /api/messages — a thread's messages, its draft batch and drafts.
+     * @param {number} thread
+     */
+    async messages(thread) {
+      return call('GET', `/api/messages?thread=${thread}`, undefined);
     },
 
     /**
@@ -124,6 +136,18 @@ export function createAgent(base, token) {
         state,
         text: text ?? '',
         ...(attached ? { attached } : {}),
+      });
+    },
+
+    /**
+     * POST /api/agent/settled - settle a delivery turn.
+     * @param {string} session
+     * @param {number[]} [shown] - delivery ids shown this turn
+     */
+    async settled(session, shown) {
+      return call('POST', '/api/agent/settled', {
+        session,
+        shown: shown ?? [],
       });
     },
 

@@ -692,28 +692,209 @@
   max-width: 320px;
 }
 
-/* Composer area (Task 7 fills this) */
-.cb-dock-composer {
-  border-top: 1px solid var(--kit-line);
+/* ---- the bottom of the rail (Task 7) --------------------------------------
+ * Top to bottom, as in the mock: the batch card (the last card in the
+ * scrolling message area), the progress line, the waiting strip, and the
+ * composer. The message area is the only part that scrolls, so the composer
+ * stays pinned to the bottom of the rail. */
+
+/* The batch: a dashed card (the kit has no dashed card). */
+.kit-card.cb-batch {
+  border-style: dashed;
+  background: transparent;
   padding: 12px 14px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
-.cb-dock-composer textarea {
-  width: 100%;
-  font: 14px var(--kit-sans);
-  color: var(--kit-fg);
-  background: var(--kit-bg);
-  border: 1px solid var(--kit-line);
+.cb-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.cb-batch-head .kit-card-head {
+  margin: 0;
+}
+
+.kit-btn.cb-batch-send {
+  padding: 1px 10px;
+  font-size: 11.5px;
+}
+
+.cb-batch-draft {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.cb-batch-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cb-batch-edit {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  padding: 2px 8px;
+}
+
+.cb-batch-acts {
+  display: flex;
+  gap: 2px;
+  flex: none;
+}
+
+.cb-batch-act {
+  font: 11.5px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
   border-radius: 6px;
-  padding: 8px 10px;
-  resize: none;
-  min-height: 60px;
-  line-height: 1.5;
+  padding: 0 4px;
+  cursor: pointer;
 }
 
-.cb-dock-composer textarea:focus-visible {
-  outline: 1px solid var(--kit-signal);
-  outline-offset: 0;
+.cb-batch-act:hover:not(:disabled) {
+  color: var(--kit-fg);
+}
+
+.cb-batch-act:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* The progress line: the agent's wash, an amber dot, a thin bar. */
+.cb-prog {
+  margin: 0 12px 10px;
+  background: var(--kit-agent-soft);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: 12.5px var(--kit-mono);
+  flex: none;
+}
+
+.cb-prog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cb-prog-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--kit-agent);
+  flex: none;
+}
+
+.cb-prog-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-prog-age {
+  margin-left: auto;
+  color: var(--kit-muted);
+  white-space: nowrap;
+  flex: none;
+}
+
+.cb-prog-bar {
+  height: 3px;
+  background: var(--kit-line);
+  border-radius: 2px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.cb-prog-fill {
+  display: block;
+  height: 100%;
+  background: var(--kit-agent);
+}
+
+/* The waiting strip. */
+.cb-wait {
+  margin: 0 12px 10px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  flex: none;
+}
+
+.cb-wait-word {
+  color: var(--kit-wait);
+}
+
+/* The composer: the rail's one raised surface. The kit keeps --kit-lift for
+ * .kit-float (fixed) surfaces; the composer sits in the rail's flow. */
+.cb-comp {
+  margin: 0 12px 12px;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  box-shadow: var(--kit-lift);
+  flex: none;
+}
+
+.cb-comp-attached {
+  font: 11.5px var(--kit-mono);
+  color: var(--kit-muted);
+  padding: 9px 12px 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-comp-attached-value {
+  color: var(--kit-signal);
+  font-weight: 600;
+  border-radius: 2px;
+}
+
+.cb-comp-attached-value[data-empty] {
+  color: var(--kit-muted);
+  font-weight: 400;
+}
+
+.cb-comp-attached:focus-within {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.cb-comp-input {
+  display: block;
+  width: 100%;
+  font: 15px/1.55 var(--kit-sans);
+  color: var(--kit-fg);
+  background: transparent;
+  border: 0;
+  padding: 8px 12px 10px;
+  resize: none;
+}
+
+.cb-comp-input::placeholder {
+  color: var(--kit-muted);
+}
+
+.cb-comp-input:focus-visible {
+  outline: none;
+}
+
+.cb-comp-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-top: 1px solid var(--kit-line);
+  padding: 7px 10px 7px 12px;
+  font: 11.5px var(--kit-mono);
+  color: var(--kit-muted);
 }
 
 /* ---- history entries ----------------------------------------------------- */
@@ -790,4 +971,37 @@
   font-size: 13.5px;
   color: var(--kit-muted);
   margin: 8px 0 0;
+}
+
+/* ---- worked for … (a settled turn folded into the thread) ---------------- */
+
+.kit-fold.cb-worked {
+  margin: 0;
+  font: 12px/1.6 var(--kit-mono);
+  color: var(--kit-muted);
+}
+
+/* The kit's fold summary is an uppercase label; this one reads as the
+ * spec writes it, "worked for 3m 12s". */
+.kit-fold.cb-worked > summary {
+  margin: 0;
+  padding: 2px 4px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 12px;
+}
+
+.cb-worked-lines {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 calc(1.4em + 4px);
+}
+
+.cb-worked-line {
+  display: flex;
+  gap: 8px;
+}
+
+.cb-worked-at {
+  flex: none;
 }
