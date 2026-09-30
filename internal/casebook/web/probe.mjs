@@ -1802,10 +1802,29 @@ async function keyScopeScenariosOn(context, serveHandle) {
   }
 }
 
+// ---- the scenario list ------------------------------------------------------
+//
+// run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
+// least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
+// leave the probe green. Raise it whenever checks are added.
+const MIN_CHECKS = 260;
+
+// PROBE_ONLY runs one group of scenarios, for working on them locally. Under
+// CI (the CI env var is set) it is refused: CI always runs the whole probe.
+const only = process.env.PROBE_ONLY ?? '';
+const underCI = !!process.env.CI;
+
 async function run() {
+  if (only && underCI) {
+    console.error(
+      `probe: PROBE_ONLY=${only} is set under CI; CI runs the whole probe`,
+    );
+    fails++;
+    return;
+  }
   const browser = await findChrome();
   if (!browser) {
-    if (required) {
+    if (required || underCI) {
       console.error(
         'probe: Chrome is required (KIT_BROWSER=required) but not found.',
       );
@@ -1834,6 +1853,7 @@ async function run() {
 
   const context = await browser.newContext();
   const page = await context.newPage();
+  ran = true;
 
   try {
     // PROBE_ONLY=composer runs only the Task 7 scenarios (their own serve).
@@ -6429,7 +6449,15 @@ async function run() {
   }
 }
 
+let ran = false; // a browser ran the scenarios (not the no-Chrome skip)
+
 void run().then(() => {
   console.log(`\nprobe: ${passes} passed, ${fails} failed`);
+  if (ran && !only && passes < MIN_CHECKS) {
+    console.error(
+      `probe: a full run passed ${passes} checks, fewer than MIN_CHECKS (${MIN_CHECKS})`,
+    );
+    fails++;
+  }
   if (fails > 0) process.exit(1);
 });
