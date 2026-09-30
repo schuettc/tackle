@@ -540,6 +540,7 @@ export interface JobStep {
   detail?: string;
   verified_at?: string;
   undone_at?: string;
+  undoable?: boolean;
 }
 
 export interface Conflict {

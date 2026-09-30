@@ -84,6 +84,10 @@ type JobStep struct {
 	Detail       string    `json:"detail,omitempty"`
 	VerifiedAt   time.Time `json:"verified_at,omitzero"`
 	UndoneAt     time.Time `json:"undone_at,omitzero"`
+	// Undoable: the step is verified, not undone, and its restore command is
+	// automatic (AutoUndoable), so POST /api/jobs/undo would run it (§5.5).
+	// Computed when read, never stored.
+	Undoable bool `json:"undoable,omitempty"`
 }
 
 // NeedsYou is a card requesting Court's attention for a job (and optionally a step).
@@ -890,6 +894,7 @@ func scanStep(sc scanner) (JobStep, error) {
 	st.Posts = posts != 0
 	st.VerifiedAt = tm(verifiedAt)
 	st.UndoneAt = tm(undoneAt)
+	st.Undoable = st.State == StepVerified && st.UndoneAt.IsZero() && AutoUndoable(st.Restore)
 	return st, nil
 }
 

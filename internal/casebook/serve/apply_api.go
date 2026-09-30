@@ -375,39 +375,8 @@ func (s *Server) postJobsResume(w http.ResponseWriter, r *http.Request) {
 	reply(w, JobView{Job: job, NeedsYou: open}, nil)
 }
 
-// autoUndoable reports whether a restore command is one of the automatic,
-// deterministic kinds that can be undone without human judgment (§5.5):
-//   - branch recreate: "git -C <dir> branch <b> <tip>"
-//   - remote branch recreate: "git -C <dir> push <remote> <tip>:refs/heads/<b>"
-//   - worktree restore: "git -C <dir> worktree add <path> <ref>"
-//   - gh repo unarchive
-//   - gh pr reopen
-//   - gh issue reopen
-//
-// A posted comment is never undoable. An empty restore is never undoable.
-func autoUndoable(restore string) bool {
-	if restore == "" {
-		return false
-	}
-	if strings.HasPrefix(restore, "git -C ") {
-		// branch recreate:   "git -C <dir> branch <b> <tip>"
-		// remote recreate:   "git -C <dir> push <remote> <tip>:refs/heads/<b>"
-		// worktree restore:  "git -C <dir> worktree add <path> <ref>"
-		return strings.Contains(restore, " branch ") ||
-			strings.Contains(restore, " push ") ||
-			strings.Contains(restore, " worktree ")
-	}
-	for _, prefix := range []string{
-		"gh repo unarchive ",
-		"gh pr reopen ",
-		"gh issue reopen ",
-	} {
-		if strings.HasPrefix(restore, prefix) {
-			return true
-		}
-	}
-	return false
-}
+// autoUndoable is apply.AutoUndoable: the rule the step's Undoable says.
+func autoUndoable(restore string) bool { return apply.AutoUndoable(restore) }
 
 // postJobsUndo is POST /api/jobs/undo.
 // Input: {"step":N}
