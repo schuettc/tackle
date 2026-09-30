@@ -373,8 +373,7 @@ export function boot(): void {
       ctx.setPrimary(activeSec.primary());
     } else {
       ctx.setPrimary(null);
-      // A section that isn't built yet (Apply before Task 9) has no
-      // context: nothing is attached while it is shown.
+      // No section for this route: nothing is attached while it is shown.
       ctx.setAttached({});
     }
   });
@@ -385,10 +384,11 @@ export function boot(): void {
     .get<SummaryView>('/summary')
     .then((s) => {
       const counts = s.counts ?? {};
-      // 'all' is the attention total. The Rules section counts its rules
-      // itself (the summary has no rules count); apply arrives with Task 9.
+      // 'all' is the attention total; 'to-apply' the decided items waiting
+      // to be applied. The Rules section counts its rules itself (the
+      // summary has no rules count).
       handle.setCount('attention', counts['all'] ?? 0);
-      handle.setCount('apply', counts['apply'] ?? 0);
+      handle.setCount('apply', counts['to-apply'] ?? 0);
 
       const minsAgo = s.synced_at
         ? Math.round((Date.now() - new Date(s.synced_at).getTime()) / 60000)
@@ -413,7 +413,7 @@ export function boot(): void {
       .then((s) => {
         const counts = s.counts ?? {};
         handle.setCount('attention', counts['all'] ?? 0);
-        handle.setCount('apply', counts['apply'] ?? 0);
+        handle.setCount('apply', counts['to-apply'] ?? 0);
       })
       .catch(() => {});
   });

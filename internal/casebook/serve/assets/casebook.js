@@ -81,16 +81,16 @@ function registerDock(make) {
 }
 var liveListeners = /* @__PURE__ */ new Map();
 function onLiveEvent(type, cb) {
-  let list3 = liveListeners.get(type);
-  if (!list3) {
-    list3 = [];
-    liveListeners.set(type, list3);
+  let list4 = liveListeners.get(type);
+  if (!list4) {
+    list4 = [];
+    liveListeners.set(type, list4);
   }
-  list3.push(cb);
+  list4.push(cb);
 }
 function emitLive(type, data) {
-  const list3 = liveListeners.get(type);
-  if (list3) for (const cb of list3) cb(data);
+  const list4 = liveListeners.get(type);
+  if (list4) for (const cb of list4) cb(data);
 }
 var booted = false;
 function boot() {
@@ -205,9 +205,9 @@ function boot() {
     app.append(sec.list, sec.read);
   }
   if (sections.size === 0) {
-    const list3 = h("div", { class: "kit-list" });
+    const list4 = h("div", { class: "kit-list" });
     const read = h("div", { class: "kit-read" });
-    app.append(list3, read);
+    app.append(list4, read);
   }
   const rail = h("div", { class: "kit-rail" });
   for (const make of dockMakers) {
@@ -259,7 +259,7 @@ function boot() {
   void api.get("/summary").then((s) => {
     const counts = s.counts ?? {};
     handle.setCount("attention", counts["all"] ?? 0);
-    handle.setCount("apply", counts["apply"] ?? 0);
+    handle.setCount("apply", counts["to-apply"] ?? 0);
     const minsAgo = s.synced_at ? Math.round((Date.now() - new Date(s.synced_at).getTime()) / 6e4) : null;
     const statusText = minsAgo !== null ? `synced ${minsAgo}m ago · ${s.machine}` : s.machine;
     handle.setStatus(
@@ -272,7 +272,7 @@ function boot() {
     void api.get("/summary").then((s) => {
       const counts = s.counts ?? {};
       handle.setCount("attention", counts["all"] ?? 0);
-      handle.setCount("apply", counts["apply"] ?? 0);
+      handle.setCount("apply", counts["to-apply"] ?? 0);
     }).catch(() => {
     });
   });
@@ -280,21 +280,13 @@ function boot() {
   void liveClient;
 }
 
-// attention.ts
+// apply.ts
 import {
   list,
-  createSelection,
-  h as h6
-} from "/_kit/kit.js";
-
-// item.ts
-import { h as h4, facts, fold } from "/_kit/kit.js";
-
-// decide.ts
-import {
-  sheet,
-  h as h2,
-  noteField
+  h as h3,
+  facts,
+  buttons,
+  card
 } from "/_kit/kit.js";
 
 // decide-math.ts
@@ -333,6 +325,11 @@ function stripOwnKey(subject, key) {
 }
 
 // decide.ts
+import {
+  sheet,
+  h as h2,
+  noteField
+} from "/_kit/kit.js";
 var _vocab = null;
 async function getVocab(ctx) {
   if (_vocab !== null) return _vocab;
@@ -572,8 +569,1147 @@ function wireSelection(ctx, listHandle) {
   };
 }
 
+// apply-text.ts
+function viewOf(job) {
+  switch (job.state) {
+    case "planned":
+      return "ready";
+    case "done":
+    case "failed":
+    case "cancelled":
+      return "done";
+    default:
+      return "running";
+  }
+}
+var TITLES = {
+  "branch-delete-local": "Delete local branches",
+  "branch-delete-remote": "Delete remote branches",
+  "worktree-remove": "Remove worktrees",
+  "repo-archive": "Archive repos",
+  "repo-delete": "Delete repos",
+  "pr-close": "Close PRs",
+  "pr-merge": "Merge PRs",
+  "issue-close": "Close issues"
+};
+function actionTitle(action) {
+  return TITLES[action] ?? action;
+}
+var PAST = {
+  "branch-delete-local": "deleted",
+  "branch-delete-remote": "deleted on the remote",
+  "worktree-remove": "removed",
+  "repo-archive": "archived",
+  "repo-delete": "deleted",
+  "pr-close": "closed",
+  "pr-merge": "merged",
+  "issue-close": "closed"
+};
+var VERB = {
+  "branch-delete-local": "delete",
+  "branch-delete-remote": "delete",
+  "worktree-remove": "remove",
+  "repo-archive": "archive",
+  "repo-delete": "delete",
+  "pr-close": "close",
+  "pr-merge": "merge",
+  "issue-close": "close"
+};
+function actionVerb(action) {
+  return VERB[action] ?? "run";
+}
+function laneLabel(lane, agent) {
+  return lane === "agent" ? `${agent || "agent"} · outward` : "casebook · local";
+}
+function groupSteps(steps) {
+  const out = [];
+  const at2 = /* @__PURE__ */ new Map();
+  for (const s of steps) {
+    const k = `${s.action}\0${s.lane}`;
+    const i = at2.get(k);
+    if (i === void 0) {
+      at2.set(k, out.length);
+      out.push({ action: s.action, lane: s.lane, steps: [s] });
+    } else out[i].steps.push(s);
+  }
+  return out;
+}
+function jobTitle(job) {
+  const titles = [
+    ...new Set(groupSteps(job.steps ?? []).map((g) => actionTitle(g.action)))
+  ];
+  if (!titles.length) return `job #${job.id}`;
+  return titles.map((t, i) => i ? t.charAt(0).toLowerCase() + t.slice(1) : t).join(", ");
+}
+function jobLanes(job) {
+  const have = new Set((job.steps ?? []).map((s) => s.lane));
+  return ["casebook", "agent"].filter((l) => have.has(l));
+}
+var FINISHED = /* @__PURE__ */ new Set(["verified", "reported", "skipped", "failed"]);
+function progress(job) {
+  const p = {
+    total: 0,
+    finished: 0,
+    byLane: {},
+    verified: 0,
+    paused: 0,
+    skipped: 0,
+    failed: 0,
+    started: job.state === "running"
+  };
+  for (const s of job.steps ?? []) {
+    p.total++;
+    if (s.state !== "pending") p.started = true;
+    if (FINISHED.has(s.state)) {
+      p.finished++;
+      p.byLane[s.lane] = (p.byLane[s.lane] ?? 0) + 1;
+    }
+    if (s.state === "verified") p.verified++;
+    if (s.state === "paused") p.paused++;
+    if (s.state === "skipped") p.skipped++;
+    if (s.state === "failed") p.failed++;
+  }
+  return p;
+}
+function needsLine(needsYou, paused) {
+  const parts = [];
+  if (needsYou)
+    parts.push(`${needsYou} ${needsYou === 1 ? "needs" : "need"} you`);
+  if (paused) parts.push(`${paused} paused`);
+  return parts.join(" · ");
+}
+function openCardsByJob(cards) {
+  const m = /* @__PURE__ */ new Map();
+  for (const c of cards) {
+    if (c.state !== "open") continue;
+    m.set(c.job_id, (m.get(c.job_id) ?? 0) + 1);
+  }
+  return m;
+}
+function stepMark(s, next) {
+  const past = PAST[s.action] ?? "done";
+  const why = (w) => s.detail ? `${w} · ${s.detail}` : w;
+  if (s.undone_at) return { glyph: "↺", text: "undone", tone: "muted" };
+  switch (s.state) {
+    case "verified":
+      return { glyph: "✓", text: `${past} · verified`, tone: "ok" };
+    case "reported":
+      return {
+        glyph: "✓",
+        text: `${past} · reported`,
+        tone: "muted"
+      };
+    case "running":
+      return {
+        glyph: "▸",
+        text: "running",
+        tone: s.lane === "agent" ? "agent" : "signal"
+      };
+    case "paused":
+      return { glyph: "‖", text: why("paused"), tone: "agent" };
+    case "needs_you":
+      return { glyph: "!", text: "needs you", tone: "signal" };
+    case "failed":
+      return { glyph: "✗", text: why("failed"), tone: "signal" };
+    case "skipped":
+      return { glyph: "–", text: why("skipped"), tone: "muted" };
+    default:
+      return { glyph: "·", text: next ? "next" : "queued", tone: "wait" };
+  }
+}
+function nextSteps(steps) {
+  const out = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set();
+  for (const s of steps) {
+    if (s.state !== "pending" || seen.has(s.lane)) continue;
+    seen.add(s.lane);
+    out.add(s.id);
+  }
+  return out;
+}
+function planSummary(steps) {
+  let local = 0;
+  let out = 0;
+  for (const s of steps) {
+    if (s.lane === "agent") out++;
+    else local++;
+  }
+  const parts = [pluralize(steps.length, "step")];
+  if (local) parts.push(`${local} local`);
+  if (out) parts.push(`${out} outward`);
+  return parts.join(" · ");
+}
+function needsSession(steps) {
+  return steps.some((s) => s.lane === "agent");
+}
+function makeSeq() {
+  let latest = 0;
+  return {
+    next: () => ++latest,
+    isLatest: (n) => n === latest
+  };
+}
+
+// time-utils.ts
+function ageMs(ts) {
+  return Date.now() - new Date(ts).getTime();
+}
+function fmtAge(ts) {
+  const ms = ageMs(ts);
+  const s = Math.floor(ms / 1e3);
+  if (s < 60) return "now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h13 = Math.floor(m / 60);
+  if (h13 < 24) return `${h13}h`;
+  const d = Math.floor(h13 / 24);
+  if (d < 30) return `${d}d`;
+  const mo = Math.floor(d / 30);
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(mo / 12)}y`;
+}
+
+// apply.ts
+var PAGE = 200;
+var STEPS_PAGE = 200;
+var VIEWS = [
+  { id: "running", label: "running" },
+  { id: "ready", label: "ready" },
+  { id: "done", label: "done" }
+];
+function message(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function builtAgo(ts) {
+  const a = fmtAge(ts);
+  return a === "now" ? "just now" : `${a} ago`;
+}
+var dangerVerb = (verb) => DANGER_DISPS.has(verb) || verb === "remove";
+var planner = null;
+function buildPlan(ctx, what) {
+  const body = what === "all" ? { all: true } : { keys: what };
+  void ctx.api.post("/apply/plan", body).then((v) => planner?.planned(v)).catch((err) => planner?.refused(message(err)));
+}
+function makeApply(ctx) {
+  const readEl = h3("div", { class: "kit-read cb-apply-read" });
+  let jobs = [];
+  let cards = [];
+  let sessions = [];
+  let items = [];
+  let itemsTotal = 0;
+  let machine = "";
+  let view = "running";
+  let active = false;
+  let openId = null;
+  let open = null;
+  let planGroups = null;
+  let chosenSession = "";
+  let stepsShown = STEPS_PAGE;
+  let refusal = "";
+  let note = "";
+  let busy = false;
+  let painting = false;
+  const listSeq = makeSeq();
+  const itemsSeq = makeSeq();
+  const jobSeq = makeSeq();
+  const agentOf = (job) => {
+    const id = job.state === "planned" && !job.session ? chosenSession : job.session;
+    const s = sessions.find((x) => x.id === id);
+    return s?.harness || ctx.agentName() || "agent";
+  };
+  const present = () => sessions.filter((s) => !s.left);
+  const footCount = h3("span", { class: "cb-apply-foot-n" });
+  const footBtns = h3("span", { class: "cb-apply-foot-btns" });
+  const foot = h3("div", { class: "cb-apply-foot" }, footCount, footBtns);
+  const handle = list({
+    label: "to apply",
+    views: VIEWS.map((v) => ({ ...v, on: v.id === view })),
+    openOnMove: false,
+    row(r) {
+      if (r.t === "more") {
+        return {
+          id: "more",
+          title: `… ${pluralize(r.left, "more decided item")}`,
+          meta: "show more"
+        };
+      }
+      if (r.t === "item") {
+        const it = r.item;
+        return {
+          id: it.key,
+          key: `${it.kind} · ${keyWithoutKind(it.key)}`,
+          title: it.title ?? keyWithoutKind(it.key),
+          meta: it.decision?.disposition ?? "",
+          selectable: true
+        };
+      }
+      const j = r.job;
+      const p = progress(j);
+      const lanes = jobLanes(j).map((l) => laneLabel(l, agentOf(j))).join(" + ");
+      const planned = j.state === "planned";
+      return {
+        id: `job:${j.id}`,
+        key: planned ? `plan · job #${j.id}` : lanes || `job #${j.id}`,
+        title: jobTitle(j),
+        meta: planned ? pluralize(p.total, "step") : p.started || viewOf(j) === "done" ? `${p.finished}/${p.total}` : "queued",
+        sub: needsLine(cardsFor(j.id), p.paused) || void 0
+      };
+    },
+    onChip(group, id) {
+      if (group !== "view") return;
+      view = id;
+      paintList();
+      feed();
+    },
+    onOpen(r, i) {
+      if (painting) return;
+      if (r.t === "job") ctx.route.go("apply", String(r.job.id));
+      else if (r.t === "item") handle.toggle(i);
+      else void loadItems(items.length);
+    },
+    onSelect() {
+      paintFoot();
+      if (active) ctx.setPrimary(primary());
+      if (openId === null) drawOverview();
+    },
+    foot
+  });
+  handle.el.classList.add("cb-apply-list");
+  const cardsFor = (jobId) => openCardsByJob(cards.filter((c) => c.kind !== "paused")).get(jobId) ?? 0;
+  const selectedKeys = () => handle.selectedIds().filter((k) => !k.startsWith("job:") && k !== "more");
+  function rowsFor(v) {
+    const js = jobs.filter((j) => viewOf(j) === v).sort((a, b) => b.id - a.id).map((job) => ({ t: "job", job }));
+    if (v !== "ready") return js;
+    const its = items.map((item) => ({ t: "item", item }));
+    const more = itemsTotal > items.length ? [{ t: "more", left: itemsTotal - items.length }] : [];
+    return [...js, ...its, ...more];
+  }
+  function counts() {
+    const c = { running: 0, ready: itemsTotal, done: 0 };
+    for (const j of jobs) c[viewOf(j)]++;
+    return c;
+  }
+  function paintList() {
+    const c = counts();
+    handle.setChips(
+      "view",
+      VIEWS.map((v) => ({
+        ...v,
+        on: v.id === view,
+        count: c[v.id] || void 0
+      }))
+    );
+    const shown = rowsFor(view);
+    handle.setItems(shown);
+    const els = handle.el.querySelectorAll(".kit-row");
+    els.forEach((rowEl, i) => {
+      const r = shown[i];
+      if (!r) return;
+      if (r.t !== "job") {
+        if (r.t === "item") rowEl.dataset.key = r.item.key;
+        else rowEl.classList.add("cb-apply-more");
+        return;
+      }
+      decorateJobRow(rowEl, r.job);
+    });
+    const openAt = shown.findIndex((r) => r.t === "job" && r.job.id === openId);
+    if (openAt >= 0) {
+      painting = true;
+      try {
+        handle.open(openAt);
+      } finally {
+        painting = false;
+      }
+    }
+    paintFoot();
+  }
+  function decorateJobRow(rowEl, j) {
+    rowEl.dataset.job = String(j.id);
+    rowEl.classList.add("cb-job-row");
+    const p = progress(j);
+    const kicker = rowEl.querySelector(".kit-kicker");
+    if (kicker && j.state !== "planned") {
+      const lanes = jobLanes(j);
+      if (lanes.length) {
+        kicker.replaceChildren(
+          ...lanes.flatMap((l, i) => [
+            i ? " + " : "",
+            h3(
+              "span",
+              { class: `cb-lanename cb-lanename-${l}`, "data-lane": l },
+              laneLabel(l, agentOf(j))
+            )
+          ])
+        );
+      }
+    } else kicker?.classList.add("cb-plan-kicker");
+    const meta = rowEl.querySelector(".kit-meta");
+    if (meta?.textContent === "queued") meta.classList.add("cb-queued");
+    rowEl.querySelector(".kit-sub")?.classList.add("cb-needs-line");
+    if (j.state !== "planned" && (p.started || viewOf(j) === "done")) {
+      const bar2 = h3("div", {
+        class: "cb-pb",
+        role: "progressbar",
+        "aria-valuemin": "0",
+        "aria-valuemax": String(p.total),
+        "aria-valuenow": String(p.finished)
+      });
+      for (const l of jobLanes(j)) {
+        const n = p.byLane[l] ?? 0;
+        if (!n) continue;
+        bar2.append(
+          h3("span", {
+            class: `cb-pb-${l}`,
+            style: `width:${100 * n / Math.max(1, p.total)}%`
+          })
+        );
+      }
+      rowEl.querySelector(".kit-title")?.after(bar2);
+    }
+  }
+  function paintFoot() {
+    if (view !== "ready" || !itemsTotal) {
+      footCount.textContent = "";
+      footBtns.replaceChildren();
+      foot.hidden = true;
+      return;
+    }
+    foot.hidden = false;
+    const n = selectedKeys().length;
+    footCount.textContent = n ? `${n} selected` : pluralize(itemsTotal, "decided item");
+    const bs = [];
+    if (n) bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
+    bs.push({ label: `plan all ${itemsTotal}`, run: () => plan("all") });
+    footBtns.replaceChildren(buttons(bs));
+  }
+  async function loadJobs() {
+    const mine = listSeq.next();
+    try {
+      const [j, c] = await Promise.all([
+        ctx.api.get("/jobs"),
+        ctx.api.get("/needs-you")
+      ]);
+      if (!listSeq.isLatest(mine)) return;
+      jobs = j.jobs ?? [];
+      cards = c.cards ?? [];
+      paintList();
+    } catch {
+    }
+  }
+  async function loadItems(offset = 0) {
+    const mine = itemsSeq.next();
+    try {
+      const v = await ctx.api.get("/items", {
+        view: "to-apply",
+        limit: String(PAGE),
+        offset: String(offset)
+      });
+      if (!itemsSeq.isLatest(mine)) return;
+      const got = v.items ?? [];
+      items = offset ? [...items, ...got] : got;
+      itemsTotal = v.total;
+      const keep = new Set(items.map((i) => i.key));
+      const gone = selectedKeys().filter((k) => !keep.has(k));
+      if (gone.length && offset === 0 && itemsTotal <= items.length) {
+        handle.deselect(gone);
+      }
+      paintList();
+      if (active) ctx.setPrimary(primary());
+      if (openId === null) drawOverview();
+    } catch {
+    }
+  }
+  async function loadSessions() {
+    try {
+      const v = await ctx.api.get("/sessions");
+      sessions = v.sessions ?? [];
+      if (chosenSession && !present().some((s) => s.id === chosenSession)) {
+        chosenSession = "";
+      }
+      paintList();
+      if (open?.job.state === "planned") drawOpen();
+      if (active) ctx.setPrimary(primary());
+    } catch {
+    }
+  }
+  async function loadSummary() {
+    try {
+      const s = await ctx.api.get("/summary");
+      machine = s.machine;
+      if (openId === null) drawOverview();
+    } catch {
+    }
+  }
+  async function loadJob(id) {
+    const mine = jobSeq.next();
+    try {
+      const v = await ctx.api.get("/job", { id: String(id) });
+      if (!jobSeq.isLatest(mine) || openId !== id) return;
+      setOpen(v);
+    } catch (err) {
+      if (!jobSeq.isLatest(mine) || openId !== id) return;
+      open = null;
+      readEl.replaceChildren(
+        h3(
+          "div",
+          { class: "cb-read-empty" },
+          h3("p", { class: "cb-read-empty-section kit-label" }, "to apply"),
+          h3("p", { class: "cb-read-empty-prompt" }, message(err))
+        )
+      );
+      feed();
+    }
+  }
+  function setOpen(v) {
+    const first = open?.job.id !== v.job.id;
+    open = v;
+    view = viewOf(v.job);
+    const i = jobs.findIndex((j) => j.id === v.job.id);
+    if (i >= 0) jobs[i] = v.job;
+    else jobs = [...jobs, v.job];
+    if (first) stepsShown = STEPS_PAGE;
+    paintList();
+    drawOpen();
+    if (first) readEl.scrollTop = 0;
+    feed();
+  }
+  async function act(path, body) {
+    if (busy) return;
+    busy = true;
+    note = "";
+    const mine = jobSeq.next();
+    try {
+      const r = await ctx.api.post(path, body);
+      const jv = r;
+      if (jv && typeof jv === "object" && "job" in jv && jv.job) {
+        if (jobSeq.isLatest(mine) && openId === jv.job.id) setOpen(jv);
+      } else if (openId !== null) {
+        await loadJob(openId);
+      }
+      void loadJobs();
+    } catch (err) {
+      note = message(err);
+      drawOpen();
+    } finally {
+      busy = false;
+    }
+  }
+  let asked = [];
+  function plan(what) {
+    refusal = "";
+    asked = what;
+    buildPlan(ctx, what);
+  }
+  planner = {
+    planned(v) {
+      refusal = "";
+      if (asked === "all") handle.clearSelection();
+      else handle.deselect(asked);
+      openId = v.job.id;
+      planGroups = {
+        job: v.job.id,
+        groups: (v.groups ?? []).map((g) => ({
+          action: g.action,
+          lane: g.lane,
+          steps: g.steps ?? []
+        }))
+      };
+      setOpen({ job: v.job, needs_you: [] });
+      void loadJobs();
+      ctx.route.go("apply", String(v.job.id));
+    },
+    refused(msg) {
+      refusal = msg;
+      if (openId === null) drawOverview();
+      else {
+        note = msg;
+        drawOpen();
+      }
+    }
+  };
+  function drawOverview() {
+    if (openId !== null) return;
+    const n = selectedKeys().length;
+    const doc = h3(
+      "article",
+      { class: "cb-apply-doc", "data-testid": "apply-overview" },
+      h3(
+        "p",
+        { class: "kit-kick" },
+        `to apply${machine ? ` · ${machine}` : ""}`
+      ),
+      h3(
+        "h1",
+        { class: "kit-h1" },
+        itemsTotal ? `${pluralize(itemsTotal, "decided item")} to apply` : "Nothing decided is waiting to be applied"
+      ),
+      facts([
+        ["running", String(counts().running)],
+        ["plans", String(jobs.filter((j) => j.state === "planned").length)],
+        ["selected", String(n)]
+      ]),
+      h3(
+        "p",
+        null,
+        "A plan shows the exact command for every step before anything runs. This machine applies what is on it; GitHub steps run once, from whichever machine applies them."
+      )
+    );
+    if (refusal) {
+      doc.append(
+        card({
+          edge: "signal",
+          head: "not planned",
+          body: h3("p", { "data-testid": "plan-refused" }, refusal)
+        })
+      );
+    }
+    if (itemsTotal) {
+      const bs = [];
+      if (n)
+        bs.push({
+          label: `plan ${n} selected`,
+          run: () => plan(selectedKeys())
+        });
+      bs.push({
+        label: `plan all ${itemsTotal}`,
+        fill: !n,
+        run: () => plan("all")
+      });
+      doc.append(buttons(bs));
+    }
+    readEl.replaceChildren(h3("div", { class: "kit-doc" }, doc));
+  }
+  function drawOpen() {
+    if (!open) return;
+    const j = open.job;
+    const doc = j.state === "planned" ? renderPlan(j) : renderJob(ctx, open, jobHooks);
+    readEl.replaceChildren(h3("div", { class: "kit-doc" }, doc));
+  }
+  function renderPlan(j) {
+    const steps = j.steps ?? [];
+    const ps = present();
+    if (!ps.some((s) => s.id === chosenSession))
+      chosenSession = ps[0]?.id ?? "";
+    const groups = planGroups?.job === j.id ? planGroups.groups : groupSteps(steps);
+    const agent = agentOf(j);
+    const doc = h3(
+      "article",
+      { class: "cb-apply-doc cb-plan", "data-job": String(j.id) },
+      h3(
+        "p",
+        { class: "kit-kick" },
+        `plan · job #${j.id} · ${j.machine} · built ${builtAgo(j.created_at)}`
+      ),
+      h3("h1", { class: "kit-h1" }, jobTitle(j)),
+      facts([
+        ["steps", String(steps.length)],
+        ["local", String(steps.filter((s) => s.lane !== "agent").length)],
+        ["outward", String(steps.filter((s) => s.lane === "agent").length)]
+      ])
+    );
+    if (!steps.length) {
+      doc.append(
+        h3(
+          "p",
+          { "data-testid": "plan-empty" },
+          "Nothing in this plan runs from this machine: no step is on it, and nothing outward."
+        )
+      );
+      return doc;
+    }
+    for (const g of groups) {
+      doc.append(
+        h3(
+          "h3",
+          { class: "kit-label cb-group-label" },
+          h3(
+            "span",
+            { class: `cb-lanename cb-lanename-${g.lane}` },
+            laneLabel(g.lane, agent)
+          ),
+          ` · ${actionTitle(g.action)} · ${g.steps.length}`
+        ),
+        h3(
+          "div",
+          {
+            class: "kit-table cb-plan-group",
+            "data-action": g.action,
+            "data-lane": g.lane
+          },
+          ...g.steps.map(
+            (s) => h3(
+              "div",
+              { class: "kit-tr cb-plan-step", "data-key": s.key },
+              h3("span", { class: "cb-step-k" }, keyWithoutKind(s.key)),
+              h3("code", { class: "cb-cmd" }, s.command)
+            )
+          )
+        )
+      );
+    }
+    doc.append(approveBlock(j));
+    return doc;
+  }
+  function approveBlock(j) {
+    const steps = j.steps ?? [];
+    const outward = steps.filter((s) => s.lane === "agent").length;
+    const el = h3("div", { class: "cb-approve", "data-testid": "approve" });
+    el.append(h3("h3", { class: "kit-label" }, "approve"));
+    if (needsSession(steps)) {
+      const ps = present();
+      if (!ps.length) {
+        el.append(
+          h3(
+            "p",
+            { class: "cb-approve-none", "data-testid": "no-session" },
+            `The ${pluralize(outward, "outward step")} go to an agent session, and none is here. When one attaches, it appears here to choose.`
+          )
+        );
+        if (note)
+          el.append(h3("p", { class: "cb-apply-note", role: "status" }, note));
+        return el;
+      }
+      el.append(
+        h3(
+          "p",
+          { class: "cb-approve-what" },
+          `${planSummary(steps)}. The ${pluralize(outward, "outward step")} go to:`
+        ),
+        h3(
+          "div",
+          {
+            class: "cb-sessions",
+            role: "radiogroup",
+            "aria-label": "session",
+            "data-testid": "session-picker"
+          },
+          ...ps.map(
+            (s) => h3(
+              "button",
+              {
+                type: "button",
+                role: "radio",
+                class: "kit-chip cb-session" + (s.id === chosenSession ? " on" : ""),
+                "aria-checked": String(s.id === chosenSession),
+                "data-session": s.id,
+                onclick() {
+                  chosenSession = s.id;
+                  drawOpen();
+                  if (active) ctx.setPrimary(primary());
+                }
+              },
+              s.label || s.id
+            )
+          )
+        )
+      );
+    } else {
+      el.append(
+        h3(
+          "p",
+          { class: "cb-approve-what" },
+          `${planSummary(steps)}, all local.`
+        )
+      );
+    }
+    el.append(
+      buttons([
+        {
+          label: needsSession(steps) ? "approve" : "approve and run",
+          fill: true,
+          run: () => approve()
+        }
+      ])
+    );
+    if (note)
+      el.append(h3("p", { class: "cb-apply-note", role: "status" }, note));
+    return el;
+  }
+  function canApprove() {
+    if (!open || open.job.state !== "planned") return false;
+    const steps = open.job.steps ?? [];
+    if (!steps.length) return false;
+    if (!needsSession(steps)) return true;
+    return present().some((s) => s.id === chosenSession);
+  }
+  function approve() {
+    if (!open || !canApprove()) return;
+    const needs = needsSession(open.job.steps ?? []);
+    void act("/apply/approve", {
+      plan_id: open.job.id,
+      session: needs ? chosenSession : ""
+    });
+  }
+  function pauseOrResume() {
+    if (!open || viewOf(open.job) !== "running") return;
+    void act(open.job.paused ? "/jobs/resume" : "/jobs/pause", {
+      id: open.job.id
+    });
+  }
+  const jobHooks = {
+    agent: (j) => agentOf(j),
+    stepsShown: () => stepsShown,
+    showMore() {
+      stepsShown += STEPS_PAGE;
+      drawOpen();
+    },
+    note: () => note,
+    answer(card6, action, text) {
+      void act("/jobs/answer", {
+        needs_you: card6.id,
+        action,
+        text
+      });
+    },
+    undo(step) {
+      void act("/jobs/undo", { step: step.id });
+    }
+  };
+  function primary() {
+    if (open && openId !== null) {
+      const j = open.job;
+      if (j.state === "planned") {
+        return canApprove() ? { label: "Approve", run: approve } : null;
+      }
+      if (viewOf(j) === "running") {
+        return j.paused ? { label: "Resume", run: pauseOrResume } : { label: "Pause job", run: pauseOrResume };
+      }
+      return null;
+    }
+    if (openId === null && view === "ready" && itemsTotal) {
+      const n = selectedKeys().length;
+      return n ? { label: `Plan ${n}`, run: () => plan(selectedKeys()) } : { label: "Plan all", run: () => plan("all") };
+    }
+    return null;
+  }
+  function feed() {
+    if (!active) return;
+    ctx.setAttached(open && openId !== null ? { job: String(openId) } : {});
+    ctx.setPrimary(primary());
+  }
+  const approveKey = {
+    keys: "a",
+    label: "approve the open plan",
+    group: "page",
+    run() {
+      if (canApprove()) approve();
+    }
+  };
+  const pauseKey = {
+    keys: "p",
+    label: "pause or resume the open job",
+    group: "page",
+    run() {
+      pauseOrResume();
+    }
+  };
+  function close() {
+    jobSeq.next();
+    openId = null;
+    open = null;
+    note = "";
+    drawOverview();
+    paintList();
+    feed();
+  }
+  void loadJobs();
+  void loadItems();
+  void loadSessions();
+  void loadSummary();
+  const jobOf = (type, data) => {
+    const d = data ?? {};
+    if (type === "job") return d.id ?? null;
+    return d.job_id ?? null;
+  };
+  return {
+    id: "apply",
+    list: handle.el,
+    read: readEl,
+    keys: [approveKey, pauseKey],
+    show(sub) {
+      active = true;
+      const id = sub ? Number(decodeURIComponent(sub).replace(/^#/, "")) : NaN;
+      if (!sub || !Number.isFinite(id)) {
+        if (openId !== null) close();
+        else {
+          drawOverview();
+          feed();
+        }
+      } else if (id !== openId) {
+        openId = id;
+        open = null;
+        note = "";
+        feed();
+        void loadJob(id);
+      } else {
+        if (open) drawOpen();
+        else void loadJob(id);
+        feed();
+      }
+      paintList();
+    },
+    hide() {
+      active = false;
+    },
+    onLive(type, data) {
+      if (type === "job" || type === "step" || type === "needs_you") {
+        void loadJobs();
+        const about = jobOf(type, data);
+        if (openId !== null && (about === null || about === openId)) {
+          void loadJob(openId);
+        }
+      } else if (type === "index" || type === "decided") {
+        void loadItems();
+      } else if (type === "sessions") {
+        void loadSessions();
+      }
+    },
+    primary
+  };
+}
+function renderJob(_ctx, v, hooks) {
+  const j = v.job;
+  const steps = j.steps ?? [];
+  const p = progress(j);
+  const agent = hooks.agent(j);
+  const open = (v.needs_you ?? []).filter((c) => c.state === "open");
+  const stepOf = (id) => steps.find((s) => s.id === id);
+  const lanes = jobLanes(j).map((l) => laneLabel(l, agent));
+  const state = j.paused && viewOf(j) === "running" ? "paused" : j.state;
+  const doc = h3(
+    "article",
+    { class: "cb-apply-doc cb-job", "data-job": String(j.id) },
+    h3(
+      "p",
+      { class: "kit-kick" },
+      [lanes.join(" + "), `job #${j.id}`, state].filter(Boolean).join(" · ")
+    ),
+    h3("h1", { class: "kit-h1" }, jobTitle(j))
+  );
+  const pairs = [
+    ["done", `${p.verified} of ${p.total}`],
+    ["needs you", String(open.filter((c) => c.kind !== "paused").length)],
+    ["paused", String(p.paused)]
+  ];
+  if (p.skipped) pairs.push(["skipped", String(p.skipped)]);
+  if (p.failed) pairs.push(["failed", String(p.failed)]);
+  const restores = steps.filter((s) => s.restore).length;
+  if (restores) pairs.push(["restore records", String(restores)]);
+  doc.append(facts(pairs));
+  const cardsEl = h3("div", { class: "cb-needs", "data-testid": "needs-you" });
+  for (const c of open)
+    cardsEl.append(needsCard(c, stepOf(c.step_id), j, agent, hooks));
+  doc.append(cardsEl);
+  const note = hooks.note();
+  if (note)
+    doc.append(h3("p", { class: "cb-apply-note", role: "status" }, note));
+  const next = nextSteps(steps);
+  const shown = steps.slice(0, hooks.stepsShown());
+  doc.append(
+    h3("h3", { class: "kit-label" }, "steps"),
+    h3(
+      "div",
+      { class: "kit-table cb-steps", "data-testid": "steps" },
+      ...shown.map((s) => {
+        const m = stepMark(s, next.has(s.id));
+        return h3(
+          "div",
+          {
+            class: "kit-tr cb-step",
+            "data-step": String(s.id),
+            "data-state": s.state,
+            "data-key": s.key
+          },
+          h3("span", { class: `cb-step-g cb-tone-${m.tone}` }, m.glyph),
+          h3("span", { class: "cb-step-k" }, keyWithoutKind(s.key)),
+          h3(
+            "span",
+            { class: "cb-step-w" },
+            h3("span", { class: `cb-step-t cb-tone-${m.tone}` }, m.text),
+            s.undoable ? h3(
+              "button",
+              {
+                type: "button",
+                class: "kit-btn cb-undo",
+                onclick() {
+                  hooks.undo(s);
+                }
+              },
+              "undo"
+            ) : null
+          )
+        );
+      }),
+      steps.length > shown.length ? h3(
+        "div",
+        { class: "kit-tr cb-steps-more" },
+        h3("span"),
+        h3(
+          "span",
+          { class: "cb-step-k" },
+          `… ${pluralize(steps.length - shown.length, "more step")}`
+        ),
+        h3(
+          "button",
+          {
+            type: "button",
+            class: "cb-link",
+            onclick() {
+              hooks.showMore();
+            }
+          },
+          "show more"
+        )
+      ) : null
+    )
+  );
+  return doc;
+}
+function needsCard(c, step, j, agent, hooks) {
+  const key = step ? keyWithoutKind(step.key) : "";
+  const verb = step ? actionVerb(step.action) : "run";
+  const answer = (action, text = "") => hooks.answer(c, action, text);
+  let el;
+  switch (c.kind) {
+    case "text": {
+      const quote = h3("blockquote", { class: "cb-needs-text" }, c.text);
+      const body = h3(
+        "div",
+        null,
+        h3(
+          "p",
+          { class: "cb-needs-what" },
+          h3("code", null, key),
+          ` · ${verb} with comment`
+        ),
+        quote
+      );
+      const four = [
+        {
+          label: "post and close",
+          fill: true,
+          run: () => answer("post-and-close", c.text)
+        },
+        { label: "edit text", run: () => edit() },
+        {
+          label: "close without comment",
+          run: () => answer("close-without-comment")
+        },
+        { label: "skip", run: () => answer("skip") }
+      ];
+      el = card({
+        edge: "signal",
+        head: c.question ? `needs you · ${c.question}` : "needs you",
+        body,
+        actions: four
+      });
+      const edit = () => {
+        const field = h3("textarea", {
+          class: "cb-needs-edit",
+          "aria-label": "comment",
+          rows: 4
+        });
+        field.value = c.text;
+        quote.replaceWith(field);
+        const btns = el.querySelector(".kit-btns");
+        btns?.replaceWith(
+          buttons([
+            {
+              label: "save text",
+              fill: true,
+              run: () => answer("edit-text", field.value)
+            },
+            {
+              label: "cancel",
+              run() {
+                field.replaceWith(quote);
+                el.querySelector(".kit-btns")?.replaceWith(buttons(four));
+              }
+            }
+          ])
+        );
+        field.focus();
+      };
+      break;
+    }
+    case "batch":
+      el = card({
+        edge: "signal",
+        head: "needs you · confirm the batch",
+        body: h3("p", null, c.question),
+        actions: [
+          { label: "confirm", fill: true, run: () => answer("confirm") },
+          { label: "skip batch", run: () => answer("skip-batch") }
+        ]
+      });
+      break;
+    case "failed": {
+      const bs = [];
+      if (j.session)
+        bs.push({
+          label: `hand to ${agent}`,
+          run: () => answer("hand-to-agent")
+        });
+      bs.push({ label: "skip", run: () => answer("skip") });
+      el = card({
+        edge: "signal",
+        head: `needs you · ${key || "a step"} failed`,
+        body: h3(
+          "div",
+          null,
+          h3("p", null, c.question),
+          step ? h3("code", { class: "cb-cmd" }, step.command) : null
+        ),
+        actions: bs
+      });
+      break;
+    }
+    case "paused":
+      el = card({
+        edge: "agent",
+        head: `${agent} paused`,
+        body: h3(
+          "p",
+          null,
+          key ? h3("code", null, key) : null,
+          key ? ": " : "",
+          c.question
+        ),
+        actions: [
+          {
+            label: `${verb} anyway`,
+            danger: dangerVerb(verb),
+            run: () => answer("resume")
+          },
+          { label: "skip", run: () => answer("skip") }
+        ]
+      });
+      break;
+    default:
+      el = card({
+        edge: "signal",
+        head: `needs you · ${c.kind}`,
+        body: c.question
+      });
+  }
+  el.classList.add("cb-needs-card");
+  el.dataset.card = String(c.id);
+  el.dataset.kind = c.kind;
+  return el;
+}
+
+// attention.ts
+import {
+  list as list2,
+  createSelection,
+  h as h7
+} from "/_kit/kit.js";
+
+// item.ts
+import { h as h5, facts as facts2, fold } from "/_kit/kit.js";
+
 // proposals.ts
-import { card, sheet as sheet2, noteField as noteField2, h as h3 } from "/_kit/kit.js";
+import { card as card2, sheet as sheet2, noteField as noteField2, h as h4 } from "/_kit/kit.js";
 function agentFromSource(source) {
   const i = source.indexOf(":");
   return i === -1 ? source : source.slice(0, i);
@@ -588,15 +1724,15 @@ function openRejectSheet(ctx, ids, onDone) {
       reason = v;
     }
   });
-  const errEl = h3("p", { class: "cb-sheet-err" });
+  const errEl = h4("p", { class: "cb-sheet-err" });
   errEl.hidden = true;
-  const body = h3(
+  const body = h4(
     "div",
     { class: "cb-sheet-body" },
-    h3(
+    h4(
       "div",
       { class: "cb-sheet-row" },
-      h3("label", { class: "cb-sheet-label" }, "reason"),
+      h4("label", { class: "cb-sheet-label" }, "reason"),
       reasonInput
     ),
     errEl
@@ -642,11 +1778,11 @@ function proposalCard(ctx, detail, onDone) {
   const head = `${agent} proposes · ${p.disposition}`;
   const lines = [];
   if (p.note) {
-    const noteEl = h3("p", { class: "cb-proposal-note" });
+    const noteEl = h4("p", { class: "cb-proposal-note" });
     noteEl.textContent = p.note;
     lines.push(noteEl);
   }
-  const bodyEl = h3("div", { class: "cb-proposal-body" }, ...lines);
+  const bodyEl = h4("div", { class: "cb-proposal-body" }, ...lines);
   function doAccept() {
     void ctx.api.post("/proposals/accept", { ids: [p.id] }).then(() => {
       onDone?.();
@@ -686,14 +1822,14 @@ function proposalCard(ctx, detail, onDone) {
     },
     { label: "reject", run: doReject }
   ];
-  const el = card({ edge: "agent", head, body: bodyEl, actions });
+  const el = card2({ edge: "agent", head, body: bodyEl, actions });
   el.classList.add("cb-proposal-card");
   return el;
 }
 function bulkProposalActions(ctx, onDone) {
   let _ids = [];
   let _keys = [];
-  const acceptBtn = h3("button", {
+  const acceptBtn = h4("button", {
     class: "kit-btn fill cb-prop-accept",
     hidden: true,
     onclick() {
@@ -707,7 +1843,7 @@ function bulkProposalActions(ctx, onDone) {
     }
   });
   acceptBtn.textContent = "accept 0";
-  const rejectBtn = h3("button", {
+  const rejectBtn = h4("button", {
     class: "kit-btn cb-prop-reject",
     hidden: true,
     onclick() {
@@ -719,7 +1855,7 @@ function bulkProposalActions(ctx, onDone) {
     }
   });
   rejectBtn.textContent = "reject 0…";
-  const el = h3("div", { class: "cb-prop-bulk" }, acceptBtn, rejectBtn);
+  const el = h4("div", { class: "cb-prop-bulk" }, acceptBtn, rejectBtn);
   function update(proposalIds, itemKeys) {
     _ids = proposalIds;
     _keys = itemKeys;
@@ -757,23 +1893,23 @@ function fmtShortDate(s) {
   return `${mm}-${dd}`;
 }
 function renderEvidence(evs) {
-  const section = h4("section", { class: "cb-evidence" });
-  section.append(h4("h3", { class: "kit-label" }, "evidence"));
+  const section = h5("section", { class: "cb-evidence" });
+  section.append(h5("h3", { class: "kit-label" }, "evidence"));
   if (evs.length === 0) {
-    section.append(h4("p", { class: "cb-empty" }, "no evidence"));
+    section.append(h5("p", { class: "cb-empty" }, "no evidence"));
     return section;
   }
   for (const ev of evs) {
-    const authorEl = ev.author ? h4("span", { class: "cb-evidence-author" }, ev.author + " ") : null;
-    const time = h4(
+    const authorEl = ev.author ? h5("span", { class: "cb-evidence-author" }, ev.author + " ") : null;
+    const time = h5(
       "span",
       { class: "cb-muted" },
       ` · ${fmtShortDate(ev.created_at)}`
     );
-    const item = h4(
+    const item = h5(
       "div",
       { class: "cb-evidence-item" },
-      h4(
+      h5(
         "p",
         { class: "cb-evidence-meta" },
         ...authorEl ? [authorEl] : [],
@@ -786,40 +1922,40 @@ function renderEvidence(evs) {
   return section;
 }
 function renderHistory(events, decisions, ownKey) {
-  const section = h4("section", { class: "cb-history" });
-  section.append(h4("h3", { class: "kit-label" }, "history"));
+  const section = h5("section", { class: "cb-history" });
+  section.append(h5("h3", { class: "kit-label" }, "history"));
   if (events.length === 0 && decisions.length === 0) {
-    section.append(h4("p", { class: "cb-empty" }, "no history"));
+    section.append(h5("p", { class: "cb-empty" }, "no history"));
     return section;
   }
   for (const entry of decisions) {
     const display = stripOwnKey(entry.Subject, ownKey);
     section.append(
-      h4(
+      h5(
         "div",
         { class: "cb-history-item cb-history-decision" },
-        h4("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
-        h4("span", { class: "cb-history-msg" }, display)
+        h5("span", { class: "cb-history-time" }, fmtShortDate(entry.Time)),
+        h5("span", { class: "cb-history-msg" }, display)
       )
     );
   }
   for (const ev of events) {
     const label = ev.actions && ev.actions.length > 0 ? ev.actions.map((a) => a.hook ?? "").filter(Boolean).join(", ") : ev.hook ?? ev.src;
     section.append(
-      h4(
+      h5(
         "div",
         { class: "cb-history-item" },
-        h4("span", { class: "cb-history-time" }, fmtShortDate(ev.ts)),
-        h4("span", { class: "cb-history-msg" }, label)
+        h5("span", { class: "cb-history-time" }, fmtShortDate(ev.ts)),
+        h5("span", { class: "cb-history-msg" }, label)
       )
     );
   }
   return section;
 }
 function renderDecideSection(ctx, key, kind) {
-  const section = h4("section", { class: "cb-decide" });
-  section.append(h4("h3", { class: "kit-label" }, "decide"));
-  const dispRow = h4("div", { class: "cb-decide-btns" });
+  const section = h5("section", { class: "cb-decide" });
+  section.append(h5("h3", { class: "kit-label" }, "decide"));
+  const dispRow = h5("div", { class: "cb-decide-btns" });
   section.append(dispRow);
   void getVocab(ctx).then((vocab2) => {
     const vocabKind = (vocab2.kinds ?? []).find((k) => k.kind === kind);
@@ -828,7 +1964,7 @@ function renderDecideSection(ctx, key, kind) {
     for (const d of kindAllowed) {
       const label = needsUntilSet.has(d) ? `${d}…` : d;
       dispRow.append(
-        h4(
+        h5(
           "button",
           {
             type: "button",
@@ -847,12 +1983,12 @@ function renderDecideSection(ctx, key, kind) {
 }
 function renderItem(ctx, detail, onRefresh) {
   const it = detail.item;
-  const el = h4("article", { class: "cb-item" });
+  const el = h5("article", { class: "cb-item" });
   const displayKey = keyWithoutKind(it.key);
   const kickerParts = [it.kind, displayKey, it.relation].filter(Boolean).join(" · ");
-  el.append(h4("p", { class: "cb-kicker kit-kick" }, kickerParts));
+  el.append(h5("p", { class: "cb-kicker kit-kick" }, kickerParts));
   el.append(
-    h4("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
+    h5("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
   );
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
@@ -864,14 +2000,14 @@ function renderItem(ctx, detail, onRefresh) {
   if (it.labels && it.labels.length > 0)
     factPairs.push(["labels", it.labels.join(", ")]);
   if (it.landed) factPairs.push(["landed", it.landed_how ?? it.landed]);
-  el.append(facts(factPairs));
+  el.append(facts2(factPairs));
   if (it.body) {
     const excerpt = it.body.slice(0, BODY_CAP);
     const rest = it.body.slice(BODY_CAP);
-    const bodyWrap = h4("div", { class: "cb-body" });
-    bodyWrap.append(h4("p", null, excerpt));
+    const bodyWrap = h5("div", { class: "cb-body" });
+    bodyWrap.append(h5("p", null, excerpt));
     if (rest) {
-      bodyWrap.append(fold("read more", h4("p", null, rest)));
+      bodyWrap.append(fold("read more", h5("p", null, rest)));
     }
     el.append(bodyWrap);
   }
@@ -884,11 +2020,11 @@ function renderItem(ctx, detail, onRefresh) {
   el.append(
     renderHistory(detail.history ?? [], detail.decisions ?? [], it.key)
   );
-  return h4("div", { class: "kit-doc" }, el);
+  return h5("div", { class: "kit-doc" }, el);
 }
 
 // board.ts
-import { h as h5 } from "/_kit/kit.js";
+import { h as h6 } from "/_kit/kit.js";
 var PAGE_SIZE = 200;
 var LANES = [
   { id: "waiting", label: "waiting on you" },
@@ -905,36 +2041,36 @@ function ageOf(it) {
   return `${days}d`;
 }
 function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
-  const el = h5("div", { class: "cb-board" });
+  const el = h6("div", { class: "cb-board" });
   const laneState = new Map(
     LANES.map(({ id }) => [id, { items: [], total: 0 }])
   );
   const laneRowsEl = /* @__PURE__ */ new Map();
   const laneMoreEl = /* @__PURE__ */ new Map();
   for (const { id, label } of LANES) {
-    const headEl = h5("div", { class: "cb-lane-head" });
+    const headEl = h6("div", { class: "cb-lane-head" });
     headEl.textContent = label;
-    const rowsEl = h5("div", { class: "cb-lane-rows" });
+    const rowsEl = h6("div", { class: "cb-lane-rows" });
     laneRowsEl.set(id, rowsEl);
-    const moreEl = h5("button", { class: "cb-lane-more", hidden: true });
+    const moreEl = h6("button", { class: "cb-lane-more", hidden: true });
     moreEl.textContent = "show more";
     moreEl.addEventListener("click", () => {
       void loadMore(id);
     });
     laneMoreEl.set(id, moreEl);
     el.append(
-      h5("div", { class: "cb-lane", "data-lane": id }, headEl, rowsEl, moreEl)
+      h6("div", { class: "cb-lane", "data-lane": id }, headEl, rowsEl, moreEl)
     );
   }
   function buildCard(it, laneId) {
     const selected = sel.has(it.key);
-    const box = h5("span", { class: "kit-box" + (selected ? " on" : "") });
-    const kk = h5("span", { class: "cb-card-kk" });
+    const box = h6("span", { class: "kit-box" + (selected ? " on" : "") });
+    const kk = h6("span", { class: "cb-card-kk" });
     const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
     kk.textContent = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
-    const titleEl = h5("div", { class: "cb-card-title" });
+    const titleEl = h6("div", { class: "cb-card-title" });
     titleEl.textContent = it.title ?? displayKey;
-    const card5 = h5(
+    const card6 = h6(
       "div",
       {
         // Use .kit-card for background/border/radius from the kit;
@@ -943,26 +2079,26 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
         tabindex: "0",
         "data-id": it.key
       },
-      h5("div", { class: "kit-card-head" }, box, kk),
+      h6("div", { class: "kit-card-head" }, box, kk),
       titleEl
     );
     const age = ageOf(it);
     if (age) {
-      const ageEl = h5("div", { class: "cb-card-age" });
+      const ageEl = h6("div", { class: "cb-card-age" });
       ageEl.textContent = age;
-      card5.append(ageEl);
+      card6.append(ageEl);
     }
     if (it.proposal) {
-      const propEl = h5("div", { class: "cb-card-prop" });
+      const propEl = h6("div", { class: "cb-card-prop" });
       propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
-      card5.append(propEl);
+      card6.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {
       e.stopPropagation();
       onOpen?.(it.key, laneId);
       ctx.route.go("item", it.key);
     });
-    card5.addEventListener("click", (e) => {
+    card6.addEventListener("click", (e) => {
       const state = laneState.get(laneId);
       const orderedIds = state?.items.map((i) => i.key) ?? [];
       if (e.shiftKey) {
@@ -976,14 +2112,14 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
         sel.toggle(it.key);
       }
     });
-    card5.addEventListener("keydown", (e) => {
+    card6.addEventListener("keydown", (e) => {
       if (e.key === "o" || e.key === "Enter") {
         e.preventDefault();
         onOpen?.(it.key, laneId);
         ctx.route.go("item", it.key);
       }
     });
-    return card5;
+    return card6;
   }
   function repaintLane(laneId) {
     const rowsEl = laneRowsEl.get(laneId);
@@ -1005,12 +2141,12 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
       if (!rowsEl) continue;
       const state = laneState.get(laneId);
       const cards = rowsEl.querySelectorAll(".kit-card");
-      cards.forEach((card5, i) => {
+      cards.forEach((card6, i) => {
         const it = state.items[i];
         if (!it) return;
         const selected = sel.has(it.key);
-        card5.classList.toggle("on", selected);
-        card5.querySelector(".kit-box")?.classList.toggle("on", selected);
+        card6.classList.toggle("on", selected);
+        card6.querySelector(".kit-box")?.classList.toggle("on", selected);
       });
     }
   }
@@ -1095,7 +2231,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
 // attention.ts
 var PAGE_SIZE2 = 200;
 var selection = createSelection();
-var VIEWS = [
+var VIEWS2 = [
   { id: "waiting", label: "waiting on you" },
   { id: "new", label: "new" },
   { id: "due", label: "due" },
@@ -1145,7 +2281,7 @@ function ageOf2(it) {
   return `${days}d`;
 }
 function makeAttention(ctx) {
-  const readEl = h6("div", { class: "kit-read" });
+  const readEl = h7("div", { class: "kit-read" });
   let offset = 0;
   let totalItems = 0;
   let loadedItems = [];
@@ -1159,22 +2295,22 @@ function makeAttention(ctx) {
   const viewCounts2 = {};
   let boardHandle = null;
   function renderReadEmpty() {
-    const nameEl = h6(
+    const nameEl = h7(
       "p",
       { class: "cb-read-empty-section kit-label" },
       "attention"
     );
-    const countEl = h6(
+    const countEl = h7(
       "p",
       { class: "cb-read-empty-count" },
       pluralize(totalItemsForView, "item")
     );
-    const promptEl = h6(
+    const promptEl = h7(
       "p",
       { class: "cb-read-empty-prompt" },
       "Select an item to see it here."
     );
-    return h6("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
+    return h7("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
   }
   function updateReadEmptyCount() {
     const countEl = readEl.querySelector(".cb-read-empty-count");
@@ -1197,12 +2333,12 @@ function makeAttention(ctx) {
   }
   showReadEmpty();
   function buildFoot() {
-    const selCount = h6(
+    const selCount = h7(
       "span",
       { class: "cb-sel-count", hidden: true },
       "0 selected"
     );
-    const selAllBtn = h6(
+    const selAllBtn = h7(
       "button",
       {
         class: "cb-sel-all",
@@ -1216,11 +2352,11 @@ function makeAttention(ctx) {
       selection.deselect(keys);
       void reload();
     });
-    const footRight = h6(
+    const footRight = h7(
       "div",
       { class: "cb-foot-right" },
       propFoot.el,
-      h6(
+      h7(
         "button",
         {
           class: "cb-foot-more",
@@ -1233,7 +2369,7 @@ function makeAttention(ctx) {
         `show ${PAGE_SIZE2} more`
       )
     );
-    footEl = h6("div", { class: "cb-foot" }, selCount, selAllBtn, footRight);
+    footEl = h7("div", { class: "cb-foot" }, selCount, selAllBtn, footRight);
     return footEl;
   }
   function updateProposalBulk(selectedIds) {
@@ -1268,9 +2404,9 @@ function makeAttention(ctx) {
     }
     handle.selectAll(allIds);
   }
-  const handle = list({
+  const handle = list2({
     label: "attention",
-    views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
+    views: VIEWS2.map((v) => ({ ...v, on: v.id === filters.view })),
     filters: FILTER_CHIPS,
     selection,
     openOnMove: false,
@@ -1432,7 +2568,7 @@ function makeAttention(ctx) {
     }
   }
   function viewChips(activeId) {
-    return VIEWS.map((v) => ({
+    return VIEWS2.map((v) => ({
       ...v,
       on: v.id === activeId,
       count: viewCounts2[v.id]
@@ -1440,7 +2576,7 @@ function makeAttention(ctx) {
   }
   function applyCounts(counts) {
     if (!counts) return;
-    for (const v of VIEWS) {
+    for (const v of VIEWS2) {
       if (v.id !== "board") viewCounts2[v.id] = 0;
     }
     Object.assign(viewCounts2, counts);
@@ -1586,7 +2722,7 @@ function makeAttention(ctx) {
       handle.setSearch(urlQ);
     }
     const view = sub || "waiting";
-    if (VIEWS.some((v) => v.id === view) && view !== "board") {
+    if (VIEWS2.some((v) => v.id === view) && view !== "board") {
       filters.view = view;
       handle.setChips("view", viewChips(filters.view));
       updateProposalBulk(selection.ids());
@@ -1659,26 +2795,7 @@ function makeAttention(ctx) {
 }
 
 // dock.ts
-import { h as h9, card as card3 } from "/_kit/kit.js";
-
-// time-utils.ts
-function ageMs(ts) {
-  return Date.now() - new Date(ts).getTime();
-}
-function fmtAge(ts) {
-  const ms = ageMs(ts);
-  const s = Math.floor(ms / 1e3);
-  if (s < 60) return "now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h12 = Math.floor(m / 60);
-  if (h12 < 24) return `${h12}h`;
-  const d = Math.floor(h12 / 24);
-  if (d < 30) return `${d}d`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo`;
-  return `${Math.floor(mo / 12)}y`;
-}
+import { h as h10, card as card4 } from "/_kit/kit.js";
 
 // thread.ts
 function at(m) {
@@ -1692,7 +2809,7 @@ function threadOrder(ms) {
 }
 
 // composer.ts
-import { h as h7 } from "/_kit/kit.js";
+import { h as h8 } from "/_kit/kit.js";
 
 // attached.ts
 var KIND_PLURAL = { branch: "branches" };
@@ -1765,7 +2882,7 @@ function makeComposer(ctx, dock) {
   let override = null;
   let sending = false;
   const effective = () => override ?? context;
-  const value = h7("span", {
+  const value = h8("span", {
     class: "cb-comp-attached-value",
     contenteditable: "true",
     role: "textbox",
@@ -1773,10 +2890,10 @@ function makeComposer(ctx, dock) {
     spellcheck: false,
     "data-testid": "composer-attached"
   });
-  const line = h7(
+  const line = h8(
     "div",
     { class: "cb-comp-attached" },
-    h7("span", { class: "cb-comp-attached-prefix" }, "attached: "),
+    h8("span", { class: "cb-comp-attached-prefix" }, "attached: "),
     value
   );
   let editing = false;
@@ -1821,7 +2938,7 @@ function makeComposer(ctx, dock) {
       value.blur();
     }
   });
-  const input = h7("textarea", {
+  const input = h8("textarea", {
     class: "cb-comp-input",
     rows: 1,
     placeholder: "Message the agent…",
@@ -1839,14 +2956,14 @@ function makeComposer(ctx, dock) {
     e.preventDefault();
     void send(false);
   });
-  const note = h7("span", { class: "cb-comp-note", role: "status" });
-  const footer = h7(
+  const note = h8("span", { class: "cb-comp-note", role: "status" });
+  const footer = h8(
     "div",
     { class: "cb-comp-foot" },
-    h7("span", {}, "↵ send · ⌘↵ add to batch"),
+    h8("span", {}, "↵ send · ⌘↵ add to batch"),
     note
   );
-  const el = h7(
+  const el = h8(
     "div",
     { class: "cb-comp", "data-testid": "composer" },
     line,
@@ -1923,27 +3040,27 @@ function makeComposer(ctx, dock) {
 }
 
 // progress.ts
-import { h as h8, card as card2, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
+import { h as h9, card as card3, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
 function makeBatchTray(ctx) {
   let thread = 0;
   let batch = 0;
   let drafts = [];
   let loadSeq = 0;
-  const label = h8("span", { class: "kit-card-head cb-batch-label" });
-  const sendBtn = h8("button", {
+  const label = h9("span", { class: "kit-card-head cb-batch-label" });
+  const sendBtn = h9("button", {
     class: "kit-btn fill cb-batch-send",
     "data-testid": "batch-send",
     onclick() {
       void sendBatch();
     }
   });
-  const list3 = h8("div", { class: "cb-batch-drafts" });
-  const el = card2({
-    body: h8(
+  const list4 = h9("div", { class: "cb-batch-drafts" });
+  const el = card3({
+    body: h9(
       "div",
       {},
-      h8("div", { class: "cb-batch-head" }, label, sendBtn),
-      list3
+      h9("div", { class: "cb-batch-head" }, label, sendBtn),
+      list4
     )
   });
   el.classList.add("cb-batch");
@@ -1952,15 +3069,15 @@ function makeBatchTray(ctx) {
   function render() {
     el.hidden = drafts.length === 0;
     if (!drafts.length) {
-      list3.replaceChildren();
+      list4.replaceChildren();
       return;
     }
     label.textContent = `batch · ${pluralize(drafts.length, "draft")}`;
     sendBtn.textContent = `send ${drafts.length}`;
-    list3.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
+    list4.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
   }
   function actionBtn(text, action, aria, run, disabled = false) {
-    return h8(
+    return h9(
       "button",
       {
         class: "cb-batch-act",
@@ -1973,12 +3090,12 @@ function makeBatchTray(ctx) {
     );
   }
   function draftRow(d, i) {
-    const text = h8("span", { class: "cb-batch-text" }, d.body);
-    const row = h8(
+    const text = h9("span", { class: "cb-batch-text" }, d.body);
+    const row = h9(
       "div",
       { class: "cb-batch-draft", "data-draft-id": String(d.id) },
       text,
-      h8(
+      h9(
         "span",
         { class: "cb-batch-acts" },
         actionBtn(
@@ -2117,17 +3234,17 @@ function countText(n, total) {
 function makeProgressLine() {
   let prog = null;
   let at2 = 0;
-  const text = h8("span", { class: "cb-prog-text" });
-  const age = h8("span", { class: "cb-prog-age" });
-  const fill = h8("span", { class: "cb-prog-fill" });
-  const bar2 = h8("div", { class: "cb-prog-bar", role: "progressbar" }, fill);
-  const el = h8(
+  const text = h9("span", { class: "cb-prog-text" });
+  const age = h9("span", { class: "cb-prog-age" });
+  const fill = h9("span", { class: "cb-prog-fill" });
+  const bar2 = h9("div", { class: "cb-prog-bar", role: "progressbar" }, fill);
+  const el = h9(
     "div",
     { class: "cb-prog", "data-testid": "progress-line" },
-    h8(
+    h9(
       "div",
       { class: "cb-prog-row" },
-      h8("span", { class: "cb-prog-dot" }),
+      h9("span", { class: "cb-prog-dot" }),
       text,
       age
     ),
@@ -2166,11 +3283,11 @@ function makeProgressLine() {
   };
 }
 function makeWaitingStrip() {
-  const count = h8("span", {});
-  const el = h8(
+  const count = h9("span", {});
+  const el = h9(
     "div",
     { class: "cb-wait", "data-testid": "waiting-strip" },
-    h8("span", { class: "cb-wait-word" }, "waiting"),
+    h9("span", { class: "cb-wait-word" }, "waiting"),
     count
   );
   el.hidden = true;
@@ -2192,15 +3309,15 @@ function clock(ts) {
 }
 function workedFold(msg) {
   const lines = msg.worked?.lines ?? [];
-  const history2 = h8(
+  const history2 = h9(
     "ol",
     { class: "cb-worked-lines" },
     ...lines.map(
-      (l) => h8(
+      (l) => h9(
         "li",
         { class: "cb-worked-line" },
-        h8("span", { class: "cb-worked-at" }, clock(l.at)),
-        h8("span", {}, l.text + countText(l.n, l.total))
+        h9("span", { class: "cb-worked-at" }, clock(l.at)),
+        h9("span", {}, l.text + countText(l.n, l.total))
       )
     )
   );
@@ -2240,8 +3357,8 @@ function sessionLabel(s) {
   return cwd ? `${harness} · ${cwd}` : harness;
 }
 function renderAgentBody(msg) {
-  const wrap = h9("div", { class: "cb-dock-body" });
-  const bodyP = h9("p", { class: "cb-dock-bodytext" });
+  const wrap = h10("div", { class: "cb-dock-body" });
+  const bodyP = h10("p", { class: "cb-dock-bodytext" });
   bodyP.textContent = msg.body;
   wrap.append(bodyP);
   const { attached } = msg;
@@ -2250,7 +3367,7 @@ function renderAgentBody(msg) {
     if (attached.keys && attached.keys.length > 0) {
       const shown = attached.keys.slice(0, 5);
       for (const k of shown) {
-        const a = h9("a", {
+        const a = h10("a", {
           class: "cb-dock-link",
           href: "#",
           onclick(e) {
@@ -2263,7 +3380,7 @@ function renderAgentBody(msg) {
       }
       if (attached.keys.length > 5) {
         links.push(
-          h9(
+          h10(
             "span",
             { class: "cb-dock-link-more" },
             `+${attached.keys.length - 5} more`
@@ -2273,7 +3390,7 @@ function renderAgentBody(msg) {
     }
     if (attached.open) {
       const k = attached.open;
-      const a = h9("a", {
+      const a = h10("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -2286,7 +3403,7 @@ function renderAgentBody(msg) {
     }
     if (attached.rule) {
       const id = attached.rule;
-      const a = h9("a", {
+      const a = h10("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -2299,7 +3416,7 @@ function renderAgentBody(msg) {
     }
     if (attached.job) {
       const id = attached.job;
-      const a = h9("a", {
+      const a = h10("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -2311,7 +3428,7 @@ function renderAgentBody(msg) {
       links.push(a);
     }
     if (links.length > 0) {
-      const linkRow = h9("div", { class: "cb-dock-links" }, ...links);
+      const linkRow = h10("div", { class: "cb-dock-links" }, ...links);
       wrap.append(linkRow);
     }
   }
@@ -2322,24 +3439,24 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
   const isAgent = msg.author !== "court";
   const authorLabel = isAgent ? agentName.toUpperCase() : "YOU";
   const age = fmtAge(msg.created_at);
-  const headEl = h9(
+  const headEl = h10(
     "div",
     { class: "cb-dock-ch" },
-    h9(
+    h10(
       "span",
       {
         class: isAgent ? "cb-dock-ch-name cb-dock-ch-agent" : "cb-dock-ch-name"
       },
       authorLabel
     ),
-    h9("span", { class: "cb-dock-ch-age" }, age)
+    h10("span", { class: "cb-dock-ch-age" }, age)
   );
   let bodyContent;
   if (isAgent) {
     bodyContent = renderAgentBody(msg);
   } else {
-    const bodyEl = h9("div", { class: "cb-dock-body" });
-    const bodyP = h9("p", { class: "cb-dock-bodytext" });
+    const bodyEl = h10("div", { class: "cb-dock-body" });
+    const bodyP = h10("p", { class: "cb-dock-bodytext" });
     bodyP.textContent = msg.body;
     bodyEl.append(bodyP);
     bodyContent = bodyEl;
@@ -2358,7 +3475,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       "interrupted"
     ];
     if (validStates.includes(msg.state)) {
-      stateEl = h9("div", {
+      stateEl = h10("div", {
         class: "cb-dock-state",
         "data-state": msg.state,
         style: `color:${stateColor(msg.state)}`
@@ -2366,7 +3483,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       stateEl.textContent = stateLabel(msg);
     }
   }
-  const fullBody = h9(
+  const fullBody = h10(
     "div",
     { class: "cb-dock-card-body" },
     headEl,
@@ -2380,12 +3497,12 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       const ageStr = ageText === "now" ? "just now" : `${ageText} ago`;
       stateEl.textContent = "";
       stateEl.setAttribute("data-state", "stuck");
-      const stuckBold = h9("strong", { style: "font-weight:600" });
+      const stuckBold = h10("strong", { style: "font-weight:600" });
       stuckBold.textContent = "stuck";
       stateEl.append(`delivered ${ageStr} · `, stuckBold);
     }
     const d = delivery;
-    const releaseBtn = h9("button", {
+    const releaseBtn = h10("button", {
       class: "kit-btn",
       "data-action": "release",
       onclick() {
@@ -2394,7 +3511,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
     });
     releaseBtn.textContent = "release";
     const otherSessions = sessions.filter((s) => s.id !== d.session_id);
-    const moveBtn = h9("button", {
+    const moveBtn = h10("button", {
       class: "kit-btn",
       "data-action": "move",
       onclick() {
@@ -2402,9 +3519,9 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       }
     });
     moveBtn.textContent = "move to another session";
-    fullBody.append(h9("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
+    fullBody.append(h10("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
   }
-  const el = card3({
+  const el = card4({
     edge: isAgent ? "agent" : "signal",
     body: fullBody
   });
@@ -2429,7 +3546,7 @@ async function moveDelivery(ctx, id, sessionId) {
 }
 function openMoveSheet(ctx, delivery, targets) {
   const items = targets.map((s) => {
-    const el = h9("button", { class: "cb-dock-pick-item" });
+    const el = h10("button", { class: "cb-dock-pick-item" });
     el.textContent = sessionLabel(s);
     el.onclick = () => {
       void moveDelivery(ctx, delivery.id, s.id);
@@ -2438,16 +3555,16 @@ function openMoveSheet(ctx, delivery, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h9(
+    const noOther = h10(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h9("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h10("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet4 = {
-    el: h9("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h10("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -2474,7 +3591,7 @@ async function moveSession(ctx, fromSession, toSession) {
 }
 function openSessionMoveSheet(ctx, fromSession, targets) {
   const items = targets.map((s) => {
-    const el = h9("button", { class: "cb-dock-pick-item" });
+    const el = h10("button", { class: "cb-dock-pick-item" });
     el.textContent = sessionLabel(s);
     el.onclick = () => {
       void moveSession(ctx, fromSession, s.id);
@@ -2483,16 +3600,16 @@ function openSessionMoveSheet(ctx, fromSession, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h9(
+    const noOther = h10(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h9("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h10("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet4 = {
-    el: h9("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h10("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -2512,7 +3629,7 @@ function buildSessionPicker(sessions, currentId, onSelect) {
     const busy = s.busy ? " · busy" : " · idle";
     const stale = s.left ? " · left" : "";
     const label = sessionLabel(s) + busy + stale;
-    const el = h9("button", {
+    const el = h10("button", {
       class: "cb-dock-pick-item" + (s.id === currentId ? " cb-dock-pick-item--on" : "")
     });
     el.textContent = label;
@@ -2522,7 +3639,7 @@ function buildSessionPicker(sessions, currentId, onSelect) {
     };
     return el;
   });
-  const picker = h9(
+  const picker = h10(
     "div",
     { class: "cb-dock-picker", role: "listbox" },
     ...items
@@ -2551,9 +3668,9 @@ function makeDock(ctx) {
   let messages = [];
   let currentDelivery = null;
   let lastUsedSessionId = "";
-  const sessionDot = h9("span", { class: "cb-dock-dot" });
-  const sessionLabelEl = h9("span", { class: "cb-dock-session-label" });
-  const sessionPickerBtn = h9("button", {
+  const sessionDot = h10("span", { class: "cb-dock-dot" });
+  const sessionLabelEl = h10("span", { class: "cb-dock-session-label" });
+  const sessionPickerBtn = h10("button", {
     class: "cb-dock-agent-btn",
     "aria-label": "pick agent session",
     onclick(e) {
@@ -2571,21 +3688,21 @@ function makeDock(ctx) {
     }
   });
   sessionPickerBtn.textContent = "AGENT ▾";
-  const leftStatusRow = h9("div", { class: "cb-dock-left-row" });
+  const leftStatusRow = h10("div", { class: "cb-dock-left-row" });
   leftStatusRow.hidden = true;
-  const sessionHeader = h9(
+  const sessionHeader = h10(
     "div",
     { class: "cb-dock-header" },
-    h9(
+    h10(
       "div",
       { class: "cb-dock-header-row" },
-      h9("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
+      h10("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
       sessionPickerBtn
     ),
     leftStatusRow
   );
-  const threadChips = h9("div", { class: "cb-dock-threads" });
-  const messageArea = h9("div", {
+  const threadChips = h10("div", { class: "cb-dock-threads" });
+  const messageArea = h10("div", {
     class: "cb-dock-messages",
     "data-testid": "dock-messages"
   });
@@ -2602,7 +3719,7 @@ function makeDock(ctx) {
       void batchTray.load(t.id);
     }
   });
-  const rail = h9("div", { class: "cb-dock-inner" });
+  const rail = h10("div", { class: "cb-dock-inner" });
   rail.append(
     sessionHeader,
     threadChips,
@@ -2628,7 +3745,7 @@ function makeDock(ctx) {
     sessionLabelEl.textContent = sessionLabel(sess);
     if (stale) {
       leftStatusRow.textContent = "";
-      const moveLink = h9("button", {
+      const moveLink = h10("button", {
         class: "cb-dock-move-link",
         "data-testid": "dock-move-link",
         onclick(e) {
@@ -2638,12 +3755,12 @@ function makeDock(ctx) {
         }
       });
       moveLink.textContent = "move to…";
-      const parts = [h9("span", {}, "left")];
+      const parts = [h10("span", {}, "left")];
       if (sess.queued > 0) {
-        parts.push(h9("span", { class: "cb-dock-sep" }, "·"));
-        parts.push(h9("span", {}, `${sess.queued} queued`));
+        parts.push(h10("span", { class: "cb-dock-sep" }, "·"));
+        parts.push(h10("span", {}, `${sess.queued} queued`));
       }
-      parts.push(h9("span", { class: "cb-dock-sep" }, "·"));
+      parts.push(h10("span", { class: "cb-dock-sep" }, "·"));
       parts.push(moveLink);
       leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
@@ -2657,7 +3774,7 @@ function makeDock(ctx) {
   function renderThreadChips() {
     threadChips.innerHTML = "";
     for (const t of threads) {
-      const chip = h9("button", {
+      const chip = h10("button", {
         class: "kit-chip" + (t.id === currentThreadId ? " on" : ""),
         "data-thread": String(t.id),
         onclick() {
@@ -2667,7 +3784,7 @@ function makeDock(ctx) {
       chip.textContent = t.name;
       threadChips.append(chip);
     }
-    const addChip = h9("button", {
+    const addChip = h10("button", {
       class: "kit-chip cb-dock-add",
       "data-testid": "dock-add-thread",
       onclick() {
@@ -2680,7 +3797,7 @@ function makeDock(ctx) {
   function renderMessages() {
     messageArea.replaceChildren();
     if (messages.length === 0) {
-      const empty = h9("p", { class: "cb-dock-empty" }, "no messages");
+      const empty = h10("p", { class: "cb-dock-empty" }, "no messages");
       messageArea.append(empty);
     }
     const name = agentName();
@@ -2916,17 +4033,17 @@ function makeDock(ctx) {
 
 // rules.ts
 import {
-  list as list2,
-  h as h11,
-  facts as facts2,
-  buttons,
-  card as card4,
+  list as list3,
+  h as h12,
+  facts as facts3,
+  buttons as buttons2,
+  card as card5,
   sheet as sheet3,
   ApiError
 } from "/_kit/kit.js";
 
 // conditions.ts
-import { h as h10 } from "/_kit/kit.js";
+import { h as h11 } from "/_kit/kit.js";
 
 // menu-nav.ts
 function menuNav(menu, selector, opener, close) {
@@ -2940,32 +4057,32 @@ function menuNav(menu, selector, opener, close) {
   });
   menu.addEventListener("keydown", (e) => {
     if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
-    const list3 = items();
-    if (!list3.length) return;
-    const at2 = list3.indexOf(document.activeElement);
+    const list4 = items();
+    if (!list4.length) return;
+    const at2 = list4.indexOf(document.activeElement);
     let next = -1;
     switch (e.key) {
       case "ArrowDown":
       case "ArrowRight":
-        next = at2 < 0 ? 0 : (at2 + 1) % list3.length;
+        next = at2 < 0 ? 0 : (at2 + 1) % list4.length;
         break;
       case "ArrowUp":
       case "ArrowLeft":
-        next = at2 < 0 ? list3.length - 1 : (at2 - 1 + list3.length) % list3.length;
+        next = at2 < 0 ? list4.length - 1 : (at2 - 1 + list4.length) % list4.length;
         break;
       case "Home":
         next = 0;
         break;
       case "End":
-        next = list3.length - 1;
+        next = list4.length - 1;
         break;
       default:
         return;
     }
     e.preventDefault();
     e.stopPropagation();
-    rove(list3[next]);
-    list3[next].focus();
+    rove(list4[next]);
+    list4[next].focus();
   });
   menu.addEventListener("focusout", (e) => {
     if (menu.hidden) return;
@@ -3015,13 +4132,13 @@ function firstValue(f, op) {
   return picks(f, op) ? choices(f)[0] ?? "" : "";
 }
 function select(cls, label, options, value, onPick) {
-  const el = h10(
+  const el = h11(
     "select",
     { class: cls, "aria-label": label },
-    ...options.map((o) => h10("option", { value: o }, o))
+    ...options.map((o) => h11("option", { value: o }, o))
   );
   if (!options.includes(value)) {
-    el.prepend(h10("option", { value }, value));
+    el.prepend(h11("option", { value }, value));
   }
   el.value = value;
   el.addEventListener("change", () => onPick(el.value));
@@ -3032,18 +4149,18 @@ function conditionEditor(ctx, rule, onChange) {
   const conds = (rule.match ?? []).map((c) => ({ ...c }));
   let fields = [];
   const fieldOf = (name) => fields.find((f) => f.name === name);
-  const el = h10("div", {
+  const el = h11("div", {
     class: "kit-table cb-conds",
     "data-testid": "conditions"
   });
-  const rowsEl = h10("div", { class: "cb-cond-rows" });
-  const general = h10("div", { class: "cb-cond-err", hidden: true });
+  const rowsEl = h11("div", { class: "cb-cond-rows" });
+  const general = h11("div", { class: "cb-cond-err", hidden: true });
   el.append(rowsEl, general);
   const changed = () => onChange(conds.map((c) => ({ ...c })));
   function valueControl(i, f) {
     const c = conds[i];
     if (!editable || !f) {
-      return h10("span", { class: "cb-cond-v" }, c.value);
+      return h11("span", { class: "cb-cond-v" }, c.value);
     }
     if (picks(f, c.op)) {
       return select(
@@ -3057,7 +4174,7 @@ function conditionEditor(ctx, rule, onChange) {
         }
       );
     }
-    const input = h10("input", {
+    const input = h11("input", {
       class: "cb-cond-v",
       type: "text",
       value: c.value,
@@ -3082,8 +4199,8 @@ function conditionEditor(ctx, rule, onChange) {
         render();
       }
       changed();
-    }) : h10("span", { class: "cb-cond-o" }, c.op);
-    const remove = editable ? h10(
+    }) : h11("span", { class: "cb-cond-o" }, c.op);
+    const remove = editable ? h11(
       "button",
       {
         type: "button",
@@ -3097,18 +4214,18 @@ function conditionEditor(ctx, rule, onChange) {
       },
       "×"
     ) : null;
-    return h10(
+    return h11(
       "div",
       { class: "cb-cond", "data-index": i },
-      h10(
+      h11(
         "div",
         { class: "kit-tr cb-cond-row" + (editable ? " cb-cond-edit" : "") },
-        h10("span", { class: "cb-cond-f" }, c.field),
+        h11("span", { class: "cb-cond-f" }, c.field),
         op,
         valueControl(i, f),
         remove
       ),
-      h10("div", { class: "cb-cond-err", hidden: true })
+      h11("div", { class: "cb-cond-err", hidden: true })
     );
   }
   function render() {
@@ -3116,13 +4233,13 @@ function conditionEditor(ctx, rule, onChange) {
     const e = errors.get(el);
     if (e) setConditionError(el, e.index, e.message);
   }
-  const menu = h10("div", {
+  const menu = h11("div", {
     class: "cb-cond-menu",
     role: "menu",
     "aria-label": "add a condition",
     hidden: true
   });
-  const add = h10(
+  const add = h11(
     "button",
     {
       type: "button",
@@ -3167,15 +4284,15 @@ function conditionEditor(ctx, rule, onChange) {
   function fillMenu() {
     menu.replaceChildren(
       ...fields.map(
-        (f) => h10(
+        (f) => h11(
           "div",
           { class: "cb-cond-menu-row", "data-field": f.name },
-          h10("span", { class: "cb-cond-menu-f" }, f.name),
-          h10(
+          h11("span", { class: "cb-cond-menu-f" }, f.name),
+          h11(
             "span",
             { class: "cb-cond-menu-ops" },
             ...(f.ops ?? []).map(
-              (op) => h10(
+              (op) => h11(
                 "button",
                 {
                   type: "button",
@@ -3211,9 +4328,9 @@ function conditionEditor(ctx, rule, onChange) {
   }
   return el;
 }
-function setConditionError(editor, index, message2) {
-  if (message2 === null) errors.delete(editor);
-  else errors.set(editor, { index, message: message2 });
+function setConditionError(editor, index, message3) {
+  if (message3 === null) errors.delete(editor);
+  else errors.set(editor, { index, message: message3 });
   for (const e of editor.querySelectorAll(".cb-cond-err")) {
     e.hidden = true;
     e.textContent = "";
@@ -3221,14 +4338,14 @@ function setConditionError(editor, index, message2) {
   for (const r2 of editor.querySelectorAll(".cb-cond[data-invalid]")) {
     r2.removeAttribute("data-invalid");
   }
-  if (message2 === null) return;
+  if (message3 === null) return;
   const r = editor.querySelector(
     `.cb-cond[data-index="${index}"]`
   );
   const slot = r ? r.querySelector(".cb-cond-err") : editor.querySelector(":scope > .cb-cond-err");
   r?.setAttribute("data-invalid", "");
   if (slot) {
-    slot.textContent = message2;
+    slot.textContent = message3;
     slot.hidden = false;
   }
 }
@@ -3263,8 +4380,8 @@ function matchesHeading(total, by) {
   const why = reasonSummary(by);
   return `matches now · ${total}` + (why ? ` · ${why}` : "");
 }
-function conditionErrorIndex(message2) {
-  const m = /^condition (\d+): /.exec(message2);
+function conditionErrorIndex(message3) {
+  const m = /^condition (\d+): /.exec(message3);
   const n = m ? Number(m[1]) : 0;
   return n >= 1 ? n - 1 : -1;
 }
@@ -3303,13 +4420,13 @@ function refusedDisposition(d, conds, allowed) {
 // rules.ts
 var HINT_SEP = " · ";
 var PREVIEW_DEBOUNCE_MS = 300;
-var PAGE = 200;
-var VIEWS2 = [
+var PAGE2 = 200;
+var VIEWS3 = [
   { id: "all", label: "all" },
   { id: "active", label: "active" },
   { id: "drafts", label: "drafts" }
 ];
-function message(err) {
+function message2(err) {
   return err instanceof Error ? err.message : String(err);
 }
 var isConflict = (err) => err instanceof ApiError && err.status === 409;
@@ -3332,8 +4449,8 @@ function renderRule(ctx, detail, hooks) {
   let seq = 0;
   let timer = null;
   let busy = false;
-  const doc = h11("article", { class: "cb-rule", "data-rule": id });
-  const el = h11("div", { class: "kit-doc" }, doc);
+  const doc = h12("article", { class: "cb-rule", "data-rule": id });
+  const el = h12("div", { class: "kit-doc" }, doc);
   const dirty = () => !sameConditions(work, base.match ?? []) || !sameAction(workPropose, base.propose);
   const isDraft = () => base.status !== "active";
   const editable = () => isDraft() || !!saved.invalid;
@@ -3343,31 +4460,31 @@ function renderRule(ctx, detail, hooks) {
     propose: workPropose,
     exclude
   });
-  let factsEl = h11("div");
-  let editor = h11("div");
-  const titleEl = h11("h1", { class: "kit-h1" });
-  const kickEl = h11("p", { class: "kit-kick" });
-  const proseEl = h11("p");
-  const invalidEl = h11("div", { "data-testid": "rule-invalid" });
-  const conflictEl = h11("div", { "data-testid": "rule-conflict" });
-  const proposeEl = h11("div");
-  const proposeErrEl = h11("p", {
+  let factsEl = h12("div");
+  let editor = h12("div");
+  const titleEl = h12("h1", { class: "kit-h1" });
+  const kickEl = h12("p", { class: "kit-kick" });
+  const proseEl = h12("p");
+  const invalidEl = h12("div", { "data-testid": "rule-invalid" });
+  const conflictEl = h12("div", { "data-testid": "rule-conflict" });
+  const proposeEl = h12("div");
+  const proposeErrEl = h12("p", {
     class: "cb-cond-err cb-propose-err",
     "data-testid": "propose-err",
     hidden: true
   });
-  const heading = h11("h3", { class: "kit-label cb-matches-label" });
-  const groupChips = h11("span", { class: "cb-matches-view" });
-  const matchesEl = h11("div", {
+  const heading = h12("h3", { class: "kit-label cb-matches-label" });
+  const groupChips = h12("span", { class: "cb-matches-view" });
+  const matchesEl = h12("div", {
     class: "kit-table cb-matches",
     "data-testid": "matches"
   });
-  const actionsEl = h11("div", { class: "cb-rule-actions" });
-  const note = h11("p", { class: "cb-rule-note", role: "status" });
+  const actionsEl = h12("div", { class: "cb-rule-actions" });
+  const note = h12("p", { class: "cb-rule-note", role: "status" });
   function drawFacts() {
     const who = authorOf(base.created_by);
-    const byEl = h11("b", who.agent ? { class: "cb-by-agent" } : null, who.name);
-    const next = facts2([
+    const byEl = h12("b", who.agent ? { class: "cb-by-agent" } : null, who.name);
+    const next = facts3([
       ["status", saved.invalid ? `${base.status} · not valid` : base.status],
       ["matches", invalid ? "—" : String(preview.total)],
       ["excluded", String(exclude.length)],
@@ -3385,7 +4502,7 @@ function renderRule(ctx, detail, hooks) {
       );
     } else if (who.agent) {
       proseEl.replaceChildren(
-        h11("span", { class: "cb-by-agent" }, who.name),
+        h12("span", { class: "cb-by-agent" }, who.name),
         " drafted this rule. It proposes nothing until you activate it, and only you can. ",
         lifecycle2
       );
@@ -3403,14 +4520,14 @@ function renderRule(ctx, detail, hooks) {
     }
     const skipped = base.status === "active";
     invalidEl.replaceChildren(
-      card4({
+      card5({
         edge: "signal",
         head: skipped ? "not valid · active, but skipped at every sync" : "not valid",
-        body: h11(
+        body: h12(
           "div",
           null,
-          h11("p", { class: "cb-invalid-msg" }, saved.invalid),
-          h11(
+          h12("p", { class: "cb-invalid-msg" }, saved.invalid),
+          h12(
             "p",
             { class: "cb-invalid-help" },
             skipped ? "casebook proposes nothing from this rule until it is valid. Fix it and save it (it becomes a draft), or deactivate it." : "It can’t be activated or propose anything until it is valid."
@@ -3421,23 +4538,23 @@ function renderRule(ctx, detail, hooks) {
   }
   function drawPropose() {
     const p = workPropose;
-    const tr = (label, value) => h11(
+    const tr = (label, value) => h12(
       "div",
       { class: "kit-tr" },
-      h11("span", { class: "cb-cond-f" }, label),
-      h11("span"),
+      h12("span", { class: "cb-cond-f" }, label),
+      h12("span"),
       value
     );
     if (!editable()) {
       drawChoices = () => {
       };
       proposeEl.replaceChildren(
-        h11(
+        h12(
           "div",
           { class: "kit-table cb-propose", "data-testid": "propose" },
           tr(
             "disposition",
-            h11(
+            h12(
               "span",
               {
                 class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : "")
@@ -3445,13 +4562,13 @@ function renderRule(ctx, detail, hooks) {
               p.disposition
             )
           ),
-          p.until ? tr("until", h11("span", { class: "cb-cond-v" }, p.until)) : null,
-          p.note ? tr("note", h11("span", { class: "cb-cond-v" }, p.note)) : null
+          p.until ? tr("until", h12("span", { class: "cb-cond-v" }, p.until)) : null,
+          p.note ? tr("note", h12("span", { class: "cb-cond-v" }, p.note)) : null
         )
       );
       return;
     }
-    const pick = h11("button", {
+    const pick = h12("button", {
       type: "button",
       class: "cb-cond-v cb-disp",
       "aria-label": "disposition",
@@ -3461,21 +4578,21 @@ function renderRule(ctx, detail, hooks) {
         setMenu(menu.hidden);
       }
     });
-    const menu = h11("div", {
+    const menu = h12("div", {
       class: "cb-disp-menu",
       role: "menu",
       "aria-label": "dispositions",
       hidden: true
     });
-    const menuChips = h11("span", { class: "cb-disp-opts" });
-    const whyEl = h11("span", {
+    const menuChips = h12("span", { class: "cb-disp-opts" });
+    const whyEl = h12("span", {
       class: "cb-disp-why",
       "data-testid": "disp-why"
     });
     menu.append(
-      h11("span"),
-      h11("span"),
-      h11("span", { class: "cb-disp-col" }, menuChips, whyEl)
+      h12("span"),
+      h12("span"),
+      h12("span", { class: "cb-disp-col" }, menuChips, whyEl)
     );
     menuNav(menu, ".cb-disp-opt", pick, () => setMenu(false));
     const onEsc = (e) => {
@@ -3515,7 +4632,7 @@ function renderRule(ctx, detail, hooks) {
       pick.classList.toggle("cb-danger", DANGER_DISPS.has(cur));
       menuChips.replaceChildren(
         ...dispositions.map(
-          (d) => h11(
+          (d) => h12(
             "button",
             {
               type: "button",
@@ -3535,7 +4652,7 @@ function renderRule(ctx, detail, hooks) {
       drawProposeErr();
     };
     const text = (field, placeholder2) => {
-      const input = h11("input", {
+      const input = h12("input", {
         class: "cb-cond-v",
         type: "text",
         value: p[field] ?? "",
@@ -3551,12 +4668,12 @@ function renderRule(ctx, detail, hooks) {
       });
       return input;
     };
-    const hint = (testid) => h11(
+    const hint = (testid) => h12(
       "div",
       { class: "cb-prop-hint", "data-testid": testid },
-      h11("span"),
-      h11("span"),
-      h11("span", { class: "cb-prop-hint-t" })
+      h12("span"),
+      h12("span"),
+      h12("span", { class: "cb-prop-hint-t" })
     );
     const untilIn = text("until", "");
     const untilRow = tr("until", untilIn);
@@ -3568,7 +4685,7 @@ function renderRule(ctx, detail, hooks) {
       const out = [];
       words.forEach((w, i) => {
         if (i) out.push(HINT_SEP);
-        out.push(h11("span", { class: "cb-prop-hint-i" }, w));
+        out.push(h12("span", { class: "cb-prop-hint-i" }, w));
       });
       el2.lastElementChild.replaceChildren(
         ...words.length ? [lead, ...out] : []
@@ -3595,7 +4712,7 @@ function renderRule(ctx, detail, hooks) {
     }).catch(() => {
     });
     proposeEl.replaceChildren(
-      h11(
+      h12(
         "div",
         { class: "kit-table cb-propose", "data-testid": "propose" },
         tr("disposition", pick),
@@ -3624,7 +4741,7 @@ function renderRule(ctx, detail, hooks) {
     proposeErrEl.hidden = !msg;
   }
   function box(on, label, run) {
-    return h11("span", {
+    return h12("span", {
       class: "kit-box",
       role: "checkbox",
       tabindex: 0,
@@ -3644,21 +4761,21 @@ function renderRule(ctx, detail, hooks) {
   }
   function matchRow(m) {
     const why = m.reason === "matched" ? m.title || m.status : m.reason.toLowerCase();
-    return h11(
+    return h12(
       "div",
       { class: "cb-mr on", "data-key": m.key, title: m.title || m.key },
       box(true, `exclude ${m.key}`, () => untick(m.key)),
-      h11("span", { class: "cb-mr-k" }, keyWithoutKind(m.key)),
-      h11("span", { class: "cb-mr-w" }, why)
+      h12("span", { class: "cb-mr-k" }, keyWithoutKind(m.key)),
+      h12("span", { class: "cb-mr-w" }, why)
     );
   }
   function excludedRow(x) {
-    return h11(
+    return h12(
       "div",
       { class: "cb-mr x", "data-key": x.key },
       box(false, `include ${x.key}`, () => void include(x.key)),
-      h11("span", { class: "cb-mr-k" }, keyWithoutKind(x.key)),
-      h11(
+      h12("span", { class: "cb-mr-k" }, keyWithoutKind(x.key)),
+      h12(
         "span",
         { class: "cb-mr-w" },
         x.reason ? `excluded · ${x.reason}` : "excluded"
@@ -3666,12 +4783,12 @@ function renderRule(ctx, detail, hooks) {
     );
   }
   function waitRow(text) {
-    return h11(
+    return h12(
       "div",
       { class: "cb-mr cb-mr-wait" },
-      h11("span"),
-      h11("span", { class: "cb-mr-k" }, text),
-      h11("span")
+      h12("span"),
+      h12("span", { class: "cb-mr-k" }, text),
+      h12("span")
     );
   }
   function drawMatches() {
@@ -3695,11 +4812,11 @@ function renderRule(ctx, detail, hooks) {
         for (const m of mine) rest.splice(rest.indexOf(m), 1);
         const why = reasonSummary(g.reasons);
         out.push(
-          h11(
+          h12(
             "div",
             { class: "cb-mgroup", "data-repo": g.repo },
-            h11("span", { class: "cb-mgroup-repo" }, g.repo),
-            h11(
+            h12("span", { class: "cb-mgroup-repo" }, g.repo),
+            h12(
               "span",
               { class: "cb-mr-w" },
               String(g.count) + (why ? ` · ${why}` : "")
@@ -3716,12 +4833,12 @@ function renderRule(ctx, detail, hooks) {
     const more = preview.total - shown.length;
     if (more > 0) {
       out.push(
-        h11(
+        h12(
           "div",
           { class: "cb-mr cb-mr-more" },
-          h11("span"),
-          h11("span", { class: "cb-mr-k" }, `… ${more} more`),
-          h11(
+          h12("span"),
+          h12("span", { class: "cb-mr-k" }, `… ${more} more`),
+          h12(
             "button",
             {
               type: "button",
@@ -3730,7 +4847,7 @@ function renderRule(ctx, detail, hooks) {
                 void loadMore();
               }
             },
-            `show ${Math.min(PAGE, more)} more`
+            `show ${Math.min(PAGE2, more)} more`
           )
         )
       );
@@ -3739,7 +4856,7 @@ function renderRule(ctx, detail, hooks) {
     matchesEl.replaceChildren(...out);
   }
   function drawGroupChips() {
-    const chip = (label, on) => h11(
+    const chip = (label, on) => h12(
       "button",
       {
         type: "button",
@@ -3774,7 +4891,7 @@ function renderRule(ctx, detail, hooks) {
     drawMatches();
     drawFacts();
   }
-  async function previewNow(depth = PAGE) {
+  async function previewNow(depth = PAGE2) {
     if (timer !== null) {
       clearTimeout(timer);
       timer = null;
@@ -3786,7 +4903,7 @@ function renderRule(ctx, detail, hooks) {
       let rows = p.page ?? [];
       while (rows.length < Math.min(depth, p.total)) {
         const next = await ctx.api.post(
-          `/rules/preview?offset=${rows.length}&limit=${PAGE}`,
+          `/rules/preview?offset=${rows.length}&limit=${PAGE2}`,
           b
         );
         if (mine !== seq || !(next.page ?? []).length) break;
@@ -3797,18 +4914,18 @@ function renderRule(ctx, detail, hooks) {
       if (mine !== seq) return;
       if (err instanceof ApiError && err.status === 400)
         setInvalid(err.message);
-      else note.textContent = `preview failed: ${message(err)}`;
+      else note.textContent = `preview failed: ${message2(err)}`;
     }
   }
   function schedule(keepDepth = false) {
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void previewNow(keepDepth ? Math.max(PAGE, shown.length) : PAGE);
+      void previewNow(keepDepth ? Math.max(PAGE2, shown.length) : PAGE2);
     }, PREVIEW_DEBOUNCE_MS);
   }
   async function loadMore() {
-    const q = `?offset=${shown.length}&limit=${PAGE}`;
+    const q = `?offset=${shown.length}&limit=${PAGE2}`;
     const mine = seq;
     try {
       const p = await ctx.api.post(`/rules/preview${q}`, body());
@@ -3817,14 +4934,14 @@ function renderRule(ctx, detail, hooks) {
       preview = { ...p, page: shown };
       drawMatches();
     } catch (err) {
-      note.textContent = `more matches failed: ${message(err)}`;
+      note.textContent = `more matches failed: ${message2(err)}`;
     }
   }
   function applyExclusions(d) {
     exclude = d.rule.exclude ?? [];
     base = { ...base, exclude };
     if (dirty() || invalid) {
-      void previewNow(Math.max(PAGE, shown.length));
+      void previewNow(Math.max(PAGE2, shown.length));
     } else {
       seq++;
       setPreview(d.matches);
@@ -3832,13 +4949,13 @@ function renderRule(ctx, detail, hooks) {
     drawFacts();
   }
   function untick(key) {
-    const reason = h11("input", {
+    const reason = h12("input", {
       class: "kit-note",
       type: "text",
       placeholder: "reason (optional)",
       "aria-label": "reason"
     });
-    const err = h11("p", { class: "cb-sheet-err", hidden: true });
+    const err = h12("p", { class: "cb-sheet-err", hidden: true });
     let sending = false;
     const go2 = async () => {
       if (sending) return;
@@ -3853,7 +4970,7 @@ function renderRule(ctx, detail, hooks) {
         applyExclusions(d);
         hooks.saved();
       } catch (e) {
-        err.textContent = message(e);
+        err.textContent = message2(e);
         err.hidden = false;
         sending = false;
       }
@@ -3866,18 +4983,18 @@ function renderRule(ctx, detail, hooks) {
     });
     const sh = sheet3({
       title: `exclude ${keyWithoutKind(key)}`,
-      body: h11(
+      body: h12(
         "div",
         { class: "cb-sheet-body" },
-        h11(
+        h12(
           "p",
           { class: "cb-sheet-preview" },
           "This rule skips it from now on. It stays listed here, unticked."
         ),
-        h11(
+        h12(
           "div",
           { class: "cb-sheet-row" },
-          h11("label", { class: "cb-sheet-label" }, "reason"),
+          h12("label", { class: "cb-sheet-label" }, "reason"),
           reason
         ),
         err
@@ -3899,7 +5016,7 @@ function renderRule(ctx, detail, hooks) {
       applyExclusions(d);
       hooks.saved();
     } catch (err) {
-      note.textContent = `not included: ${message(err)}`;
+      note.textContent = `not included: ${message2(err)}`;
     }
   }
   function drawConflict() {
@@ -3910,30 +5027,30 @@ function renderRule(ctx, detail, hooks) {
     const theirs = conflict.detail.rule;
     const who = conflict.by ? authorOf(conflict.by).name : "";
     const p = theirs.propose;
-    const theirsBody = h11(
+    const theirsBody = h12(
       "div",
       null,
-      h11(
+      h12(
         "p",
         { class: "cb-conflict-help" },
         "Your edits are kept below and not saved. Serve’s copy now:"
       ),
-      theirs.name !== base.name ? h11("p", { class: "cb-conflict-name" }, theirs.name) : null,
+      theirs.name !== base.name ? h12("p", { class: "cb-conflict-name" }, theirs.name) : null,
       conditionEditor(
         ctx,
         { match: theirs.match, status: "active", editable: false },
         () => {
         }
       ),
-      h11(
+      h12(
         "div",
         { class: "kit-table cb-propose" },
-        h11(
+        h12(
           "div",
           { class: "kit-tr" },
-          h11("span", { class: "cb-cond-f" }, "disposition"),
-          h11("span"),
-          h11(
+          h12("span", { class: "cb-cond-f" }, "disposition"),
+          h12("span"),
+          h12(
             "span",
             {
               class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : ""),
@@ -3942,25 +5059,25 @@ function renderRule(ctx, detail, hooks) {
             p.disposition
           )
         ),
-        p.until ? h11(
+        p.until ? h12(
           "div",
           { class: "kit-tr" },
-          h11("span", { class: "cb-cond-f" }, "until"),
-          h11("span"),
-          h11("span", { class: "cb-cond-v" }, p.until)
+          h12("span", { class: "cb-cond-f" }, "until"),
+          h12("span"),
+          h12("span", { class: "cb-cond-v" }, p.until)
         ) : null,
-        p.note ? h11(
+        p.note ? h12(
           "div",
           { class: "kit-tr" },
-          h11("span", { class: "cb-cond-f" }, "note"),
-          h11("span"),
-          h11("span", { class: "cb-cond-v" }, p.note)
+          h12("span", { class: "cb-cond-f" }, "note"),
+          h12("span"),
+          h12("span", { class: "cb-cond-v" }, p.note)
         ) : null
       ),
-      h11("p", { class: "cb-conflict-note", role: "status" })
+      h12("p", { class: "cb-conflict-note", role: "status" })
     );
     conflictEl.replaceChildren(
-      card4({
+      card5({
         edge: "signal",
         head: who ? `changed while you were editing · by ${who}` : "changed while you were editing",
         body: theirsBody,
@@ -4009,7 +5126,7 @@ function renderRule(ctx, detail, hooks) {
         note.textContent = `It changed before you ${what} it; nothing was ${what}. Here is serve’s copy.`;
       }
     } catch (err) {
-      note.textContent = message(err);
+      note.textContent = message2(err);
     }
   }
   function saysWhatHeEdited(r) {
@@ -4050,7 +5167,7 @@ function renderRule(ctx, detail, hooks) {
       else if (err instanceof ApiError && err.status === 400) {
         if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
         else note.textContent = err.message;
-      } else note.textContent = `not saved: ${message(err)}`;
+      } else note.textContent = `not saved: ${message2(err)}`;
       return false;
     }
   }
@@ -4079,7 +5196,7 @@ function renderRule(ctx, detail, hooks) {
       hooks.saved();
     } catch (err) {
       if (isConflict(err)) void afterConflict(`${verb}d`);
-      else note.textContent = `not ${verb}d: ${message(err)}`;
+      else note.textContent = `not ${verb}d: ${message2(err)}`;
     } finally {
       busy = false;
     }
@@ -4094,7 +5211,7 @@ function renderRule(ctx, detail, hooks) {
       });
       note.replaceChildren(
         `${pluralize(r.proposed, "match", "matches")} proposed · `,
-        h11(
+        h12(
           "button",
           {
             type: "button",
@@ -4108,7 +5225,7 @@ function renderRule(ctx, detail, hooks) {
       );
       hooks.saved();
     } catch (err) {
-      note.textContent = `not proposed: ${message(err)}`;
+      note.textContent = `not proposed: ${message2(err)}`;
     } finally {
       busy = false;
     }
@@ -4124,7 +5241,7 @@ function renderRule(ctx, detail, hooks) {
     if (isDraft() && !saved.invalid) {
       bs.push({ label: "propose once", run: () => void proposeOnce() });
     }
-    actionsEl.replaceChildren(bs.length ? buttons(bs) : "", note);
+    actionsEl.replaceChildren(bs.length ? buttons2(bs) : "", note);
   }
   function edited() {
     note.textContent = "";
@@ -4163,7 +5280,7 @@ function renderRule(ctx, detail, hooks) {
       { match: work, status: base.status, editable: editable() },
       onEdit
     );
-    factsEl = h11("div");
+    factsEl = h12("div");
     doc.replaceChildren(
       kickEl,
       titleEl,
@@ -4171,11 +5288,11 @@ function renderRule(ctx, detail, hooks) {
       proseEl,
       invalidEl,
       conflictEl,
-      h11("h3", { class: "kit-label" }, "when an undecided item matches all of"),
+      h12("h3", { class: "kit-label" }, "when an undecided item matches all of"),
       editor,
-      h11("h3", { class: "kit-label" }, "propose"),
+      h12("h3", { class: "kit-label" }, "propose"),
       proposeEl,
-      h11("div", { class: "cb-matches-head" }, heading, groupChips),
+      h12("div", { class: "cb-matches-head" }, heading, groupChips),
       matchesEl,
       actionsEl
     );
@@ -4228,7 +5345,7 @@ function renderRule(ctx, detail, hooks) {
   };
 }
 function makeRules(ctx) {
-  const readEl = h11("div", { class: "kit-read cb-rules-read" });
+  const readEl = h12("div", { class: "kit-read cb-rules-read" });
   let rows = [];
   let view = "all";
   let active = false;
@@ -4241,7 +5358,7 @@ function makeRules(ctx) {
   let liveSeq = 0;
   const statusOf = (r) => r.rule.status;
   const inView = (r) => view === "all" || (view === "active" ? statusOf(r) === "active" : statusOf(r) !== "active");
-  const askEl = h11(
+  const askEl = h12(
     "button",
     {
       type: "button",
@@ -4259,10 +5376,10 @@ function makeRules(ctx) {
   };
   nameAgent();
   ctx.onAgentName(nameAgent);
-  const foot = h11(
+  const foot = h12(
     "div",
     { class: "cb-rules-foot" },
-    h11(
+    h12(
       "button",
       {
         type: "button",
@@ -4277,13 +5394,13 @@ function makeRules(ctx) {
     askEl
   );
   function newRule() {
-    const name = h11("input", {
+    const name = h12("input", {
       class: "kit-note",
       type: "text",
       placeholder: "e.g. Landed branches → delete",
       "aria-label": "name"
     });
-    const idIn = h11("input", {
+    const idIn = h12("input", {
       class: "kit-note",
       type: "text",
       placeholder: "e.g. landed-branches",
@@ -4297,7 +5414,7 @@ function makeRules(ctx) {
     idIn.addEventListener("input", () => {
       idTyped = true;
     });
-    const err = h11("p", { class: "cb-sheet-err", hidden: true });
+    const err = h12("p", { class: "cb-sheet-err", hidden: true });
     let sending = false;
     const create = async () => {
       if (sending) return;
@@ -4321,7 +5438,7 @@ function makeRules(ctx) {
         await loadList();
         ctx.route.go("rules", id);
       } catch (e) {
-        err.textContent = message(e);
+        err.textContent = message2(e);
         err.hidden = false;
         sending = false;
       }
@@ -4336,22 +5453,22 @@ function makeRules(ctx) {
     }
     const sh = sheet3({
       title: "new rule",
-      body: h11(
+      body: h12(
         "div",
         { class: "cb-sheet-body" },
-        h11(
+        h12(
           "div",
           { class: "cb-sheet-row" },
-          h11("label", { class: "cb-sheet-label" }, "name"),
+          h12("label", { class: "cb-sheet-label" }, "name"),
           name
         ),
-        h11(
+        h12(
           "div",
           { class: "cb-sheet-row" },
-          h11("label", { class: "cb-sheet-label" }, "id"),
+          h12("label", { class: "cb-sheet-label" }, "id"),
           idIn
         ),
-        h11(
+        h12(
           "p",
           { class: "cb-sheet-preview" },
           "A draft: it proposes nothing until you activate it."
@@ -4366,9 +5483,9 @@ function makeRules(ctx) {
     sh.el.dataset.testid = "new-rule-sheet";
     name.focus();
   }
-  const handle = list2({
+  const handle = list3({
     label: "rules",
-    views: VIEWS2.map((v) => ({ ...v, on: v.id === view })),
+    views: VIEWS3.map((v) => ({ ...v, on: v.id === view })),
     openOnMove: false,
     row(r) {
       const who = authorOf(r.rule.created_by);
@@ -4398,7 +5515,7 @@ function makeRules(ctx) {
     const shown = rows.filter(inView);
     handle.setChips(
       "view",
-      VIEWS2.map((v) => ({ ...v, on: v.id === view, count: c[v.id] }))
+      VIEWS3.map((v) => ({ ...v, on: v.id === view, count: c[v.id] }))
     );
     handle.setItems(shown);
     const els = handle.el.querySelectorAll(".kit-row");
@@ -4437,16 +5554,16 @@ function makeRules(ctx) {
   }
   function drawEmpty() {
     readEl.replaceChildren(
-      h11(
+      h12(
         "div",
         { class: "cb-read-empty" },
-        h11("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-        h11(
+        h12("p", { class: "cb-read-empty-section kit-label" }, "rules"),
+        h12(
           "p",
           { class: "cb-read-empty-count" },
           pluralize(rows.length, "rule")
         ),
-        h11(
+        h12(
           "p",
           { class: "cb-read-empty-prompt" },
           "Select a rule to see it here."
@@ -4483,11 +5600,11 @@ function makeRules(ctx) {
       if (mine !== opening) return;
       doc = null;
       readEl.replaceChildren(
-        h11(
+        h12(
           "div",
           { class: "cb-read-empty" },
-          h11("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-          h11("p", { class: "cb-read-empty-prompt" }, message(err))
+          h12("p", { class: "cb-read-empty-section kit-label" }, "rules"),
+          h12("p", { class: "cb-read-empty-prompt" }, message2(err))
         )
       );
       feed();
@@ -4564,5 +5681,6 @@ function makeRules(ctx) {
 // entry.ts
 registerSection(makeAttention);
 registerSection(makeRules);
+registerSection(makeApply);
 registerDock(makeDock);
 boot();

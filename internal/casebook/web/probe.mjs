@@ -18,6 +18,7 @@
 import pkg from 'playwright-core';
 import { startServe } from './serve.mjs';
 import { createAgent } from './agent.mjs';
+import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
 
 const { chromium } = pkg;
 
@@ -76,6 +77,7 @@ function cleanup() {
     _invalidServe.stop();
     _invalidServe = null;
   }
+  stopApplyServes();
 }
 
 process.on('SIGTERM', () => {
@@ -2363,8 +2365,8 @@ async function rulesScenariosOn(context, serveHandle) {
           Math.abs(geo.doc.x - (geo.read.x + (geo.read.w - 640) / 2)) <= 1,
       );
       check(
-        `Attention's list is not displayed (${geo.others.join(',')})`,
-        geo.others.length === 1 && geo.others[0] === 'none',
+        `Attention's and To apply's lists are not displayed (${geo.others.join(',')})`,
+        geo.others.length === 2 && geo.others.every((d) => d === 'none'),
       );
       const wait = await cssColor(pg, 'var(--kit-wait)');
       const signal = await cssColor(pg, 'var(--kit-signal)');
@@ -4376,12 +4378,15 @@ async function invalidRulesScenariosOn(context, serveHandle) {
   }
 }
 
+// The helpers the To apply scenarios (probe-apply.mjs) check with.
+const applyHelpers = { check, checkList, until, eventually };
+
 // ---- the scenario list ------------------------------------------------------
 //
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 423;
+const MIN_CHECKS = 497;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -4393,7 +4398,7 @@ const only = process.env.PROBE_ONLY ?? '';
 const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
-const PROBE_GROUPS = ['composer', 'keys', 'rules'];
+const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply'];
 
 async function run() {
   if (only && !PROBE_GROUPS.includes(only)) {
@@ -4477,6 +4482,11 @@ async function run() {
     if (process.env.PROBE_ONLY === 'rules') {
       await rulesScenarios(context);
       await invalidRulesScenarios(context);
+      return;
+    }
+    // PROBE_ONLY=apply runs only the To apply scenarios (their own serves).
+    if (process.env.PROBE_ONLY === 'apply') {
+      await applyScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -8720,6 +8730,9 @@ async function run() {
     // ---- Task 8: Rules (its own seeded serve) -------------------------------
     await rulesScenarios(context);
     await invalidRulesScenarios(context);
+
+    // ---- Task 9: To apply (its own seeded serves) ---------------------------
+    await applyScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

@@ -15,6 +15,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -71,18 +72,40 @@ let homes = 0;
 //
 // seedFiles adds any other files to the casebook-data repo, committed with
 // the machines ({'rules/x.toml': '…'}), e.g. a rule file as a person wrote it.
-function setupHome(seedRepos = [], seedMachines = [], seedFiles = {}) {
+function setupHome(
+  seedRepos = [],
+  seedMachines = [],
+  seedFiles = {},
+  seedClones = [],
+  syncInterval = '30m',
+) {
   const fixture = join(here, 'testdata', 'home');
-  const home = join(tmpdir(), `casebook-probe-${process.pid}-${homes++}`);
+  const home =
+    realpathSync(tmpdir()) + `/casebook-probe-${process.pid}-${homes++}`;
 
   mkdirSync(join(home, 'config'), { recursive: true });
   mkdirSync(join(home, 'data'), { recursive: true });
   mkdirSync(join(home, 'state', 'live'), { recursive: true });
+  writeFakeGh(home);
 
   // Clone the bundle to data/repo.
   const bundlePath = join(fixture, 'data', 'repo.bundle');
   const repoPath = join(home, 'data', 'repo');
   execSync(`git clone -q "${bundlePath}" "${repoPath}"`, { stdio: 'pipe' });
+  // Real clones on this machine ("probe"), with landed branches, under the
+  // home: the casebook lane's git runs in them and nowhere else.
+  if (seedClones.length) {
+    const snap = join(repoPath, 'machines', 'probe.json');
+    const probe = existsSync(snap)
+      ? JSON.parse(readFileSync(snap, 'utf8'))
+      : { version: 1, machine: 'probe', roots: [], clones: [] };
+    probe.roots = [...(probe.roots ?? []), join(home, 'clones')];
+    probe.clones = [
+      ...(probe.clones ?? []),
+      ...seedClones.map((c) => makeClone(home, c)),
+    ];
+    seedMachines = [...seedMachines, probe];
+  }
   const files = Object.entries(seedFiles);
   if (seedMachines.length || files.length) {
     for (const snap of seedMachines) {
@@ -139,12 +162,108 @@ function setupHome(seedRepos = [], seedMachines = [], seedFiles = {}) {
       'user = "schuettc"',
       'casebook_remote = ""',
       'roots = []',
-      'sync_interval = "30m"',
+      `sync_interval = "${syncInterval}"`,
     ].join('\n') + '\n',
     { mode: 0o600 },
   );
 
   return home;
+}
+
+// ---- hermetic executors ------------------------------------------------------
+//
+// serve runs gh for one thing in these probes: verifying an agent-lane step
+// the agent reported (a fresh `gh pr view`, `gh repo view`). The Go tests
+// give serve apptest.FakeGh for it; the binary has no such seam, so every
+// serve the probe starts finds a fake gh first on its PATH, answering the
+// verification reads the way apptest.FakeGh does and refusing anything else.
+// Every call is logged (ghCalls()), so a probe can say none went elsewhere.
+// Nothing the probe starts can reach GitHub.
+//
+// git is real, and hermetic: no global or system config (so no hooks of
+// Court's), and every repository it touches is under the probe's temp home.
+const FAKE_GH = `#!/bin/sh
+printf '%s\\n' "$*" >> "$CASEBOOK_HOME/gh-calls.log"
+case "$*" in
+  "pr view "*"--json state"*) echo '{"state":"CLOSED"}' ;;
+  "issue view "*"--json state"*) echo '{"state":"CLOSED"}' ;;
+  "repo view "*"--json isArchived"*) echo '{"isArchived":true}' ;;
+  "repo view "*) echo '{}' ;;
+  *) echo "probe fake gh: unexpected: $*" >&2; exit 1 ;;
+esac
+`;
+
+function writeFakeGh(home) {
+  mkdirSync(join(home, 'bin'), { recursive: true });
+  writeFileSync(join(home, 'bin', 'gh'), FAKE_GH, { mode: 0o755 });
+}
+
+const HERMETIC_GIT = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_AUTHOR_NAME: 'probe',
+  GIT_AUTHOR_EMAIL: 'probe@example.com',
+  GIT_COMMITTER_NAME: 'probe',
+  GIT_COMMITTER_EMAIL: 'probe@example.com',
+};
+
+// makeClone creates a real clone under <home>/clones/<name>, with a bare
+// "origin" under <home>/remotes (so a remote delete pushes there), and
+// returns its snapshot record (the machines/<m>.json clone shape) with the
+// landed verdicts a sync would have written: each branch in c.branches is
+// merged into main, pushed, and landed in main.
+function makeClone(home, c) {
+  const path = join(home, 'clones', c.name);
+  const remote = join(home, 'remotes', `${c.name}.git`);
+  mkdirSync(path, { recursive: true });
+  mkdirSync(dirname(remote), { recursive: true });
+  const git = (dir, args) =>
+    execSync(`git ${args}`, {
+      cwd: dir,
+      stdio: 'pipe',
+      env: { ...process.env, ...HERMETIC_GIT, HOME: home },
+    })
+      .toString()
+      .trim();
+  git(home, `init -q --bare "${remote}"`);
+  git(path, 'init -q -b main');
+  git(path, `remote add origin "${remote}"`);
+  writeFileSync(join(path, 'README'), `${c.name}\n`);
+  git(path, 'add README');
+  git(path, 'commit -q -m init');
+  const branches = [];
+  for (const b of c.branches) {
+    git(path, `switch -q -c "${b}" main`);
+    writeFileSync(join(path, `${b.replace(/\W/g, '_')}.txt`), `${b}\n`);
+    git(path, 'add -A');
+    git(path, `commit -q -m "${b}"`);
+    const tip = git(path, 'rev-parse HEAD');
+    git(path, 'switch -q main');
+    git(path, `merge -q --ff-only "${b}"`);
+    git(path, `push -q origin "${b}"`);
+    git(path, `branch -q --set-upstream-to="origin/${b}" "${b}"`);
+    branches.push({
+      name: b,
+      tip,
+      tip_at: '2026-09-20T00:00:00Z',
+      upstream: `origin/${b}`,
+      remote_tip: tip,
+      landed_state: 'yes',
+      landed: 'in main',
+      landed_tip: tip,
+      landed_how: 'default-branch',
+    });
+  }
+  git(path, 'push -q origin main');
+  return {
+    path,
+    repo: `schuettc/${c.name}`,
+    remotes: { origin: `schuettc/${c.name}` },
+    branches: [
+      { name: 'main', tip: git(path, 'rev-parse main'), landed_state: 'no' },
+      ...branches,
+    ],
+  };
 }
 
 // Wait up to timeoutMs for the advert file to appear and return its contents.
@@ -177,7 +296,13 @@ function waitForAdvert(advertPath, timeoutMs = 10000) {
  */
 export async function startServe(opts = {}) {
   const bin = findBinary();
-  const home = setupHome(opts.seedRepos, opts.seedMachines, opts.seedFiles);
+  const home = setupHome(
+    opts.seedRepos,
+    opts.seedMachines,
+    opts.seedFiles,
+    opts.seedClones,
+    opts.syncInterval,
+  );
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
   const proc = spawn(bin, SERVE_ARGS, {
@@ -185,6 +310,9 @@ export async function startServe(opts = {}) {
       ...process.env,
       CASEBOOK_HOME: home,
       HOME: home,
+      // The fake gh first on PATH; git without Court's config.
+      PATH: `${join(home, 'bin')}:${process.env.PATH}`,
+      ...HERMETIC_GIT,
       // Disables browser opening via the test seam in cli/workbench.go.
       CASEBOOK_NO_BROWSER: '1',
       // Short stuck threshold so probes can test stuck delivery UI without
@@ -222,6 +350,14 @@ export async function startServe(opts = {}) {
     url: adv.url,
     base: adv.base,
     token: adv.token,
+    home,
+    /** Every gh call serve made (to the fake), one line each. */
+    ghCalls() {
+      const log = join(home, 'gh-calls.log');
+      return existsSync(log)
+        ? readFileSync(log, 'utf8').split('\n').filter(Boolean)
+        : [];
+    },
     stop() {
       if (!exited) proc.kill();
       rmSync(home, { recursive: true, force: true });
