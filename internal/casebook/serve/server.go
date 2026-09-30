@@ -69,7 +69,10 @@ type Server struct {
 	streams          atomic.Int32      // open page event streams (connected tabs)
 	streamWG         sync.WaitGroup    // Run waits for streams to end before closing the database
 	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
-	life             context.Context   // Run's context; done while shutting down
+	ruleCountRuns    atomic.Int32      // rules counted (MatchAll runs) for the rules list; for tests
+	ruleCountMu      sync.Mutex
+	ruleCounts       map[string]ruleCount // rule id → its match count for one content + index
+	life             context.Context      // Run's context; done while shutting down
 	stop             context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil

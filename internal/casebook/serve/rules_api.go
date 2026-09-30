@@ -22,7 +22,10 @@ func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	rows := make([]RuleRow, 0, len(all))
 	for _, ru := range all {
 		rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-		rows = append(rows, RuleRow{Rule: ru, Record: rec, Invalid: invalidReason(ru)})
+		rows = append(rows, RuleRow{
+			Rule: ru, Record: rec, Invalid: invalidReason(ru),
+			Matches: s.ruleMatches(ru), Excluded: len(ru.Exclude),
+		})
 	}
 	// A file that can't be read as a rule is listed too, as invalid: Court
 	// sees it and can replace it from the page.
@@ -58,6 +61,46 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, s.ruleDetail(ctx, *ru), nil)
+}
+
+// ruleCount is one rule's match count, for one content of the rule
+// (its version and exclusions) against one build of the index.
+type ruleCount struct {
+	sig string
+	gen uint64
+	n   int
+}
+
+// ruleMatches counts ru's matches now. The count is kept until the rule or
+// the index changes, so listing the rules doesn't re-run every rule.
+func (s *Server) ruleMatches(ru rules.Rule) int {
+	if rules.ValidateConditions(ru.Match) != nil {
+		return 0
+	}
+	sig := rules.Version(ru)
+	for _, x := range ru.Exclude {
+		sig += "\x00" + x.Key
+	}
+	gen := s.Index.Gen()
+	s.ruleCountMu.Lock()
+	c, ok := s.ruleCounts[ru.ID]
+	s.ruleCountMu.Unlock()
+	if ok && c.sig == sig && c.gen == gen {
+		return c.n
+	}
+	s.ruleCountRuns.Add(1)
+	ms, err := ru.MatchAll(s.Index.Result(), s.Now())
+	n := len(ms)
+	if err != nil {
+		n = 0
+	}
+	s.ruleCountMu.Lock()
+	if s.ruleCounts == nil {
+		s.ruleCounts = map[string]ruleCount{}
+	}
+	s.ruleCounts[ru.ID] = ruleCount{sig: sig, gen: gen, n: n}
+	s.ruleCountMu.Unlock()
+	return n
 }
 
 // unreadableRule stands in for a rules/<id>.toml that can't be read: a draft

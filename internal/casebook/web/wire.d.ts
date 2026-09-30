@@ -124,6 +124,8 @@ export interface RuleRow {
   rule: Rule;
   record: TrackRecord;
   invalid?: string;
+  matches: number;
+  excluded: number;
 }
 
 export interface RuleDetailView {

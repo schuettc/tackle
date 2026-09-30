@@ -20,6 +20,7 @@ type Index struct {
 	byKey   map[string]engine.Item
 	builtAt time.Time
 	head    string
+	gen     uint64 // bumped on every set: which build a cached count belongs to
 }
 
 func (x *Index) set(r engine.Result, head string, at time.Time) {
@@ -29,6 +30,7 @@ func (x *Index) set(r engine.Result, head string, at time.Time) {
 	}
 	x.mu.Lock()
 	x.res, x.byKey, x.head, x.builtAt = r, m, head, at
+	x.gen++
 	x.mu.Unlock()
 }
 
@@ -233,6 +235,13 @@ func (x *Index) Result() engine.Result {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.res
+}
+
+// Gen is the index's build number: it changes whenever the index does.
+func (x *Index) Gen() uint64 {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.gen
 }
 
 // BuiltAt is when the index was last built.

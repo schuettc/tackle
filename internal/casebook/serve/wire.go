@@ -171,6 +171,11 @@ type RuleRow struct {
 	// Invalid is why the rule is not valid (serve's validation message,
 	// naming the condition), or why its file can't be read; "" when valid.
 	Invalid string `json:"invalid,omitempty"`
+	// Matches is how many items the rule matches now (its exclusions left
+	// out); Excluded is how many it excludes. Matches is 0 while its
+	// conditions are invalid.
+	Matches  int `json:"matches"`
+	Excluded int `json:"excluded"`
 }
 
 // RuleDetailView is the response body of GET /api/rule, POST /api/rules/draft,
