@@ -17,6 +17,7 @@
 import { h } from '/_kit/kit.js';
 import type { Condition, Field, NoteToken, VocabularyView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
+import { menuNav } from './menu-nav.ts';
 
 // Field types, as serve's rules.FieldType numbers them.
 const ENUM = 0;
@@ -249,6 +250,8 @@ export function conditionEditor(
       document.removeEventListener('keydown', onEsc, true);
     }
   }
+
+  menuNav(menu, '.cb-cond-menu-op', add, () => setMenu(false));
 
   function addCondition(f: Field, op: string): void {
     conds.push({ field: f.name, op, value: firstValue(f, op) });

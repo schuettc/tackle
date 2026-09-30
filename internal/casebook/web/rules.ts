@@ -67,10 +67,13 @@ import {
 } from './conditions.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { DANGER_DISPS, getVocab } from './decide.ts';
+import { menuNav } from './menu-nav.ts';
 import {
   authorOf,
   conditionErrorIndex,
+  kindHint,
   matchesHeading,
+  refusedDisposition,
   reasonSummary,
   rowKicker,
   sameAction,
@@ -323,7 +326,18 @@ export function renderRule(
       hidden: true,
     });
     const menuChips = h('span', { class: 'cb-disp-opts' });
-    menu.append(h('span'), h('span'), menuChips);
+    // Why only some are offered: a rule with no kind condition may propose
+    // only what every kind of item allows (serve's rule).
+    const whyEl = h('span', {
+      class: 'cb-disp-why',
+      'data-testid': 'disp-why',
+    });
+    menu.append(
+      h('span'),
+      h('span'),
+      h('span', { class: 'cb-disp-col' }, menuChips, whyEl),
+    );
+    menuNav(menu, '.cb-disp-opt', pick, () => setMenu(false));
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return;
       if (!menu.isConnected) {
@@ -386,6 +400,7 @@ export function renderRule(
           ),
         ),
       );
+      whyEl.textContent = kindHint(work, dispositions, allDispositions);
       drawProposeErr();
     };
     const text = (field: 'until' | 'note', placeholder: string) => {
@@ -434,6 +449,8 @@ export function renderRule(
     };
     void getVocab(ctx)
       .then((v) => {
+        allDispositions = (v.kinds ?? []).flatMap((k) => k.allowed ?? []);
+        drawChoices();
         const forms = v.until_forms ?? [];
         if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
         items(
@@ -470,6 +487,8 @@ export function renderRule(
 
   // drawChoices redraws the disposition picker (a new list from serve).
   let drawChoices: () => void = () => {};
+  // Every disposition some kind of item allows (the decision vocabulary).
+  let allDispositions: string[] = [];
 
   // drawProposeErr says why the proposal isn't valid: serve's message for
   // the copy it holds, or, once Court changes the disposition, whether
@@ -484,7 +503,7 @@ export function renderRule(
     ) {
       msg = saved.invalid;
     } else if (d && dispositions.length && !dispositions.includes(d)) {
-      msg = `${d} can\u2019t be proposed for what this rule matches (allowed: ${dispositions.join(', ')})`;
+      msg = refusedDisposition(d, work, dispositions);
     }
     proposeErrEl.textContent = msg;
     proposeErrEl.hidden = !msg;
@@ -906,6 +925,14 @@ export function renderRule(
     conflictEl.scrollIntoView?.({ block: 'nearest' });
   }
 
+  // refuseInvalid: Activate waits for a valid rule. The card above says
+  // why (serve's message is shown there, and at the field), so the note
+  // only points to it.
+  function refuseInvalid(): void {
+    note.textContent = 'not activated: fix what\u2019s marked above';
+    invalidEl.scrollIntoView?.({ block: 'nearest' });
+  }
+
   // enterConflict fetches serve's copy after a 409 (a change the page hadn't
   // heard of yet) and shows it: as a conflict when Court has edits, else by
   // drawing it with a note that nothing was done.
@@ -989,9 +1016,19 @@ export function renderRule(
       refuseActivate();
       return;
     }
+    if (verb === 'activate' && saved.invalid && !dirty()) {
+      refuseInvalid();
+      return;
+    }
     busy = true;
     try {
       if (verb === 'activate' && dirty() && !(await save())) return;
+      // A saved copy serve holds as invalid can't be activated: the card
+      // says why, once; nothing is posted that is sure to be refused.
+      if (verb === 'activate' && saved.invalid) {
+        refuseInvalid();
+        return;
+      }
       // Activate names the copy shown; serve refuses (409) one that changed.
       const d = await ctx.api.post<RuleDetailView>(
         `/rules/${verb}`,

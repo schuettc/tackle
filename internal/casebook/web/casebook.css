@@ -1358,6 +1358,16 @@ button.cb-cond-v.cb-disp:focus-visible {
   flex-wrap: wrap;
   gap: 4px 6px;
 }
+/* Why a rule with no kind condition offers only some dispositions. */
+.cb-disp-why {
+  display: block;
+  margin-top: 6px;
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+}
+.cb-disp-why:empty {
+  display: none;
+}
 .cb-disp-opt.kit-chip.cb-danger {
   color: var(--kit-danger);
 }

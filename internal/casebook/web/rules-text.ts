@@ -124,3 +124,47 @@ export function sameRule(a: Rule, b: Rule): boolean {
     ex(a) === ex(b)
   );
 }
+
+/** hasKindCondition: the rule says which kinds of item it matches. */
+export function hasKindCondition(conds: Condition[]): boolean {
+  return conds.some((c) => c.field === 'kind');
+}
+
+// "a, b or c"
+function orList(words: string[]): string {
+  if (words.length <= 1) return words.join('');
+  return `${words.slice(0, -1).join(', ')} or ${words[words.length - 1]}`;
+}
+
+/**
+ * kindHint is the disposition picker's line when the rule has no kind
+ * condition: it may propose only what every kind of item allows, and a kind
+ * condition would let it propose the rest ('' when nothing is missing).
+ */
+export function kindHint(
+  conds: Condition[],
+  allowed: string[],
+  all: string[],
+): string {
+  if (hasKindCondition(conds) || !allowed.length) return '';
+  const missing = [...new Set(all)].filter((d) => !allowed.includes(d)).sort();
+  return missing.length
+    ? `add a kind condition to propose ${orList(missing)}`
+    : '';
+}
+
+/**
+ * refusedDisposition says why this rule may not propose d, in serve's words
+ * for a rule with no kind condition ("every kind of item (the rule has no
+ * kind condition)").
+ */
+export function refusedDisposition(
+  d: string,
+  conds: Condition[],
+  allowed: string[],
+): string {
+  const what = hasKindCondition(conds)
+    ? 'what this rule matches'
+    : 'every kind of item (the rule has no kind condition)';
+  return `${d} can\u2019t be proposed for ${what} (allowed: ${allowed.join(', ')})`;
+}

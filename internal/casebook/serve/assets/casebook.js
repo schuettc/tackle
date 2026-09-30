@@ -2927,6 +2927,55 @@ import {
 
 // conditions.ts
 import { h as h10 } from "/_kit/kit.js";
+
+// menu-nav.ts
+function menuNav(menu, selector, opener, close) {
+  const items = () => [...menu.querySelectorAll(selector)];
+  const rove = (to) => {
+    for (const it of items()) it.tabIndex = it === to ? 0 : -1;
+  };
+  menu.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if (t.matches(selector)) rove(t);
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    const list3 = items();
+    if (!list3.length) return;
+    const at2 = list3.indexOf(document.activeElement);
+    let next = -1;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        next = at2 < 0 ? 0 : (at2 + 1) % list3.length;
+        break;
+      case "ArrowUp":
+      case "ArrowLeft":
+        next = at2 < 0 ? list3.length - 1 : (at2 - 1 + list3.length) % list3.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = list3.length - 1;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    rove(list3[next]);
+    list3[next].focus();
+  });
+  menu.addEventListener("focusout", (e) => {
+    if (menu.hidden) return;
+    const to = e.relatedTarget;
+    if (to && (menu.contains(to) || to === opener)) return;
+    close();
+  });
+}
+
+// conditions.ts
 var ENUM = 0;
 var DURATION = 2;
 var BOOL = 3;
@@ -3106,6 +3155,7 @@ function conditionEditor(ctx, rule, onChange) {
       document.removeEventListener("keydown", onEsc, true);
     }
   }
+  menuNav(menu, ".cb-cond-menu-op", add, () => setMenu(false));
   function addCondition(f, op) {
     conds.push({ field: f.name, op, value: firstValue(f, op) });
     setMenu(false);
@@ -3232,6 +3282,22 @@ function sameConditions(a, b) {
 function sameRule(a, b) {
   const ex = (r) => (r.exclude ?? []).map((x) => `${x.key}\0${x.reason ?? ""}`).join("\n");
   return a.id === b.id && a.name === b.name && a.status === b.status && a.created_by === b.created_by && a.edited_at === b.edited_at && sameConditions(a.match ?? [], b.match ?? []) && sameAction(a.propose, b.propose) && ex(a) === ex(b);
+}
+function hasKindCondition(conds) {
+  return conds.some((c) => c.field === "kind");
+}
+function orList(words) {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+}
+function kindHint(conds, allowed, all) {
+  if (hasKindCondition(conds) || !allowed.length) return "";
+  const missing = [...new Set(all)].filter((d) => !allowed.includes(d)).sort();
+  return missing.length ? `add a kind condition to propose ${orList(missing)}` : "";
+}
+function refusedDisposition(d, conds, allowed) {
+  const what = hasKindCondition(conds) ? "what this rule matches" : "every kind of item (the rule has no kind condition)";
+  return `${d} can’t be proposed for ${what} (allowed: ${allowed.join(", ")})`;
 }
 
 // rules.ts
@@ -3402,7 +3468,16 @@ function renderRule(ctx, detail, hooks) {
       hidden: true
     });
     const menuChips = h11("span", { class: "cb-disp-opts" });
-    menu.append(h11("span"), h11("span"), menuChips);
+    const whyEl = h11("span", {
+      class: "cb-disp-why",
+      "data-testid": "disp-why"
+    });
+    menu.append(
+      h11("span"),
+      h11("span"),
+      h11("span", { class: "cb-disp-col" }, menuChips, whyEl)
+    );
+    menuNav(menu, ".cb-disp-opt", pick, () => setMenu(false));
     const onEsc = (e) => {
       if (e.key !== "Escape" || e.isComposing) return;
       if (!menu.isConnected) {
@@ -3456,6 +3531,7 @@ function renderRule(ctx, detail, hooks) {
           )
         )
       );
+      whyEl.textContent = kindHint(work, dispositions, allDispositions);
       drawProposeErr();
     };
     const text = (field, placeholder2) => {
@@ -3499,6 +3575,8 @@ function renderRule(ctx, detail, hooks) {
       );
     };
     void getVocab(ctx).then((v) => {
+      allDispositions = (v.kinds ?? []).flatMap((k) => k.allowed ?? []);
+      drawChoices();
       const forms = v.until_forms ?? [];
       if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
       items(
@@ -3533,13 +3611,14 @@ function renderRule(ctx, detail, hooks) {
   }
   let drawChoices = () => {
   };
+  let allDispositions = [];
   function drawProposeErr() {
     let msg = "";
     const d = workPropose.disposition;
     if (saved.invalid?.startsWith("propose:") && sameAction(workPropose, base.propose) && sameConditions(work, base.match ?? [])) {
       msg = saved.invalid;
     } else if (d && dispositions.length && !dispositions.includes(d)) {
-      msg = `${d} can’t be proposed for what this rule matches (allowed: ${dispositions.join(", ")})`;
+      msg = refusedDisposition(d, work, dispositions);
     }
     proposeErrEl.textContent = msg;
     proposeErrEl.hidden = !msg;
@@ -3913,6 +3992,10 @@ function renderRule(ctx, detail, hooks) {
     }
     conflictEl.scrollIntoView?.({ block: "nearest" });
   }
+  function refuseInvalid() {
+    note.textContent = "not activated: fix what’s marked above";
+    invalidEl.scrollIntoView?.({ block: "nearest" });
+  }
   async function afterConflict(what) {
     try {
       const d = await ctx.api.get("/rule", { id });
@@ -3977,9 +4060,17 @@ function renderRule(ctx, detail, hooks) {
       refuseActivate();
       return;
     }
+    if (verb === "activate" && saved.invalid && !dirty()) {
+      refuseInvalid();
+      return;
+    }
     busy = true;
     try {
       if (verb === "activate" && dirty() && !await save()) return;
+      if (verb === "activate" && saved.invalid) {
+        refuseInvalid();
+        return;
+      }
       const d = await ctx.api.post(
         `/rules/${verb}`,
         verb === "activate" ? { id, version: saved.version } : { id }

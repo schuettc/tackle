@@ -14,6 +14,9 @@ import {
   sameConditions,
   sameRule,
   rowKicker,
+  hasKindCondition,
+  kindHint,
+  refusedDisposition,
 } from './rules-text.ts';
 
 describe('trackRecord', () => {
@@ -182,6 +185,69 @@ describe('sameRule', () => {
     assert.equal(
       sameRule(rule, { ...rule, propose: { disposition: 'keep' } }),
       false,
+    );
+  });
+});
+
+describe('the proposal without a kind condition (P1)', () => {
+  const all = [
+    'keep',
+    'archive',
+    'delete',
+    'wait',
+    'watch',
+    'ignore',
+    'close',
+    'merge',
+  ];
+  const noKind = ['keep', 'wait', 'ignore'];
+  test('hasKindCondition reads only kind conditions', () => {
+    assert.equal(hasKindCondition([]), false);
+    assert.equal(
+      hasKindCondition([{ field: 'landed', op: 'is', value: 'all-machines' }]),
+      false,
+    );
+    assert.equal(
+      hasKindCondition([{ field: 'kind', op: 'is-not', value: 'repo' }]),
+      true,
+    );
+  });
+  test('the picker says what a kind condition would add', () => {
+    assert.equal(
+      kindHint([], noKind, all),
+      'add a kind condition to propose archive, close, delete, merge or watch',
+    );
+  });
+  test('no hint once the rule has a kind condition, or nothing is missing', () => {
+    assert.equal(
+      kindHint([{ field: 'kind', op: 'is', value: 'branch' }], noKind, all),
+      '',
+    );
+    assert.equal(kindHint([], all, all), '');
+    assert.equal(kindHint([], [], all), '');
+  });
+  test('a lone missing disposition reads without a list', () => {
+    assert.equal(
+      kindHint(
+        [],
+        ['keep', 'wait', 'ignore', 'merge'],
+        ['keep', 'wait', 'ignore', 'merge', 'close'],
+      ),
+      'add a kind condition to propose close',
+    );
+  });
+  test("a refused disposition names the cause in serve's words", () => {
+    assert.equal(
+      refusedDisposition('archive', [], noKind),
+      'archive can\u2019t be proposed for every kind of item (the rule has no kind condition) (allowed: keep, wait, ignore)',
+    );
+    assert.equal(
+      refusedDisposition(
+        'archive',
+        [{ field: 'kind', op: 'is', value: 'branch' }],
+        ['keep', 'delete'],
+      ),
+      'archive can\u2019t be proposed for what this rule matches (allowed: keep, delete)',
     );
   });
 });

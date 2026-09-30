@@ -3273,7 +3273,122 @@ async function rulesScenariosOn(context, serveHandle) {
         'wait',
         'ignore',
       ]);
-      await closeMenu();
+      // P1: the picker says why, in the menu, while it is open.
+      const why = await pg
+        .$eval('[data-testid="disp-why"]', (e) => ({
+          text: e.textContent,
+          shown:
+            getComputedStyle(e).display !== 'none' &&
+            e.getBoundingClientRect().height > 0,
+        }))
+        .catch(() => ({ text: '', shown: false }));
+      check(
+        `with no kind condition the picker says why it offers only these ("${why.text}")`,
+        why.shown &&
+          why.text ===
+            'add a kind condition to propose archive, close, delete, merge or watch',
+      );
+      // P2: the arrow keys move between the chips (a roving tab stop), Home
+      // and End go to the ends, and the page's list doesn't move with them.
+      const focusedDisp = () =>
+        pg.evaluate(() => document.activeElement?.dataset?.disp ?? '');
+      const firstFocused = await focusedDisp();
+      await pg.keyboard.press('ArrowRight');
+      const afterRight = await focusedDisp();
+      await pg.keyboard.press('ArrowDown');
+      const afterDown = await focusedDisp();
+      await pg.keyboard.press('ArrowLeft');
+      const afterLeft = await focusedDisp();
+      await pg.keyboard.press('End');
+      const atEnd = await focusedDisp();
+      await pg.keyboard.press('Home');
+      const atHome = await focusedDisp();
+      await pg.keyboard.press('ArrowUp');
+      const wrapped = await focusedDisp();
+      checkList(
+        'the disposition menu: → ↓ ← End Home ↑ move through the chips (wrapping)',
+        [
+          firstFocused,
+          afterRight,
+          afterDown,
+          afterLeft,
+          atEnd,
+          atHome,
+          wrapped,
+        ],
+        ['keep', 'wait', 'ignore', 'wait', 'ignore', 'keep', 'ignore'],
+      );
+      check(
+        'the chips are one tab stop (only the focused chip is tabbable)',
+        await pg.$$eval(
+          '.cb-disp-menu .cb-disp-opt',
+          (els) =>
+            els.map((e) => `${e.dataset.disp}:${e.tabIndex}`).join(' ') ===
+            'keep:-1 wait:-1 ignore:0',
+        ),
+      );
+      // Focus Tabs out of the menu (headless Chrome withholds focus events
+      // without window focus, so the focusout is fired as a Tab makes it).
+      await pg.evaluate(() => {
+        const from = document.activeElement;
+        const to = document.querySelector(
+          '[data-testid="propose"] input[aria-label="note"]',
+        );
+        from.dispatchEvent(
+          new FocusEvent('focusout', { bubbles: true, relatedTarget: to }),
+        );
+      });
+      check(
+        'the disposition menu closes when focus Tabs out of it',
+        await until(pg, () =>
+          document.querySelector('.cb-disp-menu')?.hasAttribute('hidden'),
+        ),
+      );
+      // The + condition menu: the same keys, and it closes on Tab-out too.
+      await pg.click('.cb-cond-add');
+      await pg.waitForSelector('.cb-cond-menu:not([hidden])', {
+        timeout: 4000,
+      });
+      const opOrder = await pg.$$eval('.cb-cond-menu .cb-cond-menu-op', (els) =>
+        els.map(
+          (e) =>
+            `${e.closest('.cb-cond-menu-row').dataset.field} ${e.dataset.op}`,
+        ),
+      );
+      const focusedOp = () =>
+        pg.evaluate(() => {
+          const e = document.activeElement;
+          return e?.classList.contains('cb-cond-menu-op')
+            ? `${e.closest('.cb-cond-menu-row').dataset.field} ${e.dataset.op}`
+            : '';
+        });
+      const opFirst = await focusedOp();
+      await pg.keyboard.press('ArrowDown');
+      const opSecond = await focusedOp();
+      await pg.keyboard.press('End');
+      const opLast = await focusedOp();
+      await pg.keyboard.press('ArrowRight');
+      const opWrapped = await focusedOp();
+      checkList(
+        'the + condition menu: ↓ End → move through its operators (wrapping)',
+        [opFirst, opSecond, opLast, opWrapped],
+        [opOrder[0], opOrder[1], opOrder[opOrder.length - 1], opOrder[0]],
+      );
+      await pg.evaluate(() => {
+        document.activeElement.dispatchEvent(
+          new FocusEvent('focusout', {
+            bubbles: true,
+            relatedTarget:
+              document.querySelector('.cb-rule .kit-h1') ?? document.body,
+          }),
+        );
+      });
+      check(
+        'the + condition menu closes when focus Tabs out of it',
+        await until(pg, () =>
+          document.querySelector('.cb-cond-menu')?.hasAttribute('hidden'),
+        ),
+      );
       // Two conditions: kind is repo, fork is true.
       await pg.click('.cb-cond-add');
       await pg.click(
@@ -3380,19 +3495,41 @@ async function rulesScenariosOn(context, serveHandle) {
           withBadUntil?.invalid ?? '-',
         ),
       );
-      const refusedAct = pg.waitForResponse((r) =>
-        r.url().includes('/api/rules/activate'),
-      );
+      // P3: Activate is refused on the page (nothing is posted that is sure
+      // to be refused); the note points to the card, and serve's reason is
+      // on the page twice: in the card and at the field.
+      let activatePosts = 0;
+      const countActivate = (r) => {
+        if (r.url().includes('/api/rules/activate')) activatePosts++;
+      };
+      pg.on('request', countActivate);
       await pg.click('.kit-primary');
+      const pointed = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule-note')?.textContent ===
+          'not activated: fix what\u2019s marked above',
+      );
+      await pg.waitForTimeout(300);
+      pg.off('request', countActivate);
       check(
-        'Activate is refused (400) and says why; serve still has a draft',
-        (await refusedAct).status() === 400 &&
-          (await until(pg, () =>
-            (
-              document.querySelector('.cb-rule-note')?.textContent ?? ''
-            ).startsWith('not activated: '),
-          )) &&
-          (await ruleOf('old-forks-archive')).rule.status === 'draft',
+        'Activate on a saved invalid rule is refused on the page, pointing to the card',
+        pointed && activatePosts === 0,
+      );
+      check(
+        "serve's reason shows once in the card and once at the field, never in the note",
+        await pg.evaluate((w) => {
+          const doc = document.querySelector('.cb-rule');
+          const all = doc.textContent.split(w).length - 1;
+          return (
+            all === 2 &&
+            !document.querySelector('.cb-rule-note').textContent.includes(w)
+          );
+        }, withBadUntil?.invalid ?? '-'),
+      );
+      check(
+        'serve still has a draft',
+        (await ruleOf('old-forks-archive')).rule.status === 'draft',
       );
       // The screenshot: the proposal with the until hint, the picker open.
       await chips();
