@@ -61,22 +61,24 @@ type Server struct {
 	waiters   map[string]chan struct{} // session → wake
 	streamMu  sync.Mutex               // guards streams counter + setPageOpen decision (one critical section)
 
-	laneMu           sync.Mutex        // guards laneRun
-	laneRun          map[int64]bool    // job id → a casebook lane is running for it
-	onLaneStart      func(jobID int64) // test hook: called once per lane that actually starts
-	onBeforeLaneExit func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
-	activity         atomic.Int64      // unix ms of the last API request
-	streams          atomic.Int32      // open page event streams (connected tabs)
-	streamWG         sync.WaitGroup    // Run waits for streams to end before closing the database
-	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
-	ruleCountRuns    atomic.Int32      // rules counted (MatchAll runs) for the rules list; for tests
-	ruleCountMu      sync.Mutex
-	ruleCounts       map[string]ruleCount            // rule id → its match count for one content + index
-	syncMu           sync.Mutex                      // guards syncing
-	syncing          bool                            // a sync POST /api/sync started is running
-	runSync          func(ctx context.Context) error // test seam for syncNow (nil: App.Sync)
-	life             context.Context                 // Run's context; done while shutting down
-	stop             context.CancelFunc
+	laneMu            sync.Mutex        // guards laneRun
+	laneRun           map[int64]bool    // job id → a casebook lane is running for it
+	onLaneStart       func(jobID int64) // test hook: called once per lane that actually starts
+	onBeforeLaneExit  func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
+	activity          atomic.Int64      // unix ms of the last API request
+	streams           atomic.Int32      // open page event streams (connected tabs)
+	streamWG          sync.WaitGroup    // Run waits for streams to end before closing the database
+	rebuilds          atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
+	ruleCountRuns     atomic.Int32      // rules counted (MatchAll runs) for the rules list; for tests
+	ruleCountMu       sync.Mutex
+	ruleCounts        map[string]ruleCount            // rule id → its match count for one content + index
+	syncMu            sync.Mutex                      // guards syncing
+	planMu            sync.Mutex                      // one plan or approve at a time: the overlap check and its write are one step
+	afterOverlapCheck func()                          // test hook: runs between the overlap check and the create/approve
+	syncing           bool                            // a sync POST /api/sync started is running
+	runSync           func(ctx context.Context) error // test seam for syncNow (nil: App.Sync)
+	life              context.Context                 // Run's context; done while shutting down
+	stop              context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.

@@ -97,6 +97,16 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// The overlap check and the create are one step: two requests can't both
+	// find an item free and both plan it.
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+	held, err := s.heldKeys(ctx, 0, false)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+
 	// Collect to-apply items from the live index.
 	res := s.Index.Result()
 	builtAt := s.Index.BuiltAt()
@@ -106,21 +116,21 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	// Filter items: all to-apply or only the requested keys.
 	var items []engine.Item
 	if in.All {
-		// An item already in a plan Court hasn't approved (or discarded) is
-		// left out: "plan all" twice doesn't plan the same steps twice.
-		planned, err := s.plannedKeys(ctx)
-		if err != nil {
-			reply(w, nil, err)
-			return
-		}
+		// An item already in a job that hasn't finished (a plan not yet
+		// approved or discarded, or a job approved, running or paused) is
+		// left out: an item is in at most one unfinished job.
 		for _, it := range res.Items {
-			if it.Status == item.StatusToApply && it.Decision != nil && !planned[it.ID] {
+			if it.Status == item.StatusToApply && it.Decision != nil && held[it.ID] == nil {
 				items = append(items, it)
 			}
 		}
 	} else {
 		keySet := make(map[string]bool, len(in.Keys))
 		for _, k := range in.Keys {
+			if j := held[k]; j != nil {
+				reply(w, nil, httpError{code: http.StatusConflict, msg: heldMsg(k, *j)})
+				return
+			}
 			keySet[k] = true
 		}
 		for _, it := range res.Items {
@@ -156,6 +166,10 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 
 	plan.Head = s.Index.Head()
 
+	if s.afterOverlapCheck != nil {
+		s.afterOverlapCheck()
+	}
+
 	// Persist as a planned job.
 	job, err := s.Apply.Create(ctx, plan, s.App.Cfg.Machine)
 	if err != nil {
@@ -168,22 +182,47 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	reply(w, PlanView{Plan: plan, Groups: plan.Groups(), Job: job}, nil)
 }
 
-// plannedKeys is the set of item keys with a step in an unapproved plan.
-func (s *Server) plannedKeys(ctx context.Context) (map[string]bool, error) {
+// heldKeys maps each item key with a step in an unfinished job (planned,
+// approved, running or paused) to that job, leaving out job except. With
+// startedOnly it counts only jobs Court has approved (approved, running or
+// paused): approving a plan checks against those, so of two plans that
+// overlap the first approved wins. Done, failed and cancelled jobs hold
+// nothing.
+func (s *Server) heldKeys(ctx context.Context, except int64, startedOnly bool) (map[string]*apply.Job, error) {
 	jobs, err := s.Apply.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]bool{}
-	for _, j := range jobs {
-		if j.State != apply.JobPlanned {
+	out := map[string]*apply.Job{}
+	for i := range jobs {
+		j := &jobs[i]
+		if j.ID == except {
+			continue
+		}
+		switch j.State {
+		case apply.JobApproved, apply.JobRunning, apply.JobPaused:
+		case apply.JobPlanned:
+			if startedOnly {
+				continue
+			}
+		default:
 			continue
 		}
 		for _, st := range j.Steps {
-			out[st.Key] = true
+			if out[st.Key] == nil {
+				out[st.Key] = j
+			}
 		}
 	}
 	return out, nil
+}
+
+// heldMsg is serve's refusal for an item already in job j.
+func heldMsg(key string, j apply.Job) string {
+	if j.State == apply.JobPlanned {
+		return fmt.Sprintf("%s is already in plan #%d, which hasn't been approved or discarded; an item is in one unfinished job at a time", key, j.ID)
+	}
+	return fmt.Sprintf("%s is already in job #%d (%s), which hasn't finished; an item is in one unfinished job at a time", key, j.ID, j.State)
 }
 
 // postApplyApprove is POST /api/apply/approve.
@@ -215,6 +254,28 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 				msg: fmt.Sprintf("session %q has left; approving outward steps needs a session that is here", in.Session)})
 			return
 		}
+	}
+
+	// Two plans can overlap before either is approved. The first approved
+	// holds its items; approving another whose items it holds is refused.
+	// The check and the approve are one step (planMu).
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+	if plan, err := s.Apply.Get(ctx, in.PlanID); err == nil && plan.State == apply.JobPlanned {
+		held, err := s.heldKeys(ctx, in.PlanID, true)
+		if err != nil {
+			reply(w, nil, err)
+			return
+		}
+		for _, st := range plan.Steps {
+			if j := held[st.Key]; j != nil {
+				reply(w, nil, httpError{code: http.StatusConflict, msg: heldMsg(st.Key, *j)})
+				return
+			}
+		}
+	}
+	if s.afterOverlapCheck != nil {
+		s.afterOverlapCheck()
 	}
 
 	// Step 1: Approve the job.

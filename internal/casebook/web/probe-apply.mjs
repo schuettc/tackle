@@ -38,6 +38,7 @@ const T9_SEED = {
   seedRepos: [
     dormant('t9-dormant-a'),
     dormant('t9-dormant-b'),
+    dormant('t9-dormant-c'),
     {
       repo: 'schuettc/t9-prs',
       pushed_at: '2026-09-20T00:00:00Z',
@@ -61,6 +62,9 @@ const BR = (b) => `branch:schuettc/t9-local@${b}`;
 const PR = 'pr:schuettc/t9-prs#7';
 const REPO_A = 'repo:schuettc/t9-dormant-a';
 const REPO_B = 'repo:schuettc/t9-dormant-b';
+// Decided only once the first job holds the other five: an item in an
+// unfinished job can't be planned again, so the second plan is of this.
+const REPO_C = 'repo:schuettc/t9-dormant-c';
 
 // The page's state, read in one place.
 const read = {
@@ -1212,9 +1216,14 @@ async function applyScenariosOn(context, t, serveHandle) {
         !['Pause job', 'Resume', 'Approve'].includes(await read.primary(pg)),
       );
 
-      // A second plan: "a" on Attention doesn't approve it.
+      // A second plan: "a" on Attention doesn't approve it. Its item is
+      // one decided after the first job took the other five.
+      await agent.api('POST', '/api/decide', {
+        keys: [REPO_C],
+        disposition: 'archive',
+      });
       const second = await agent.api('POST', '/api/apply/plan', {
-        keys: [REPO_B],
+        keys: [REPO_C],
       });
       await pg.evaluate((id) => {
         location.hash = `#/apply/${id}`;
@@ -1264,7 +1273,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       check(
         `the item in it is marked in the ready list ("in plan #${second.job.id}")`,
         (await pg.$eval(
-          `.cb-apply-list .kit-row[data-key="${REPO_B}"] .kit-meta`,
+          `.cb-apply-list .kit-row[data-key="${REPO_C}"] .kit-meta`,
           (e) => e.textContent,
         )) === `in plan #${second.job.id}`,
       );
@@ -1298,7 +1307,7 @@ async function applyScenariosOn(context, t, serveHandle) {
             !!document.querySelector(
               `.cb-apply-list .kit-row[data-key="${key}"] .kit-box`,
             ),
-          [second.job.id, REPO_B],
+          [second.job.id, REPO_C],
         ),
       );
     } finally {
