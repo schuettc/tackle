@@ -248,6 +248,40 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 	reply(w, JobView{Job: job, NeedsYou: cards}, nil)
 }
 
+// postApplyCancel is POST /api/apply/cancel {plan_id}: discard a plan Court
+// hasn't approved (planned → cancelled; Store.Cancel refuses anything else,
+// 409). An approved job is paused, not discarded.
+func (s *Server) postApplyCancel(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		PlanID int64 `json:"plan_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	ctx := r.Context()
+	if _, err := s.Apply.Get(ctx, in.PlanID); err != nil {
+		reply(w, nil, httpError{code: http.StatusNotFound, msg: err.Error()})
+		return
+	}
+	if err := s.Apply.Cancel(ctx, in.PlanID); err != nil {
+		var inv *apply.ErrInvalidTransition
+		if errors.As(err, &inv) {
+			reply(w, nil, httpError{code: http.StatusConflict, msg: fmt.Sprintf("job %d is %s, not a plan; only a plan can be discarded", in.PlanID, inv.From)})
+		} else {
+			reply(w, nil, err)
+		}
+		return
+	}
+	s.publish(ctx, "job", map[string]any{"id": in.PlanID, "state": apply.JobCancelled})
+	job, err := s.Apply.Get(ctx, in.PlanID)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	reply(w, JobView{Job: job, NeedsYou: []apply.NeedsYou{}}, nil)
+}
+
 // present reports whether a session is here now (seen within the left
 // threshold), by the same rule GET /api/sessions marks one left.
 func (s *Server) present(ctx context.Context, id string) bool {

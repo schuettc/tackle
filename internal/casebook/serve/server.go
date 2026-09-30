@@ -574,6 +574,7 @@ func (s *Server) Handler() http.Handler {
 	// apply
 	m.HandleFunc("POST /api/apply/plan", s.postApplyPlan)
 	m.HandleFunc("POST /api/apply/approve", s.postApplyApprove)
+	m.HandleFunc("POST /api/apply/cancel", s.postApplyCancel)
 	m.HandleFunc("GET /api/jobs", s.getJobs)
 	m.HandleFunc("GET /api/job", s.getJob)
 	m.HandleFunc("GET /api/needs-you", s.getNeedsYou)
