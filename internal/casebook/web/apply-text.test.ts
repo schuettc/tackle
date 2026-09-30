@@ -22,6 +22,8 @@ import {
   outwardGo,
   plannedKeys,
   plannableCount,
+  heldLabel,
+  heldWhere,
   ageText,
   observations,
 } from './apply-text.ts';
@@ -259,21 +261,44 @@ describe('plannedKeys and plannableCount', () => {
     j(2, 'running', ['pr:o/r#3']),
     j(3, 'cancelled', ['pr:o/r#4']),
     j(4, 'planned', ['pr:o/r#2', 'pr:o/r#2']),
+    j(5, 'approved', ['pr:o/r#5']),
+    j(6, 'paused', ['pr:o/r#6']),
+    j(7, 'done', ['pr:o/r#7']),
+    j(8, 'failed', ['pr:o/r#8']),
+    j(9, 'planned', ['pr:o/r#3']),
   ];
-  test('only unapproved plans hold keys, the newest plan wins', () => {
+  test('every unfinished job holds its keys; a started job before a plan, then the newest', () => {
     const m = plannedKeys(jobs);
-    assert.deepEqual([...m.entries()].sort(), [
-      ['pr:o/r#1', 1],
-      ['pr:o/r#2', 4],
-    ]);
+    assert.deepEqual(
+      [...m.entries()].map(([k, v]) => `${k} ${heldLabel(v)}`).sort(),
+      [
+        'pr:o/r#1 in plan #1',
+        'pr:o/r#2 in plan #4',
+        'pr:o/r#3 in job #2',
+        'pr:o/r#5 in job #5',
+        'pr:o/r#6 in job #6',
+      ],
+    );
   });
-  test('plan all leaves out what is in a plan', () => {
+  test('plan all leaves out what is in a plan or a job', () => {
     const m = plannedKeys(jobs);
-    const loaded = ['pr:o/r#1', 'pr:o/r#2', 'pr:o/r#5'];
+    const loaded = ['pr:o/r#1', 'pr:o/r#3', 'pr:o/r#9'];
     assert.equal(plannableCount(3, loaded, m, true), 1);
-    // Not all loaded: a planned key not seen yet is one of the total.
-    assert.equal(plannableCount(10, ['pr:o/r#5'], m, false), 8);
-    assert.equal(plannableCount(1, loaded, m, true), 0);
+    // Not all loaded: a held key not seen yet is one of the total.
+    assert.equal(plannableCount(10, ['pr:o/r#9'], m, false), 5);
+    assert.equal(plannableCount(2, loaded, m, true), 0);
+  });
+  test('the foot says where the held items are', () => {
+    const m = plannedKeys(jobs);
+    assert.equal(
+      heldWhere(new Map([...m].filter(([, v]) => v.planned))),
+      'in a plan',
+    );
+    assert.equal(
+      heldWhere(new Map([...m].filter(([, v]) => !v.planned))),
+      'in a job',
+    );
+    assert.equal(heldWhere(m), 'in a plan or a job');
   });
 });
 

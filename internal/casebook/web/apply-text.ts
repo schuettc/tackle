@@ -272,31 +272,63 @@ export function outwardGo(n: number): string {
   return n === 1 ? 'The outward step goes' : `The ${n} outward steps go`;
 }
 
+/** Held: the unfinished job an item is in, and whether it is still a plan. */
+export interface Held {
+  id: number;
+  planned: boolean;
+}
+
 /**
- * plannedKeys maps each item key with a step in an unapproved plan to that
- * plan's job id (the newest plan, when two hold it).
+ * plannedKeys maps each item key with a step in an unfinished job (a plan
+ * not yet approved or discarded, or a job approved, running or paused) to
+ * that job: serve plans an item into at most one. A started job is named
+ * before a plan (the newest of each, when two hold it: jobs from before
+ * serve kept to one). Done, failed and cancelled jobs hold nothing.
  */
-export function plannedKeys(jobs: Job[]): Map<string, number> {
-  const m = new Map<string, number>();
+export function plannedKeys(jobs: Job[]): Map<string, Held> {
+  const m = new Map<string, Held>();
+  const rank = (h: Held) => (h.planned ? 0 : 1);
   for (const j of jobs) {
-    if (j.state !== 'planned') continue;
+    if (!['planned', 'approved', 'running', 'paused'].includes(j.state))
+      continue;
+    const h: Held = { id: j.id, planned: j.state === 'planned' };
     for (const s of j.steps ?? []) {
-      if ((m.get(s.key) ?? 0) < j.id) m.set(s.key, j.id);
+      const was = m.get(s.key);
+      if (
+        !was ||
+        rank(h) > rank(was) ||
+        (rank(h) === rank(was) && h.id > was.id)
+      )
+        m.set(s.key, h);
     }
   }
   return m;
 }
 
+/** heldLabel is a held item's meta: "in plan #3", "in job #1". */
+export function heldLabel(h: Held): string {
+  return `${h.planned ? 'in plan' : 'in job'} #${h.id}`;
+}
+
+/** heldWhere says where held items are: "in a plan", "in a job", or both. */
+export function heldWhere(held: Map<string, Held>): string {
+  const vs = [...held.values()];
+  const plans = vs.some((h) => h.planned);
+  const jobs = vs.some((h) => !h.planned);
+  if (plans && jobs) return 'in a plan or a job';
+  return jobs ? 'in a job' : 'in a plan';
+}
+
 /**
  * plannableCount is how many decided items "plan all" would plan: serve
- * leaves out the ones already in an unapproved plan. total is serve's count
+ * leaves out the ones already in an unfinished job (plannedKeys). total is serve's count
  * of decided items, loaded the keys the page has, all whether it has them
  * all; a planned key the page hasn't loaded is counted as one of the total.
  */
 export function plannableCount(
   total: number,
   loaded: string[],
-  planned: Map<string, number>,
+  planned: Map<string, Held>,
   all: boolean,
 ): number {
   const have = new Set(loaded);

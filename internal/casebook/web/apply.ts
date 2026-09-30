@@ -7,8 +7,9 @@
 // and n/total (or "queued"), and a signal line when something needs Court
 // ("1 needs you · 1 paused"). ready: the plans serve built and Court hasn't
 // approved, then the decided items waiting to be applied (selectable; the
-// foot plans the selection, or all of them; an item already in a plan says
-// "in plan #N" and isn't offered again). done: finished jobs. The foot also
+// foot plans the selection, or all of them; an item already in a job that
+// hasn't finished says "in plan #N" or "in job #N" and isn't offered again:
+// serve plans an item into one unfinished job at most). done: finished jobs. The foot also
 // says how old serve's observations are ("observations fresh", or "… 34m
 // old" past one sync interval, when a plan would be refused).
 //
@@ -88,6 +89,8 @@ import {
   outwardGo,
   plannableCount,
   plannedKeys,
+  heldLabel,
+  heldWhere,
   planSummary,
   progress,
   stepMark,
@@ -238,7 +241,8 @@ export function makeApply(ctx: Ctx): Section {
   let intervalMs = 0;
   let syncing = false;
   let syncError = '';
-  // What a refused plan asked for, built again once a sync is done.
+  // What a refused plan asked for, built again once a sync Court asked for
+  // here (sync first, in this tab) is done.
   let afterSync: string[] | 'all' | null = null;
   // An open "edit text" field's text, by card id: a redraw keeps it.
   const editors = new Map<number, string>();
@@ -280,7 +284,8 @@ export function makeApply(ctx: Ctx): Section {
   );
   const foot = h('div', { class: 'cb-apply-foot' }, footSel, obsEl);
 
-  // In a plan Court hasn't approved: key → that plan's job id.
+  // In a job that hasn't finished (a plan, or a job approved, running or
+  // paused): key → that job.
   const inPlan = () => plannedKeys(jobs);
   const plannable = () =>
     plannableCount(
@@ -309,7 +314,7 @@ export function makeApply(ctx: Ctx): Section {
           id: it.key,
           key: `${it.kind} \u00b7 ${keyWithoutKind(it.key)}`,
           title: it.title ?? keyWithoutKind(it.key),
-          meta: plan ? `in plan #${plan}` : (it.decision?.disposition ?? ''),
+          meta: plan ? heldLabel(plan) : (it.decision?.disposition ?? ''),
           selectable: !plan,
         };
       }
@@ -341,9 +346,9 @@ export function makeApply(ctx: Ctx): Section {
       if (painting) return;
       if (r.t === 'job') ctx.route.go('apply', String(r.job.id));
       else if (r.t === 'item') {
-        // An item in a plan opens its plan; any other is selected.
+        // An item in a job opens that job; any other is selected.
         const plan = inPlan().get(r.item.key);
-        if (plan) ctx.route.go('apply', String(plan));
+        if (plan) ctx.route.go('apply', String(plan.id));
         else handle.toggle(i);
       } else void loadItems(items.length);
     },
@@ -410,7 +415,7 @@ export function makeApply(ctx: Ctx): Section {
           rowEl.dataset.key = r.item.key;
           const plan = planned.get(r.item.key);
           if (plan) {
-            rowEl.dataset.plan = String(plan);
+            rowEl.dataset.plan = String(plan.id);
             rowEl.classList.add('cb-in-plan');
           }
         } else rowEl.classList.add('cb-apply-more');
@@ -495,12 +500,16 @@ export function makeApply(ctx: Ctx): Section {
       ? `${n} selected`
       : can
         ? pluralize(can, 'decided item')
-        : `${pluralize(held, 'decided item')} in a plan`;
+        : `${pluralize(held, 'decided item')} ${heldWhere(inPlan())}`;
     // Signal is the selection's colour; a plain total isn't.
     footCount.classList.toggle('cb-sel', n > 0);
+    // While a refusal stands its card is the offer (sync first): planning
+    // again would be refused again, so the foot offers no plan.
     const bs: Button[] = [];
-    if (n) bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
-    if (can) bs.push({ label: `plan all ${can}`, run: () => plan('all') });
+    if (n && !refusal)
+      bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
+    if (can && !refusal)
+      bs.push({ label: `plan all ${can}`, run: () => plan('all') });
     footBtns.replaceChildren(bs.length ? buttons(bs) : '');
   }
 
@@ -788,10 +797,9 @@ export function makeApply(ctx: Ctx): Section {
     },
     refused(msg: string) {
       refusal = msg;
-      // Once a sync is done, the same plan is asked for again.
-      afterSync = asked;
       if (openId === null) {
         drawOverview();
+        paintFoot();
         if (active) ctx.setPrimary(primary());
       } else ctx.route.go('apply');
     },
@@ -801,10 +809,15 @@ export function makeApply(ctx: Ctx): Section {
   // live wire says when it is done, and the refused plan is built again.
   async function syncFirst(): Promise<void> {
     syncError = '';
+    // Armed here, in the tab where Court asked, before serve is asked (its
+    // done can be heard before its reply): another tab's sync re-plans
+    // nothing here.
+    afterSync = asked;
     try {
       const v = await ctx.api.post<SyncView>('/sync', {});
       syncing = v.running;
     } catch (err) {
+      afterSync = null;
       syncError = message(err);
     }
     paintObs();
@@ -825,6 +838,11 @@ export function makeApply(ctx: Ctx): Section {
         afterSync = null;
         refusal = '';
         plan(what);
+      } else if (e.state === 'done' && refusal) {
+        // Another tab's sync made the observations fresh: the refusal no
+        // longer holds, and nothing is planned here unasked.
+        refusal = '';
+        paintFoot();
       }
     }
     paintObs();
@@ -895,7 +913,7 @@ export function makeApply(ctx: Ctx): Section {
       facts([
         ['running', String(counts().running)],
         ['plans', String(jobs.filter((j) => j.state === 'planned').length)],
-        ['in a plan', String(itemsTotal - can)],
+        [heldWhere(inPlan()), String(itemsTotal - can)],
         ['selected', String(n)],
       ]),
       h(

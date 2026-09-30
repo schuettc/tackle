@@ -767,13 +767,28 @@ function outwardGo(n) {
 }
 function plannedKeys(jobs) {
   const m = /* @__PURE__ */ new Map();
+  const rank = (h13) => h13.planned ? 0 : 1;
   for (const j of jobs) {
-    if (j.state !== "planned") continue;
+    if (!["planned", "approved", "running", "paused"].includes(j.state))
+      continue;
+    const h13 = { id: j.id, planned: j.state === "planned" };
     for (const s of j.steps ?? []) {
-      if ((m.get(s.key) ?? 0) < j.id) m.set(s.key, j.id);
+      const was = m.get(s.key);
+      if (!was || rank(h13) > rank(was) || rank(h13) === rank(was) && h13.id > was.id)
+        m.set(s.key, h13);
     }
   }
   return m;
+}
+function heldLabel(h13) {
+  return `${h13.planned ? "in plan" : "in job"} #${h13.id}`;
+}
+function heldWhere(held) {
+  const vs = [...held.values()];
+  const plans = vs.some((h13) => h13.planned);
+  const jobs = vs.some((h13) => !h13.planned);
+  if (plans && jobs) return "in a plan or a job";
+  return jobs ? "in a job" : "in a plan";
 }
 function plannableCount(total, loaded, planned, all) {
   const have = new Set(loaded);
@@ -950,7 +965,7 @@ function makeApply(ctx) {
           id: it.key,
           key: `${it.kind} · ${keyWithoutKind(it.key)}`,
           title: it.title ?? keyWithoutKind(it.key),
-          meta: plan2 ? `in plan #${plan2}` : it.decision?.disposition ?? "",
+          meta: plan2 ? heldLabel(plan2) : it.decision?.disposition ?? "",
           selectable: !plan2
         };
       }
@@ -977,7 +992,7 @@ function makeApply(ctx) {
       if (r.t === "job") ctx.route.go("apply", String(r.job.id));
       else if (r.t === "item") {
         const plan2 = inPlan().get(r.item.key);
-        if (plan2) ctx.route.go("apply", String(plan2));
+        if (plan2) ctx.route.go("apply", String(plan2.id));
         else handle.toggle(i);
       } else void loadItems(items.length);
     },
@@ -1029,7 +1044,7 @@ function makeApply(ctx) {
           rowEl.dataset.key = r.item.key;
           const plan2 = planned.get(r.item.key);
           if (plan2) {
-            rowEl.dataset.plan = String(plan2);
+            rowEl.dataset.plan = String(plan2.id);
             rowEl.classList.add("cb-in-plan");
           }
         } else rowEl.classList.add("cb-apply-more");
@@ -1104,11 +1119,13 @@ function makeApply(ctx) {
     const n = selectedKeys().length;
     const can = plannable();
     const held = itemsTotal - can;
-    footCount.textContent = n ? `${n} selected` : can ? pluralize(can, "decided item") : `${pluralize(held, "decided item")} in a plan`;
+    footCount.textContent = n ? `${n} selected` : can ? pluralize(can, "decided item") : `${pluralize(held, "decided item")} ${heldWhere(inPlan())}`;
     footCount.classList.toggle("cb-sel", n > 0);
     const bs = [];
-    if (n) bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
-    if (can) bs.push({ label: `plan all ${can}`, run: () => plan("all") });
+    if (n && !refusal)
+      bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
+    if (can && !refusal)
+      bs.push({ label: `plan all ${can}`, run: () => plan("all") });
     footBtns.replaceChildren(bs.length ? buttons(bs) : "");
   }
   function paintObs() {
@@ -1341,19 +1358,21 @@ function makeApply(ctx) {
     },
     refused(msg) {
       refusal = msg;
-      afterSync = asked;
       if (openId === null) {
         drawOverview();
+        paintFoot();
         if (active) ctx.setPrimary(primary());
       } else ctx.route.go("apply");
     }
   };
   async function syncFirst() {
     syncError = "";
+    afterSync = asked;
     try {
       const v = await ctx.api.post("/sync", {});
       syncing = v.running;
     } catch (err) {
+      afterSync = null;
       syncError = message(err);
     }
     paintObs();
@@ -1373,6 +1392,9 @@ function makeApply(ctx) {
         afterSync = null;
         refusal = "";
         plan(what);
+      } else if (e.state === "done" && refusal) {
+        refusal = "";
+        paintFoot();
       }
     }
     paintObs();
@@ -1435,7 +1457,7 @@ function makeApply(ctx) {
       facts([
         ["running", String(counts().running)],
         ["plans", String(jobs.filter((j) => j.state === "planned").length)],
-        ["in a plan", String(itemsTotal - can)],
+        [heldWhere(inPlan()), String(itemsTotal - can)],
         ["selected", String(n)]
       ]),
       h3(

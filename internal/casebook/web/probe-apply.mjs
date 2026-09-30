@@ -11,7 +11,7 @@
 // serve's own routes: presence, casebook_job_step, casebook_job_ask.
 
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServe, probeGit } from './serve.mjs';
@@ -138,6 +138,39 @@ async function shoot(t, pg, name, themes = ['light', 'dark']) {
     const th = await pg.evaluate(() => document.documentElement.dataset.theme);
     if (th === 'light') break;
     await pg.click('button.kit-ctl:has-text("theme")');
+  }
+}
+
+// copyPlan writes a second plan with the same steps as plan jobId straight
+// into this serve's database: what an older casebook (before serve kept an
+// item to one unfinished job) could have left behind. serve can't be asked
+// for it; that is the point. It returns the copy's job id.
+async function copyPlan(home, jobId) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const file = readdirSync(home, { recursive: true }).find(
+    (f) => String(f).split('/').pop() === 'casebook.db',
+  );
+  if (!file) throw new Error(`no casebook.db under ${home}`);
+  const db = new DatabaseSync(join(home, String(file)));
+  try {
+    db.exec('PRAGMA busy_timeout = 5000');
+    db.exec('BEGIN IMMEDIATE');
+    const r = db
+      .prepare(
+        `INSERT INTO jobs(plan_json, machine, session, state, created_at)
+         SELECT plan_json, machine, '', 'planned', created_at FROM jobs WHERE id = ?`,
+      )
+      .run(jobId);
+    const id = Number(r.lastInsertRowid);
+    db.prepare(
+      `INSERT INTO steps(job_id, pos, key, action, lane, command, precondition, posts, expected_tip, state, updated_at)
+       SELECT ?, pos, key, action, lane, command, precondition, posts, expected_tip, 'pending', updated_at
+       FROM steps WHERE job_id = ?`,
+    ).run(id, jobId);
+    db.exec('COMMIT');
+    return id;
+  } finally {
+    db.close();
   }
 }
 
@@ -1216,15 +1249,78 @@ async function applyScenariosOn(context, t, serveHandle) {
         !['Pause job', 'Resume', 'Approve'].includes(await read.primary(pg)),
       );
 
-      // A second plan: "a" on Attention doesn't approve it. Its item is
-      // one decided after the first job took the other five.
+      // An item is in one unfinished job: job #1 is approved (running),
+      // so its five items say "in job #1" and aren't offered again; a
+      // sixth, decided now, is all "Plan all" plans.
+      console.log('\nscenario: to apply — an item is in one unfinished job');
       await agent.api('POST', '/api/decide', {
         keys: [REPO_C],
         disposition: 'archive',
       });
-      const second = await agent.api('POST', '/api/apply/plan', {
-        keys: [REPO_C],
+      await pg.evaluate(() => {
+        location.hash = '#/apply';
       });
+      await until(
+        pg,
+        () =>
+          document
+            .querySelector('.kit-ctl[data-id="apply"]')
+            ?.classList.contains('on') ?? false,
+      );
+      await pg.click('.kit-chip[data-id="ready"]');
+      const heldOk = await until(
+        pg,
+        ([id, c]) => {
+          const rows = [
+            ...document.querySelectorAll('.cb-apply-list .kit-row[data-key]'),
+          ];
+          return (
+            rows.length === 6 &&
+            rows.every((r) =>
+              r.dataset.key === c
+                ? r.querySelector('.kit-meta')?.textContent === 'archive' &&
+                  !!r.querySelector('.kit-box')
+                : r.querySelector('.kit-meta')?.textContent ===
+                    `in job #${id}` && !r.querySelector('.kit-box'),
+            )
+          );
+        },
+        [jobId, REPO_C],
+      );
+      const heldMetas = await pg.$$eval(
+        '.cb-apply-list .kit-row[data-key] .kit-meta',
+        (els) => els.map((e) => e.textContent),
+      );
+      check(
+        `the running job's five items say "in job #${jobId}" and can't be selected; the new one can (${heldMetas.join(', ')})`,
+        heldOk,
+      );
+      const heldFoot = await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Plan all' &&
+          [...document.querySelectorAll('.cb-apply-foot-btns .kit-btn')]
+            .map((b) => b.textContent)
+            .join(',') === 'plan all 1',
+      );
+      check(
+        'the primary and the foot plan only the item not in a job ("Plan all", "plan all 1")',
+        heldFoot,
+      );
+      const secondResp = pg.waitForResponse(
+        (r) =>
+          r.url().includes('/api/apply/plan') &&
+          r.request().method() === 'POST',
+      );
+      await pg.click('.kit-primary');
+      const second = await (await secondResp).json();
+      checkList(
+        'after a plan is approved, "Plan all" leaves its items out: the new plan is only the new item',
+        (second.job?.steps ?? []).map((st) => st.key),
+        [REPO_C],
+      );
+
+      // A second plan: "a" on Attention doesn't approve it.
       await pg.evaluate((id) => {
         location.hash = `#/apply/${id}`;
       }, second.job.id);
@@ -1309,6 +1405,72 @@ async function applyScenariosOn(context, t, serveHandle) {
             ),
           [second.job.id, REPO_C],
         ),
+      );
+
+      // Two plans can overlap when they were made before serve kept an
+      // item to one unfinished job (an older database). Approving one holds
+      // its items; approving the other is refused, in serve's words.
+      console.log(
+        '\nscenario: to apply — approving a plan whose item another job holds',
+      );
+      const third = await agent.api('POST', '/api/apply/plan', {
+        keys: [REPO_C],
+      });
+      const twin = await copyPlan(home, third.job.id);
+      await agent.api('POST', '/api/apply/approve', {
+        plan_id: third.job.id,
+        session: SESSION,
+      });
+      await pg.evaluate((id) => {
+        location.hash = `#/apply/${id}`;
+      }, twin);
+      await until(
+        pg,
+        (id) => document.querySelector('.cb-plan')?.dataset.job === String(id),
+        twin,
+      );
+      check(
+        `its item says it is in the approved job ("in job #${third.job.id}")`,
+        await until(
+          pg,
+          ([key, id]) =>
+            document.querySelector(
+              `.cb-apply-list .kit-row[data-key="${key}"] .kit-meta`,
+            )?.textContent === `in job #${id}`,
+          [REPO_C, third.job.id],
+        ),
+      );
+      await pg.click(`.cb-session[data-session="${SESSION}"]`);
+      await until(
+        pg,
+        () => document.querySelector('.kit-primary')?.textContent === 'Approve',
+      );
+      const refusedResp = pg.waitForResponse((r) =>
+        r.url().includes('/api/apply/approve'),
+      );
+      await pg.click('.kit-primary');
+      const rr = await refusedResp;
+      const rb = await rr.json().catch(() => ({}));
+      check(
+        `serve refuses it, naming the job (${rr.status()}: ${rb.error})`,
+        rr.status() === 409 &&
+          (rb.error ?? '').includes(
+            `${REPO_C} is already in job #${third.job.id}`,
+          ),
+      );
+      check(
+        "the page shows serve's message",
+        await until(
+          pg,
+          (w) =>
+            document.querySelector('[data-testid="approve"] .cb-apply-note')
+              ?.textContent === w,
+          rb.error ?? '-',
+        ),
+      );
+      check(
+        'and it is still a plan',
+        (await job(twin)).job.state === 'planned',
       );
     } finally {
       clearInterval(keep);
@@ -1443,11 +1605,55 @@ async function staleScenario(context, t, serveHandle) {
       around.filled.join(',') === 'sync first' &&
         around.primary === 'Sync first',
     );
+    const staleFoot = await pg.$$eval('.cb-apply-foot-btns .kit-btn', (els) =>
+      els.map((b) => b.textContent),
+    );
+    check(
+      `while the refusal stands the list's foot offers no plan (${staleFoot.join(', ') || 'none'})`,
+      staleFoot.length === 0,
+    );
     check(
       'no job was made',
       ((await agent.api('GET', '/api/jobs')).jobs ?? []).length === 0,
     );
     await shoot(t, pg, 'stale', ['light']);
+
+    // A second tab, refused too. Court presses sync first in the first
+    // tab only: the plan is built again there, not here.
+    const pg2 = await context.newPage();
+    pg2.on('pageerror', (e) => errors.push(`tab 2: ${e}`));
+    await pg2.setViewportSize({ width: 1600, height: 900 });
+    await pg2.goto(serveHandle.url + '#/apply', {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    });
+    await until(
+      pg2,
+      () => document.querySelector('.kit-live')?.dataset.state === 'live',
+    );
+    await pg2.click('.kit-chip[data-id="ready"]');
+    await until(
+      pg2,
+      () => document.querySelector('.kit-primary')?.textContent === 'Plan all',
+    );
+    const resp2 = pg2.waitForResponse((x) =>
+      x.url().includes('/api/apply/plan'),
+    );
+    await pg2.click('.kit-primary');
+    check(
+      'a second tab is refused too',
+      (await resp2).status() === 409 &&
+        (await until(
+          pg2,
+          () => !!document.querySelector('[data-testid="plan-refused"]'),
+        )),
+    );
+    const tab2Plans = [];
+    const onReq2 = (q) => {
+      if (q.method() === 'POST' && q.url().includes('/api/apply/plan'))
+        tab2Plans.push(q.url());
+    };
+    pg2.on('request', onReq2);
 
     // sync first: serve syncs (once), the page says so, and the plan is
     // built again when it is done.
@@ -1511,6 +1717,21 @@ async function staleScenario(context, t, serveHandle) {
       'serve has one plan (no second sync, no second plan)',
       ((await agent.api('GET', '/api/jobs')).jobs ?? []).length === 1,
     );
+    // The other tab heard the sync too; it re-plans nothing, and its
+    // refusal (of observations the sync made fresh) is gone.
+    const tab2Cleared = await until(
+      pg2,
+      () =>
+        !document.querySelector('[data-testid="refusal"]') &&
+        document.querySelector('.kit-primary')?.textContent !== 'Sync first',
+    );
+    await pg2.waitForTimeout(300);
+    pg2.off('request', onReq2);
+    check(
+      `the tab that didn't ask re-plans nothing (${tab2Plans.length} POST /api/apply/plan) and no longer shows the refusal`,
+      tab2Plans.length === 0 && tab2Cleared,
+    );
+    await pg2.close();
     // Nothing outward ran: every gh call went to the probe's fake, each a
     // read (the fake refuses what it doesn't know), each with the
     // fail-closed environment; casebook-data's remote is the bundle on disk.
