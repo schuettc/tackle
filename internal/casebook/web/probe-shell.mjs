@@ -192,6 +192,8 @@ export async function shellScenarios(shared, t) {
     ['the disconnected banner', downScenario],
     ['the stale pill', staleScenario],
     ['offline · N queued', offlineQueuedScenario],
+    ['the stale pill from an API call', staleApiScenario],
+    ['200 rows and "show more"', pageCapScenario],
   ]) {
     try {
       await run(shared, t);
@@ -554,6 +556,23 @@ async function keyboardScenario(shared, t) {
             )),
         );
         await pg.keyboard.press('Escape');
+        // The draft was the in-field fixture: remove it (the tray's ×), so
+        // the tray is empty again, on the page and on serve.
+        await pg.click(
+          '[data-testid="batch-tray"] .cb-batch-act[data-action="remove"]',
+        );
+        check(
+          'the fixture draft is removed: the tray hides, and serve has no drafts',
+          (await until(
+            pg,
+            () =>
+              !!document.querySelector('[data-testid="batch-tray"]')?.hidden,
+          )) &&
+            (await eventually(
+              async () =>
+                ((await agent.messages(thread.id)).drafts ?? []).length === 0,
+            )),
+        );
 
         // ? lists every key that works here, and none that doesn't.
         checkList(
@@ -573,14 +592,16 @@ async function keyboardScenario(shared, t) {
             bg: getComputedStyle(document.body).backgroundColor,
             blurred: document.activeElement === document.body,
             shown: !!document.querySelector('.kit-keys'),
+            tray: !document.querySelector('[data-testid="batch-tray"]')?.hidden,
           }));
           const path = `/tmp/t10-overlay-${theme}.png`;
           check(
-            `${path} is ${theme} with the overlay open (theme ${got.theme}, body ${got.bg}), nothing focused`,
+            `${path} is ${theme} with the overlay open (theme ${got.theme}, body ${got.bg}), nothing focused, no batch tray (${got.tray})`,
             got.theme === theme &&
               got.bg === BG[theme] &&
               got.blurred &&
-              got.shown,
+              got.shown &&
+              !got.tray,
           );
           await pg.screenshot({ path });
           await pg.keyboard.press('Escape');
@@ -1143,6 +1164,60 @@ async function downScenario(shared, t) {
 
         // Down again; this time the page's own poll finds serve back.
         check('down again', await cut());
+        // The retry is neutral (not danger: it destroys nothing) and stands
+        // out from the banner's ground, in both themes: its border has at
+        // least 3:1 contrast with the ground (WCAG non-text contrast), and
+        // its own ground differs from the banner's.
+        const dangerNow = async () => cssColor(pg, 'var(--kit-danger)');
+        for (const theme of ['light', 'dark']) {
+          await setTheme(pg, theme);
+          const c = await pg.evaluate(() => {
+            const px = (css) => {
+              const cv = document.createElement('canvas');
+              cv.width = cv.height = 1;
+              const x = cv.getContext('2d');
+              x.fillStyle = '#000';
+              x.fillStyle = css;
+              x.fillRect(0, 0, 1, 1);
+              return [...x.getImageData(0, 0, 1, 1).data];
+            };
+            const lum = ([r, g, b]) => {
+              const f = (v) => {
+                v /= 255;
+                return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+              };
+              return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+            };
+            const ratio = (a, b) => {
+              const [hi, lo] = [lum(a), lum(b)].sort((m, n) => n - m);
+              return (hi + 0.05) / (lo + 0.05);
+            };
+            const banner = document.querySelector(
+              '[data-testid="down-banner"]',
+            );
+            const btn = banner.querySelector('[data-testid="down-retry"]');
+            const bs = getComputedStyle(btn);
+            const ground = px(getComputedStyle(banner).backgroundColor);
+            const border = px(bs.borderTopColor);
+            const fill = px(bs.backgroundColor);
+            return {
+              border: bs.borderTopColor,
+              color: bs.color,
+              borderRatio: ratio(border, ground),
+              fillRatio: ratio(fill, ground),
+              fillAlpha: fill[3],
+            };
+          });
+          const danger = await dangerNow();
+          check(
+            `${theme}: the retry is neutral and clearly visible on the banner (border ${c.border} at ${c.borderRatio.toFixed(2)}:1 to the ground, its own ground ${c.fillRatio.toFixed(2)}:1, text ${c.color})`,
+            c.borderRatio >= 3 &&
+              c.fillAlpha === 255 &&
+              c.fillRatio > 1.05 &&
+              c.border !== danger &&
+              c.color !== danger,
+          );
+        }
         // The page down with its counts and status: light and dark.
         await shoot(t, pg, 'down');
         // serve answers the poll, but the stream stays cut: serve is back,
@@ -1210,8 +1285,12 @@ async function staleScenario(shared, t) {
         pg.on('request', (q) => {
           if (new URL(q.url()).pathname.startsWith('/api/')) reqs.push(q.url());
         });
+        let first401Url = '';
         pg.on('response', (r) => {
-          if (r.status() === 401 && first401 < 0) first401 = reqs.length;
+          if (r.status() === 401 && first401 < 0) {
+            first401 = reqs.length;
+            first401Url = new URL(r.url()).pathname;
+          }
         });
         const pagesBefore = context.pages().length;
 
@@ -1250,8 +1329,8 @@ async function staleScenario(shared, t) {
           staleNow && pill.shown && pill.color === muted,
         );
         check(
-          `the 401 came (${first401 >= 0 ? `after ${first401} requests` : 'none'})`,
-          first401 >= 0,
+          `the 401 came, from the live poll (${first401 >= 0 ? `after ${first401} requests: ${first401Url}` : 'none'})`,
+          first401 >= 0 && first401Url === '/api/state',
         );
 
         // The tab stops: over a minute and more, and with Court clicking a
@@ -1371,6 +1450,205 @@ async function offlineQueuedScenario(shared, t) {
                 s.color === danger,
             );
           }
+        } finally {
+          await pg.close();
+        }
+      }),
+  );
+}
+
+// ---- a restarted serve: the first 401 from an API call ---------------------------
+
+// staleApiScenario: Court clicks in the 2 s before the live client's next
+// poll. The first 401 is then an API call's (createApi's onStale), not the
+// poll's: the tab goes stale at once, and nothing leaves it after.
+async function staleApiScenario(shared, t) {
+  const { check, until } = t;
+  console.log(
+    '\nscenario: a restarted serve — the first 401 from an API call makes the tab stale',
+  );
+  await withServe({ seedRepos: [dormant('stale-api-probe')] }, (serveHandle) =>
+    withContext(shared, async (context) => {
+      const pg = await context.newPage();
+      const errors = [];
+      pg.on('pageerror', (e) => errors.push(String(e)));
+      try {
+        await pg.setViewportSize({ width: 1600, height: 900 });
+        await pg.clock.install();
+        await pg.goto(serveHandle.url + '#/attention/waiting', {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await until(
+          pg,
+          () => document.querySelector('.kit-live')?.dataset.state === 'live',
+          undefined,
+          10000,
+        );
+        // The page's clock stands still: no poll runs until the probe says.
+        await pg.clock.pauseAt(Date.now() + 1000);
+        const reqs = [];
+        const u401 = [];
+        pg.on('request', (q) => {
+          const path = new URL(q.url()).pathname;
+          if (path.startsWith('/api/')) reqs.push(path);
+        });
+        pg.on('response', (r) => {
+          if (r.status() === 401)
+            u401.push({ at: reqs.length, path: new URL(r.url()).pathname });
+        });
+        await serveHandle.restart();
+        await until(
+          pg,
+          () =>
+            document.querySelector('.kit-live')?.dataset.state === 'polling',
+        );
+        const beforeClick = reqs.length;
+        // Court clicks a view: the API call meets the restarted serve.
+        await pg.click('.kit-chip[data-id="new"]');
+        const staleNow = await until(
+          pg,
+          (w) => {
+            const e = document.querySelector('.kit-live');
+            return e?.dataset.state === 'stale' && e.textContent.trim() === w;
+          },
+          STALE_TEXT,
+        );
+        const first = u401[0];
+        check(
+          `the first 401 is the click's API call, not a poll (${first ? `${first.path} after ${first.at - beforeClick} requests` : 'none'}; requests since the restart: ${reqs.slice(beforeClick).join(' ')})`,
+          !!first &&
+            first.path === '/api/items' &&
+            !reqs.includes('/api/state'),
+        );
+        check(
+          `and at once, before any poll, the pill reads "${STALE_TEXT}"`,
+          staleNow && !reqs.includes('/api/state'),
+        );
+        const at = reqs.length;
+        await pg.clock.runFor(60000);
+        await pg.click('.kit-chip[data-id="waiting"]');
+        await press(pg, 'g', 'r');
+        await pg.clock.runFor(60000);
+        await pg.waitForTimeout(500);
+        const after = reqs.slice(at);
+        check(
+          `no further calls fire over two minutes, a click and a switch (${after.length}: ${after.slice(0, 4).join(' ')})`,
+          after.length === 0,
+        );
+        check(
+          `and the pill still says so (${await pg.$eval('.kit-live', (e) => `${e.dataset.state} ${e.textContent.trim()}`)})`,
+          (await pg.$eval(
+            '.kit-live',
+            (e) => `${e.dataset.state} ${e.textContent.trim()}`,
+          )) === `stale ${STALE_TEXT}`,
+        );
+        check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
+      } finally {
+        await pg.close();
+      }
+    }),
+  );
+}
+
+// ---- a large view: 200 rows and "show more" -----------------------------------
+
+// pageCapScenario: a view with 203 items renders 200 rows (the kit is tested
+// to 500; the first triage was 1,567), and the list's own "show 3 more"
+// brings the rest.
+async function pageCapScenario(shared, t) {
+  const { check, checkList, until } = t;
+  console.log('\nscenario: a large view renders 200 rows and a "show more"');
+  const BIG = 'cap-probe';
+  const N = 203;
+  const prs = [];
+  for (let i = 0; i < N; i++) {
+    const day = new Date(Date.UTC(2026, 3, 1) + i * 3600000).toISOString();
+    prs.push({
+      repo: `schuettc/${BIG}`,
+      number: 1000 + i,
+      title: `capped change ${1000 + i}`,
+      author: 'ivo',
+      state: 'OPEN',
+      created_at: day,
+      updated_at: day,
+    });
+  }
+  await withServe(
+    {
+      seedRepos: [
+        {
+          repo: `schuettc/${BIG}`,
+          pushed_at: '2026-09-20T00:00:00Z',
+          default_branch: 'main',
+          prs,
+          issues: [],
+        },
+      ],
+    },
+    (serveHandle) =>
+      withContext(shared, async (context) => {
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        const all = await agent.api(
+          'GET',
+          `/api/items?view=waiting&q=${BIG}&offset=0&limit=1000`,
+        );
+        check(
+          `serve has ${N} items waiting in ${BIG} (${all.total})`,
+          all.total === N,
+        );
+        const pg = await context.newPage();
+        try {
+          await pg.setViewportSize({ width: 1600, height: 900 });
+          await pg.goto(`${serveHandle.url}&q=${BIG}#/attention/waiting`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          const rowKeys = () =>
+            pg.$$eval(`${SHOWN} .kit-row .kit-title`, (els) =>
+              els.map((e) => e.textContent ?? ''),
+            );
+          const more = () =>
+            pg.$eval(`${SHOWN} .cb-foot-more`, (b) => ({
+              text: b.textContent,
+              shown: !b.hidden && b.getBoundingClientRect().width > 0,
+            }));
+          const first = await until(
+            pg,
+            (sel) => document.querySelectorAll(`${sel} .kit-row`).length > 0,
+            SHOWN,
+            15000,
+          );
+          await pg.waitForTimeout(500);
+          const keys200 = await rowKeys();
+          check(
+            `the first page renders exactly 200 rows of ${N} (${keys200.length})`,
+            first && keys200.length === 200 && new Set(keys200).size === 200,
+          );
+          const m = await more();
+          check(
+            `the list's foot offers "show 3 more" ("${m.text}", shown ${m.shown})`,
+            m.text === 'show 3 more' && m.shown,
+          );
+          await pg.click(`${SHOWN} .cb-foot-more`);
+          const allShown = await until(
+            pg,
+            ([sel, n]) =>
+              document.querySelectorAll(`${sel} .kit-row`).length === n,
+            [SHOWN, N],
+          );
+          const keysAll = await rowKeys();
+          checkList(
+            `"show 3 more" brings the rest: all ${N}, each once, the first 200 unchanged`,
+            [
+              String(allShown),
+              String(new Set(keysAll).size),
+              String(keys200.every((k, i) => keysAll[i] === k)),
+            ],
+            ['true', String(N), 'true'],
+          );
+          const m2 = await more();
+          check(`and the "show more" goes (shown ${m2.shown})`, !m2.shown);
         } finally {
           await pg.close();
         }

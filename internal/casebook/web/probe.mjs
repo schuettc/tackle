@@ -4500,7 +4500,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 628;
+const MIN_CHECKS = 639;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -4962,20 +4962,8 @@ async function run() {
       }
     }
 
-    // ---- scenario: pagination -----------------------------------------------
-    console.log('\nscenario: large view renders at most 200 rows');
-
-    {
-      const rowCount = await page.$$eval('.kit-row', (rows) => rows.length);
-      check('at most 200 .kit-row rendered', rowCount <= 200);
-
-      // The foot element (.cb-foot) is always in the DOM (hidden when no more).
-      const footExists = await page
-        .$('.cb-foot')
-        .then((el) => el !== null)
-        .catch(() => false);
-      check('show-more foot element exists in DOM', footExists);
-    }
+    // The 200-row cap is probe-shell.mjs's "a large view renders 200 rows
+    // and a "show more"" (its own serve with 203 items).
 
     // ---- scenario: foot stays visible when view fits one page ---------------
     console.log('\nscenario: foot stays visible when view fits one page');

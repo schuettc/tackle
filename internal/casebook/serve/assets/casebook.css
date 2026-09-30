@@ -1322,3 +1322,7 @@ textarea.cb-needs-edit:focus {
 .kit-app > .cb-down[hidden] {
   display: none;
 }
+.kit-app > .cb-down .kit-btn {
+  background: var(--kit-bg);
+  border-color: var(--kit-muted);
+}

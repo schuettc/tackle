@@ -1658,3 +1658,11 @@ textarea.cb-needs-edit:focus {
 .kit-app > .cb-down[hidden] {
   display: none;
 }
+/*
+ * The retry is neutral (it destroys nothing): the page's ground and a muted
+ * border, so it stands out from the danger-tinted banner in both themes.
+ */
+.kit-app > .cb-down .kit-btn {
+  background: var(--kit-bg);
+  border-color: var(--kit-muted);
+}
