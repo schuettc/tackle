@@ -72,6 +72,10 @@ function cleanup() {
     _rulesServe.stop();
     _rulesServe = null;
   }
+  if (_invalidServe) {
+    _invalidServe.stop();
+    _invalidServe = null;
+  }
 }
 
 process.on('SIGTERM', () => {
@@ -2021,6 +2025,21 @@ const r8Read = {
     ),
 };
 
+// r8Light puts a page in the light theme (the control cycles system →
+// light → dark) and reports whether it is.
+async function r8Light(pg) {
+  for (let i = 0; i < 3; i++) {
+    const t = await pg.evaluate(() => document.documentElement.dataset.theme);
+    if (t === 'light') break;
+    await pg.click('button.kit-ctl:has-text("theme")');
+  }
+  return pg.evaluate(
+    () =>
+      document.documentElement.dataset.theme === 'light' &&
+      getComputedStyle(document.body).backgroundColor === 'rgb(244, 245, 248)',
+  );
+}
+
 async function r8Shoot(pg, name) {
   const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
   for (const theme of ['light', 'dark']) {
@@ -2170,11 +2189,19 @@ async function rulesScenariosOn(context, serveHandle) {
         R8_LANDED.match.map((c) => `${c.field} ${c.op} ${c.value}`),
       );
       checkList(
-        'the proposal table: disposition and note',
+        "the proposal table: a draft's disposition (destructive: red) and note, editable (no until for delete)",
         await pg.$$eval('[data-testid="propose"] .kit-tr', (els) =>
-          els.map((e) => e.textContent),
+          els
+            .filter((e) => getComputedStyle(e).display !== 'none')
+            .map((e) => {
+              const v = e.querySelector('select, input');
+              return `${e.querySelector('.cb-cond-f').textContent}=${v.value}${v.classList.contains('cb-danger') ? ' (danger)' : ''}`;
+            }),
         ),
-        ['dispositiondelete', 'notelanded ({how}); restore tip {tip}'],
+        [
+          'disposition=delete (danger)',
+          'note=landed ({how}); restore tip {tip}',
+        ],
       );
 
       // Grouped by repo: serve's groups, each with its rows.
@@ -2414,8 +2441,32 @@ async function rulesScenariosOn(context, serveHandle) {
         ),
         (await agent.api('GET', '/api/rules')).rules.map(
           (r) =>
-            `${r.rule.id}: 0 pending | ${r.rule.status === 'active' ? 'ok' : 'wait'} ${r.rule.status}`,
+            `${r.rule.id}: ${r.matches} match \u00b7 ${r.excluded} excluded | ${r.rule.status === 'active' ? 'ok' : 'wait'} ${r.rule.status}`,
         ),
+      );
+      check(
+        'r8-landed\'s row reads "5 match · 1 excluded", as in the mock',
+        (await pg.$eval(
+          '.kit-row[data-rule="r8-landed"] .kit-kicker',
+          (e) => e.textContent,
+        )) === '5 match \u00b7 1 excluded',
+      );
+      const footGeo = await pg.evaluate(() => {
+        const f = document.querySelector('.cb-rules-list .kit-foot');
+        const b = f.getBoundingClientRect();
+        return {
+          shown: getComputedStyle(f).display !== 'none' && b.height > 0,
+          bottom: Math.round(b.bottom),
+          button: f.querySelector('[data-testid="new-rule"]')?.textContent,
+          ask: f.querySelector('.cb-rules-ask')?.textContent,
+        };
+      });
+      check(
+        `the list's foot, at its bottom: "new rule" and "or ask pi to draft one" (${JSON.stringify(footGeo)})`,
+        footGeo.shown &&
+          footGeo.bottom === 900 &&
+          footGeo.button === 'new rule' &&
+          footGeo.ask === 'or ask pi to draft one',
       );
       checkList(
         'the views count all, active and drafts',
@@ -2431,14 +2482,11 @@ async function rulesScenariosOn(context, serveHandle) {
           (e) => e.textContent,
         )) === '3',
       );
-      // The whole document, down to the excluded match, in the shot.
-      await pg.$eval('.cb-rules-read', (e) => {
-        e.scrollTop = e.scrollHeight;
-      });
-      await r8Shoot(pg, 'rules');
+      // The document from its top: kicker, title and facts, in the shot.
       await pg.$eval('.cb-rules-read', (e) => {
         e.scrollTop = 0;
       });
+      await r8Shoot(pg, 'rules');
 
       // The + condition menu offers the vocabulary: every field with its
       // operators, as serve lists them.
@@ -2537,6 +2585,73 @@ async function rulesScenariosOn(context, serveHandle) {
         ),
       );
 
+      // An older preview that answers late never paints over a newer one.
+      {
+        const setHow = async (v) => {
+          await pg.click(how, { clickCount: 3 });
+          await pg.keyboard.type(v);
+        };
+        let release;
+        const gate = new Promise((r) => {
+          release = r;
+        });
+        let seen;
+        const firstSeen = new Promise((r) => {
+          seen = r;
+        });
+        let first = true;
+        const holdFirst = async (route) => {
+          if (route.request().method() === 'POST' && first) {
+            first = false;
+            seen();
+            await gate;
+          }
+          await route.continue();
+        };
+        const previewRoute = /\/api\/rules\/preview/;
+        await pg.route(previewRoute, holdFirst);
+        await setHow('default-branch,merged-pr');
+        await firstSeen; // "5 · 3 in main · 2 via merged pr", held
+        await setHow('default-branch');
+        check(
+          'the newer preview lands: "matches now · 3 · 3 in main"',
+          await until(
+            pg,
+            () =>
+              document.querySelector('.cb-matches-label')?.textContent ===
+              'matches now \u00b7 3 \u00b7 3 in main',
+          ),
+        );
+        const late = pg.waitForResponse(
+          (r) => previewRoute.test(r.url()) && r.request().method() === 'POST',
+        );
+        release();
+        await late;
+        // Watch the heading while the late reply is read and handled.
+        let held3 = true;
+        for (let i = 0; i < 10; i++) {
+          if (
+            (await r8Read.heading(pg)) !==
+            'matches now \u00b7 3 \u00b7 3 in main'
+          ) {
+            held3 = false;
+          }
+          await sleep(50);
+        }
+        check(
+          'the older one, answering after it, is dropped (still "3 · 3 in main")',
+          held3,
+        );
+        await pg.unroute(previewRoute, holdFirst);
+        await setHow('merged-pr');
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-matches-label')?.textContent ===
+            'matches now \u00b7 2 \u00b7 2 via merged pr',
+        );
+      }
+
       // Validation is serve's: a bad duration and a bad count show serve's
       // message under the condition, and the matches wait for a valid rule.
       const bodyNow = () =>
@@ -2596,7 +2711,7 @@ async function rulesScenariosOn(context, serveHandle) {
             (await pg.$eval(
               '[data-testid="matches"]',
               (e) => e.textContent,
-            )) === 'not previewed: condition 6 is not valid' &&
+            )) === 'not previewed: the conditions aren\u2019t valid' &&
             (await r8Read.facts(pg))[1] === 'matches \u2014',
         );
         await pg.click('.cb-cond[data-index="5"] .cb-cond-rm');
@@ -2692,6 +2807,7 @@ async function rulesScenariosOn(context, serveHandle) {
     const pg = await context.newPage();
     try {
       await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.clock.install({ time: Date.now() });
       await pg.goto(serveHandle.url + '#/rules/r8-many', {
         waitUntil: 'domcontentloaded',
       });
@@ -2723,6 +2839,58 @@ async function rulesScenariosOn(context, serveHandle) {
         'the 203 rows are 203 different branches',
         new Set(keys).size === 203,
       );
+
+      // Decisions elsewhere (a live decided and index) re-preview the open
+      // rule once, 300 ms after the last event, and keep the rows Court
+      // opened with "show more".
+      const firsts = [];
+      pg.on('request', (r) => {
+        if (
+          r.method() === 'POST' &&
+          r.url().includes('/api/rules/preview') &&
+          !r.url().includes('offset=')
+        ) {
+          firsts.push(r.url());
+        }
+      });
+      // Let what the page was already doing finish (events from before it
+      // opened replay on connect), then count from a still clock.
+      await pg.clock.pauseAt(Date.now() + 2000);
+      await pg.clock.runFor(1000);
+      await pg.waitForLoadState('domcontentloaded');
+      await eventually(async () => {
+        const n = firsts.length;
+        await sleep(300);
+        return firsts.length === n;
+      });
+      firsts.length = 0;
+      const listed = pg.waitForRequest((r) => /\/api\/rules$/.test(r.url()));
+      await agent.api('POST', '/api/decide', {
+        keys: [R8_BR('r8-many', 'feat/n001'), R8_BR('r8-many', 'feat/n002')],
+        disposition: 'keep',
+      });
+      await listed; // the index event reached the page (it reloads the list)
+      await sleep(300);
+      check(
+        `the live events wait for the debounce (${firsts.length} previews)`,
+        firsts.length === 0,
+      );
+      await pg.clock.runFor(300);
+      check(
+        'then one preview for them all',
+        await eventually(async () => firsts.length === 1),
+      );
+      check(
+        'and the 203 rows Court opened stay open',
+        await eventually(
+          async () =>
+            (await r8Read.ticked(pg)).length === 203 &&
+            !(await pg.$('.cb-mr-more')),
+        ),
+      );
+      await pg.clock.runFor(1000);
+      check(`still one preview (${firsts.length})`, firsts.length === 1);
+      await pg.clock.resume();
     } finally {
       await pg.close();
     }
@@ -2766,6 +2934,10 @@ async function rulesScenariosOn(context, serveHandle) {
         () => document.querySelector('.cb-rule')?.dataset.rule === 'r8-agent',
         undefined,
         8000,
+      );
+      await until(
+        pg,
+        () => !!document.querySelector('.kit-row[data-rule="r8-agent"]'),
       );
       const row = await pg.$eval('.kit-row[data-rule="r8-agent"]', (e) => ({
         sub: e.querySelector('.kit-sub')?.textContent ?? '',
@@ -2838,20 +3010,43 @@ async function rulesScenariosOn(context, serveHandle) {
 
       // A rule still loading when Rules is left: its answer, arriving under
       // Attention, must not reach the attached line or the primary.
-      const slowRule = /\/api\/rule\?/;
+      const slowRule = /\/api\/rule\?id=r8-stale/;
+      let release;
+      const gate = new Promise((r) => {
+        release = r;
+      });
+      let held;
+      const heldSeen = new Promise((r) => {
+        held = r;
+      });
       const hold = async (route) => {
-        await sleep(800);
+        held();
+        await gate;
         await route.continue();
       };
       await pg.route(slowRule, hold);
       await pg.evaluate(() => {
         location.hash = '#/rules/r8-stale';
       });
-      await sleep(150);
+      await heldSeen; // the rule is loading
       await pg.evaluate(() => {
         location.hash = '#/attention/new';
       });
-      await sleep(1500);
+      await until(
+        pg,
+        () =>
+          document
+            .querySelector('.kit-ctl[data-id="attention"]')
+            ?.classList.contains('on') ?? false,
+      );
+      const answered = pg.waitForResponse(slowRule);
+      release();
+      await answered;
+      // The hidden Rules has drawn the rule (its feed() has run).
+      await until(
+        pg,
+        () => !!document.querySelector('.cb-rule[data-rule="r8-stale"]'),
+      );
       check(
         'a rule that finishes loading after Rules is left attaches nothing',
         (await r8Read.attached(pg)) === 'nothing' &&
@@ -2891,7 +3086,7 @@ async function rulesScenariosOn(context, serveHandle) {
       );
       const ok = await cssColor(pg, 'var(--kit-ok)');
       check(
-        'the rule shows as active: pill in the ok colour, primary "Deactivate", "2 pending"',
+        'the rule shows as active: pill in the ok colour, primary "Deactivate", "2 match · 0 excluded · 2 pending"',
         await until(
           pg,
           ([okc]) => {
@@ -2900,7 +3095,8 @@ async function rulesScenariosOn(context, serveHandle) {
             return (
               m?.textContent === 'active' &&
               getComputedStyle(m).color === okc &&
-              r.querySelector('.kit-kicker').textContent === '2 pending' &&
+              r.querySelector('.kit-kicker').textContent ===
+                '2 match \u00b7 0 excluded \u00b7 2 pending' &&
               document.querySelector('.kit-primary')?.textContent ===
                 'Deactivate'
             );
@@ -2974,6 +3170,672 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.close();
     }
   }
+
+  // ---- scenario: rules — new rule, and asking the agent --------------------
+  console.log('\nscenario: rules — new rule, and asking the agent');
+  {
+    const fx = await dockFixture(serveHandle, 'r8-new');
+    const stopPresent = fx.present();
+    const pg = await openDock(context, serveHandle, fx, {
+      hash: '#/rules/no-such-rule',
+    });
+    try {
+      check(
+        'a rule that does not exist says so',
+        await until(pg, () =>
+          (
+            document.querySelector('.cb-rules-read')?.textContent ?? ''
+          ).includes('rule no-such-rule not found'),
+        ),
+      );
+      check(
+        'and attaches nothing (not "rule no-such-rule")',
+        (await r8Read.attached(pg)) === 'nothing',
+      );
+
+      // new rule: a name and an id, nothing else.
+      await pg.click('[data-testid="new-rule"]');
+      await pg.waitForSelector('[data-testid="new-rule-sheet"] input');
+      await pg.keyboard.type('Old forks \u2192 archive');
+      check(
+        'the id follows the name: "old-forks-archive"',
+        (await pg.$eval(
+          '[data-testid="new-rule-sheet"] input[aria-label="id"]',
+          (e) => e.value,
+        )) === 'old-forks-archive',
+      );
+      await pg.keyboard.press('Enter');
+      check(
+        'new rule creates the draft and opens it',
+        await until(
+          pg,
+          () =>
+            location.hash === '#/rules/old-forks-archive' &&
+            document.querySelector('.cb-rule')?.dataset.rule ===
+              'old-forks-archive',
+          undefined,
+          8000,
+        ),
+      );
+      const fresh = await ruleOf('old-forks-archive');
+      check(
+        `serve has it as Court's draft, named as typed (${fresh.rule.created_by})`,
+        fresh.rule.status === 'draft' &&
+          fresh.rule.name === 'Old forks \u2192 archive' &&
+          fresh.rule.created_by === 'schuettc',
+      );
+      check(
+        `with no disposition it is shown as not valid, in serve's words (${fresh.invalid})`,
+        (await pg.$eval(
+          '[data-testid="rule-invalid"] .cb-invalid-msg',
+          (e) => e.textContent,
+        )) === fresh.invalid && fresh.invalid !== '',
+      );
+      check(
+        'the new rule is at the top of the reading column, and attached',
+        (await r8Read.attached(pg)) === 'rule old-forks-archive' &&
+          (await pg.$eval('.cb-rule .kit-h1', (e) => e.textContent)) ===
+            'Old forks \u2192 archive',
+      );
+      // Finish it: a disposition and a condition, then save.
+      const untilShown = () =>
+        pg.$eval(
+          '[data-testid="propose"] input[aria-label="until"]',
+          (e) => getComputedStyle(e.closest('.kit-tr')).display !== 'none',
+        );
+      await pg.selectOption('[data-testid="propose"] select', 'wait');
+      const withWait = await untilShown();
+      await pg.selectOption('[data-testid="propose"] select', 'archive');
+      check(
+        'the until row shows for wait, not for archive',
+        withWait && !(await untilShown()),
+      );
+      await pg.click('.cb-cond-add');
+      await pg.click(
+        '.cb-cond-menu-row[data-field="fork"] .cb-cond-menu-op[data-op="is"]',
+      );
+      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+      check(
+        'saved: serve has the disposition and the condition, and it is valid',
+        await eventually(async () => {
+          const r = await ruleOf('old-forks-archive');
+          return (
+            r.rule.propose.disposition === 'archive' &&
+            r.rule.match.length === 1 &&
+            r.rule.match[0].field === 'fork' &&
+            r.rule.match[0].value === 'true' &&
+            !r.invalid
+          );
+        }),
+      );
+      check(
+        'the page drops the not-valid card, and the list pill reads draft',
+        await until(
+          pg,
+          () =>
+            !document.querySelector('[data-testid="rule-invalid"] .kit-card') &&
+            document.querySelector(
+              '.kit-row[data-rule="old-forks-archive"] .kit-meta',
+            )?.textContent === 'draft',
+        ),
+      );
+      // A new rule never overwrites one.
+      await pg.click('[data-testid="new-rule"]');
+      await pg.waitForSelector('[data-testid="new-rule-sheet"] input');
+      await pg.keyboard.type('Landed again');
+      await pg.fill(
+        '[data-testid="new-rule-sheet"] input[aria-label="id"]',
+        'r8-landed',
+      );
+      await pg.keyboard.press('Enter');
+      check(
+        'new rule with an id in use says so, and changes nothing',
+        await until(pg, () =>
+          (
+            document.querySelector(
+              '[data-testid="new-rule-sheet"] .cb-sheet-err',
+            )?.textContent ?? ''
+          ).includes('already exists'),
+        ),
+      );
+      check(
+        'r8-landed is untouched',
+        (await ruleOf('r8-landed')).rule.name === R8_LANDED.name,
+      );
+      await pg.keyboard.press('Escape');
+
+      // "or ask pi to draft one": the composer, attached to Rules, empty.
+      await pg.evaluate(() => {
+        location.hash = '#/rules';
+      });
+      await until(pg, () => !document.querySelector('.cb-rule'));
+      await pg.click('.cb-rules-ask');
+      const asked = await pg.evaluate(() => ({
+        focused:
+          document.activeElement ===
+          document.querySelector('[data-testid="composer-input"]'),
+        value: document.querySelector('[data-testid="composer-input"]').value,
+        attached: document.querySelector('[data-testid="composer-attached"]')
+          .textContent,
+      }));
+      check(
+        `asking the agent focuses the composer, "attached: rules", no text (${JSON.stringify(asked)})`,
+        asked.focused && asked.attached === 'rules' && asked.value === '',
+      );
+      await pg.keyboard.type('draft a rule for dependabot minor bumps');
+      await pg.keyboard.press('Enter');
+      const d = await fx.agent.wait(fx.sid);
+      checkList(
+        'the agent gets the message with the rules section attached',
+        (d?.delivery?.messages ?? []).map(
+          (m) => `${m.body} | ${JSON.stringify(m.attached)}`,
+        ),
+        ['draft a rule for dependabot minor bumps | {"section":"rules"}'],
+      );
+    } finally {
+      stopPresent();
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: rules — a change under Court's edits (I1) -----------------
+  console.log("\nscenario: rules — a change under Court's edits");
+  {
+    const sid = `probe-r8-arch-${Date.now()}`;
+    await agent.presence(sid, 'pi \u00b7 arch', '/home/court/r8', 'pi');
+    const arch = (disposition, name = 'Dormant repos') => ({
+      id: 'r8-arch',
+      name,
+      status: 'draft',
+      match: [
+        { field: 'kind', op: 'is', value: 'repo' },
+        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
+      ],
+      propose: { disposition },
+    });
+    await agent.ruleDraft(sid, arch('archive'));
+    const pg = await context.newPage();
+    const activates = [];
+    pg.on('request', (r) => {
+      if (r.url().includes('/api/rules/activate')) activates.push(r.url());
+    });
+    try {
+      await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.goto(serveHandle.url + '#/rules/r8-arch', {
+        waitUntil: 'domcontentloaded',
+      });
+      await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule')?.dataset.rule === 'r8-arch' &&
+          document.querySelector('[data-testid="conditions"]')?.dataset
+            .ready === 'true',
+        undefined,
+        8000,
+      );
+      // Court edits a condition; before he saves, the agent changes the
+      // proposal from archive to delete.
+      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
+        clickCount: 3,
+      });
+      await pg.keyboard.type('schuettc/r8-other');
+      await agent.ruleDraft(sid, arch('delete'));
+      check(
+        'the change shows: "changed while you were editing · by pi"',
+        await until(
+          pg,
+          () =>
+            document.querySelector(
+              '[data-testid="rule-conflict"] .kit-card-head',
+            )?.textContent === 'changed while you were editing \u00b7 by pi',
+        ),
+      );
+      check(
+        "serve's copy is shown: it now proposes delete",
+        (await pg.$eval(
+          '[data-testid="conflict-disposition"]',
+          (e) => e.textContent,
+        )) === 'delete',
+      );
+      check(
+        'his edit is kept',
+        (await pg.$eval(
+          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] input.cb-cond-v',
+          (e) => e.value,
+        )) === 'schuettc/r8-other',
+      );
+      await pg.$eval('.cb-rules-read', (e) => {
+        e.scrollTop = 0;
+      });
+      check(
+        '/tmp/t8-conflict-light.png is light (theme and body)',
+        await r8Light(pg),
+      );
+      await pg.screenshot({ path: '/tmp/t8-conflict-light.png' });
+      await pg.click('.kit-primary');
+      check(
+        'Activate refuses while it stands, and says why',
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-conflict-note')?.textContent ===
+            'Activate waits: reload their copy, or keep yours over it, first.',
+        ),
+      );
+      check(
+        `nothing was sent to activate (${activates.length}), and serve still has a draft`,
+        activates.length === 0 &&
+          (await ruleOf('r8-arch')).rule.status === 'draft',
+      );
+
+      // Keep mine: his edits over theirs, saved against serve's copy.
+      await pg.click(
+        '[data-testid="rule-conflict"] .kit-btn:has-text("keep mine")',
+      );
+      await until(
+        pg,
+        () =>
+          !document.querySelector('[data-testid="rule-conflict"] .kit-card'),
+      );
+      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+      check(
+        'keep mine, then save: serve has his condition and his proposal (archive)',
+        await eventually(async () => {
+          const r = await ruleOf('r8-arch');
+          return (
+            r.rule.match[1].value === 'schuettc/r8-other' &&
+            r.rule.propose.disposition === 'archive'
+          );
+        }),
+      );
+
+      // Reload theirs: the agent changes it again under a new edit; Court
+      // takes serve's copy, and Activate activates exactly that.
+      await until(
+        pg,
+        () =>
+          !document.querySelector('.cb-rule-actions .kit-btn') ||
+          ![...document.querySelectorAll('.cb-rule-actions .kit-btn')]
+            .map((b) => b.textContent)
+            .includes('save draft'),
+      );
+      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
+        clickCount: 3,
+      });
+      await pg.keyboard.type('schuettc/r8-landed');
+      await agent.ruleDraft(sid, {
+        ...arch('close'),
+        match: [
+          { field: 'kind', op: 'is', value: 'repo' },
+          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
+        ],
+      });
+      await until(
+        pg,
+        () =>
+          !!document.querySelector('[data-testid="rule-conflict"] .kit-card'),
+      );
+      await pg.click(
+        '[data-testid="rule-conflict"] .kit-btn:has-text("reload theirs")',
+      );
+      check(
+        "reload theirs shows serve's copy (close), and drops his edit",
+        await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="propose"] select')?.value ===
+              'close' &&
+            document.querySelector('.cb-cond[data-index="1"] input.cb-cond-v')
+              ?.value === 'schuettc/r8-other',
+        ),
+      );
+      await pg.click('.kit-primary');
+      check(
+        'Activate then activates what is shown: close',
+        await eventually(async () => {
+          const r = await ruleOf('r8-arch');
+          return (
+            r.rule.status === 'active' && r.rule.propose.disposition === 'close'
+          );
+        }),
+      );
+      await pg.click('.kit-primary'); // Deactivate
+      await eventually(
+        async () => (await ruleOf('r8-arch')).rule.status === 'draft',
+      );
+
+      // A change the page hasn't heard of yet (its live reads held): serve
+      // refuses the stale Activate, and the page shows what it refused.
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Activate',
+      );
+      let open;
+      const shut = new Promise((r) => {
+        open = r;
+      });
+      const liveReads = /\/api\/rule\?id=r8-arch/;
+      const holdReads = async (route) => {
+        await shut;
+        await route.continue();
+      };
+      await pg.route(liveReads, holdReads);
+      await agent.ruleDraft(sid, arch('delete', 'Dormant repos, all of them'));
+      const n0 = activates.length;
+      const refused = pg.waitForResponse((r) =>
+        r.url().includes('/api/rules/activate'),
+      );
+      await pg.click('.kit-primary');
+      check(
+        'serve refuses the Activate of a copy that changed (409)',
+        (await refused).status() === 409 && activates.length === n0 + 1,
+      );
+      open();
+      check(
+        "the page shows serve's copy (delete), saying nothing was activated",
+        await until(
+          pg,
+          () =>
+            document.querySelector('.cb-rule .kit-h1')?.textContent ===
+              'Dormant repos, all of them' &&
+            document.querySelector('[data-testid="propose"] select')?.value ===
+              'delete' &&
+            (
+              document.querySelector('.cb-rule-note')?.textContent ?? ''
+            ).startsWith(
+              'It changed before you activated it; nothing was activated.',
+            ),
+        ),
+      );
+      check(
+        'and serve still has a draft',
+        (await ruleOf('r8-arch')).rule.status === 'draft',
+      );
+      await pg.unroute(liveReads, holdReads);
+    } finally {
+      await pg.close();
+    }
+  }
+}
+
+// ---- Task 8 fix: invalid rules (I2) -----------------------------------------
+//
+// Its own serve, whose data repo holds rule files as a person (or an older
+// casebook) wrote them: an active rule with a bool value serve refuses, an
+// active one with a count that isn't one, and a file that isn't a rule.
+const RULE_HEAD = (id, name, status) =>
+  [
+    `id = "${id}"`,
+    `name = "${name}"`,
+    `status = "${status}"`,
+    'created_by = "schuettc"',
+    'created_at = 2026-09-27T10:00:00Z',
+    'edited_at = 2026-09-27T10:00:00Z',
+  ].join('\n');
+const cond = (field, op, value) =>
+  `[[match]]\nfield = "${field}"\nop = "${op}"\nvalue = "${value}"`;
+const INVALID_SEED = {
+  'rules/r8-bad.toml': [
+    RULE_HEAD('r8-bad', 'Bot PRs \u2192 close', 'active'),
+    cond('kind', 'is', 'pr'),
+    cond('bot', 'is', 'yes'),
+    '[propose]\ndisposition = "close"',
+    '',
+  ].join('\n'),
+  'rules/r8-bad2.toml': [
+    RULE_HEAD('r8-bad2', 'Busy repos \u2192 keep', 'active'),
+    cond('kind', 'is', 'repo'),
+    cond('open-prs', 'gt', 'lots'),
+    '[propose]\ndisposition = "keep"',
+    '',
+  ].join('\n'),
+  'rules/r8-broken.toml': 'this is [not a rule\n',
+};
+
+let _invalidServe = null;
+async function invalidRulesScenarios(context) {
+  const serveHandle = await startServe({ seedFiles: INVALID_SEED });
+  _invalidServe = serveHandle;
+  try {
+    await invalidRulesScenariosOn(context, serveHandle);
+  } finally {
+    serveHandle.stop();
+    _invalidServe = null;
+  }
+}
+
+async function invalidRulesScenariosOn(context, serveHandle) {
+  console.log('\nscenario: rules — invalid rules are shown and recoverable');
+  const agent = createAgent(serveHandle.base, serveHandle.token);
+  const ruleOf = (id) => agent.api('GET', `/api/rule?id=${id}`);
+  const status = async (method, path, body) => {
+    const r = await fetch(serveHandle.base + path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Local-Token': serveHandle.token,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    return r.status;
+  };
+  const bad = await ruleOf('r8-bad');
+  check(
+    `serve reads r8-bad as invalid, naming the condition (${bad.invalid})`,
+    bad.invalid.startsWith('condition 1: ') && bad.matches.total === 0,
+  );
+  checkList(
+    'serve refuses to preview it or propose from it',
+    [
+      await status('POST', '/api/rules/preview', bad.rule),
+      await status('POST', '/api/rules/propose-once', { id: 'r8-bad' }),
+    ],
+    [400, 400],
+  );
+
+  const pg = await context.newPage();
+  try {
+    await pg.setViewportSize({ width: 1600, height: 900 });
+    await pg.goto(serveHandle.url + '#/rules/r8-bad', {
+      waitUntil: 'domcontentloaded',
+    });
+    await until(
+      pg,
+      () =>
+        document.querySelector('.cb-rule')?.dataset.rule === 'r8-bad' &&
+        document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
+          'true' &&
+        document.querySelectorAll('.cb-rules-list .kit-row').length === 3,
+      undefined,
+      8000,
+    );
+    const rows = await pg.$$eval('.cb-rules-list .kit-row', (els) =>
+      els.map((e) => {
+        const m = e.querySelector('.kit-meta');
+        return {
+          id: e.dataset.rule,
+          kicker: e.querySelector('.kit-kicker').textContent,
+          pill: m.textContent,
+          invalid: m.classList.contains('cb-pill-invalid'),
+          color: getComputedStyle(m).color,
+          title: e.title,
+        };
+      }),
+    );
+    const signal = await cssColor(pg, 'var(--kit-signal)');
+    const list = (await agent.api('GET', '/api/rules')).rules;
+    checkList(
+      'the list shows every rule serve holds as invalid (all three, the unreadable one too), pill "not valid" in the signal colour',
+      rows.map(
+        (r) =>
+          `${r.id}: ${r.kicker} | ${r.pill} ${r.invalid && r.color === signal} | ${r.title}`,
+      ),
+      list.map(
+        (r) => `${r.rule.id}: not valid | not valid true | ${r.invalid}`,
+      ),
+    );
+    const doc = await pg.evaluate(() => ({
+      head: document.querySelector(
+        '[data-testid="rule-invalid"] .kit-card-head',
+      )?.textContent,
+      msg: document.querySelector(
+        '[data-testid="rule-invalid"] .cb-invalid-msg',
+      )?.textContent,
+      inline: (() => {
+        const e = document.querySelector(
+          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] .cb-cond-err',
+        );
+        return e && !e.hidden ? e.textContent : '';
+      })(),
+      matches: document.querySelector('[data-testid="matches"]').textContent,
+      primary: document.querySelector('.kit-primary')?.textContent,
+    }));
+    check(
+      `the document says it is invalid and skipped ("${doc.head}")`,
+      doc.head === 'not valid \u00b7 active, but skipped at every sync' &&
+        doc.msg === bad.invalid,
+    );
+    check(
+      "serve's message is under condition 1 too",
+      doc.inline === bad.invalid,
+    );
+    check(
+      'its matches are not previewed (no count, no list / by repo)',
+      doc.matches === 'not previewed: the conditions aren\u2019t valid' &&
+        (await r8Read.heading(pg)) === 'matches now' &&
+        (await pg.$eval(
+          '.cb-matches-view',
+          (e) => getComputedStyle(e).display === 'none',
+        )),
+    );
+    check('its primary is Deactivate', doc.primary === 'Deactivate');
+    checkList(
+      'the facts: status "active · not valid", matches "—"',
+      (await r8Read.facts(pg)).slice(0, 2),
+      ['status active \u00b7 not valid', 'matches \u2014'],
+    );
+    await pg.$eval('.cb-rules-read', (e) => {
+      e.scrollTop = 0;
+    });
+    check(
+      '/tmp/t8-invalid-light.png is light (theme and body)',
+      await r8Light(pg),
+    );
+    await pg.screenshot({ path: '/tmp/t8-invalid-light.png' });
+
+    // Fix it on the page: bot is true, then save (it becomes a draft).
+    await pg.selectOption(
+      '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] select.cb-cond-v',
+      'true',
+    );
+    check(
+      'the fixed conditions preview',
+      await until(pg, () =>
+        (
+          document.querySelector('.cb-matches-label')?.textContent ?? ''
+        ).startsWith('matches now \u00b7 '),
+      ),
+    );
+    await pg.click('.cb-rule-actions .kit-btn:has-text("save as draft")');
+    check(
+      'save as draft: serve has the fix, as a valid draft',
+      await eventually(async () => {
+        const r = await ruleOf('r8-bad');
+        return (
+          r.rule.status === 'draft' &&
+          r.rule.match[1].value === 'true' &&
+          !r.invalid
+        );
+      }),
+    );
+    check(
+      'the page shows it fixed: no card, pill "draft"',
+      await until(
+        pg,
+        () =>
+          !document.querySelector('[data-testid="rule-invalid"] .kit-card') &&
+          document.querySelector('.kit-row[data-rule="r8-bad"] .kit-meta')
+            ?.textContent === 'draft',
+      ),
+    );
+
+    // Or deactivate it: r8-bad2 stays invalid, but no longer active.
+    await pg.evaluate(() => {
+      location.hash = '#/rules/r8-bad2';
+    });
+    await until(
+      pg,
+      () =>
+        document.querySelector('.cb-rule')?.dataset.rule === 'r8-bad2' &&
+        document.querySelector('.kit-primary')?.textContent === 'Deactivate',
+    );
+    await pg.click('.kit-primary');
+    check(
+      'Deactivate works on an invalid rule, and keeps it (and its value)',
+      await eventually(async () => {
+        const r = await ruleOf('r8-bad2');
+        return (
+          r.rule.status === 'draft' &&
+          r.rule.match[1].value === 'lots' &&
+          r.invalid.startsWith('condition 1: ')
+        );
+      }),
+    );
+    check(
+      'the page: a draft, still not valid, no longer skipped',
+      await until(
+        pg,
+        () =>
+          document.querySelector('[data-testid="rule-invalid"] .kit-card-head')
+            ?.textContent === 'not valid' &&
+          document.querySelector('.kit-primary')?.textContent === 'Activate',
+      ),
+    );
+
+    // A file that isn't a rule: listed, shown with its parse error, and a
+    // save from the page replaces it.
+    const broken = await ruleOf('r8-broken');
+    await pg.evaluate(() => {
+      location.hash = '#/rules/r8-broken';
+    });
+    check(
+      `the unreadable file shows serve's parse error (${broken.invalid})`,
+      await until(
+        pg,
+        (w) =>
+          document.querySelector('.cb-rule')?.dataset.rule === 'r8-broken' &&
+          document.querySelector('[data-testid="rule-invalid"] .cb-invalid-msg')
+            ?.textContent === w,
+        broken.invalid,
+      ),
+    );
+    await until(
+      pg,
+      () =>
+        document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
+        'true',
+    );
+    await pg.click('.cb-cond-add');
+    await pg.click(
+      '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
+    );
+    await pg.selectOption('[data-testid="propose"] select', 'keep');
+    await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
+    check(
+      'saving replaces it with a valid rule',
+      await eventually(async () => {
+        const r = await ruleOf('r8-broken');
+        return (
+          !r.invalid &&
+          r.rule.match.length === 1 &&
+          r.rule.propose.disposition === 'keep'
+        );
+      }),
+    );
+  } finally {
+    await pg.close();
+  }
 }
 
 // ---- the scenario list ------------------------------------------------------
@@ -2981,18 +3843,38 @@ async function rulesScenariosOn(context, serveHandle) {
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 354;
+const MIN_CHECKS = 404;
 
-// PROBE_ONLY runs one group of scenarios, for working on them locally. Under
-// CI (the CI env var is set) it is refused: CI always runs the whole probe.
+// PROBE_ONLY runs one group of scenarios, for working on them: a partial
+// run. It has to say so: under CI (the CI env var) it is refused outright,
+// and a required run (KIT_BROWSER=required, as `just verify-slow` makes it)
+// refuses it unless PROBE_PARTIAL=1 says the partial run is meant
+// (`just casebook-probe-only <name>`). An unknown name is an error, not a
+// quiet full run without the floor.
 const only = process.env.PROBE_ONLY ?? '';
 const keyClashes = [];
 const underCI = !!process.env.CI;
+const partial = process.env.PROBE_PARTIAL === '1';
+const PROBE_GROUPS = ['composer', 'keys', 'rules'];
 
 async function run() {
+  if (only && !PROBE_GROUPS.includes(only)) {
+    console.error(
+      `probe: PROBE_ONLY=${only} is not a group (${PROBE_GROUPS.join(', ')})`,
+    );
+    fails++;
+    return;
+  }
   if (only && underCI) {
     console.error(
       `probe: PROBE_ONLY=${only} is set under CI; CI runs the whole probe`,
+    );
+    fails++;
+    return;
+  }
+  if (only && required && !partial) {
+    console.error(
+      `probe: PROBE_ONLY=${only} is set for a full, required run; unset it, or run the part on purpose with \`just casebook-probe-only ${only}\``,
     );
     fails++;
     return;
@@ -3056,6 +3938,7 @@ async function run() {
     // PROBE_ONLY=rules runs only the Rules scenarios (their own serve).
     if (process.env.PROBE_ONLY === 'rules') {
       await rulesScenarios(context);
+      await invalidRulesScenarios(context);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -7298,6 +8181,7 @@ async function run() {
 
     // ---- Task 8: Rules (its own seeded serve) -------------------------------
     await rulesScenarios(context);
+    await invalidRulesScenarios(context);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

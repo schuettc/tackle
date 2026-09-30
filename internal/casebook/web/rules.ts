@@ -1,33 +1,44 @@
 // rules.ts — the Rules section (spec §4.3): the list of standing rules and a
 // rule as a document in the reading column.
 //
-// The list (kit list) shows every rule with its status pill and its track
-// record ("87 accepted · 4 rejected · 3 pending"); views all / active /
-// drafts. #/rules/<id> opens a rule: kicker, title, facts (status, matches,
-// excluded, author), what a draft or an active rule does, the conditions
-// table with `+ condition` (conditions.ts), the proposal, and the live
-// matches: "matches now · N · <by reason>", paginated, groupable by repo.
-// Unticking a match adds an exclusion (with an optional reason); ticking an
-// excluded one includes it again.
+// The list (kit list) shows every rule with what it matches and excludes now
+// and its track record ("849 match · 2 excluded · 3 pending"), and its status
+// pill (draft, active, or not valid); views all / active / drafts. Its foot
+// makes a new draft (`new rule`: an id and a name) or asks the agent to draft
+// one (the composer, with `attached: rules`). #/rules/<id> opens a rule:
+// kicker, title, facts (status, matches, excluded, author), what a draft or
+// an active rule does, the conditions table with `+ condition`
+// (conditions.ts), the proposal, and the live matches: "matches now · N ·
+// <by reason>", paginated, groupable by repo. Unticking a match adds an
+// exclusion (with an optional reason); ticking an excluded one includes it.
 //
-// Editing a draft's conditions re-previews them against the live index,
-// debounced by 300 ms (POST /api/rules/preview; nothing is saved). A
-// condition serve refuses shows serve's message under it, and the matches
-// wait for a valid rule rather than showing a preview of a broken one.
-// `save draft` saves the edits; `propose once` turns the current matches into
-// proposals. The bar's primary follows the rule: Activate on a draft,
-// Deactivate on an active rule. An agent's draft shows its author, and only
-// Court's Activate (this page) activates it: serve refuses an agent's.
+// A draft's conditions and proposal are editable. Editing the conditions
+// re-previews them against the live index, debounced by 300 ms (POST
+// /api/rules/preview; nothing is saved). serve validates: a condition it
+// refuses shows serve's message under it, and the matches wait for a valid
+// rule rather than showing a preview of a broken one. A rule serve holds as
+// invalid (a hand-written file, an older value, a draft not finished) says
+// so, in the list and in its document; an active one says casebook skips it,
+// and Court fixes it (and saves it, as a draft) or deactivates it.
+//
+// What Court activates is what the page shows: activate and save carry the
+// rule's version, and serve refuses (409) a copy that changed. A live change
+// that arrives while Court has unsaved edits doesn't replace them silently:
+// the document shows the change, who made it and serve's copy, and Activate
+// waits until he reloads theirs or keeps his own over it.
 //
 // While Rules is the active section it feeds the composer {rule: <id>} for
-// the open rule and {} for none; hidden, it never touches the attached line
-// or the bar's primary, though it keeps itself current from live events.
+// the open rule (once it has loaded), {section: 'rules'} when he asks the
+// agent from the foot, and {} otherwise; hidden, it never touches the
+// attached line or the bar's primary, though it keeps itself current from
+// live events.
 
 import {
   list,
   h,
   facts,
   buttons,
+  card,
   sheet,
   ApiError,
   type Button,
@@ -43,6 +54,7 @@ import type {
   MatchRow,
   ProposeResult,
   Rule,
+  RuleAction,
   RuleDetailView,
   RuleRow,
   RulesView,
@@ -50,22 +62,23 @@ import type {
 import type { Ctx, Section } from './app.ts';
 import { conditionEditor, setConditionError } from './conditions.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
-import { DANGER_DISPS } from './decide.ts';
+import { DANGER_DISPS, getVocab } from './decide.ts';
 import {
   authorOf,
   conditionErrorIndex,
   matchesHeading,
   reasonSummary,
+  rowKicker,
+  sameAction,
   sameConditions,
   sameRule,
-  trackRecord,
   viewCounts,
 } from './rules-text.ts';
 
 /** The re-preview debounce (spec §4.3). */
 export const PREVIEW_DEBOUNCE_MS = 300;
 
-// Matches are fetched 200 at a time, like the Attention list.
+// Matches are fetched 200 at a time, like the Attention list (serve's cap).
 const PAGE = 200;
 
 type View = 'all' | 'active' | 'drafts';
@@ -79,24 +92,36 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+const isConflict = (err: unknown) =>
+  err instanceof ApiError && err.status === 409;
+
+// A rule id from a name: lower case, a-z 0-9 and hyphens (serve's rule).
+function slug(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+}
+
 // ---- the rule document -----------------------------------------------------
 
 /** What the section needs from an open rule's document. */
 export interface RuleDoc {
   el: HTMLElement;
   id: string;
-  /** Unsaved condition edits. */
+  /** Unsaved edits to the conditions or the proposal. */
   dirty(): boolean;
   /** The bar's primary for this rule: Activate or Deactivate. */
   primary(): Primary | null;
-  /** serve's current rule (a live change): redraw unless Court is editing. */
-  update(detail: RuleDetailView): void;
-  /** The index changed: preview again, now. */
-  repreview(): void;
+  /** serve's current rule (a live change), and who changed it if known. */
+  update(detail: RuleDetailView, by: string): void;
+  /** The index changed: preview again (debounced), keeping the depth shown. */
+  refresh(): void;
 }
 
 export interface RuleHooks {
-  /** The primary changed (status, or edits to save first). */
+  /** The primary changed (status, edits, a conflict). */
   primaryChanged(): void;
   /** serve saved something (edit, exclusion, lifecycle): refresh the list. */
   saved(): void;
@@ -112,12 +137,15 @@ export function renderRule(
   hooks: RuleHooks,
 ): RuleDoc {
   const id = detail.rule.id;
-  let base: Rule = detail.rule; // serve's saved rule
+  let saved: RuleDetailView = detail; // serve's copy, as shown
+  let base: Rule = detail.rule;
   let work: Condition[] = [...(base.match ?? [])]; // Court's edits
+  let workPropose: RuleAction = { ...base.propose };
   let exclude: Exclusion[] = base.exclude ?? [];
   let preview: MatchPreview = detail.matches;
   let shown: MatchRow[] = preview.page ?? [];
-  let invalid: string | null = null;
+  let invalid: string | null = null; // the conditions, as serve judged them
+  let conflict: { detail: RuleDetailView; by: string } | null = null;
   let grouped = false;
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -126,14 +154,29 @@ export function renderRule(
   const doc = h('article', { class: 'cb-rule', 'data-rule': id });
   const el = h('div', { class: 'kit-doc' }, doc);
 
-  const dirty = () => !sameConditions(work, base.match ?? []);
+  const dirty = () =>
+    !sameConditions(work, base.match ?? []) ||
+    !sameAction(workPropose, base.propose);
   const isDraft = () => base.status !== 'active';
-  const body = (): Rule => ({ ...base, match: work, exclude });
+  // An active rule is edited only while serve holds it invalid (to fix it).
+  const editable = () => isDraft() || !!saved.invalid;
+  const body = (): Rule => ({
+    ...base,
+    match: work,
+    propose: workPropose,
+    exclude,
+  });
 
   // ---- parts that update in place ----
 
   let factsEl = h('div');
   let editor = h('div');
+  const titleEl = h('h1', { class: 'kit-h1' });
+  const kickEl = h('p', { class: 'kit-kick' });
+  const proseEl = h('p');
+  const invalidEl = h('div', { 'data-testid': 'rule-invalid' });
+  const conflictEl = h('div', { 'data-testid': 'rule-conflict' });
+  const proposeEl = h('div');
   const heading = h('h3', { class: 'kit-label cb-matches-label' });
   const groupChips = h('span', { class: 'cb-matches-view' });
   const matchesEl = h('div', {
@@ -147,7 +190,7 @@ export function renderRule(
     const who = authorOf(base.created_by);
     const byEl = h('b', who.agent ? { class: 'cb-by-agent' } : null, who.name);
     const next = facts([
-      ['status', base.status],
+      ['status', saved.invalid ? `${base.status} · not valid` : base.status],
       ['matches', invalid ? '\u2014' : String(preview.total)],
       ['excluded', String(exclude.length)],
       ['by', byEl],
@@ -156,54 +199,155 @@ export function renderRule(
     factsEl = next;
   }
 
-  function prose(): HTMLElement {
+  function drawProse(): void {
     const who = authorOf(base.created_by);
     const lifecycle =
       'Once active, casebook proposes new matches after every sync, and never overrides an item that\u2019s already decided.';
     if (!isDraft()) {
-      return h(
-        'p',
-        null,
+      proseEl.replaceChildren(
         'Active: casebook proposes new matches after every sync, and never overrides an item that\u2019s already decided.',
       );
-    }
-    if (who.agent) {
-      return h(
-        'p',
-        null,
+    } else if (who.agent) {
+      proseEl.replaceChildren(
         h('span', { class: 'cb-by-agent' }, who.name),
         ' drafted this rule. It proposes nothing until you activate it, and only you can. ',
         lifecycle,
       );
+    } else {
+      proseEl.replaceChildren(
+        'A draft proposes nothing until you activate it. ',
+        lifecycle,
+      );
     }
-    return h(
-      'p',
-      null,
-      'A draft proposes nothing until you activate it. ',
-      lifecycle,
+  }
+
+  // The card for a rule serve holds as invalid: its message, and for an
+  // active rule that casebook skips it (rebuild does, with a notice).
+  function drawInvalid(): void {
+    if (!saved.invalid) {
+      invalidEl.replaceChildren();
+      return;
+    }
+    const skipped = base.status === 'active';
+    invalidEl.replaceChildren(
+      card({
+        edge: 'signal',
+        head: skipped
+          ? 'not valid \u00b7 active, but skipped at every sync'
+          : 'not valid',
+        body: h(
+          'div',
+          null,
+          h('p', { class: 'cb-invalid-msg' }, saved.invalid),
+          h(
+            'p',
+            { class: 'cb-invalid-help' },
+            skipped
+              ? 'casebook proposes nothing from this rule until it is valid. Fix it and save it (it becomes a draft), or deactivate it.'
+              : 'It can\u2019t be activated or propose anything until it is valid.',
+          ),
+        ),
+      }),
     );
   }
 
-  function proposalTable(): HTMLElement {
-    const p = base.propose;
-    const tr = (label: string, value: string, cls = '') =>
+  // The proposal: a draft's is editable (disposition, until, note).
+  function drawPropose(): void {
+    const p = workPropose;
+    const tr = (label: string, value: Node) =>
       h(
         'div',
         { class: 'kit-tr' },
         h('span', { class: 'cb-cond-f' }, label),
         h('span'),
-        h('span', { class: 'cb-cond-v' + cls }, value),
+        value,
       );
-    return h(
-      'div',
-      { class: 'kit-table cb-propose', 'data-testid': 'propose' },
-      tr(
-        'disposition',
-        p.disposition,
-        DANGER_DISPS.has(p.disposition) ? ' cb-danger' : '',
+    if (!editable()) {
+      proposeEl.replaceChildren(
+        h(
+          'div',
+          { class: 'kit-table cb-propose', 'data-testid': 'propose' },
+          tr(
+            'disposition',
+            h(
+              'span',
+              {
+                class:
+                  'cb-cond-v' +
+                  (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+              },
+              p.disposition,
+            ),
+          ),
+          p.until
+            ? tr('until', h('span', { class: 'cb-cond-v' }, p.until))
+            : null,
+          p.note ? tr('note', h('span', { class: 'cb-cond-v' }, p.note)) : null,
+        ),
+      );
+      return;
+    }
+    const disp = h('select', {
+      class:
+        'cb-cond-v' + (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+      'aria-label': 'disposition',
+    }) as HTMLSelectElement;
+    const fill = (choices: string[]) => {
+      const opts = [...choices];
+      if (!opts.includes(p.disposition)) opts.unshift(p.disposition);
+      disp.replaceChildren(
+        ...opts.map((d) =>
+          h('option', { value: d }, d === '' ? 'choose\u2026' : d),
+        ),
+      );
+      disp.value = p.disposition;
+    };
+    fill([]);
+    void getVocab(ctx)
+      .then((v) => {
+        const all: string[] = [];
+        for (const k of v.kinds ?? []) {
+          for (const d of k.allowed ?? []) if (!all.includes(d)) all.push(d);
+        }
+        fill(all);
+      })
+      .catch(() => {});
+    // until is for the dispositions that wait (wait, watch): its row shows
+    // for those, or when the rule already has one.
+    const needsUntil = () =>
+      !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
+    disp.addEventListener('change', () => {
+      workPropose = { ...workPropose, disposition: disp.value };
+      disp.classList.toggle('cb-danger', DANGER_DISPS.has(disp.value));
+      untilRow.hidden = !needsUntil();
+      edited();
+    });
+    const text = (field: 'until' | 'note', placeholder: string) => {
+      const input = h('input', {
+        class: 'cb-cond-v',
+        type: 'text',
+        value: p[field] ?? '',
+        placeholder,
+        spellcheck: false,
+        'aria-label': field,
+      }) as HTMLInputElement;
+      input.addEventListener('input', () => {
+        const v = input.value;
+        workPropose = { ...workPropose, [field]: v || undefined };
+        edited();
+      });
+      return input;
+    };
+    const untilRow = tr('until', text('until', 'e.g. 30d'));
+    untilRow.hidden = !needsUntil();
+    proposeEl.replaceChildren(
+      h(
+        'div',
+        { class: 'kit-table cb-propose', 'data-testid': 'propose' },
+        tr('disposition', disp),
+        untilRow,
+        tr('note', text('note', 'e.g. landed ({how}); restore tip {tip}')),
       ),
-      p.until ? tr('until', p.until) : null,
-      p.note ? tr('note', p.note) : null,
     );
   }
 
@@ -255,26 +399,25 @@ export function renderRule(
     );
   }
 
+  function waitRow(text: string): HTMLElement {
+    return h(
+      'div',
+      { class: 'cb-mr cb-mr-wait' },
+      h('span'),
+      h('span', { class: 'cb-mr-k' }, text),
+      h('span'),
+    );
+  }
+
   function drawMatches(): void {
     matchesEl.removeAttribute('data-invalid');
     if (invalid) {
+      // serve's message is under the condition it names; this line doesn't
+      // repeat (or renumber) it.
       heading.textContent = 'matches now';
-      const n = conditionErrorIndex(invalid);
       matchesEl.setAttribute('data-invalid', '');
       matchesEl.replaceChildren(
-        h(
-          'div',
-          { class: 'cb-mr cb-mr-wait' },
-          h('span'),
-          h(
-            'span',
-            { class: 'cb-mr-k' },
-            n >= 0
-              ? `not previewed: condition ${n + 1} is not valid`
-              : 'not previewed: the rule is not valid',
-          ),
-          h('span'),
-        ),
+        waitRow('not previewed: the conditions aren\u2019t valid'),
       );
       groupChips.hidden = true;
       return;
@@ -329,17 +472,7 @@ export function renderRule(
         ),
       );
     }
-    if (out.length === 0) {
-      out.push(
-        h(
-          'div',
-          { class: 'cb-mr cb-mr-wait' },
-          h('span'),
-          h('span', { class: 'cb-mr-k' }, 'nothing matches now'),
-          h('span'),
-        ),
-      );
-    }
+    if (out.length === 0) out.push(waitRow('nothing matches now'));
     matchesEl.replaceChildren(...out);
   }
 
@@ -365,7 +498,7 @@ export function renderRule(
     );
   }
 
-  // setPreview takes a fresh first page of matches.
+  // setPreview takes fresh matches (their pages so far).
   function setPreview(p: MatchPreview): void {
     invalid = null;
     setConditionError(editor, -1, null);
@@ -384,15 +517,27 @@ export function renderRule(
 
   // ---- re-preview ----
 
-  async function previewNow(): Promise<void> {
+  // previewNow previews the rule as edited. depth keeps that many rows (a
+  // live refresh keeps a "show more" Court opened); an edit starts again.
+  async function previewNow(depth = PAGE): Promise<void> {
     if (timer !== null) {
       clearTimeout(timer);
       timer = null;
     }
     const mine = ++seq;
     try {
-      const p = await ctx.api.post<MatchPreview>('/rules/preview', body());
-      if (mine === seq) setPreview(p);
+      const b = body();
+      const p = await ctx.api.post<MatchPreview>('/rules/preview', b);
+      let rows = p.page ?? [];
+      while (rows.length < Math.min(depth, p.total)) {
+        const next = await ctx.api.post<MatchPreview>(
+          `/rules/preview?offset=${rows.length}&limit=${PAGE}`,
+          b,
+        );
+        if (mine !== seq || !(next.page ?? []).length) break;
+        rows = [...rows, ...(next.page ?? [])];
+      }
+      if (mine === seq) setPreview({ ...p, page: rows });
     } catch (err) {
       if (mine !== seq) return;
       if (err instanceof ApiError && err.status === 400)
@@ -401,11 +546,13 @@ export function renderRule(
     }
   }
 
-  function schedule(): void {
+  // schedule previews after the debounce. keepDepth (a live refresh) keeps
+  // as many rows as are shown when it fires; an edit starts from page one.
+  function schedule(keepDepth = false): void {
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void previewNow();
+      void previewNow(keepDepth ? Math.max(PAGE, shown.length) : PAGE);
     }, PREVIEW_DEBOUNCE_MS);
   }
 
@@ -425,19 +572,19 @@ export function renderRule(
 
   // ---- exclusions ----
 
-  // applyServe takes serve's rule after an exclusion or an inclusion: the
-  // exclusions are serve's; the matches are serve's unless Court has
+  // applyExclusions takes serve's rule after an exclusion or an inclusion:
+  // the exclusions are serve's; so are the matches, unless Court has
   // unsaved edits, which are previewed again with the new exclusions.
   function applyExclusions(d: RuleDetailView): void {
     exclude = d.rule.exclude ?? [];
     base = { ...base, exclude };
-    if (dirty()) {
-      void previewNow();
+    if (dirty() || invalid) {
+      void previewNow(Math.max(PAGE, shown.length));
     } else {
       seq++; // a preview in flight is older than this
       setPreview(d.matches);
     }
-    hooks.saved();
+    drawFacts();
   }
 
   function untick(key: string): void {
@@ -460,6 +607,7 @@ export function renderRule(
         });
         sh.close();
         applyExclusions(d);
+        hooks.saved();
       } catch (e) {
         err.textContent = message(e);
         err.hidden = false;
@@ -506,38 +654,183 @@ export function renderRule(
         key,
       });
       applyExclusions(d);
+      hooks.saved();
     } catch (err) {
       note.textContent = `not included: ${message(err)}`;
     }
   }
 
+  // ---- a change underneath Court's edits ----
+
+  function drawConflict(): void {
+    if (!conflict) {
+      conflictEl.replaceChildren();
+      return;
+    }
+    const theirs = conflict.detail.rule;
+    const who = conflict.by ? authorOf(conflict.by).name : '';
+    const p = theirs.propose;
+    const theirsBody = h(
+      'div',
+      null,
+      h(
+        'p',
+        { class: 'cb-conflict-help' },
+        'Your edits are kept below and not saved. Serve\u2019s copy now:',
+      ),
+      theirs.name !== base.name
+        ? h('p', { class: 'cb-conflict-name' }, theirs.name)
+        : null,
+      conditionEditor(
+        ctx,
+        { match: theirs.match, status: 'active', editable: false },
+        () => {},
+      ),
+      h(
+        'div',
+        { class: 'kit-table cb-propose' },
+        h(
+          'div',
+          { class: 'kit-tr' },
+          h('span', { class: 'cb-cond-f' }, 'disposition'),
+          h('span'),
+          h(
+            'span',
+            {
+              class:
+                'cb-cond-v' +
+                (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+              'data-testid': 'conflict-disposition',
+            },
+            p.disposition,
+          ),
+        ),
+        p.until
+          ? h(
+              'div',
+              { class: 'kit-tr' },
+              h('span', { class: 'cb-cond-f' }, 'until'),
+              h('span'),
+              h('span', { class: 'cb-cond-v' }, p.until),
+            )
+          : null,
+        p.note
+          ? h(
+              'div',
+              { class: 'kit-tr' },
+              h('span', { class: 'cb-cond-f' }, 'note'),
+              h('span'),
+              h('span', { class: 'cb-cond-v' }, p.note),
+            )
+          : null,
+      ),
+      h('p', { class: 'cb-conflict-note', role: 'status' }),
+    );
+    conflictEl.replaceChildren(
+      card({
+        edge: 'signal',
+        head: who
+          ? `changed while you were editing \u00b7 by ${who}`
+          : 'changed while you were editing',
+        body: theirsBody,
+        actions: [
+          {
+            label: 'reload theirs',
+            run() {
+              const d = conflict!.detail;
+              conflict = null;
+              draw(d);
+            },
+          },
+          {
+            label: 'keep mine',
+            run() {
+              const d = conflict!.detail;
+              conflict = null;
+              draw(d, { match: work, propose: workPropose });
+            },
+          },
+        ],
+      }),
+    );
+  }
+
+  // refuseActivate: Activate waits for Court to settle a conflict.
+  function refuseActivate(): void {
+    const n = conflictEl.querySelector<HTMLElement>('.cb-conflict-note');
+    if (n) {
+      n.textContent =
+        'Activate waits: reload their copy, or keep yours over it, first.';
+    }
+    conflictEl.scrollIntoView?.({ block: 'nearest' });
+  }
+
+  // enterConflict fetches serve's copy after a 409 (a change the page hadn't
+  // heard of yet) and shows it: as a conflict when Court has edits, else by
+  // drawing it with a note that nothing was done.
+  async function afterConflict(what: string): Promise<void> {
+    try {
+      const d = await ctx.api.get<RuleDetailView>('/rule', { id });
+      if (dirty()) {
+        conflict = { detail: d, by: '' };
+        drawConflict();
+        drawActions();
+        hooks.primaryChanged();
+      } else {
+        draw(d);
+        note.textContent = `It changed before you ${what} it; nothing was ${what}. Here is serve\u2019s copy.`;
+      }
+    } catch (err) {
+      note.textContent = message(err);
+    }
+  }
+
   // ---- saving and lifecycle ----
 
-  // save posts Court's edits; false (with serve's message shown) on refusal.
+  // save posts Court's edits over the version shown; false (with serve's
+  // message, or the conflict, shown) on refusal.
   async function save(): Promise<boolean> {
+    if (conflict) {
+      refuseActivate();
+      return false;
+    }
     try {
-      const d = await ctx.api.post<RuleDetailView>('/rules/draft', body());
+      const d = await ctx.api.post<RuleDetailView>(
+        `/rules/draft?version=${encodeURIComponent(saved.version)}`,
+        body(),
+      );
       draw(d);
       hooks.saved();
       return true;
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400)
-        setInvalid(err.message);
-      else note.textContent = `not saved: ${message(err)}`;
+      if (isConflict(err)) void afterConflict('saved');
+      else if (err instanceof ApiError && err.status === 400) {
+        if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
+        else note.textContent = err.message;
+      } else note.textContent = `not saved: ${message(err)}`;
       return false;
     }
   }
 
   async function lifecycle(verb: 'activate' | 'deactivate'): Promise<void> {
     if (busy) return;
+    if (verb === 'activate' && conflict) {
+      refuseActivate();
+      return;
+    }
     busy = true;
     try {
       if (verb === 'activate' && dirty() && !(await save())) return;
-      const d = await ctx.api.post<RuleDetailView>(`/rules/${verb}`, { id });
+      // Activate names the copy shown; serve refuses (409) one that changed.
+      const d = await ctx.api.post<RuleDetailView>(
+        `/rules/${verb}`,
+        verb === 'activate' ? { id, version: saved.version } : { id },
+      );
       draw(d);
       hooks.saved();
     } catch (err) {
-      note.textContent = `not ${verb}d: ${message(err)}`;
+      if (isConflict(err)) void afterConflict(`${verb}d`);
+      else note.textContent = `not ${verb}d: ${message(err)}`;
     } finally {
       busy = false;
     }
@@ -575,61 +868,90 @@ export function renderRule(
 
   function drawActions(): void {
     const bs: Button[] = [];
-    if (isDraft()) {
-      if (dirty()) bs.push({ label: 'save draft', run: () => void save() });
+    if (editable() && dirty()) {
+      bs.push({
+        label: isDraft() ? 'save draft' : 'save as draft',
+        run: () => void save(),
+      });
+    }
+    if (isDraft() && !saved.invalid) {
       bs.push({ label: 'propose once', run: () => void proposeOnce() });
     }
     actionsEl.replaceChildren(bs.length ? buttons(bs) : '', note);
   }
 
-  function onEdit(m: Condition[]): void {
-    const was = dirty();
-    work = m;
+  // edited follows any edit: the proposal or the conditions.
+  function edited(): void {
     note.textContent = '';
-    schedule();
-    if (dirty() !== was) {
-      drawActions();
-      hooks.primaryChanged();
-    }
+    drawActions();
+    hooks.primaryChanged();
   }
 
-  // draw lays the whole document out from serve's rule.
-  function draw(d: RuleDetailView): void {
+  function onEdit(m: Condition[]): void {
+    work = m;
+    schedule();
+    edited();
+  }
+
+  // draw lays the whole document out from serve's copy (keep: Court's edits,
+  // kept over it).
+  function draw(
+    d: RuleDetailView,
+    keep?: { match: Condition[]; propose: RuleAction },
+  ): void {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     seq++;
+    saved = d;
     base = d.rule;
-    work = [...(base.match ?? [])];
+    work = keep ? keep.match : [...(base.match ?? [])];
+    workPropose = keep ? keep.propose : { ...base.propose };
     exclude = base.exclude ?? [];
     preview = d.matches;
     shown = preview.page ?? [];
-    invalid = null;
+    // Conditions serve refuses (or a file it can't read) aren't previewed.
+    invalid =
+      d.invalid &&
+      !keep &&
+      (conditionErrorIndex(d.invalid) >= 0 || d.invalid.startsWith('rules/'))
+        ? d.invalid
+        : null;
     doc.dataset.status = base.status;
-    editor = conditionEditor(ctx, base, onEdit);
+    doc.toggleAttribute('data-invalid', !!d.invalid);
+    kickEl.textContent = `rule \u00b7 ${base.status} \u00b7 rules/${id}.toml`;
+    titleEl.textContent = base.name || id;
+    editor = conditionEditor(
+      ctx,
+      { match: work, status: base.status, editable: editable() },
+      onEdit,
+    );
     factsEl = h('div');
-    const head = h('div', { class: 'cb-matches-head' }, heading, groupChips);
     doc.replaceChildren(
-      h(
-        'p',
-        { class: 'kit-kick' },
-        `rule \u00b7 ${base.status} \u00b7 rules/${id}.toml`,
-      ),
-      h('h1', { class: 'kit-h1' }, base.name || id),
+      kickEl,
+      titleEl,
       factsEl,
-      prose(),
+      proseEl,
+      invalidEl,
+      conflictEl,
       h('h3', { class: 'kit-label' }, 'when an undecided item matches all of'),
       editor,
       h('h3', { class: 'kit-label' }, 'propose'),
-      proposalTable(),
-      head,
+      proposeEl,
+      h('div', { class: 'cb-matches-head' }, heading, groupChips),
       matchesEl,
       actionsEl,
     );
     note.textContent = '';
+    drawProse();
+    drawInvalid();
+    drawConflict();
+    drawPropose();
     drawFacts();
     drawGroupChips();
     drawMatches();
+    if (invalid) setInvalid(invalid);
     drawActions();
+    if (keep) schedule();
     hooks.primaryChanged();
   }
 
@@ -640,24 +962,32 @@ export function renderRule(
     id,
     dirty,
     primary() {
-      return isDraft()
-        ? { label: 'Activate', run: () => void lifecycle('activate') }
-        : { label: 'Deactivate', run: () => void lifecycle('deactivate') };
+      if (!isDraft()) {
+        return { label: 'Deactivate', run: () => void lifecycle('deactivate') };
+      }
+      return { label: 'Activate', run: () => void lifecycle('activate') };
     },
-    update(d) {
-      if (dirty()) {
-        // Court is editing: keep his edits, take serve's exclusions.
-        exclude = d.rule.exclude ?? [];
-        base = { ...d.rule, match: base.match };
-        void previewNow();
+    update(d, by) {
+      if (d.version === saved.version) {
+        // The same rule; its exclusions (or record) may have moved.
+        const was = (saved.rule.exclude ?? []).map((x) => x.key).join('\n');
+        const now = (d.rule.exclude ?? []).map((x) => x.key).join('\n');
+        saved = { ...saved, record: d.record, invalid: d.invalid };
+        if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
         return;
       }
-      if (!sameRule(d.rule, base) || d.matches.total !== preview.total) {
+      if (!dirty()) {
         draw(d);
+        return;
       }
+      // Court is editing: his edits stay, and the change shows, with who
+      // made it; Activate waits until he settles it.
+      conflict = { detail: d, by };
+      drawConflict();
+      hooks.primaryChanged();
     },
-    repreview() {
-      void previewNow();
+    refresh() {
+      if (!invalid || dirty()) schedule(true);
     },
   };
 }
@@ -671,13 +1001,145 @@ export function makeRules(ctx: Ctx): Section {
   let active = false;
   let openId: string | null = null;
   let doc: RuleDoc | null = null;
+  let asking = false; // Court asked the agent from the foot
   let opening = 0;
   let painting = false;
+  let listSeq = 0;
+  let liveSeq = 0;
 
   const statusOf = (r: RuleRow) => r.rule.status;
   const inView = (r: RuleRow) =>
     view === 'all' ||
     (view === 'active' ? statusOf(r) === 'active' : statusOf(r) !== 'active');
+
+  // ---- the foot: new rule, or ask the agent ----
+
+  const askEl = h(
+    'button',
+    {
+      type: 'button',
+      class: 'cb-link cb-rules-ask',
+      onclick() {
+        asking = true;
+        feed();
+        ctx.focusComposer();
+      },
+    },
+    '',
+  );
+  const nameAgent = () => {
+    askEl.textContent = `or ask ${ctx.agentName() || 'the agent'} to draft one`;
+  };
+  nameAgent();
+  ctx.onAgentName(nameAgent);
+  const foot = h(
+    'div',
+    { class: 'cb-rules-foot' },
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'kit-btn',
+        'data-testid': 'new-rule',
+        onclick() {
+          newRule();
+        },
+      },
+      'new rule',
+    ),
+    askEl,
+  );
+
+  function newRule(): void {
+    const name = h('input', {
+      class: 'kit-note',
+      type: 'text',
+      placeholder: 'e.g. Landed branches \u2192 delete',
+      'aria-label': 'name',
+    }) as HTMLInputElement;
+    const idIn = h('input', {
+      class: 'kit-note',
+      type: 'text',
+      placeholder: 'e.g. landed-branches',
+      spellcheck: false,
+      'aria-label': 'id',
+    }) as HTMLInputElement;
+    let idTyped = false;
+    name.addEventListener('input', () => {
+      if (!idTyped) idIn.value = slug(name.value);
+    });
+    idIn.addEventListener('input', () => {
+      idTyped = true;
+    });
+    const err = h('p', { class: 'cb-sheet-err', hidden: true });
+    let sending = false;
+    const create = async () => {
+      if (sending) return;
+      const id = idIn.value.trim();
+      const title = name.value.trim();
+      if (!id || !title) {
+        err.textContent = 'A rule needs a name and an id.';
+        err.hidden = false;
+        return;
+      }
+      sending = true;
+      try {
+        await ctx.api.post<RuleDetailView>('/rules/draft?create=1', {
+          id,
+          name: title,
+          status: 'draft',
+          match: [],
+          propose: { disposition: '' },
+        });
+        sh.close();
+        await loadList();
+        ctx.route.go('rules', id);
+      } catch (e) {
+        err.textContent = message(e);
+        err.hidden = false;
+        sending = false;
+      }
+    };
+    for (const input of [name, idIn]) {
+      input.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && !e.isComposing) {
+          e.preventDefault();
+          void create();
+        }
+      });
+    }
+    const sh = sheet({
+      title: 'new rule',
+      body: h(
+        'div',
+        { class: 'cb-sheet-body' },
+        h(
+          'div',
+          { class: 'cb-sheet-row' },
+          h('label', { class: 'cb-sheet-label' }, 'name'),
+          name,
+        ),
+        h(
+          'div',
+          { class: 'cb-sheet-row' },
+          h('label', { class: 'cb-sheet-label' }, 'id'),
+          idIn,
+        ),
+        h(
+          'p',
+          { class: 'cb-sheet-preview' },
+          'A draft: it proposes nothing until you activate it.',
+        ),
+        err,
+      ),
+      actions: [
+        { label: 'create', fill: true, run: () => void create() },
+        { label: 'cancel', run: () => sh.close() },
+      ],
+    });
+    sh.el.dataset.testid = 'new-rule-sheet';
+    name.focus();
+  }
 
   const handle: ListHandle<RuleRow> = list<RuleRow>({
     label: 'rules',
@@ -688,13 +1150,13 @@ export function makeRules(ctx: Ctx): Section {
       const draft = r.rule.status !== 'active';
       return {
         id: r.rule.id,
-        key: trackRecord(r.record),
+        key: rowKicker(r),
         title: r.rule.name || r.rule.id,
         sub:
           who.agent && draft
             ? `drafted by ${who.name} \u00b7 awaiting your review`
             : undefined,
-        meta: r.rule.status,
+        meta: r.invalid ? 'not valid' : r.rule.status,
       };
     },
     onChip(group, id) {
@@ -706,11 +1168,12 @@ export function makeRules(ctx: Ctx): Section {
       if (painting) return; // paintList marking the open row
       ctx.route.go('rules', r.rule.id);
     },
+    foot,
   });
   handle.el.classList.add('cb-rules-list');
 
   // paintList draws the list and marks each row's status as a pill (the
-  // kit's row has no pill slot: its meta span takes the kit's pill classes).
+  // kit's row has no pill slot: its meta span takes the pill classes).
   function paintList(): void {
     const c = viewCounts(rows.map((r) => r.rule));
     const shown = rows.filter(inView);
@@ -724,14 +1187,18 @@ export function makeRules(ctx: Ctx): Section {
       const r = shown[i];
       if (!r) return;
       rowEl.dataset.rule = r.rule.id;
-      const meta = rowEl.querySelector('.kit-meta');
-      meta?.classList.add(
-        'kit-pill',
-        r.rule.status === 'active' ? 'ok' : 'wait',
-      );
+      if (r.invalid) rowEl.title = r.invalid;
+      rowEl
+        .querySelector('.kit-meta')
+        ?.classList.add(
+          'kit-pill',
+          r.invalid
+            ? 'cb-pill-invalid'
+            : r.rule.status === 'active'
+              ? 'ok'
+              : 'wait',
+        );
     });
-    // The open rule's row reads as open (a route, not a click, may have
-    // opened it).
     const openAt = shown.findIndex((r) => r.rule.id === openId);
     if (openAt >= 0) {
       painting = true;
@@ -742,12 +1209,16 @@ export function makeRules(ctx: Ctx): Section {
       }
     }
     ctx.bar.setCount('rules', c.all);
+    nameAgent();
     if (!doc && !openId) drawEmpty();
   }
 
+  // loadList reloads the list; an older reply never paints over a newer one.
   async function loadList(): Promise<void> {
+    const mine = ++listSeq;
     try {
       const v = await ctx.api.get<RulesView>('/rules');
+      if (mine !== listSeq) return;
       rows = v.rules ?? [];
       paintList();
     } catch {
@@ -775,11 +1246,14 @@ export function makeRules(ctx: Ctx): Section {
     );
   }
 
-  // feed tells the composer and the bar about the open rule, only while
-  // Rules is the active section.
+  // feed tells the composer and the bar what Rules shows, only while it is
+  // the active section: the open rule once it has loaded (a rule that
+  // doesn't load attaches nothing), or the section when Court asks the agent.
   function feed(): void {
     if (!active) return;
-    ctx.setAttached(openId ? { rule: openId } : {});
+    ctx.setAttached(
+      doc ? { rule: doc.id } : asking ? { section: 'rules' } : {},
+    );
     ctx.setPrimary(doc ? doc.primary() : null);
   }
 
@@ -798,6 +1272,7 @@ export function makeRules(ctx: Ctx): Section {
       const d = await ctx.api.get<RuleDetailView>('/rule', { id });
       if (mine !== opening || openId !== id) return;
       doc = renderRule(ctx, d, hooks);
+      asking = false;
       readEl.replaceChildren(doc.el);
       readEl.scrollTop = 0;
       feed();
@@ -826,7 +1301,7 @@ export function makeRules(ctx: Ctx): Section {
 
   // "a" activates the open draft: the bar's primary, from the keyboard. Like
   // every section key it is bound only while Rules is shown (Attention's "a"
-  // accepts a proposal).
+  // accepts a proposal). Activation only proposes (m2, accepted).
   const activateKey: KeyBinding = {
     keys: 'a',
     label: 'activate the open draft',
@@ -863,23 +1338,27 @@ export function makeRules(ctx: Ctx): Section {
     },
     hide() {
       active = false;
+      asking = false;
     },
     onLive(type: string, data: unknown) {
       if (type === 'rules') {
         void loadList();
-        const ev = data as { id?: string };
+        const ev = data as { id?: string; by?: string };
         if (doc && openId && (!ev?.id || ev.id === openId)) {
           const d = doc;
+          const mine = ++liveSeq;
           void ctx.api
             .get<RuleDetailView>('/rule', { id: openId })
             .then((detail) => {
-              if (doc === d) d.update(detail);
+              // Only the newest reply, and only for the same document.
+              if (mine === liveSeq && doc === d) d.update(detail, ev?.by ?? '');
             })
             .catch(() => {});
         }
       } else if (type === 'index' || type === 'decided') {
-        // The live index moved: the open rule's matches are recomputed.
-        doc?.repreview();
+        // The live index moved: the open rule's matches are recomputed
+        // (debounced: a batch of decisions is one preview).
+        doc?.refresh();
         if (type === 'index') void loadList();
       } else if (type === 'proposals') {
         void loadList(); // track records

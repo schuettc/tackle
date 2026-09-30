@@ -19,7 +19,7 @@ const KIND_PLURAL: Record<string, string> = { branch: 'branches' };
 
 /** isEmpty reports whether nothing is attached. */
 export function isEmpty(a: Attached): boolean {
-  return !a.keys?.length && !a.open && !a.rule && !a.job;
+  return !a.keys?.length && !a.open && !a.rule && !a.job && !a.section;
 }
 
 /** attachedLabel is the attached line's display value ('' when empty). */
@@ -41,6 +41,8 @@ export function attachedLabel(a: Attached): string {
   }
   if (a.rule) parts.push(`rule ${a.rule}`);
   if (a.job) parts.push(`job #${a.job}`);
+  // The section Court asked from, when nothing in it is open ("rules").
+  if (a.section && parts.length === 0) parts.push(a.section);
   return parts.join(' \u00b7 ');
 }
 
@@ -52,6 +54,7 @@ export function attachedText(a: Attached): string {
   }
   if (a.rule) words.push(`rule ${a.rule}`);
   if (a.job) words.push(`job ${a.job}`);
+  if (a.section) words.push(`section ${a.section}`);
   return words.join(' ');
 }
 
@@ -66,8 +69,12 @@ export function parseAttached(text: string): Attached {
   for (let i = 0; i < words.length; i++) {
     const w = words[i];
     const next = words[i + 1];
-    if ((w === 'rule' || w === 'job' || w === 'open') && next) {
+    if (
+      (w === 'rule' || w === 'job' || w === 'open' || w === 'section') &&
+      next
+    ) {
       if (w === 'rule') out.rule = next;
+      else if (w === 'section') out.section = next;
       else if (w === 'job') out.job = next.replace(/^#/, '');
       else if (isKey(next)) out.open = next;
       i++;

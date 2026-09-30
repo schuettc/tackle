@@ -26,6 +26,9 @@ const COUNT = 4;
 
 let vocab: Promise<Field[]> | null = null;
 
+// The message each editor shows (setConditionError), to redraw it with.
+const errors = new WeakMap<HTMLElement, { index: number; message: string }>();
+
 /** ruleVocabulary fetches the field vocabulary once. */
 export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
   if (!vocab) {
@@ -83,15 +86,16 @@ function select(
 }
 
 /**
- * conditionEditor draws a rule's conditions. rule.status 'draft' is editable.
- * onChange receives the whole new list after every edit.
+ * conditionEditor draws a rule's conditions: editable for a draft (or when
+ * rule.editable says so: an invalid active rule, to be fixed), read-only for
+ * an active rule. onChange receives the whole new list after every edit.
  */
 export function conditionEditor(
   ctx: Ctx,
-  rule: { match: Condition[] | null; status: string },
+  rule: { match: Condition[] | null; status: string; editable?: boolean },
   onChange: (match: Condition[]) => void,
 ): HTMLElement {
-  const editable = rule.status === 'draft';
+  const editable = rule.editable ?? rule.status === 'draft';
   const conds: Condition[] = (rule.match ?? []).map((c) => ({ ...c }));
   let fields: Field[] = [];
   const fieldOf = (name: string) => fields.find((f) => f.name === name);
@@ -186,6 +190,10 @@ export function conditionEditor(
 
   function render(): void {
     rowsEl.replaceChildren(...conds.map((_, i) => row(i)));
+    // A message serve gave stays with its condition across a redraw (the
+    // vocabulary arriving redraws the rows).
+    const e = errors.get(el);
+    if (e) setConditionError(el, e.index, e.message);
   }
 
   // ---- + condition ---------------------------------------------------------
@@ -305,6 +313,8 @@ export function setConditionError(
   index: number,
   message: string | null,
 ): void {
+  if (message === null) errors.delete(editor);
+  else errors.set(editor, { index, message });
   for (const e of editor.querySelectorAll<HTMLElement>('.cb-cond-err')) {
     e.hidden = true;
     e.textContent = '';

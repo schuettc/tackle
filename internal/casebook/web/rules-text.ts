@@ -2,19 +2,51 @@
 //
 // No kit or browser imports, so node --test can load it.
 
-import type { Condition, ReasonCount, Rule, TrackRecord } from './wire.d.ts';
+import type {
+  Condition,
+  ReasonCount,
+  Rule,
+  RuleAction,
+  TrackRecord,
+} from './wire.d.ts';
 
 /**
- * trackRecord is a rule's record as the list shows it (spec §4.3):
- * "87 accepted · 4 rejected · 3 pending", leaving out the parts that are 0.
- * A rule with no record yet reads "0 pending".
+ * trackRecord is a rule's record (spec §4.3): "87 accepted · 4 rejected ·
+ * 3 pending", leaving out the parts that are 0 ('' for none yet).
  */
 export function trackRecord(r: TrackRecord): string {
   const parts: string[] = [];
   if (r.accepted) parts.push(`${r.accepted} accepted`);
   if (r.rejected) parts.push(`${r.rejected} rejected`);
   if (r.pending) parts.push(`${r.pending} pending`);
-  return parts.length ? parts.join(' \u00b7 ') : '0 pending';
+  return parts.join(' \u00b7 ');
+}
+
+/**
+ * rowKicker is a rule's line in the list: what it matches now, what it
+ * excludes, and its record ("849 match · 2 excluded · 3 pending"); an
+ * invalid rule says so instead of counting.
+ */
+export function rowKicker(row: {
+  matches: number;
+  excluded: number;
+  record: TrackRecord;
+  invalid?: string;
+}): string {
+  const rec = trackRecord(row.record);
+  const head = row.invalid
+    ? 'not valid'
+    : `${row.matches} match \u00b7 ${row.excluded} excluded`;
+  return rec ? `${head} \u00b7 ${rec}` : head;
+}
+
+/** sameAction compares two [propose] blocks. */
+export function sameAction(a: RuleAction, b: RuleAction): boolean {
+  return (
+    a.disposition === b.disposition &&
+    (a.until ?? '') === (b.until ?? '') &&
+    (a.note ?? '') === (b.note ?? '')
+  );
 }
 
 /**
@@ -83,9 +115,7 @@ export function sameRule(a: Rule, b: Rule): boolean {
     a.created_by === b.created_by &&
     a.edited_at === b.edited_at &&
     sameConditions(a.match ?? [], b.match ?? []) &&
-    a.propose.disposition === b.propose.disposition &&
-    (a.propose.until ?? '') === (b.propose.until ?? '') &&
-    (a.propose.note ?? '') === (b.propose.note ?? '') &&
+    sameAction(a.propose, b.propose) &&
     ex(a) === ex(b)
   );
 }

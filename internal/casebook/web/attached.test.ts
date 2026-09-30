@@ -46,6 +46,15 @@ describe('attachedLabel', () => {
     );
     assert.equal(attachedLabel({ job: '3' }), 'job #3');
   });
+  test('a section, with nothing open in it, names the section', () => {
+    assert.equal(attachedLabel({ section: 'rules' }), 'rules');
+    assert.ok(!isEmpty({ section: 'rules' }));
+    assert.equal(
+      attachedLabel({ section: 'rules', rule: 'x' }),
+      'rule x',
+      'an open rule says more than its section',
+    );
+  });
   test('nothing attached is empty', () => {
     assert.equal(attachedLabel({}), '');
     assert.ok(isEmpty({}));
@@ -59,6 +68,7 @@ describe('attachedText and parseAttached', () => {
     { open: 'pr:o/r#4' },
     { rule: 'landed-branches' },
     { job: '3' },
+    { section: 'rules' },
     { keys: ['pr:o/r#1', 'pr:o/r#2'], open: 'issue:o/r#9', rule: 'x' },
     {},
   ];

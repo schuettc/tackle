@@ -1017,10 +1017,12 @@
 }
 
 /* ---- sections: only the active one shows ----------------------------------- */
-/* app.ts hides a section's list and reading column with the hidden attribute;
- * the kit's .kit-list / .kit-read display rules would otherwise win over it. */
-.kit-app > .kit-list[hidden],
-.kit-app > .kit-read[hidden] {
+/* app.ts hides a section's list and reading column with the hidden attribute.
+ * Stopgap for a kit gap (tools-common v0.11.0): kit.css gives .kit-list
+ * display:flex and, unlike .kit-live and .kit-primary, no [hidden] rule, so
+ * the attribute alone doesn't hide it. (.kit-read sets no display; the
+ * attribute already works there.) Remove once the kit honours [hidden]. */
+.kit-app > .kit-list[hidden] {
   display: none;
 }
 
@@ -1265,4 +1267,62 @@ input.cb-cond-v::placeholder {
 .cb-by-agent,
 .kit-facts b.cb-by-agent {
   color: var(--kit-agent);
+}
+
+/* A rule serve holds as not valid: its pill (it needs Court: signal). */
+.kit-pill.cb-pill-invalid {
+  color: var(--kit-signal);
+  background: var(--kit-signal-soft);
+}
+.cb-rule .kit-card {
+  margin-top: 4px;
+}
+.cb-invalid-msg {
+  font: 13px var(--kit-mono);
+  margin: 0 0 8px;
+}
+.cb-invalid-help,
+.cb-conflict-help {
+  font-size: 14px;
+  color: var(--kit-muted);
+  margin: 0 0 10px;
+}
+.cb-conflict-name {
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.cb-conflict-note {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-signal);
+  margin: 8px 0 0;
+}
+.cb-conflict-note:empty {
+  display: none;
+}
+
+/* The list's foot: new rule, or ask the agent to draft one. */
+.cb-rules-foot {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cb-link.cb-rules-ask {
+  font-size: 12.5px;
+  color: var(--kit-muted);
+  text-decoration: none;
+}
+.cb-link.cb-rules-ask:hover,
+.cb-link.cb-rules-ask:focus-visible {
+  color: var(--kit-fg);
+  text-decoration: underline;
+}
+
+/* A proposal row a disposition doesn't use (until, unless wait / watch). */
+.cb-propose .kit-tr[hidden] {
+  display: none;
+}
+.cb-matches-view[hidden] {
+  display: none;
 }

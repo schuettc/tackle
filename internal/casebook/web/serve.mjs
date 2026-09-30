@@ -68,7 +68,10 @@ function findBinary() {
 // casebook-data repo, committed, so a scenario can own local branches (with
 // their landed verdicts) no other scenario touches.
 let homes = 0;
-function setupHome(seedRepos = [], seedMachines = []) {
+//
+// seedFiles adds any other files to the casebook-data repo, committed with
+// the machines ({'rules/x.toml': '…'}), e.g. a rule file as a person wrote it.
+function setupHome(seedRepos = [], seedMachines = [], seedFiles = {}) {
   const fixture = join(here, 'testdata', 'home');
   const home = join(tmpdir(), `casebook-probe-${process.pid}-${homes++}`);
 
@@ -80,12 +83,17 @@ function setupHome(seedRepos = [], seedMachines = []) {
   const bundlePath = join(fixture, 'data', 'repo.bundle');
   const repoPath = join(home, 'data', 'repo');
   execSync(`git clone -q "${bundlePath}" "${repoPath}"`, { stdio: 'pipe' });
-  if (seedMachines.length) {
+  const files = Object.entries(seedFiles);
+  if (seedMachines.length || files.length) {
     for (const snap of seedMachines) {
       writeFileSync(
         join(repoPath, 'machines', `${snap.machine}.json`),
         JSON.stringify(snap, null, 2) + '\n',
       );
+    }
+    for (const [rel, text] of files) {
+      mkdirSync(dirname(join(repoPath, rel)), { recursive: true });
+      writeFileSync(join(repoPath, rel), text);
     }
     const git = (args) =>
       execSync(`git ${args}`, {
@@ -101,7 +109,7 @@ function setupHome(seedRepos = [], seedMachines = []) {
           GIT_CONFIG_NOSYSTEM: '1',
         },
       });
-    git('add machines');
+    git('add -A');
     git('commit -q -m "probe: seed machine snapshots"');
   }
 
@@ -169,7 +177,7 @@ function waitForAdvert(advertPath, timeoutMs = 10000) {
  */
 export async function startServe(opts = {}) {
   const bin = findBinary();
-  const home = setupHome(opts.seedRepos, opts.seedMachines);
+  const home = setupHome(opts.seedRepos, opts.seedMachines, opts.seedFiles);
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
   const proc = spawn(bin, SERVE_ARGS, {

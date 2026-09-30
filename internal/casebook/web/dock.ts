@@ -795,6 +795,7 @@ export function makeDock(ctx: Ctx): DockHandle {
     const turn = !!sess && sess.busy && !sess.left;
     waitStrip.setQueued(turn ? sess.queued : 0);
     composer.setAgent(sess?.harness ?? '');
+    ctx.setAgentName(sess?.harness ?? '');
   }
 
   async function switchSession(id: string) {

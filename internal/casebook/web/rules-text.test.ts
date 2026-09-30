@@ -13,6 +13,7 @@ import {
   viewCounts,
   sameConditions,
   sameRule,
+  rowKicker,
 } from './rules-text.ts';
 
 describe('trackRecord', () => {
@@ -32,10 +33,38 @@ describe('trackRecord', () => {
       '3 pending',
     );
   });
-  test('a rule with no record yet reads "0 pending"', () => {
+  test('a rule with no record yet has none to show', () => {
+    assert.equal(trackRecord({ accepted: 0, rejected: 0, pending: 0 }), '');
+  });
+});
+
+describe('rowKicker', () => {
+  const none = { accepted: 0, rejected: 0, pending: 0 };
+  test('the mock\'s "849 match · 2 excluded"', () => {
     assert.equal(
-      trackRecord({ accepted: 0, rejected: 0, pending: 0 }),
-      '0 pending',
+      rowKicker({ matches: 849, excluded: 2, record: none }),
+      '849 match \u00b7 2 excluded',
+    );
+  });
+  test('then the record', () => {
+    assert.equal(
+      rowKicker({
+        matches: 3,
+        excluded: 0,
+        record: { accepted: 87, rejected: 4, pending: 3 },
+      }),
+      '3 match \u00b7 0 excluded \u00b7 87 accepted \u00b7 4 rejected \u00b7 3 pending',
+    );
+  });
+  test('an invalid rule says so instead of counting', () => {
+    assert.equal(
+      rowKicker({
+        matches: 0,
+        excluded: 1,
+        record: none,
+        invalid: 'condition 1: x',
+      }),
+      'not valid',
     );
   });
 });

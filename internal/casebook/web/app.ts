@@ -41,6 +41,16 @@ export interface Ctx {
    * Rules (Task 8) with {rule: id}, Apply (Task 9) with {job: id}.
    */
   setAttached(a: Attached): void;
+  /** focusComposer puts the cursor in the dock's message field. */
+  focusComposer(): void;
+  /**
+   * The attached session's agent ("pi", "claude"; "" before one is known).
+   * The dock sets it; sections that name the agent (Rules' "or ask pi to
+   * draft one") read it and hear when it changes.
+   */
+  agentName(): string;
+  setAgentName(name: string): void;
+  onAgentName(cb: (name: string) => void): void;
 }
 
 export interface Router {
@@ -235,6 +245,8 @@ export function boot(): void {
   // before then, so the latest value is kept and handed to each dock.
   const dockHandles: DockHandle[] = [];
   let lastAttached: Attached = {};
+  let agent = '';
+  const agentListeners: Array<(name: string) => void> = [];
 
   const ctx: Ctx = {
     api,
@@ -251,6 +263,18 @@ export function boot(): void {
     setAttached(a) {
       lastAttached = a;
       for (const d of dockHandles) d.setAttached(a);
+    },
+    focusComposer() {
+      dockHandles[0]?.focusComposer();
+    },
+    agentName: () => agent,
+    setAgentName(name) {
+      if (name === agent) return;
+      agent = name;
+      for (const cb of agentListeners) cb(name);
+    },
+    onAgentName(cb) {
+      agentListeners.push(cb);
     },
   };
 
