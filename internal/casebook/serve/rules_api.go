@@ -546,9 +546,12 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	in.Rule.Status = rules.StatusDraft
 
-	// Validate conditions.
-	if err := rules.ValidateConditions(in.Rule.Match); err != nil {
-		reply(w, nil, bad("%v", err))
+	// An agent submits a complete draft: one serve holds invalid is refused
+	// with the reason, and nothing is written. The agent corrects it; it is
+	// never told a draft it can't have was saved (Court's own new rule may
+	// be saved unfinished; the agent's may not).
+	if err := in.Rule.Validate(); err != nil {
+		reply(w, nil, bad("draft rule %q not written, not valid: %v", in.Rule.ID, err))
 		return
 	}
 

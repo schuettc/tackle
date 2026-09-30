@@ -122,3 +122,32 @@ func TestServeNumbersConditionsFromOne(t *testing.T) {
 		t.Errorf("agent draft: %q, want condition 2", msg)
 	}
 }
+
+// N2: the agent's draft is refused when it isn't valid, with serve's
+// reason, and nothing is written: the agent is never told a bad draft
+// was saved, and Court never finds one it didn't know about.
+func TestAgentDraftMustBeValid(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+	for _, tc := range []struct {
+		name, disp, until, kind, want string
+	}{
+		{"nuke", "nuke", "", "repo", `"nuke" is not a disposition`},
+		{"no-disposition", "", "", "repo", "no disposition"},
+		{"wait-no-until", "wait", "", "repo", "wait needs an until"},
+		{"wait-30d", "wait", "30d", "repo", `invalid until "30d"`},
+		{"archive-branch", "archive", "", "branch", "archive can't be proposed for a branch"},
+	} {
+		var out map[string]any
+		code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+			"session": "s1", "rule": draftBody("agent-"+tc.name, tc.disp, tc.until, kindCond(tc.kind)),
+		}, &out)
+		msg, _ := out["error"].(string)
+		if code != 400 || !strings.Contains(msg, "not valid") || !strings.Contains(msg, tc.want) {
+			t.Errorf("%s: %d %q, want 400 naming %q", tc.name, code, msg, tc.want)
+		}
+		if ru, err := r.App.Repo.ReadRule("agent-" + tc.name); ru != nil || err != nil {
+			t.Errorf("%s: a refused draft was written: %+v %v", tc.name, ru, err)
+		}
+	}
+}

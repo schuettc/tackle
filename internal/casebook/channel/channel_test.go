@@ -813,6 +813,42 @@ func TestChannelRuleDraftTool(t *testing.T) {
 	}
 }
 
+// TestChannelRuleDraftToolSaysWhyADraftIsInvalid: N2. What the agent
+// receives for a draft serve holds invalid is an error naming serve's
+// reason, never "written"; nothing is written, and a corrected draft is.
+func TestChannelRuleDraftToolSaysWhyADraftIsInvalid(t *testing.T) {
+	r := apptest.New(t)
+	c := runServe(t, r)
+	ch := New(Identity{Session: "s1", Harness: "pi", Label: "pi · w", CWD: "/w"}, c, "test")
+	ch.Retry, ch.Poll = 100*time.Millisecond, 2*time.Second
+	m := start(t, ch)
+
+	draft := func(disp, until string) (string, bool) {
+		return m.tool("casebook_rule_draft", map[string]any{
+			"id":      "ch-bad-rule",
+			"name":    "Channel bad rule",
+			"match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "branch"}},
+			"propose": map[string]any{"Disposition": disp, "Until": until},
+		})
+	}
+	for _, tc := range []struct{ disp, until, want string }{
+		{"nuke", "", `"nuke" is not a disposition`},
+		{"archive", "", "archive can't be proposed for a branch"},
+		{"wait", "30d", `invalid until "30d"`},
+	} {
+		out, isErr := draft(tc.disp, tc.until)
+		if !isErr || strings.Contains(out, "written (") || !strings.Contains(out, "not valid") || !strings.Contains(out, tc.want) {
+			t.Errorf("%s until %q: the agent received %q (error %v), want an error naming %q", tc.disp, tc.until, out, isErr, tc.want)
+		}
+	}
+	if ru, err := r.App.Repo.ReadRule("ch-bad-rule"); ru != nil || err != nil {
+		t.Fatalf("a refused draft was written: %+v %v", ru, err)
+	}
+	if out, isErr := draft("wait", "inactive(30d)"); isErr || !strings.Contains(out, "written") {
+		t.Fatalf("the corrected draft: %q (error %v)", out, isErr)
+	}
+}
+
 // TestChannelJobStepAndAskTools verifies that casebook_job_step and
 // casebook_job_ask reach the server and return structured results. The test
 // creates a job in the apply store, approves it for s1, then drives the two
