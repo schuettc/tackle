@@ -19,6 +19,11 @@ import {
   progress,
   stepMark,
   viewOf,
+  outwardGo,
+  plannedKeys,
+  plannableCount,
+  ageText,
+  observations,
 } from './apply-text.ts';
 import type { Job, JobStep, NeedsYou } from './wire.d.ts';
 
@@ -229,5 +234,65 @@ describe('ordering', () => {
     const second = s.next();
     assert.equal(s.isLatest(first), false);
     assert.equal(s.isLatest(second), true);
+  });
+});
+
+describe('outwardGo', () => {
+  test('the verb agrees with the count', () => {
+    assert.equal(outwardGo(1), 'The outward step goes');
+    assert.equal(outwardGo(3), 'The 3 outward steps go');
+  });
+});
+
+describe('plannedKeys and plannableCount', () => {
+  const j = (id: number, state: string, keys: string[]): Job =>
+    ({
+      id,
+      state,
+      machine: 'm',
+      created_at: '2026-09-27T00:00:00Z',
+      paused: false,
+      steps: keys.map((k) => step('pr-close', 'agent', 'pending', { key: k })),
+    }) as unknown as Job;
+  const jobs = [
+    j(1, 'planned', ['pr:o/r#1', 'pr:o/r#2']),
+    j(2, 'running', ['pr:o/r#3']),
+    j(3, 'cancelled', ['pr:o/r#4']),
+    j(4, 'planned', ['pr:o/r#2', 'pr:o/r#2']),
+  ];
+  test('only unapproved plans hold keys, the newest plan wins', () => {
+    const m = plannedKeys(jobs);
+    assert.deepEqual([...m.entries()].sort(), [
+      ['pr:o/r#1', 1],
+      ['pr:o/r#2', 4],
+    ]);
+  });
+  test('plan all leaves out what is in a plan', () => {
+    const m = plannedKeys(jobs);
+    const loaded = ['pr:o/r#1', 'pr:o/r#2', 'pr:o/r#5'];
+    assert.equal(plannableCount(3, loaded, m, true), 1);
+    // Not all loaded: a planned key not seen yet is one of the total.
+    assert.equal(plannableCount(10, ['pr:o/r#5'], m, false), 8);
+    assert.equal(plannableCount(1, loaded, m, true), 0);
+  });
+});
+
+describe('observations', () => {
+  const t0 = Date.parse('2026-09-27T12:00:00Z');
+  test('fresh within one sync interval, then its age', () => {
+    assert.deepEqual(observations(t0, 30 * 60e3, t0 + 29 * 60e3), {
+      text: 'observations fresh',
+      stale: false,
+    });
+    assert.deepEqual(observations(t0, 30 * 60e3, t0 + 34 * 60e3), {
+      text: 'observations 34m old',
+      stale: true,
+    });
+    assert.equal(observations(t0, 2000, t0 + 5000).text, 'observations 5s old');
+  });
+  test('ageText', () => {
+    assert.equal(ageText(40e3), '40s');
+    assert.equal(ageText(3 * 3600e3), '3h');
+    assert.equal(ageText(50 * 3600e3), '2d');
   });
 });

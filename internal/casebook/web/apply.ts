@@ -7,25 +7,36 @@
 // and n/total (or "queued"), and a signal line when something needs Court
 // ("1 needs you · 1 paused"). ready: the plans serve built and Court hasn't
 // approved, then the decided items waiting to be applied (selectable; the
-// foot plans the selection, or all of them). done: finished jobs.
+// foot plans the selection, or all of them; an item already in a plan says
+// "in plan #N" and isn't offered again). done: finished jobs. The foot also
+// says how old serve's observations are ("observations fresh", or "… 34m
+// old" past one sync interval, when a plan would be refused).
 //
 // #/apply/<job> opens a job. A plan (a planned job) shows its steps grouped
 // by action with the exact command serve will run for each (serve's own
-// command string, never composed here), and approve: with a session picker
-// when the plan has agent-lane steps (approving without one is impossible
-// here). A running or finished job shows its facts, the needs-you cards
-// (rust edge; a text card's post and close · edit text · close without
-// comment · skip, a batch's confirm, a failed step's hand to the agent, the
-// agent's paused step), and the steps table (✓ verified, ‖ paused, · next),
-// with undo on a finished step serve says it can undo.
+// command string, never composed here), approve (with a session picker
+// when the plan has agent-lane steps: a session is chosen for Court only
+// when it is the only one here or the one he picked in the dock; otherwise
+// he picks, and approving without one is impossible) and discard. A plan
+// serve refuses as stale shows serve's words and "sync first": serve syncs
+// (POST /api/sync), and when the live wire says the sync is done the plan is
+// asked for again. A running or finished job shows its facts, the needs-you
+// cards (rust edge; a text card's post and close · edit text · close
+// without comment · skip, a batch's confirm, a failed step's hand to the
+// agent, the agent's paused step), and the steps table (✓ verified,
+// ‖ paused, · next), with undo on a finished step serve says it can undo.
 //
 // The bar's primary follows the job: Pause job while it runs, Resume while
 // it is paused, Approve on a plan (once it can be), Plan N / Plan all on the
-// ready list. Live job, step and needs_you events reload the list and the
-// open job; a reload never draws over a newer one (an older reply is
+// ready list, Sync first after a stale refusal. Live job, step and
+// needs_you events mark the job they name; one reload runs at a time (at
+// most one more queued) and fetches only those jobs. A redraw keeps what
+// Court was doing: an open "edit text" field's text, the focused control
+// and the caret. A reload never draws over a newer reply (an older one is
 // dropped). While To apply is the active section it feeds the composer
-// {job: <id>} for the open job and {} otherwise; hidden, it never touches
-// the attached line or the bar's primary.
+// {job: <id>} (with the job's title for the line) for the open job and {}
+// otherwise; hidden, it never touches the attached line or the bar's
+// primary.
 
 import {
   list,
@@ -54,6 +65,8 @@ import type {
   SessionsView,
   Step,
   SummaryView,
+  SyncEvent,
+  SyncView,
   UndoResult,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
@@ -70,7 +83,11 @@ import {
   needsLine,
   needsSession,
   nextSteps,
+  observations,
   openCardsByJob,
+  outwardGo,
+  plannableCount,
+  plannedKeys,
   planSummary,
   progress,
   stepMark,
@@ -121,14 +138,76 @@ let planner: Planner | null = null;
 /**
  * buildPlan asks serve for a plan of the given decided items (or all of
  * them). A built plan opens as #/apply/<job>; serve's refusal (409: the
- * observation is older than one sync interval) is shown in its own words.
+ * observation is older than one sync interval) is shown in its own words,
+ * with "sync first".
  */
-export function buildPlan(ctx: Ctx, what: string[] | 'all'): void {
+export function buildPlan(ctx: Ctx, what: string[] | 'all'): Promise<void> {
   const body = what === 'all' ? { all: true } : { keys: what };
-  void ctx.api
+  return ctx.api
     .post<PlanView>('/apply/plan', body)
     .then((v) => planner?.planned(v))
     .catch((err: unknown) => planner?.refused(message(err)));
+}
+
+// ---- keeping focus across a redraw ------------------------------------------
+//
+// A live event redraws the open job. What Court was doing there survives it:
+// the focused control is found again in the new drawing by what it is (its
+// card, step or session, its kind, its label), and a text field keeps its
+// caret. (An edit's text itself is kept by the section, per card.)
+
+interface FocusSnap {
+  key: string;
+  start: number | null;
+  end: number | null;
+}
+
+function focusKey(el: Element): string {
+  const host = el.closest(
+    '[data-card],[data-step],[data-session],[data-testid]',
+  );
+  const hostKey = host
+    ? ['card', 'step', 'session', 'testid']
+        .map((a) => host.getAttribute(`data-${a}`) ?? '')
+        .join('/')
+    : '';
+  const own =
+    el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement
+      ? el.className
+      : (el.textContent ?? '');
+  return `${hostKey}|${el.tagName}|${own}`;
+}
+
+function focusSnapshot(root: HTMLElement): FocusSnap | null {
+  const a = document.activeElement;
+  if (!a || a === document.body || !root.contains(a)) return null;
+  const field =
+    a instanceof HTMLTextAreaElement || a instanceof HTMLInputElement
+      ? a
+      : null;
+  return {
+    key: focusKey(a),
+    start: field ? field.selectionStart : null,
+    end: field ? field.selectionEnd : null,
+  };
+}
+
+function focusRestore(root: HTMLElement, snap: FocusSnap | null): void {
+  if (!snap) return;
+  const els = root.querySelectorAll<HTMLElement>(
+    'button, textarea, input, a[href], [tabindex]',
+  );
+  for (const el of els) {
+    if (focusKey(el) !== snap.key) continue;
+    el.focus({ preventScroll: true });
+    if (
+      (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) &&
+      snap.start !== null
+    ) {
+      el.setSelectionRange(snap.start, snap.end ?? snap.start);
+    }
+    return;
+  }
 }
 
 export function makeApply(ctx: Ctx): Section {
@@ -145,31 +224,71 @@ export function makeApply(ctx: Ctx): Section {
   let open: JobView | null = null;
   // serve's groups for the plan it just built (PlanView.groups), by job.
   let planGroups: { job: number; groups: StepGroup<Step>[] } | null = null;
-  let chosenSession = '';
+  // The session Court picked for a plan's outward steps ('' until he does).
+  let courtSession = '';
   let stepsShown = STEPS_PAGE;
   let refusal = '';
   let note = '';
   let busy = false;
+  let planning = false;
   let painting = false;
-  const listSeq = makeSeq();
+  // serve's observation age: when the index was built, one sync interval,
+  // and whether a sync (POST /api/sync) is running.
+  let builtAt = 0;
+  let intervalMs = 0;
+  let syncing = false;
+  let syncError = '';
+  // What a refused plan asked for, built again once a sync is done.
+  let afterSync: string[] | 'all' | null = null;
+  // An open "edit text" field's text, by card id: a redraw keeps it.
+  const editors = new Map<number, string>();
   const itemsSeq = makeSeq();
+  const listSeq = makeSeq();
   const jobSeq = makeSeq();
 
+  const present = () => sessions.filter((s) => !s.left);
+  // The session a plan's outward steps go to: Court's pick while it is here;
+  // else the one he picked in the dock, if it is here; else the only session
+  // here. With two or more here and none picked, none: Court chooses.
+  const planSession = (): string => {
+    const ps = present();
+    const here = (id: string) => !!id && ps.some((s) => s.id === id);
+    if (here(courtSession)) return courtSession;
+    if (here(ctx.dockSession())) return ctx.dockSession();
+    return ps.length === 1 ? ps[0].id : '';
+  };
   // The agent a job's outward steps go to: its session's, or for a plan,
-  // the session Court has chosen for it.
+  // the session chosen for it.
   const agentOf = (job: Job): string => {
     const id =
-      job.state === 'planned' && !job.session ? chosenSession : job.session;
+      job.state === 'planned' && !job.session ? planSession() : job.session;
     const s = sessions.find((x) => x.id === id);
     return s?.harness || ctx.agentName() || 'agent';
   };
-  const present = () => sessions.filter((s) => !s.left);
 
   // ---- the list ----
 
   const footCount = h('span', { class: 'cb-apply-foot-n' });
   const footBtns = h('span', { class: 'cb-apply-foot-btns' });
-  const foot = h('div', { class: 'cb-apply-foot' }, footCount, footBtns);
+  const footSel = h('div', { class: 'cb-apply-foot-sel' }, footCount, footBtns);
+  const obsText = h('span', { 'data-testid': 'observations' });
+  const obsEl = h(
+    'div',
+    { class: 'cb-apply-obs' },
+    h('i', { class: 'cb-apply-obs-dot', 'aria-hidden': 'true' }),
+    obsText,
+  );
+  const foot = h('div', { class: 'cb-apply-foot' }, footSel, obsEl);
+
+  // In a plan Court hasn't approved: key → that plan's job id.
+  const inPlan = () => plannedKeys(jobs);
+  const plannable = () =>
+    plannableCount(
+      itemsTotal,
+      items.map((i) => i.key),
+      inPlan(),
+      itemsTotal <= items.length,
+    );
 
   const handle: ListHandle<Row> = list<Row>({
     label: 'to apply',
@@ -185,12 +304,13 @@ export function makeApply(ctx: Ctx): Section {
       }
       if (r.t === 'item') {
         const it = r.item;
+        const plan = inPlan().get(it.key);
         return {
           id: it.key,
           key: `${it.kind} \u00b7 ${keyWithoutKind(it.key)}`,
           title: it.title ?? keyWithoutKind(it.key),
-          meta: it.decision?.disposition ?? '',
-          selectable: true,
+          meta: plan ? `in plan #${plan}` : (it.decision?.disposition ?? ''),
+          selectable: !plan,
         };
       }
       const j = r.job;
@@ -220,8 +340,12 @@ export function makeApply(ctx: Ctx): Section {
     onOpen(r: Row, i: number) {
       if (painting) return;
       if (r.t === 'job') ctx.route.go('apply', String(r.job.id));
-      else if (r.t === 'item') handle.toggle(i);
-      else void loadItems(items.length);
+      else if (r.t === 'item') {
+        // An item in a plan opens its plan; any other is selected.
+        const plan = inPlan().get(r.item.key);
+        if (plan) ctx.route.go('apply', String(plan));
+        else handle.toggle(i);
+      } else void loadItems(items.length);
     },
     onSelect() {
       paintFoot();
@@ -235,11 +359,17 @@ export function makeApply(ctx: Ctx): Section {
   // What needs Court (a paused step is counted as paused, not twice).
   const cardsFor = (jobId: number) =>
     openCardsByJob(cards.filter((c) => c.kind !== 'paused')).get(jobId) ?? 0;
-  const selectedKeys = () =>
-    handle.selectedIds().filter((k) => !k.startsWith('job:') && k !== 'more');
+  const selectedKeys = () => {
+    const planned = inPlan();
+    return handle
+      .selectedIds()
+      .filter((k) => !k.startsWith('job:') && k !== 'more' && !planned.has(k));
+  };
+  // A discarded plan is gone: it is listed nowhere.
+  const listed = () => jobs.filter((j) => j.state !== 'cancelled');
 
   function rowsFor(v: ApplyView): Row[] {
-    const js = jobs
+    const js = listed()
       .filter((j) => viewOf(j) === v)
       .sort((a, b) => b.id - a.id)
       .map((job): Row => ({ t: 'job', job }));
@@ -254,7 +384,7 @@ export function makeApply(ctx: Ctx): Section {
 
   function counts(): Record<ApplyView, number> {
     const c = { running: 0, ready: itemsTotal, done: 0 };
-    for (const j of jobs) c[viewOf(j)]++;
+    for (const j of listed()) c[viewOf(j)]++;
     return c;
   }
 
@@ -270,13 +400,20 @@ export function makeApply(ctx: Ctx): Section {
     );
     const shown = rowsFor(view);
     handle.setItems(shown);
+    const planned = inPlan();
     const els = handle.el.querySelectorAll<HTMLElement>('.kit-row');
     els.forEach((rowEl, i) => {
       const r = shown[i];
       if (!r) return;
       if (r.t !== 'job') {
-        if (r.t === 'item') rowEl.dataset.key = r.item.key;
-        else rowEl.classList.add('cb-apply-more');
+        if (r.t === 'item') {
+          rowEl.dataset.key = r.item.key;
+          const plan = planned.get(r.item.key);
+          if (plan) {
+            rowEl.dataset.plan = String(plan);
+            rowEl.classList.add('cb-in-plan');
+          }
+        } else rowEl.classList.add('cb-apply-more');
         return;
       }
       decorateJobRow(rowEl, r.job);
@@ -340,25 +477,112 @@ export function makeApply(ctx: Ctx): Section {
     }
   }
 
+  // The foot: on ready, the selection and what it plans; always, how old the
+  // observations are that a plan would be built from.
   function paintFoot(): void {
+    paintObs();
     if (view !== 'ready' || !itemsTotal) {
       footCount.textContent = '';
       footBtns.replaceChildren();
-      foot.hidden = true;
+      footSel.hidden = true;
       return;
     }
-    foot.hidden = false;
+    footSel.hidden = false;
     const n = selectedKeys().length;
+    const can = plannable();
+    const held = itemsTotal - can;
     footCount.textContent = n
       ? `${n} selected`
-      : pluralize(itemsTotal, 'decided item');
+      : can
+        ? pluralize(can, 'decided item')
+        : `${pluralize(held, 'decided item')} in a plan`;
+    // Signal is the selection's colour; a plain total isn't.
+    footCount.classList.toggle('cb-sel', n > 0);
     const bs: Button[] = [];
     if (n) bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
-    bs.push({ label: `plan all ${itemsTotal}`, run: () => plan('all') });
-    footBtns.replaceChildren(buttons(bs));
+    if (can) bs.push({ label: `plan all ${can}`, run: () => plan('all') });
+    footBtns.replaceChildren(bs.length ? buttons(bs) : '');
   }
 
+  function paintObs(): void {
+    const o = builtAt
+      ? observations(builtAt, intervalMs, Date.now())
+      : { text: '', stale: false };
+    obsText.textContent = syncing ? 'syncing observations\u2026' : o.text;
+    obsEl.dataset.state = syncing ? 'syncing' : o.stale ? 'stale' : 'fresh';
+    obsEl.hidden = !builtAt && !syncing;
+  }
+  // The age moves on its own: the foot says so without an event.
+  const obsTimer = setInterval(paintObs, 1000);
+  void obsTimer;
+
   // ---- loading ----
+  //
+  // Live events don't each fetch: they mark what changed, and one reload
+  // runs at a time (after a short window that gathers a burst), with at most
+  // one more queued behind it that takes everything marked meanwhile. An
+  // event about a job fetches that job (GET /api/job, which carries its open
+  // cards), never the whole list.
+
+  const dirty = {
+    all: false,
+    items: false,
+    sessions: false,
+    summary: false,
+    jobs: new Set<number>(),
+  };
+  let flushing = false;
+  let queued = false;
+
+  function mark(f: (d: typeof dirty) => void): void {
+    f(dirty);
+    if (flushing) {
+      queued = true;
+      return;
+    }
+    flushing = true;
+    // A short window gathers the events of a burst into the first reload.
+    setTimeout(() => void flush(), 40);
+  }
+
+  async function flush(): Promise<void> {
+    try {
+      do {
+        queued = false;
+        const d = {
+          all: dirty.all,
+          items: dirty.items,
+          sessions: dirty.sessions,
+          summary: dirty.summary,
+          jobs: [...dirty.jobs],
+        };
+        dirty.all = dirty.items = dirty.sessions = dirty.summary = false;
+        dirty.jobs.clear();
+        // An event that names no job reloads the list, and the open job.
+        const some = d.all && openId !== null ? [openId] : d.all ? [] : d.jobs;
+        await Promise.all([
+          d.all ? loadJobs() : null,
+          some.length ? loadSome(some) : null,
+          d.items ? loadItems() : null,
+          d.sessions ? loadSessions() : null,
+          d.summary ? loadSummary() : null,
+        ]);
+      } while (queued);
+    } finally {
+      flushing = false;
+    }
+  }
+
+  // patchJob puts a job serve sent into the list, with its open cards.
+  function patchJob(v: JobView): void {
+    const i = jobs.findIndex((j) => j.id === v.job.id);
+    if (i >= 0) jobs[i] = v.job;
+    else jobs = [...jobs, v.job];
+    cards = [
+      ...cards.filter((c) => c.job_id !== v.job.id),
+      ...(v.needs_you ?? []).filter((c) => c.state === 'open'),
+    ];
+  }
 
   async function loadJobs(): Promise<void> {
     const mine = listSeq.next();
@@ -370,10 +594,36 @@ export function makeApply(ctx: Ctx): Section {
       if (!listSeq.isLatest(mine)) return;
       jobs = j.jobs ?? [];
       cards = c.cards ?? [];
+      // The open job is drawn from its own, sequenced replies.
+      if (open) patchJob(open);
       paintList();
     } catch {
       // non-fatal: the list stays as it was
     }
+  }
+
+  // loadSome fetches the jobs live events were about.
+  async function loadSome(ids: number[]): Promise<void> {
+    const openMine =
+      openId !== null && ids.includes(openId) ? jobSeq.next() : 0;
+    const at = openId;
+    const got = await Promise.all(
+      ids.map((id) =>
+        ctx.api.get<JobView>('/job', { id: String(id) }).catch(() => null),
+      ),
+    );
+    let drawn: JobView | null = null;
+    got.forEach((v, i) => {
+      if (!v) return;
+      if (ids[i] === at) {
+        // A newer reply (Court's own action) drew it: this one is older.
+        if (!jobSeq.isLatest(openMine) || openId !== at) return;
+        drawn = v;
+      }
+      patchJob(v);
+    });
+    if (drawn) setOpen(drawn);
+    else paintList();
   }
 
   async function loadItems(offset = 0): Promise<void> {
@@ -407,9 +657,6 @@ export function makeApply(ctx: Ctx): Section {
     try {
       const v = await ctx.api.get<SessionsView>('/sessions');
       sessions = v.sessions ?? [];
-      if (chosenSession && !present().some((s) => s.id === chosenSession)) {
-        chosenSession = '';
-      }
       paintList();
       if (open?.job.state === 'planned') drawOpen();
       if (active) ctx.setPrimary(primary());
@@ -422,13 +669,17 @@ export function makeApply(ctx: Ctx): Section {
     try {
       const s = await ctx.api.get<SummaryView>('/summary');
       machine = s.machine;
+      builtAt = Date.parse(s.built_at) || 0;
+      intervalMs = s.sync_interval_ms;
+      syncing = s.syncing;
+      paintObs();
       if (openId === null) drawOverview();
     } catch {
       // non-fatal
     }
   }
 
-  // loadJob reloads the open job; only the newest request may draw.
+  // loadJob loads the job a route opened; only the newest request may draw.
   async function loadJob(id: number): Promise<void> {
     const mine = jobSeq.next();
     try {
@@ -456,10 +707,13 @@ export function makeApply(ctx: Ctx): Section {
     const first = open?.job.id !== v.job.id;
     open = v;
     // The job is listed under its view: a job opened by URL shows its chip.
-    view = viewOf(v.job);
-    const i = jobs.findIndex((j) => j.id === v.job.id);
-    if (i >= 0) jobs[i] = v.job;
-    else jobs = [...jobs, v.job];
+    if (v.job.state !== 'cancelled') view = viewOf(v.job);
+    patchJob(v);
+    // An edit whose card has closed has nothing left to edit.
+    for (const id of [...editors.keys()]) {
+      if (!(v.needs_you ?? []).some((c) => c.id === id && c.state === 'open'))
+        editors.delete(id);
+    }
     if (first) stepsShown = STEPS_PAGE;
     paintList();
     drawOpen();
@@ -468,21 +722,28 @@ export function makeApply(ctx: Ctx): Section {
   }
 
   // act posts one of Court's actions on the open job; a JobView reply is
-  // drawn in order with the reloads.
-  async function act<T>(path: string, body: unknown): Promise<void> {
+  // drawn in order with the reloads. ok runs once serve has taken it, before
+  // the job is drawn again.
+  async function act<T>(
+    path: string,
+    body: unknown,
+    ok?: () => void,
+  ): Promise<void> {
     if (busy) return;
     busy = true;
     note = '';
     const mine = jobSeq.next();
     try {
       const r = await ctx.api.post<T>(path, body);
+      ok?.();
       const jv = r as unknown as JobView;
       if (jv && typeof jv === 'object' && 'job' in jv && jv.job) {
         if (jobSeq.isLatest(mine) && openId === jv.job.id) setOpen(jv);
+        else patchJob(jv);
       } else if (openId !== null) {
-        await loadJob(openId);
+        const id = openId;
+        mark((d) => d.jobs.add(id));
       }
-      void loadJobs();
     } catch (err) {
       note = message(err);
       drawOpen();
@@ -494,15 +755,22 @@ export function makeApply(ctx: Ctx): Section {
   // ---- planning ----
 
   let asked: string[] | 'all' = [];
+  // plan asks serve once: a second press while it is asking does nothing.
   function plan(what: string[] | 'all'): void {
+    if (planning) return;
+    planning = true;
     refusal = '';
     asked = what;
-    buildPlan(ctx, what);
+    void buildPlan(ctx, what).finally(() => {
+      planning = false;
+    });
   }
 
   planner = {
     planned(v: PlanView) {
       refusal = '';
+      afterSync = null;
+      syncError = '';
       // What was planned leaves the selection.
       if (asked === 'all') handle.clearSelection();
       else handle.deselect(asked);
@@ -516,24 +784,99 @@ export function makeApply(ctx: Ctx): Section {
         })),
       };
       setOpen({ job: v.job, needs_you: [] });
-      void loadJobs();
       ctx.route.go('apply', String(v.job.id));
     },
     refused(msg: string) {
       refusal = msg;
-      if (openId === null) drawOverview();
-      else {
-        note = msg;
-        drawOpen();
-      }
+      // Once a sync is done, the same plan is asked for again.
+      afterSync = asked;
+      if (openId === null) {
+        drawOverview();
+        if (active) ctx.setPrimary(primary());
+      } else ctx.route.go('apply');
     },
   };
 
+  // syncFirst asks serve to sync (one sync, however often it is asked); the
+  // live wire says when it is done, and the refused plan is built again.
+  async function syncFirst(): Promise<void> {
+    syncError = '';
+    try {
+      const v = await ctx.api.post<SyncView>('/sync', {});
+      syncing = v.running;
+    } catch (err) {
+      syncError = message(err);
+    }
+    paintObs();
+    if (openId === null) drawOverview();
+    if (active) ctx.setPrimary(primary());
+  }
+
+  function onSync(e: SyncEvent): void {
+    if (e.state === 'running') {
+      syncing = true;
+      syncError = '';
+    } else {
+      syncing = false;
+      syncError = e.state === 'failed' ? (e.error ?? 'failed') : '';
+      mark((d) => (d.summary = true));
+      if (e.state === 'done' && afterSync !== null) {
+        const what = afterSync;
+        afterSync = null;
+        refusal = '';
+        plan(what);
+      }
+    }
+    paintObs();
+    if (openId === null) drawOverview();
+    if (active) ctx.setPrimary(primary());
+  }
+
   // ---- the reading column ----
+
+  function refusalCard(): HTMLElement {
+    const body = h(
+      'div',
+      null,
+      h('p', { 'data-testid': 'plan-refused' }, refusal),
+    );
+    if (syncing) {
+      body.append(
+        h(
+          'p',
+          { class: 'cb-apply-note', role: 'status', 'data-testid': 'syncing' },
+          'syncing\u2026 the plan is built again when the sync is done',
+        ),
+      );
+    } else if (syncError) {
+      body.append(
+        h(
+          'p',
+          {
+            class: 'cb-apply-note',
+            role: 'status',
+            'data-testid': 'sync-failed',
+          },
+          `not synced: ${syncError}`,
+        ),
+      );
+    }
+    const el = card({
+      edge: 'signal',
+      head: 'not planned',
+      body,
+      actions: syncing
+        ? undefined
+        : [{ label: 'sync first', fill: true, run: () => void syncFirst() }],
+    });
+    el.dataset.testid = 'refusal';
+    return el;
+  }
 
   function drawOverview(): void {
     if (openId !== null) return;
     const n = selectedKeys().length;
+    const can = plannable();
     const doc = h(
       'article',
       { class: 'cb-apply-doc', 'data-testid': 'apply-overview' },
@@ -552,6 +895,7 @@ export function makeApply(ctx: Ctx): Section {
       facts([
         ['running', String(counts().running)],
         ['plans', String(jobs.filter((j) => j.state === 'planned').length)],
+        ['in a plan', String(itemsTotal - can)],
         ['selected', String(n)],
       ]),
       h(
@@ -560,58 +904,58 @@ export function makeApply(ctx: Ctx): Section {
         'A plan shows the exact command for every step before anything runs. This machine applies what is on it; GitHub steps run once, from whichever machine applies them.',
       ),
     );
-    if (refusal) {
-      doc.append(
-        card({
-          edge: 'signal',
-          head: 'not planned',
-          body: h('p', { 'data-testid': 'plan-refused' }, refusal),
-        }),
-      );
-    }
-    if (itemsTotal) {
+    // Refused, the offer is to sync first (planning again would be refused
+    // again): no plan buttons beside it.
+    if (refusal) doc.append(refusalCard());
+    else if (itemsTotal && (n || can)) {
       const bs: Button[] = [];
       if (n)
         bs.push({
           label: `plan ${n} selected`,
           run: () => plan(selectedKeys()),
         });
-      bs.push({
-        label: `plan all ${itemsTotal}`,
-        fill: !n,
-        run: () => plan('all'),
-      });
+      if (can)
+        bs.push({
+          label: `plan all ${can}`,
+          fill: !n,
+          run: () => plan('all'),
+        });
       doc.append(buttons(bs));
     }
+    const keep = focusSnapshot(readEl);
     readEl.replaceChildren(h('div', { class: 'kit-doc' }, doc));
+    focusRestore(readEl, keep);
   }
 
   function drawOpen(): void {
     if (!open) return;
+    const keep = focusSnapshot(readEl);
     const j = open.job;
     const doc =
-      j.state === 'planned' ? renderPlan(j) : renderJob(ctx, open, jobHooks);
+      j.state === 'planned' || j.state === 'cancelled'
+        ? renderPlan(j)
+        : renderJob(ctx, open, jobHooks);
     readEl.replaceChildren(h('div', { class: 'kit-doc' }, doc));
+    focusRestore(readEl, keep);
   }
 
-  // The plan: its groups with every step's exact command, and approve.
+  // The plan: its groups with every step's exact command, and approve (or,
+  // discarded, what it was).
   function renderPlan(j: Job): HTMLElement {
     const steps = j.steps ?? [];
-    // The session the outward steps go to: Court's choice while it is
-    // here, else the first one present.
-    const ps = present();
-    if (!ps.some((s) => s.id === chosenSession))
-      chosenSession = ps[0]?.id ?? '';
     const groups: StepGroup<Step>[] =
       planGroups?.job === j.id ? planGroups.groups : groupSteps(steps);
     const agent = agentOf(j);
+    const discarded = j.state === 'cancelled';
     const doc = h(
       'article',
       { class: 'cb-apply-doc cb-plan', 'data-job': String(j.id) },
       h(
         'p',
         { class: 'kit-kick' },
-        `plan \u00b7 job #${j.id} \u00b7 ${j.machine} \u00b7 built ${builtAgo(j.created_at)}`,
+        discarded
+          ? `plan \u00b7 job #${j.id} \u00b7 ${j.machine} \u00b7 discarded`
+          : `plan \u00b7 job #${j.id} \u00b7 ${j.machine} \u00b7 built ${builtAgo(j.created_at)}`,
       ),
       h('h1', { class: 'kit-h1' }, jobTitle(j)),
       facts([
@@ -620,13 +964,14 @@ export function makeApply(ctx: Ctx): Section {
         ['outward', String(steps.filter((s) => s.lane === 'agent').length)],
       ]),
     );
-    if (!steps.length) {
+    if (!steps.length && !discarded) {
       doc.append(
         h(
           'p',
           { 'data-testid': 'plan-empty' },
           'Nothing in this plan runs from this machine: no step is on it, and nothing outward.',
         ),
+        discardButtons(j),
       );
       return doc;
     }
@@ -660,65 +1005,87 @@ export function makeApply(ctx: Ctx): Section {
         ),
       );
     }
-    doc.append(approveBlock(j));
+    if (discarded) {
+      doc.append(
+        h(
+          'p',
+          { class: 'cb-approve-none', 'data-testid': 'plan-discarded' },
+          'This plan was discarded before it was approved: nothing in it ran.',
+        ),
+      );
+    } else doc.append(approveBlock(j));
     return doc;
   }
 
-  // approve: with a session picker when the plan has agent-lane steps.
+  function discardButtons(j: Job): HTMLElement {
+    return buttons([{ label: 'discard', run: () => void discard(j.id) }]);
+  }
+
+  // approve: with a session picker when the plan has agent-lane steps, and
+  // discard.
   function approveBlock(j: Job): HTMLElement {
     const steps = j.steps ?? [];
     const outward = steps.filter((s) => s.lane === 'agent').length;
     const el = h('div', { class: 'cb-approve', 'data-testid': 'approve' });
     el.append(h('h3', { class: 'kit-label' }, 'approve'));
+    const bs: Button[] = [];
     if (needsSession(steps)) {
       const ps = present();
+      const chosen = planSession();
       if (!ps.length) {
         el.append(
           h(
             'p',
             { class: 'cb-approve-none', 'data-testid': 'no-session' },
-            `The ${pluralize(outward, 'outward step')} go to an agent session, and none is here. When one attaches, it appears here to choose.`,
+            `${outwardGo(outward)} to an agent session, and none is here. When one attaches, it appears here to choose.`,
           ),
         );
-        if (note)
-          el.append(h('p', { class: 'cb-apply-note', role: 'status' }, note));
-        return el;
-      }
-      el.append(
-        h(
-          'p',
-          { class: 'cb-approve-what' },
-          `${planSummary(steps)}. The ${pluralize(outward, 'outward step')} go to:`,
-        ),
-        h(
-          'div',
-          {
-            class: 'cb-sessions',
-            role: 'radiogroup',
-            'aria-label': 'session',
-            'data-testid': 'session-picker',
-          },
-          ...ps.map((s) =>
-            h(
-              'button',
-              {
-                type: 'button',
-                role: 'radio',
-                class:
-                  'kit-chip cb-session' + (s.id === chosenSession ? ' on' : ''),
-                'aria-checked': String(s.id === chosenSession),
-                'data-session': s.id,
-                onclick() {
-                  chosenSession = s.id;
-                  drawOpen();
-                  if (active) ctx.setPrimary(primary());
+      } else {
+        el.append(
+          h(
+            'p',
+            { class: 'cb-approve-what' },
+            `${planSummary(steps)}. ${outwardGo(outward)} to:`,
+          ),
+          h(
+            'div',
+            {
+              class: 'cb-sessions',
+              role: 'radiogroup',
+              'aria-label': 'session',
+              'data-testid': 'session-picker',
+            },
+            ...ps.map((s) =>
+              h(
+                'button',
+                {
+                  type: 'button',
+                  role: 'radio',
+                  class: 'kit-chip cb-session' + (s.id === chosen ? ' on' : ''),
+                  'aria-checked': String(s.id === chosen),
+                  'data-session': s.id,
+                  onclick() {
+                    courtSession = s.id;
+                    note = '';
+                    drawOpen();
+                    if (active) ctx.setPrimary(primary());
+                  },
                 },
-              },
-              s.label || s.id,
+                s.label || s.id,
+              ),
             ),
           ),
-        ),
-      );
+        );
+        if (!chosen) {
+          el.append(
+            h(
+              'p',
+              { class: 'cb-approve-none', 'data-testid': 'pick-session' },
+              `${ps.length} sessions are here and none is chosen yet.`,
+            ),
+          );
+        } else bs.push({ label: 'approve', fill: true, run: () => approve() });
+      }
     } else {
       el.append(
         h(
@@ -727,16 +1094,10 @@ export function makeApply(ctx: Ctx): Section {
           `${planSummary(steps)}, all local.`,
         ),
       );
+      bs.push({ label: 'approve and run', fill: true, run: () => approve() });
     }
-    el.append(
-      buttons([
-        {
-          label: needsSession(steps) ? 'approve' : 'approve and run',
-          fill: true,
-          run: () => approve(),
-        },
-      ]),
-    );
+    bs.push({ label: 'discard', run: () => void discard(j.id) });
+    el.append(buttons(bs));
     if (note)
       el.append(h('p', { class: 'cb-apply-note', role: 'status' }, note));
     return el;
@@ -748,7 +1109,7 @@ export function makeApply(ctx: Ctx): Section {
     const steps = open.job.steps ?? [];
     if (!steps.length) return false;
     if (!needsSession(steps)) return true;
-    return present().some((s) => s.id === chosenSession);
+    return !!planSession();
   }
 
   function approve(): void {
@@ -756,8 +1117,27 @@ export function makeApply(ctx: Ctx): Section {
     const needs = needsSession(open.job.steps ?? []);
     void act<JobView>('/apply/approve', {
       plan_id: open.job.id,
-      session: needs ? chosenSession : '',
+      session: needs ? planSession() : '',
     });
+  }
+
+  // discard: serve cancels the unapproved plan; the ready list shows again.
+  async function discard(id: number): Promise<void> {
+    if (busy) return;
+    busy = true;
+    note = '';
+    try {
+      const v = await ctx.api.post<JobView>('/apply/cancel', { plan_id: id });
+      patchJob(v);
+      view = 'ready';
+      if (openId === id) ctx.route.go('apply');
+      else paintList();
+    } catch (err) {
+      note = message(err);
+      drawOpen();
+    } finally {
+      busy = false;
+    }
   }
 
   function pauseOrResume(): void {
@@ -775,15 +1155,20 @@ export function makeApply(ctx: Ctx): Section {
       drawOpen();
     },
     note: () => note,
-    answer(card: NeedsYou, action: string, text: string) {
-      void act<AnswerResult>('/jobs/answer', {
-        needs_you: card.id,
-        action,
-        text,
-      });
+    answer(card: NeedsYou, action: string, text: string, ok?: () => void) {
+      void act<AnswerResult>(
+        '/jobs/answer',
+        { needs_you: card.id, action, text },
+        ok,
+      );
     },
     undo(step: JobStep) {
       void act<UndoResult>('/jobs/undo', { step: step.id });
+    },
+    editing: (id) => editors.get(id),
+    edit(id, text) {
+      if (text === null) editors.delete(id);
+      else editors.set(id, text);
     },
   };
 
@@ -802,20 +1187,27 @@ export function makeApply(ctx: Ctx): Section {
       }
       return null;
     }
+    if (openId === null && refusal) {
+      return syncing
+        ? null
+        : { label: 'Sync first', run: () => void syncFirst() };
+    }
     if (openId === null && view === 'ready' && itemsTotal) {
       const n = selectedKeys().length;
-      return n
-        ? { label: `Plan ${n}`, run: () => plan(selectedKeys()) }
-        : { label: 'Plan all', run: () => plan('all') };
+      if (n) return { label: `Plan ${n}`, run: () => plan(selectedKeys()) };
+      return plannable() ? { label: 'Plan all', run: () => plan('all') } : null;
     }
     return null;
   }
 
   // feed tells the composer and the bar what To apply shows, only while it
-  // is the active section: the open job once it has loaded, else nothing.
+  // is the active section: the open job (by number, with its title) once it
+  // has loaded, else nothing.
   function feed(): void {
     if (!active) return;
-    ctx.setAttached(open && openId !== null ? { job: String(openId) } : {});
+    if (open && openId !== null)
+      ctx.setAttached({ job: String(openId) }, jobTitle(open.job));
+    else ctx.setAttached({});
     ctx.setPrimary(primary());
   }
 
@@ -827,6 +1219,14 @@ export function makeApply(ctx: Ctx): Section {
     group: 'page',
     run() {
       if (canApprove()) approve();
+      else if (
+        open?.job.state === 'planned' &&
+        needsSession(open.job.steps ?? []) &&
+        !planSession()
+      ) {
+        note = 'not approved: no session is chosen for the outward steps';
+        drawOpen();
+      }
     },
   };
   const pauseKey: KeyBinding = {
@@ -847,6 +1247,11 @@ export function makeApply(ctx: Ctx): Section {
     paintList();
     feed();
   }
+
+  ctx.onDockSession(() => {
+    if (open?.job.state === 'planned') drawOpen();
+    if (active) ctx.setPrimary(primary());
+  });
 
   void loadJobs();
   void loadItems();
@@ -892,15 +1297,20 @@ export function makeApply(ctx: Ctx): Section {
     },
     onLive(type: string, data: unknown) {
       if (type === 'job' || type === 'step' || type === 'needs_you') {
-        void loadJobs();
         const about = jobOf(type, data);
-        if (openId !== null && (about === null || about === openId)) {
-          void loadJob(openId);
-        }
+        mark((d) => {
+          if (about === null) d.all = true;
+          else d.jobs.add(about);
+        });
       } else if (type === 'index' || type === 'decided') {
-        void loadItems();
+        mark((d) => {
+          d.items = true;
+          if (type === 'index') d.summary = true;
+        });
       } else if (type === 'sessions') {
-        void loadSessions();
+        mark((d) => (d.sessions = true));
+      } else if (type === 'sync') {
+        onSync((data ?? {}) as SyncEvent);
       }
     },
     primary,
@@ -914,8 +1324,12 @@ export interface JobHooks {
   stepsShown(): number;
   showMore(): void;
   note(): string;
-  answer(card: NeedsYou, action: string, text: string): void;
+  answer(card: NeedsYou, action: string, text: string, ok?: () => void): void;
   undo(step: JobStep): void;
+  /** An open "edit text" field's text for a card (undefined: not editing). */
+  editing(card: number): string | undefined;
+  /** Keep (text) or drop (null) a card's open edit across redraws. */
+  edit(card: number, text: string | null): void;
 }
 
 /**
@@ -986,7 +1400,7 @@ export function renderJob(_ctx: Ctx, v: JobView, hooks: JobHooks): HTMLElement {
           h(
             'span',
             { class: 'cb-step-w' },
-            h('span', { class: `cb-step-t cb-tone-${m.tone}` }, m.text),
+            h('span', { class: 'cb-step-t' }, m.text),
             s.undoable
               ? h(
                   'button',
@@ -1063,7 +1477,13 @@ function needsCard(
           fill: true,
           run: () => answer('post-and-close', c.text),
         },
-        { label: 'edit text', run: () => edit() },
+        {
+          label: 'edit text',
+          run() {
+            hooks.edit(c.id, c.text);
+            startEdit(c.text, true);
+          },
+        },
         {
           label: 'close without comment',
           run: () => answer('close-without-comment'),
@@ -1077,34 +1497,42 @@ function needsCard(
         actions: four,
       });
       // edit text: the comment becomes a field; save sends it to serve (the
-      // card stays open with the new text).
-      const edit = () => {
+      // card stays open with the new text). While it is open its text is
+      // kept by the section, so a redraw (a live event) draws it again as
+      // Court left it.
+      const startEdit = (text: string, focus: boolean) => {
         const field = h('textarea', {
           class: 'cb-needs-edit',
           'aria-label': 'comment',
           rows: 4,
         }) as HTMLTextAreaElement;
-        field.value = c.text;
+        field.value = text;
+        field.addEventListener('input', () => hooks.edit(c.id, field.value));
         quote.replaceWith(field);
-        const btns = el.querySelector('.kit-btns');
-        btns?.replaceWith(
+        el.querySelector('.kit-btns')?.replaceWith(
           buttons([
             {
               label: 'save text',
               fill: true,
-              run: () => answer('edit-text', field.value),
+              run: () =>
+                hooks.answer(c, 'edit-text', field.value, () =>
+                  hooks.edit(c.id, null),
+                ),
             },
             {
               label: 'cancel',
               run() {
+                hooks.edit(c.id, null);
                 field.replaceWith(quote);
                 el.querySelector('.kit-btns')?.replaceWith(buttons(four));
               },
             },
           ]),
         );
-        field.focus();
+        if (focus) field.focus();
       };
+      const draft = hooks.editing(c.id);
+      if (draft !== undefined) startEdit(draft, false);
       break;
     }
     case 'batch':

@@ -3,8 +3,9 @@
 // Pure helpers with no browser or kit imports, so node --test can load them.
 //
 //   attachedLabel  — the line's display value: "4 prs selected",
-//                    "schuettc/hail#4", "rule landed-branches", "job #3",
-//                    "section rules".
+//                    "schuettc/hail#4", "rule landed-branches", "job #3"
+//                    (with its title when the page gives one: "job #3 ·
+//                    close stale prs"), "section rules".
 //   attachedText   — the editable form of the same value, in the words the
 //                    delivery text uses: "pr:o/r#1 pr:o/r#2", "open pr:o/r#4",
 //                    "rule landed-branches", "job 3".
@@ -23,8 +24,12 @@ export function isEmpty(a: Attached): boolean {
   return !a.keys?.length && !a.open && !a.rule && !a.job && !a.section;
 }
 
-/** attachedLabel is the attached line's display value ('' when empty). */
-export function attachedLabel(a: Attached): string {
+/**
+ * attachedLabel is the attached line's display value ('' when empty).
+ * jobTitle, when the section showing the job gives it, follows the job's
+ * number, lower-cased as the line reads: "job #3 · close stale prs".
+ */
+export function attachedLabel(a: Attached, jobTitle = ''): string {
   const parts: string[] = [];
   const keys = a.keys ?? [];
   if (keys.length === 1) {
@@ -41,7 +46,12 @@ export function attachedLabel(a: Attached): string {
     parts.push(keyWithoutKind(a.open));
   }
   if (a.rule) parts.push(`rule ${a.rule}`);
-  if (a.job) parts.push(`job #${a.job}`);
+  if (a.job)
+    parts.push(
+      jobTitle
+        ? `job #${a.job} \u00b7 ${jobTitle.toLowerCase()}`
+        : `job #${a.job}`,
+    );
   // The section Court asked from, when nothing in it is open: "section
   // rules", in the words the agent reads (and the editable form uses).
   if (a.section && parts.length === 0) parts.push(`section ${a.section}`);

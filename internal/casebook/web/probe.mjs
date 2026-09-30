@@ -16,7 +16,7 @@
 // module load so no future edit can accidentally open Court's browser.
 
 import pkg from 'playwright-core';
-import { startServe } from './serve.mjs';
+import { startServe, gitGuard } from './serve.mjs';
 import { createAgent } from './agent.mjs';
 import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
 
@@ -4386,7 +4386,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 497;
+const MIN_CHECKS = 532;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -4501,8 +4501,15 @@ async function run() {
     await page.waitForSelector('.kit-bar', { timeout: 8000 });
     // Wait for the summary API call to complete so counts are rendered.
     // The summary sets at least one .kit-n span inside a .kit-ctl[data-id].
+    // (attention's and to apply's: Rules counts its own, sooner.)
     await page
-      .waitForSelector('.kit-ctl[data-id] .kit-n', { timeout: 5000 })
+      .waitForFunction(
+        () =>
+          !!document.querySelector('.kit-ctl[data-id="attention"] .kit-n') &&
+          !!document.querySelector('.kit-ctl[data-id="apply"] .kit-n'),
+        undefined,
+        { timeout: 5000 },
+      )
       .catch(() => {
         // counts may all be 0; kit renders a .kit-n span for 0 too
       });
@@ -9073,6 +9080,16 @@ async function run() {
     console.error('probe: unexpected error:', err);
     fails++;
   } finally {
+    console.log('\ninvariant: every git the probe ran was hermetic');
+    {
+      const g = gitGuard();
+      check(
+        g.bad.length
+          ? `every git call ran hermetic with CASEBOOK_DISABLE=1 — ${g.bad.length} of ${g.calls} did not: ${g.bad.slice(0, 3).join(' | ')}`
+          : `every git call the probe and its serves made (${g.calls}) ran hermetic, with CASEBOOK_DISABLE=1 (the guard's log)`,
+        g.calls > 0 && g.bad.length === 0,
+      );
+    }
     console.log('\ninvariant: no section key clashed');
     check(
       keyClashes.length

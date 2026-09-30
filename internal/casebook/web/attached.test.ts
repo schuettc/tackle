@@ -45,6 +45,10 @@ describe('attachedLabel', () => {
       'rule landed-branches',
     );
     assert.equal(attachedLabel({ job: '3' }), 'job #3');
+    assert.equal(
+      attachedLabel({ job: '3' }, 'Close stale PRs'),
+      'job #3 \u00b7 close stale prs',
+    );
   });
   test('a section, with nothing open in it, reads "section rules", as the agent reads it', () => {
     assert.equal(attachedLabel({ section: 'rules' }), 'section rules');

@@ -517,6 +517,7 @@ export function makeDock(ctx: Ctx): DockHandle {
       if (!sessions.length) return;
       const p = buildSessionPicker(sessions, currentSessionId, (id) => {
         lastUsedSessionId = id;
+        ctx.setDockSession(id);
         void switchSession(id);
       });
       const btn = e.currentTarget as HTMLElement;
@@ -956,8 +957,8 @@ export function makeDock(ctx: Ctx): DockHandle {
   // ---- public interface ----------------------------------------------------
   return {
     el: rail,
-    setAttached(a: Attached): void {
-      composer.setAttached(a);
+    setAttached(a: Attached, jobTitle?: string): void {
+      composer.setAttached(a, jobTitle);
     },
     focusComposer(): void {
       composer.focus();

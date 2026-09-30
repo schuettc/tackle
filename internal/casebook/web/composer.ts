@@ -38,8 +38,11 @@ export interface ComposerDock {
 
 export interface ComposerHandle {
   el: HTMLElement;
-  /** The page's current context (sections call ctx.setAttached). */
-  setAttached(a: Attached): void;
+  /**
+   * The page's current context (sections call ctx.setAttached); jobTitle
+   * names the attached job on the line ("job #3 · close stale prs").
+   */
+  setAttached(a: Attached, jobTitle?: string): void;
   /** The agent's name for the placeholder: the session's harness. */
   setAgent(name: string): void;
   /** Focus the message field (the `.` key). */
@@ -59,6 +62,7 @@ function threadName(body: string): string {
 export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
   // context is what the page shows; override is Court's edit, held until send.
   let context: Attached = {};
+  let contextTitle = '';
   let override: Attached | null = null;
   let sending = false;
 
@@ -86,7 +90,10 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
   function renderAttached(): void {
     if (editing) return;
     const a = effective();
-    value.textContent = isEmpty(a) ? 'nothing' : attachedLabel(a);
+    // The page's job title names the job only while it is still that job
+    // (Court's edit may name another).
+    const title = a.job && a.job === context.job ? contextTitle : '';
+    value.textContent = isEmpty(a) ? 'nothing' : attachedLabel(a, title);
     value.toggleAttribute('data-empty', isEmpty(a));
     value.toggleAttribute('data-edited', override !== null);
   }
@@ -240,8 +247,9 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
   return {
     el,
     input,
-    setAttached(a: Attached): void {
+    setAttached(a: Attached, jobTitle = ''): void {
       context = a;
+      contextTitle = jobTitle;
       renderAttached();
     },
     setAgent(name: string): void {

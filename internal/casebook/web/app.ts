@@ -40,7 +40,7 @@ export interface Ctx {
    * when it is shown: Attention with the selection's keys (or the open item),
    * Rules (Task 8) with {rule: id}, Apply (Task 9) with {job: id}.
    */
-  setAttached(a: Attached): void;
+  setAttached(a: Attached, jobTitle?: string): void;
   /** focusComposer puts the cursor in the dock's message field. */
   focusComposer(): void;
   /**
@@ -51,6 +51,14 @@ export interface Ctx {
   agentName(): string;
   setAgentName(name: string): void;
   onAgentName(cb: (name: string) => void): void;
+  /**
+   * The session Court picked in the dock ('' until he picks one there; the
+   * dock showing the first session on its own is not a choice). To apply
+   * offers it for a plan's outward steps.
+   */
+  dockSession(): string;
+  setDockSession(id: string): void;
+  onDockSession(cb: (id: string) => void): void;
 }
 
 export interface Router {
@@ -100,7 +108,7 @@ export interface Section {
 
 export interface DockHandle {
   el: HTMLElement;
-  setAttached(a: Attached): void;
+  setAttached(a: Attached, jobTitle?: string): void;
   focusComposer(): void;
   currentThread(): number;
   currentSession(): string;
@@ -245,8 +253,11 @@ export function boot(): void {
   // before then, so the latest value is kept and handed to each dock.
   const dockHandles: DockHandle[] = [];
   let lastAttached: Attached = {};
+  let lastTitle = '';
   let agent = '';
   const agentListeners: Array<(name: string) => void> = [];
+  let dockSession = '';
+  const dockSessionListeners: Array<(id: string) => void> = [];
 
   const ctx: Ctx = {
     api,
@@ -260,9 +271,10 @@ export function boot(): void {
     setPrimary(p) {
       handle.setPrimary(p);
     },
-    setAttached(a) {
+    setAttached(a, jobTitle = '') {
       lastAttached = a;
-      for (const d of dockHandles) d.setAttached(a);
+      lastTitle = jobTitle;
+      for (const d of dockHandles) d.setAttached(a, jobTitle);
     },
     focusComposer() {
       dockHandles[0]?.focusComposer();
@@ -275,6 +287,15 @@ export function boot(): void {
     },
     onAgentName(cb) {
       agentListeners.push(cb);
+    },
+    dockSession: () => dockSession,
+    setDockSession(id) {
+      if (id === dockSession) return;
+      dockSession = id;
+      for (const cb of dockSessionListeners) cb(id);
+    },
+    onDockSession(cb) {
+      dockSessionListeners.push(cb);
     },
   };
 
@@ -305,7 +326,7 @@ export function boot(): void {
 
   for (const make of dockMakers) {
     const d = make(ctx);
-    d.setAttached(lastAttached);
+    d.setAttached(lastAttached, lastTitle);
     dockHandles.push(d);
   }
   if (dockHandles.length > 0) {

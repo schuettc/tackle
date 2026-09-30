@@ -233,7 +233,7 @@ export function nextSteps(steps: JobStep[]): Set<number> {
   return out;
 }
 
-/** planFacts: a plan's size, "5 steps · 3 local · 2 outward". */
+/** planSummary: a plan's size, "5 steps · 3 local · 2 outward". */
 export function planSummary(steps: Step[]): string {
   let local = 0;
   let out = 0;
@@ -253,7 +253,7 @@ export function needsSession(steps: Step[]): boolean {
 }
 
 /**
- * newer orders two reloads by when they were asked for: a reply to an older
+ * makeSeq orders replies by when they were asked for: a reply to an older
  * request never replaces what a newer one drew.
  */
 export function makeSeq(): { next(): number; isLatest(n: number): boolean } {
@@ -262,4 +262,72 @@ export function makeSeq(): { next(): number; isLatest(n: number): boolean } {
     next: () => ++latest,
     isLatest: (n) => n === latest,
   };
+}
+
+/**
+ * outwardGo starts the sentence about where a plan's outward steps go, its
+ * verb agreeing: "The outward step goes", "The 3 outward steps go".
+ */
+export function outwardGo(n: number): string {
+  return n === 1 ? 'The outward step goes' : `The ${n} outward steps go`;
+}
+
+/**
+ * plannedKeys maps each item key with a step in an unapproved plan to that
+ * plan's job id (the newest plan, when two hold it).
+ */
+export function plannedKeys(jobs: Job[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const j of jobs) {
+    if (j.state !== 'planned') continue;
+    for (const s of j.steps ?? []) {
+      if ((m.get(s.key) ?? 0) < j.id) m.set(s.key, j.id);
+    }
+  }
+  return m;
+}
+
+/**
+ * plannableCount is how many decided items "plan all" would plan: serve
+ * leaves out the ones already in an unapproved plan. total is serve's count
+ * of decided items, loaded the keys the page has, all whether it has them
+ * all; a planned key the page hasn't loaded is counted as one of the total.
+ */
+export function plannableCount(
+  total: number,
+  loaded: string[],
+  planned: Map<string, number>,
+  all: boolean,
+): number {
+  const have = new Set(loaded);
+  let inPlan = loaded.filter((k) => planned.has(k)).length;
+  if (!all) for (const k of planned.keys()) if (!have.has(k)) inPlan++;
+  return Math.max(0, total - inPlan);
+}
+
+/** ageText: a short age, "40s", "12m", "3h", "2d". */
+export function ageText(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  return `${Math.floor(h / 24)}d`;
+}
+
+/**
+ * observations says how old the observation a plan would be built from is,
+ * by serve's rule (a plan is refused once the index is older than one sync
+ * interval): "observations fresh", or "observations 34m old" when stale.
+ */
+export function observations(
+  builtAt: number,
+  intervalMs: number,
+  now: number,
+): { text: string; stale: boolean } {
+  const age = now - builtAt;
+  if (!intervalMs || age <= intervalMs)
+    return { text: 'observations fresh', stale: false };
+  return { text: `observations ${ageText(age)} old`, stale: true };
 }

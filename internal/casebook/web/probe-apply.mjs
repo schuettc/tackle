@@ -10,10 +10,16 @@
 // serve makes is checked. The agent is the fake agent (agent.mjs) over
 // serve's own routes: presence, casebook_job_step, casebook_job_ask.
 
-import { execSync } from 'node:child_process';
-import { join } from 'node:path';
-import { startServe } from './serve.mjs';
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { startServe, probeGit } from './serve.mjs';
 import { createAgent } from './agent.mjs';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const hashOf = (f) =>
+  createHash('sha256').update(readFileSync(f)).digest('hex');
 
 const SESSION = 'probe-t9-pi';
 const LABEL = 'pi \u00b7 t9-apply';
@@ -97,10 +103,12 @@ const pressWithFocus = async (pg, k) => {
   await pg.keyboard.press(k);
 };
 
-// shoot takes the light and the dark screenshot, asserting the theme.
-async function shoot(t, pg, name) {
+// shoot takes the light and the dark screenshot (or only those named),
+// asserting the theme. Focus is let go first: a focused control's ring is
+// the probe's click, not the page.
+async function shoot(t, pg, name, themes = ['light', 'dark']) {
   const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
-  for (const theme of ['light', 'dark']) {
+  for (const theme of themes) {
     for (let i = 0; i < 3; i++) {
       const th = await pg.evaluate(
         () => document.documentElement.dataset.theme,
@@ -112,9 +120,13 @@ async function shoot(t, pg, name) {
       theme: document.documentElement.dataset.theme,
       bg: getComputedStyle(document.body).backgroundColor,
     }));
+    await pg.evaluate(() => document.activeElement?.blur());
+    const focused = await pg.evaluate(
+      () => document.activeElement === document.body,
+    );
     t.check(
-      `/tmp/t9-${name}-${theme}.png is ${theme} (theme ${got.theme}, body ${got.bg})`,
-      got.theme === theme && got.bg === bgs[theme],
+      `/tmp/t9-${name}-${theme}.png is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
+      got.theme === theme && got.bg === bgs[theme] && focused,
     );
     await pg.screenshot({ path: `/tmp/t9-${name}-${theme}.png` });
   }
@@ -125,23 +137,11 @@ async function shoot(t, pg, name) {
   }
 }
 
-// gitIn runs git in a probe clone (under the serve's temp home only).
+// gitIn runs git in a probe clone (under the serve's temp home only),
+// hermetically (serve.mjs probeGit).
 function gitIn(home, clone, args) {
-  const dir = join(home, 'clones', clone);
-  if (!dir.startsWith(home)) throw new Error('git outside the probe home');
   try {
-    return execSync(`git ${args}`, {
-      cwd: dir,
-      stdio: 'pipe',
-      env: {
-        ...process.env,
-        HOME: home,
-        GIT_CONFIG_GLOBAL: '/dev/null',
-        GIT_CONFIG_NOSYSTEM: '1',
-      },
-    })
-      .toString()
-      .trim();
+    return probeGit(join(home, 'clones', clone), args, home);
   } catch {
     return null;
   }
@@ -160,7 +160,19 @@ async function ownServe(opts) {
   return s;
 }
 
-export async function applyScenarios(context, t) {
+export async function applyScenarios(shared, t) {
+  // A browser context of their own: another scenario's fake clock (a
+  // context's clock is shared by its pages) must not age these pages'
+  // observations, and the foot reads the real, advancing time.
+  const context = await shared.browser().newContext();
+  try {
+    await applyScenariosIn(context, t);
+  } finally {
+    await context.close();
+  }
+}
+
+async function applyScenariosIn(context, t) {
   const serveHandle = await ownServe(T9_SEED);
   try {
     await applyScenariosOn(context, t, serveHandle);
@@ -250,6 +262,20 @@ async function applyScenariosOn(context, t, serveHandle) {
           document.querySelector('.kit-primary')?.textContent === 'Plan all',
       ),
     );
+    const footColour = () =>
+      pg.$eval('.cb-apply-foot-n', (e) => ({
+        text: e.textContent,
+        colour: getComputedStyle(e).color,
+      }));
+    const fgC = await cssColor(pg, 'var(--kit-fg)');
+    const signalC = await cssColor(pg, 'var(--kit-signal)');
+    const plainFoot = await footColour();
+    check(
+      `with nothing selected the foot's total is plain text, not the selection's signal ("${plainFoot.text}", ${plainFoot.colour})`,
+      plainFoot.text === '5 decided items' &&
+        plainFoot.colour === fgC &&
+        fgC !== signalC,
+    );
     // Select two rows: the primary and the foot count them.
     await pg.click(`.cb-apply-list .kit-row[data-key="${REPO_B}"] .kit-box`);
     await pg.click(`.cb-apply-list .kit-row[data-key="${PR}"] .kit-box`);
@@ -263,6 +289,11 @@ async function applyScenariosOn(context, t, serveHandle) {
             '2 selected',
       ),
     );
+    const selFoot = await footColour();
+    check(
+      `a selection's count is in signal (${selFoot.colour})`,
+      selFoot.colour === signalC,
+    );
     await pg.click(`.cb-apply-list .kit-row[data-key="${REPO_B}"] .kit-box`);
     await pg.click(`.cb-apply-list .kit-row[data-key="${PR}"] .kit-box`);
 
@@ -274,9 +305,23 @@ async function applyScenariosOn(context, t, serveHandle) {
       pg,
       () => document.querySelector('.kit-primary')?.textContent === 'Plan all',
     );
-    await pg.click('.kit-primary');
+    const planPosts = [];
+    const onPlanPost = (r) => {
+      if (r.method() === 'POST' && r.url().includes('/api/apply/plan'))
+        planPosts.push(r.url());
+    };
+    pg.on('request', onPlanPost);
+    // Twice, fast: a double press.
+    await pg.click('.kit-primary', { clickCount: 2 });
     const planView = await (await planResp).json();
     const jobId = planView.job.id;
+    await pg.waitForTimeout(500);
+    pg.off('request', onPlanPost);
+    const jobsAfterPlan = (await agent.api('GET', '/api/jobs')).jobs ?? [];
+    check(
+      `a double press of "Plan all" asks serve once (${planPosts.length} POST /api/apply/plan, ${jobsAfterPlan.length} plan)`,
+      planPosts.length === 1 && jobsAfterPlan.length === 1,
+    );
     check(
       `the plan opens as #/apply/${jobId}`,
       await until(
@@ -286,6 +331,30 @@ async function applyScenariosOn(context, t, serveHandle) {
           document.querySelector('.cb-plan')?.dataset.job === String(id),
         jobId,
       ),
+    );
+    // The decided items it holds are marked as in it, and not plannable.
+    const readyRows = await pg.$$eval(
+      '.cb-apply-list .kit-row[data-key]',
+      (els) =>
+        els.map((e) => ({
+          key: e.dataset.key,
+          meta: e.querySelector('.kit-meta')?.textContent,
+          box: !!e.querySelector('.kit-box'),
+        })),
+    );
+    check(
+      `the items in the plan say so ("in plan #${jobId}") and can't be selected (${readyRows.map((r) => r.meta).join(', ')})`,
+      readyRows.length === 5 &&
+        readyRows.every((r) => r.meta === `in plan #${jobId}` && !r.box),
+    );
+    const footAfterPlan = await pg.$eval('.cb-apply-foot-sel', (e) => ({
+      n: e.querySelector('.cb-apply-foot-n')?.textContent,
+      btns: [...e.querySelectorAll('.kit-btn')].map((b) => b.textContent),
+    }));
+    check(
+      `nothing is left for "plan all": the foot says "${footAfterPlan.n}" and offers no plan (${footAfterPlan.btns.join(',') || 'none'})`,
+      footAfterPlan.n === '5 decided items in a plan' &&
+        footAfterPlan.btns.length === 0,
     );
     // Every step shows serve's exact command, grouped as serve groups them.
     const shown = await pg.$$eval('.cb-plan-group', (gs) =>
@@ -354,6 +423,16 @@ async function applyScenariosOn(context, t, serveHandle) {
         !(await pg.$('.cb-approve .kit-btn.fill')) &&
         (await read.primary(pg)) === '',
     );
+    const noSession = await pg.$eval(
+      '[data-testid="no-session"]',
+      (e) => e.textContent,
+    );
+    check(
+      `its verb agrees with the count ("${noSession}")`,
+      noSession.startsWith(
+        'The 3 outward steps go to an agent session, and none is here.',
+      ),
+    );
     await pressWithFocus(pg, 'a');
     await pg.waitForTimeout(400);
     check(
@@ -385,6 +464,42 @@ async function applyScenariosOn(context, t, serveHandle) {
           8000,
         ),
       );
+      const picker = await pg.evaluate(() => ({
+        checked: [
+          ...document.querySelectorAll(
+            '.cb-session[aria-checked="true"], .cb-session.on',
+          ),
+        ].length,
+        approve: [...document.querySelectorAll('.cb-approve .kit-btn')].map(
+          (b) => b.textContent,
+        ),
+        pick: document.querySelector('[data-testid="pick-session"]')
+          ?.textContent,
+        what: document.querySelector('.cb-approve-what')?.textContent,
+      }));
+      check(
+        `with two sessions here none is chosen for Court: no session marked, no approve, only discard (${picker.approve.join(',')}; "${picker.pick}")`,
+        picker.checked === 0 &&
+          picker.approve.join(',') === 'discard' &&
+          picker.pick === '2 sessions are here and none is chosen yet.' &&
+          (await read.primary(pg)) === '',
+      );
+      check(
+        `the sentence's verb agrees ("${picker.what}")`,
+        picker.what ===
+          '7 steps \u00b7 4 local \u00b7 3 outward. The 3 outward steps go to:',
+      );
+      await pressWithFocus(pg, 'a');
+      check(
+        '"a" with no session chosen is refused: the page says why, serve still has a plan',
+        (await until(
+          pg,
+          () =>
+            document.querySelector('.cb-approve .cb-apply-note')
+              ?.textContent ===
+            'not approved: no session is chosen for the outward steps',
+        )) && (await job(jobId)).job.state === 'planned',
+      );
       await pg.click(`.cb-session[data-session="${SESSION}"]`);
       check(
         'choosing a session marks it, and the primary is "Approve"',
@@ -406,8 +521,19 @@ async function applyScenariosOn(context, t, serveHandle) {
         ['pi \u00b7 outward', 'pi \u00b7 outward'],
       );
       check(
-        'the plan is attached to the composer ("job #N")',
-        (await read.attached(pg)) === `job #${jobId}`,
+        'with a session chosen the plan offers approve and discard',
+        (await pg.$$eval('.cb-approve .kit-btn', (bs) =>
+          bs.map((b) => b.textContent).join(','),
+        )) === 'approve,discard',
+      );
+      const planTitle = await pg.$eval(
+        '.cb-plan .kit-h1',
+        (e) => e.textContent,
+      );
+      check(
+        `the plan is attached to the composer with its title ("${await read.attached(pg)}")`,
+        (await read.attached(pg)) ===
+          `job #${jobId} \u00b7 ${planTitle.toLowerCase()}`,
       );
       // The screenshot: the plan's groups and commands, and approve with
       // its session picker.
@@ -495,6 +621,16 @@ async function applyScenariosOn(context, t, serveHandle) {
       check(
         `the verified local step reads ✓ deleted · verified (${l1Row?.glyph} ${l1Row?.text})`,
         l1Row?.glyph === '\u2713' && l1Row?.text === 'deleted \u00b7 verified',
+      );
+      const tones = await pg.$eval(`.cb-step[data-step="${l1.id}"]`, (e) => ({
+        glyph: getComputedStyle(e.querySelector('.cb-step-g')).color,
+        text: getComputedStyle(e.querySelector('.cb-step-t')).color,
+      }));
+      const okC = await cssColor(pg, 'var(--kit-ok)');
+      const mutedC = await cssColor(pg, 'var(--kit-muted)');
+      check(
+        `only the glyph carries the step's tone: ✓ in ok (${tones.glyph}), its text muted (${tones.text})`,
+        tones.glyph === okC && tones.text === mutedC && okC !== mutedC,
       );
       check(
         'the casebook lane deleted feat/l1 in the probe clone (git, in the temp home)',
@@ -618,39 +754,85 @@ async function applyScenariosOn(context, t, serveHandle) {
           )),
       );
 
+      // ---- a burst of live events -----------------------------------------
+      console.log('\nscenario: to apply — a burst of live events');
+      await pg.waitForTimeout(500); // the resume's own reloads settle
+      const fetched = [];
+      const onFetch = (r) => {
+        const u = r.url();
+        if (/\/api\/(jobs|job|needs-you)(\?|$)/.test(u))
+          fetched.push(new URL(u).pathname);
+      };
+      pg.on('request', onFetch);
+      // 30 job events about the open job, at once (a resume of a job that
+      // isn't paused changes nothing and announces it), then a pause.
+      const BURST = 30;
+      await Promise.all(
+        Array.from({ length: BURST }, () =>
+          agent.api('POST', '/api/jobs/resume', { id: jobId }),
+        ),
+      );
+      await agent.api('POST', '/api/jobs/pause', { id: jobId });
+      const settled = await until(
+        pg,
+        () => document.querySelector('.kit-primary')?.textContent === 'Resume',
+      );
+      await pg.waitForTimeout(600);
+      pg.off('request', onFetch);
+      check(
+        `${BURST + 1} live events fetch a bounded few times, one reload in flight and one queued (${fetched.length} fetches), and the page ends current (paused)`,
+        settled && fetched.length >= 1 && fetched.length <= 4,
+      );
+      check(
+        `an event about a job fetches that job only, never the whole list (${[...new Set(fetched)].join(', ')})`,
+        fetched.every((p) => p === '/api/job'),
+      );
+      await agent.api('POST', '/api/jobs/resume', { id: jobId });
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Pause job',
+      );
+
       // ---- a stale reload never draws over a newer one ------------------
       console.log('\nscenario: to apply — reloads in order');
-      await pg.waitForTimeout(500); // the resume's own reloads settle
-      let held = null;
-      let arm = true;
+      await pg.waitForTimeout(500);
+      // Hold every /api/job reload: the first (running) is released after
+      // Court's own pause has drawn, the rest after the check.
+      const heldJob = [];
       await pg.route(/\/api\/job\?/, async (route) => {
-        if (arm) {
-          arm = false;
-          const resp = await route.fetch();
-          const body = await resp.text();
-          held = () => route.fulfill({ response: resp, body });
-          return;
-        }
-        await route.continue();
+        const resp = await route.fetch();
+        const body = await resp.text();
+        heldJob.push(() =>
+          route.fulfill({ response: resp, body }).catch(() => {}),
+        );
       });
-      await agent.api('POST', '/api/jobs/pause', { id: jobId });
-      const heldOne = await eventually(async () => !!held);
-      const newer = pg.waitForResponse((r) => r.url().includes('/api/job?'));
+      // An event about the job (a resume that changes nothing): a reload,
+      // held, whose reply says running.
       await agent.api('POST', '/api/jobs/resume', { id: jobId });
-      await newer;
-      await pg.waitForTimeout(200);
-      const before = await read.primary(pg);
-      await held?.();
-      await pg.waitForTimeout(600);
+      const heldOne = await eventually(async () => heldJob.length >= 1);
+      // Court pauses: serve's reply (paused) draws.
+      await pg.click('.kit-primary');
+      const pausedDrawn = await until(
+        pg,
+        () => document.querySelector('.kit-primary')?.textContent === 'Resume',
+      );
+      await heldJob.shift()?.();
+      await pg.waitForTimeout(500);
+      const after = await read.primary(pg);
+      const kick = await pg.$eval('.cb-job .kit-kick', (e) => e.textContent);
+      for (const f of heldJob.splice(0)) await f();
       await pg.unroute(/\/api\/job\?/);
       check(
-        `an older reply (paused) arriving after a newer one (running) is not drawn (primary "${before}" → "${await read.primary(pg)}")`,
-        heldOne &&
-          before === 'Pause job' &&
-          (await read.primary(pg)) === 'Pause job' &&
-          !(await pg.$eval('.cb-job .kit-kick', (e) => e.textContent)).endsWith(
-            'paused',
-          ),
+        `an older reload (running) answered after Court's pause (paused) is not drawn (primary "${after}", kicker "${kick}")`,
+        heldOne && pausedDrawn && after === 'Resume' && kick.endsWith('paused'),
+      );
+      await pg.click('.kit-primary');
+      await eventually(async () => (await job(jobId)).job.paused === false);
+      await until(
+        pg,
+        () =>
+          document.querySelector('.kit-primary')?.textContent === 'Pause job',
       );
 
       // ---- a needs-you card (spec §10) ----------------------------------
@@ -718,9 +900,47 @@ async function applyScenariosOn(context, t, serveHandle) {
         '.cb-needs-card[data-kind="text"] .kit-btn:has-text("edit text")',
       );
       const edited = 'Closing: already on main through #9.';
-      await pg.fill(
-        '.cb-needs-card[data-kind="text"] textarea.cb-needs-edit',
-        edited,
+      const field = '.cb-needs-card[data-kind="text"] textarea.cb-needs-edit';
+      await pg.fill(field, '');
+      await pg.keyboard.type('Closing: already ');
+      // While Court types, the job moves: a step starts (a step event) and
+      // job events arrive; each redraws the open job.
+      const fieldBefore = await pg.$(field);
+      await agent.api('POST', '/api/agent/job-step', {
+        session: SESSION,
+        job: jobId,
+        step: repoA.id,
+        state: 'started',
+      });
+      for (let i = 0; i < 5; i++)
+        await agent.api('POST', '/api/jobs/resume', { id: jobId });
+      const redrawn = await until(
+        pg,
+        (id) =>
+          document.querySelector(`.cb-step[data-step="${id}"]`)?.dataset
+            .state === 'running',
+        repoA.id,
+      );
+      await pg.waitForTimeout(300);
+      const replaced = await pg.evaluate(
+        ([el, sel]) => el !== document.querySelector(sel),
+        [fieldBefore, field],
+      );
+      await pg.keyboard.type('on main through #9.');
+      const ed = await pg
+        .$eval(field, (e) => ({
+          value: e.value,
+          focused: document.activeElement === e,
+          caret: e.selectionStart,
+        }))
+        .catch(() => ({ value: '(no field)', focused: false, caret: -1 }));
+      check(
+        `typing in "edit text" while step events redraw the job: the text, focus and caret survive ("${ed.value}", focused ${ed.focused}, caret ${ed.caret}; redrawn ${redrawn && replaced})`,
+        redrawn &&
+          replaced &&
+          ed.value === edited &&
+          ed.focused &&
+          ed.caret === edited.length,
       );
       await pg.click(
         '.cb-needs-card[data-kind="text"] .kit-btn:has-text("save text")',
@@ -787,13 +1007,7 @@ async function applyScenariosOn(context, t, serveHandle) {
         ['pr view 7 -R schuettc/t9-prs --json state'],
       );
 
-      // The agent pauses a step with its reason: an amber card.
-      await agent.api('POST', '/api/agent/job-step', {
-        session: SESSION,
-        job: jobId,
-        step: repoA.id,
-        state: 'started',
-      });
+      // The agent pauses the step it started with its reason: an amber card.
       await agent.api('POST', '/api/agent/job-step', {
         session: SESSION,
         job: jobId,
@@ -910,8 +1124,9 @@ async function applyScenariosOn(context, t, serveHandle) {
         '\nscenario: to apply — only the active section feeds the composer',
       );
       check(
-        'the open job is attached to the composer',
-        (await read.attached(pg)) === `job #${jobId}`,
+        'the open job is attached to the composer, with its title',
+        (await read.attached(pg)) ===
+          `job #${jobId} \u00b7 ${planTitle.toLowerCase()}`,
       );
       await pg.evaluate(() => {
         location.hash = '#/attention/waiting';
@@ -951,11 +1166,11 @@ async function applyScenariosOn(context, t, serveHandle) {
         'back on To apply the job is attached again and the primary follows its state ("Resume")',
         await until(
           pg,
-          (id) =>
+          (want) =>
             document.querySelector('[data-testid="composer-attached"]')
-              ?.textContent === `job #${id}` &&
+              ?.textContent === want &&
             document.querySelector('.kit-primary')?.textContent === 'Resume',
-          jobId,
+          `job #${jobId} \u00b7 ${planTitle.toLowerCase()}`,
         ),
       );
       const overlay = async () => {
@@ -1030,6 +1245,62 @@ async function applyScenariosOn(context, t, serveHandle) {
         'on Attention, "a" does not approve the hidden open plan',
         (await job(second.job.id)).job.state === 'planned',
       );
+
+      // ---- discarding a plan ---------------------------------------------
+      console.log('\nscenario: to apply — a plan can be discarded');
+      await pg.evaluate((id) => {
+        location.hash = `#/apply/${id}`;
+      }, second.job.id);
+      await until(
+        pg,
+        (id) => document.querySelector('.cb-plan')?.dataset.job === String(id),
+        second.job.id,
+      );
+      const one = await pg.$eval('.cb-approve-what', (e) => e.textContent);
+      check(
+        `one outward step: "goes" ("${one}")`,
+        one === '1 step \u00b7 1 outward. The outward step goes to:',
+      );
+      check(
+        `the item in it is marked in the ready list ("in plan #${second.job.id}")`,
+        (await pg.$eval(
+          `.cb-apply-list .kit-row[data-key="${REPO_B}"] .kit-meta`,
+          (e) => e.textContent,
+        )) === `in plan #${second.job.id}`,
+      );
+      const cancelPost = pg
+        .waitForResponse((r) => r.url().includes('/api/apply/cancel'))
+        .catch(() => null);
+      await pg.click('.cb-approve .kit-btn:has-text("discard")');
+      const cancelBody = (await cancelPost)?.request().postDataJSON();
+      check(
+        `discard posts /api/apply/cancel for the plan (${JSON.stringify(cancelBody)}) and serve has it cancelled`,
+        cancelBody?.plan_id === second.job.id &&
+          (await eventually(
+            async () => (await job(second.job.id)).job.state === 'cancelled',
+          )),
+      );
+      check(
+        'the ready list shows again, without the plan, and its item is plannable again',
+        await until(
+          pg,
+          ([id, key]) =>
+            location.hash === '#/apply' &&
+            document
+              .querySelector('.kit-chip[data-id="ready"]')
+              ?.classList.contains('on') &&
+            !document.querySelector(
+              `.cb-apply-list .kit-row[data-job="${id}"]`,
+            ) &&
+            document.querySelector(
+              `.cb-apply-list .kit-row[data-key="${key}"] .kit-meta`,
+            )?.textContent === 'archive' &&
+            !!document.querySelector(
+              `.cb-apply-list .kit-row[data-key="${key}"] .kit-box`,
+            ),
+          [second.job.id, REPO_B],
+        ),
+      );
     } finally {
       clearInterval(keep);
     }
@@ -1041,18 +1312,19 @@ async function applyScenariosOn(context, t, serveHandle) {
 
 // staleScenario: serve refuses a plan from an observation older than one
 // sync interval (2s here); the page shows serve's words, which name a sync
-// and no command.
+// and no command, and offers "sync first". The sync is serve's own (POST
+// /api/sync, App.Sync) and hermetic: this serve's casebook-data remote is
+// the committed bundle on disk, it scans no roots, and its gh is the probe's
+// fake. When it is done the plan is built again, once.
 async function staleScenario(context, t, serveHandle) {
-  const { check, until } = t;
+  const { check, checkList, until, eventually } = t;
   console.log(
-    '\nscenario: to apply — a stale plan is refused in serve\u2019s words',
+    '\nscenario: to apply — a stale plan is refused in serve\u2019s words, and offers sync first',
   );
   const agent = createAgent(serveHandle.base, serveHandle.token);
-  await agent.api('POST', '/api/decide', {
-    keys: ['repo:schuettc/t9-stale'],
-    disposition: 'archive',
-  });
   const pg = await context.newPage();
+  const errors = [];
+  pg.on('pageerror', (e) => errors.push(String(e)));
   try {
     await pg.setViewportSize({ width: 1600, height: 900 });
     await pg.goto(serveHandle.url + '#/apply', {
@@ -1060,12 +1332,66 @@ async function staleScenario(context, t, serveHandle) {
       timeout: 15000,
     });
     await pg.click('.kit-chip[data-id="ready"]');
+    const okC = await cssColor(pg, 'var(--kit-ok)');
+    const mutedC = await cssColor(pg, 'var(--kit-muted)');
+    // Court decides with the page open (and live): serve rebuilds its index
+    // (built_at now) and says so; the page's foot follows serve's
+    // observation age.
     await until(
       pg,
-      () => document.querySelector('.kit-primary')?.textContent === 'Plan all',
+      () => document.querySelector('.kit-live')?.dataset.state === 'live',
     );
-    // Past the sync interval since the index was built.
-    await pg.waitForTimeout(2600);
+    await agent.api('POST', '/api/decide', {
+      keys: ['repo:schuettc/t9-stale'],
+      disposition: 'archive',
+    });
+    const sum0 = await agent.api('GET', '/api/summary');
+    check(
+      `serve gives the page its sync interval (${sum0.sync_interval_ms} ms) and the index's age (built_at)`,
+      sum0.sync_interval_ms === 2000 && !!Date.parse(sum0.built_at),
+    );
+    const freshSeen = await until(
+      pg,
+      (ok) => {
+        const e = document.querySelector('.cb-apply-obs');
+        return (
+          e?.textContent === 'observations fresh' &&
+          e.dataset.state === 'fresh' &&
+          getComputedStyle(e).color === ok &&
+          document.querySelector('.kit-primary')?.textContent === 'Plan all'
+        );
+      },
+      okC,
+      1800,
+    );
+    const obsNow = await pg.$eval('.cb-apply-obs', (e) => e.textContent);
+    check(
+      `within one sync interval of the rebuild the foot says the observations are fresh, in ok ("${obsNow}")`,
+      freshSeen,
+    );
+    // Past the sync interval since the index was built: the foot says how
+    // old they are, on its own (no event), muted.
+    check(
+      'past one sync interval the foot says how old the observations are, muted',
+      await until(
+        pg,
+        (muted) => {
+          const e = document.querySelector('.cb-apply-obs');
+          return (
+            /^observations \d+s old$/.test(e?.textContent ?? '') &&
+            e.dataset.state === 'stale' &&
+            getComputedStyle(e).color === muted
+          );
+        },
+        mutedC,
+        5000,
+      ),
+    );
+    // serve agrees: its index is older than the interval.
+    await eventually(async () => {
+      const s = await agent.api('GET', '/api/summary');
+      return Date.now() - Date.parse(s.built_at) > 2300;
+    });
     const resp = pg.waitForResponse((r) => r.url().includes('/api/apply/plan'));
     await pg.click('.kit-primary');
     const r = await resp;
@@ -1085,10 +1411,132 @@ async function staleScenario(context, t, serveHandle) {
       'it names a sync and no command for Court to run',
       !/\bgit |\bgh |casebook |`|\$/.test(shown),
     );
+    const offer = await pg.$eval('[data-testid="refusal"]', (e) => ({
+      edge: getComputedStyle(e).borderLeftColor,
+      btns: [...e.querySelectorAll('.kit-btn')].map(
+        (b) => b.textContent + (b.classList.contains('fill') ? '*' : ''),
+      ),
+    }));
+    check(
+      `the refusal offers "sync first" (${offer.btns.join(', ')})`,
+      offer.btns.join(',') === 'sync first*',
+    );
+    const around = await pg.evaluate(() => ({
+      filled: [
+        ...document.querySelectorAll(
+          '[data-testid="apply-overview"] .kit-btn.fill',
+        ),
+      ].map((b) => b.textContent),
+      primary: document.querySelector('.kit-primary')?.textContent,
+    }));
+    check(
+      `refused, sync first is the one offer: the only filled button in the document, and the bar's primary (${around.filled.join(', ')}; "${around.primary}")`,
+      around.filled.join(',') === 'sync first' &&
+        around.primary === 'Sync first',
+    );
     check(
       'no job was made',
       ((await agent.api('GET', '/api/jobs')).jobs ?? []).length === 0,
     );
+    await shoot(t, pg, 'stale', ['light']);
+
+    // sync first: serve syncs (once), the page says so, and the plan is
+    // built again when it is done.
+    const ghBefore = serveHandle.ghCalls().length;
+    const bundle = join(here, 'testdata', 'home', 'data', 'repo.bundle');
+    const bundleBefore = hashOf(bundle);
+    await pg.evaluate(() => {
+      window.__sawSyncing = false;
+      new MutationObserver(() => {
+        if (document.querySelector('[data-testid="syncing"]'))
+          window.__sawSyncing = true;
+      }).observe(document.body, { subtree: true, childList: true });
+    });
+    const syncPosts = [];
+    const planPosts = [];
+    const onReq = (q) => {
+      if (q.method() !== 'POST') return;
+      if (q.url().includes('/api/sync')) syncPosts.push(q.url());
+      if (q.url().includes('/api/apply/plan')) planPosts.push(q.url());
+    };
+    pg.on('request', onReq);
+    const replanned = pg
+      .waitForResponse(
+        (x) => x.url().includes('/api/apply/plan') && x.status() === 200,
+        { timeout: 30000 },
+      )
+      .catch(() => null);
+    await pg.click('[data-testid="refusal"] .kit-btn:has-text("sync first")');
+    const plan = await (await replanned)?.json().catch(() => null);
+    await pg.waitForTimeout(300);
+    pg.off('request', onReq);
+    check(
+      `sync first asks serve to sync once (${syncPosts.length} POST /api/sync), and the page said it was syncing`,
+      syncPosts.length === 1 &&
+        (await pg.evaluate(() => window.__sawSyncing === true)),
+    );
+    check(
+      `when the sync is done the plan is built again, once, and opens (${planPosts.length} POST /api/apply/plan; job ${plan?.job?.id})`,
+      planPosts.length === 1 &&
+        !!plan &&
+        (await until(
+          pg,
+          (id) =>
+            location.hash === `#/apply/${id}` &&
+            document.querySelector('.cb-plan')?.dataset.job === String(id),
+          plan.job.id,
+        )),
+    );
+    checkList(
+      "the plan is the refused one: the stale repo's archive",
+      (plan?.job?.steps ?? []).map((st) => `${st.action} ${st.key}`),
+      ['repo-archive repo:schuettc/t9-stale'],
+    );
+    const sum1 = await agent.api('GET', '/api/summary');
+    check(
+      `serve's index was rebuilt by the sync (built_at ${sum0.built_at} → ${sum1.built_at}) and it is no longer syncing`,
+      Date.parse(sum1.built_at) > Date.parse(sum0.built_at) + 2000 &&
+        sum1.syncing === false,
+    );
+    check(
+      'serve has one plan (no second sync, no second plan)',
+      ((await agent.api('GET', '/api/jobs')).jobs ?? []).length === 1,
+    );
+    // Nothing outward ran: every gh call went to the probe's fake, each a
+    // read (the fake refuses what it doesn't know), each with the
+    // fail-closed environment; casebook-data's remote is the bundle on disk.
+    const ghSync = serveHandle.ghCalls().slice(ghBefore);
+    const outward =
+      /\b(archive|unarchive|close|reopen|merge|delete|edit|create|comment|review)\b|(^| )(-X|--method)( |$)/;
+    check(
+      `nothing outward ran in the sync: ${ghSync.length} gh calls, all to the fake, none that changes GitHub (${[...new Set(ghSync.map((c) => c.split(' ').slice(0, 2).join(' ')))].join('; ')})`,
+      ghSync.length > 0 && ghSync.every((c) => !outward.test(c)),
+    );
+    const env = serveHandle.ghEnv();
+    check(
+      `every gh call saw the fail-closed environment (GH_HOST github.invalid, a token that isn't one, the probe's gh config; ${env.length} calls)`,
+      env.length === serveHandle.ghCalls().length &&
+        env.every(
+          (l) =>
+            l ===
+            `github.invalid probe-not-a-token ${join(serveHandle.home, 'gh')}`,
+        ),
+    );
+    const origin = probeGit(
+      join(serveHandle.home, 'data', 'repo'),
+      'remote get-url origin',
+      serveHandle.home,
+    );
+    check(
+      `casebook-data's remote, which the sync pulls from and pushes to, is the bundle on disk (${origin})`,
+      origin.endsWith('/testdata/home/data/repo.bundle') &&
+        !/^(https?|ssh|git):|@/.test(origin),
+    );
+    check(
+      'the committed bundle is untouched by the sync (nothing was pushed to it)',
+      hashOf(bundle) === bundleBefore,
+    );
+    check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
   } finally {
     await pg.close();
   }
