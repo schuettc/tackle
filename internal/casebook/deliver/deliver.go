@@ -83,7 +83,8 @@ type Attached struct {
 	Rule string   `json:"rule,omitempty"`
 	Job  string   `json:"job,omitempty"`
 	// Section is the page section Court asked from when nothing in it is
-	// open ("rules": asking the agent to draft one).
+	// open ("rules": asking the agent to draft one). It reads "section rules",
+	// like "rule <id>" and "job <n>".
 	Section string `json:"section,omitempty"`
 }
 

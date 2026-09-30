@@ -80,7 +80,7 @@ func describe(a Attached) string {
 		parts = append(parts, "job "+a.Job)
 	}
 	if a.Section != "" && len(parts) == 0 {
-		parts = append(parts, a.Section)
+		parts = append(parts, "section "+a.Section)
 	}
 	return strings.Join(parts, " · ")
 }

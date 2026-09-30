@@ -8,7 +8,9 @@ import (
 
 // Court asks from a section with nothing open in it ("or ask pi to draft
 // one" on Rules): the message carries the section, and the agent reads
-// "attached: rules" — no rule, no keys, but where he was.
+// "attached: section rules" — no rule, no keys, but where he was, in the
+// same words as the page's attached line and the other kinds ("rule <id>",
+// "job <n>").
 func TestAttachedSectionReachesTheAgent(t *testing.T) {
 	q, _ := newQueue(t)
 	th := thread(t, q, "s1")
@@ -26,7 +28,7 @@ func TestAttachedSectionReachesTheAgent(t *testing.T) {
 	if got := d.Messages[0].Attached.Section; got != "rules" {
 		t.Fatalf("the stored message lost its section: %q", got)
 	}
-	if got := Render(*d, "", "", time.UTC); !strings.Contains(got, "attached: rules\n") {
-		t.Fatalf("delivery text does not say \"attached: rules\":\n%s", got)
+	if got := Render(*d, "", "", time.UTC); !strings.Contains(got, "attached: section rules\n") {
+		t.Fatalf("delivery text does not say \"attached: section rules\":\n%s", got)
 	}
 }
