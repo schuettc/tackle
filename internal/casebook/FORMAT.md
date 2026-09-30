@@ -121,7 +121,7 @@ Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `
 
 ### Field vocabulary
 
-The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`; bool values are `true` or `false`; count values are whole numbers, 0 or more. Anything else is a validation error.
+The `field` in each `[[match]]` condition must be one of the following. Operators, by field type: text and enum fields take `is`, `is-not`, `in`, `not-in` (and `title` also `matches`, a regex); bool fields `is`, `is-not`; count fields `is`, `is-not`, `gt`, `gte`, `lt`, `lte`; duration fields `older-than`, `newer-than`. `GET /api/rules/vocabulary` lists each field's operators. Duration values use `<n>h`, `<n>d` or `<n>w`; bool values are `true` or `false`; count values are whole numbers, 0 or more. Anything else is a validation error.
 
 | Field | Type | Allowed values / notes |
 |---|---|---|
