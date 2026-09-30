@@ -1,0 +1,38 @@
+kind = "group"
+version = "group-v2"
+changelog = "Phase 0 duplicate rubric: should a group of near-duplicate tests become one table-driven test? Row labels keep descriptive names, so names alone are not a reason to keep tests separate."
+
+[[question]]
+key = "verdict"
+type = "choice"
+instructions = "These automated tests come from the same test file. Decide whether they should be consolidated into a single table-driven (parametrized) test. In a table-driven test every case keeps its own row with its own descriptive label and expected result, so descriptive test names are NOT a reason to keep tests separate. Consolidate when the tests share the same setup and assertion shape and differ only in input values, expected values, or expected messages. Keep separate only when the tests need genuinely different setup, make different kinds of assertions, or each carries a substantive explanation of a distinct design decision that would not fit in a row label."
+[question.options]
+consolidate = "Same behavior, different inputs: one table-driven test with a row per case would lose nothing and remove repetition."
+keep_separate = "The tests pin distinct rules or decisions, or differ enough in setup or assertion that a table would obscure them."
+review = "Partly overlapping, or the evidence is not enough to tell."
+
+[[question]]
+key = "same_behavior"
+type = "noul"
+instructions = "The tests exercise the same code path and check the same kind of outcome, differing only in input values or expected values."
+yes = "Same behavior, different data."
+no = "Different behaviors or rules."
+
+[[question]]
+key = "exact_duplicate"
+type = "noul"
+instructions = "At least two of these tests check essentially the identical thing (same input, same behavior), so one of them is redundant outright."
+yes = "At least one test is fully redundant with another."
+no = "Every test covers a case the others do not."
+
+[[question]]
+key = "loss_if_merged"
+type = "noul"
+instructions = "Merging these tests into one table-driven test (each case a labeled row) would lose meaningful information: genuinely different setup, different kinds of assertions, or a substantive explanation of a distinct design decision. Descriptive names alone are not lost, because each row keeps a label."
+yes = "Merging would lose something meaningful."
+no = "Merging would lose nothing meaningful."
+
+[policy]
+act = 0.6
+review = 0.3
+exact_duplicate = 0.7

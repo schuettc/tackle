@@ -16,3 +16,6 @@ docs/superpowers/
 
 # proj binary
 /proj
+
+# cull binary
+/cull
