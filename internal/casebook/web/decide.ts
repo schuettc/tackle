@@ -27,6 +27,7 @@ import {
   noteField,
   type SheetHandle,
   type ListHandle,
+  type KeyBinding,
 } from '/_kit/kit.js';
 import type { DecideResult, DecisionVocabView, ItemView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
@@ -350,11 +351,11 @@ function openDecideSheetWithVocab(
  * wireSelection subscribes to the list's shared selection store and:
  *  1. Sets the bar primary button to "Decide N" (or hides it when empty).
  *  2. Updates the .cb-sel-count element inside the list (in the foot).
- *  3. Registers the "d" key to open the decide sheet for the selection.
+ *  3. Returns the "d" binding (open the decide sheet for the selection) for
+ *     the section to list in its Section.keys, so "d" acts only while that
+ *     section is shown (app.ts registers section keys on show).
  *
  * Call after the list is created; pass the same ctx the section uses.
- * The "d" key is registered only once (a clash is silently ignored since
- * another view may also want it, per Task 10 scope rules).
  *
  * After a decide, calls list.deselect(decidedIds) so the kit drops those ids
  * from the selection store.
@@ -362,7 +363,7 @@ function openDecideSheetWithVocab(
 export function wireSelection(
   ctx: Ctx,
   listHandle: ListHandle<ItemView>,
-): void {
+): KeyBinding {
   function openSheetForSelection(): void {
     const keys = listHandle.selectedIds();
     if (keys.length === 0) return;
@@ -392,19 +393,12 @@ export function wireSelection(
     }
   });
 
-  try {
-    ctx.keys.register({
-      keys: 'd',
-      label: 'decide selection',
-      group: 'page',
-      run() {
-        openSheetForSelection();
-      },
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.startsWith('key clash:')) {
-      throw err;
-    }
-  }
+  return {
+    keys: 'd',
+    label: 'decide selection',
+    group: 'page',
+    run() {
+      openSheetForSelection();
+    },
+  };
 }

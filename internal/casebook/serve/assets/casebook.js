@@ -196,6 +196,17 @@ function boot() {
     },
     fetch: (url, init) => fetch(url, init)
   });
+  let keyedSection;
+  let unbindSectionKeys = [];
+  function bindSectionKeys(sec) {
+    if (sec === keyedSection) return;
+    for (const unbind of unbindSectionKeys) unbind();
+    unbindSectionKeys = [];
+    keyedSection = sec;
+    for (const b of sec?.keys ?? []) {
+      unbindSectionKeys.push(ctx.keys.register(b));
+    }
+  }
   onRoute((r) => {
     currentRoute = r;
     const sectionId = r.section === "rules" ? "rules" : r.section === "apply" ? "apply" : "attention";
@@ -207,6 +218,7 @@ function boot() {
       if (!active) sec.hide();
     }
     const activeSec = sections.get(sectionId);
+    bindSectionKeys(activeSec);
     if (activeSec) {
       activeSec.show(r.sub);
     } else {
@@ -521,21 +533,14 @@ function wireSelection(ctx, listHandle) {
       });
     }
   });
-  try {
-    ctx.keys.register({
-      keys: "d",
-      label: "decide selection",
-      group: "page",
-      run() {
-        openSheetForSelection();
-      }
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.startsWith("key clash:")) {
-      throw err;
+  return {
+    keys: "d",
+    label: "decide selection",
+    group: "page",
+    run() {
+      openSheetForSelection();
     }
-  }
+  };
 }
 
 // proposals.ts
@@ -1420,7 +1425,7 @@ function makeAttention(ctx) {
     }
   }
   void reload();
-  wireSelection(ctx, handle);
+  const decideKey = wireSelection(ctx, handle);
   selection.onChange((ids) => {
     updateProposalBulk(ids);
     if (footEl) {
@@ -1432,7 +1437,7 @@ function makeAttention(ctx) {
     }
     feedAttached();
   });
-  ctx.keys.register({
+  const acceptKey = {
     keys: "a",
     label: "accept proposal",
     group: "page",
@@ -1447,8 +1452,8 @@ function makeAttention(ctx) {
       }).catch(() => {
       });
     }
-  });
-  ctx.keys.register({
+  };
+  const rejectKey = {
     keys: "r",
     label: "reject proposal",
     group: "page",
@@ -1462,7 +1467,7 @@ function makeAttention(ctx) {
         void reload();
       });
     }
-  });
+  };
   if (typeof handle.focusSearch === "function") {
     const focusFn = handle.focusSearch.bind(handle);
     try {
@@ -1568,6 +1573,7 @@ function makeAttention(ctx) {
     hide() {
       active = false;
     },
+    keys: [decideKey, acceptKey, rejectKey],
     onLive(type, data) {
       if (type === "index") {
         const s = data;

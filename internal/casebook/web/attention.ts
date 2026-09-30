@@ -14,6 +14,7 @@ import {
   h,
   type Chip,
   type ListHandle,
+  type KeyBinding,
 } from '/_kit/kit.js';
 import type {
   SummaryView,
@@ -521,8 +522,9 @@ export function makeAttention(ctx: Ctx): Section {
   }
   void reload();
 
-  // Wire selection → primary button and foot count (Task 4).
-  wireSelection(ctx, handle);
+  // Wire selection → primary button and foot count (Task 4). Its "d" key is
+  // one of this section's keys (Section.keys), live only while it is shown.
+  const decideKey = wireSelection(ctx, handle);
 
   // Also update proposal bulk buttons and select-all visibility when selection changes.
   selection.onChange((ids) => {
@@ -539,10 +541,11 @@ export function makeAttention(ctx: Ctx): Section {
     feedAttached();
   });
 
-  // Register 'a' and 'r' keys to accept/reject the open item's proposal.
-  // The handler checks scope (currentOpenKey + pending proposal); no try/catch
-  // is needed because the keys are unique and registered exactly once here.
-  ctx.keys.register({
+  // 'a' and 'r' accept/reject the open item's proposal. Like "d", they are
+  // Section.keys: app.ts registers them only while Attention is shown, so on
+  // #/rules they cannot reach the open item Attention keeps while hidden, and
+  // Rules and Apply are free to bind their own a/r.
+  const acceptKey: KeyBinding = {
     keys: 'a',
     label: 'accept proposal',
     group: 'page',
@@ -559,9 +562,9 @@ export function makeAttention(ctx: Ctx): Section {
         })
         .catch(() => {});
     },
-  });
+  };
 
-  ctx.keys.register({
+  const rejectKey: KeyBinding = {
     keys: 'r',
     label: 'reject proposal',
     group: 'page',
@@ -575,7 +578,7 @@ export function makeAttention(ctx: Ctx): Section {
         void reload();
       });
     },
-  });
+  };
 
   // Register / to focus the search field (kit v0.11.0).
   // createKeys() in app.ts is called before sections are created, so we
@@ -732,6 +735,7 @@ export function makeAttention(ctx: Ctx): Section {
     hide() {
       active = false;
     },
+    keys: [decideKey, acceptKey, rejectKey],
     onLive(type: string, data: unknown) {
       if (type === 'index') {
         // One reload per index event: apply counts from the event payload and

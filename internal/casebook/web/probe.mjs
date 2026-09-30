@@ -64,6 +64,10 @@ function cleanup() {
     _composerServe.stop();
     _composerServe = null;
   }
+  if (_keysServe) {
+    _keysServe.stop();
+    _keysServe = null;
+  }
 }
 
 process.on('SIGTERM', () => {
@@ -1554,6 +1558,161 @@ async function composerScenariosOn(context, serveHandle) {
   }
 }
 
+// ---- section keys: Attention's a / r / d act only while Attention is shown -
+//
+// Its own serve (KEYS_SEED), so what a failing key does (accept a proposal,
+// open a sheet) touches nothing another scenario reads. Attention keeps its
+// open item and its selection while hidden; on #/rules neither a, r nor d may
+// reach them.
+const KEYS_SEED = [
+  seedRepo(
+    'keys-scope',
+    [
+      [31, 'wire the retry budget', 'kim'],
+      [32, 'split the settings page', 'kim'],
+    ],
+    [],
+  ),
+];
+let _keysServe = null;
+async function keyScopeScenarios(context) {
+  const serveHandle = await startServe({ seedRepos: KEYS_SEED });
+  _keysServe = serveHandle;
+  try {
+    await keyScopeScenariosOn(context, serveHandle);
+  } finally {
+    serveHandle.stop();
+    _keysServe = null;
+  }
+}
+
+async function keyScopeScenariosOn(context, serveHandle) {
+  console.log('\nscenario: section keys act only in the active section');
+  const key = 'pr:schuettc/keys-scope#31';
+  const agent = createAgent(serveHandle.base, serveHandle.token);
+  await agent.presence('probe-keys-sess', 'pi · keys', '/tmp', 'pi');
+  const made = await agent.propose('probe-keys-sess', [key], 'keep', 'keys');
+  check('a pending proposal to press "a" on', (made?.proposed ?? 0) === 1);
+  const proposalState = async () => {
+    const r = await fetch(
+      `${serveHandle.base}/api/item?key=${encodeURIComponent(key)}`,
+      { headers: { 'X-Local-Token': serveHandle.token } },
+    );
+    const v = await r.json();
+    // The one proposal on the key, whatever its state (item.proposal is
+    // only there while it is pending).
+    return (v?.proposals ?? []).map((p) => p.state).join(',');
+  };
+  const pressWithFocus = async (pg, k) => {
+    await pg.evaluate(() => {
+      window.dispatchEvent(new Event('focus'));
+      document.body.dispatchEvent(new FocusEvent('focus'));
+    });
+    await pg.keyboard.press(k);
+  };
+  const sheetOpen = (pg) => pg.$('.kit-sheet').then((el) => Boolean(el));
+
+  const pg = await context.newPage();
+  try {
+    await pg.setViewportSize({ width: 1600, height: 900 });
+    await pg.goto(serveHandle.url + '#/item/' + encodeURIComponent(key), {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    });
+    const opened = await until(
+      pg,
+      () => !!document.querySelector('.kit-read .cb-proposal-card'),
+      undefined,
+      8000,
+    );
+    check('Attention shows the open item with its pending proposal', opened);
+    // Select a row too, so "d" has something it could open decide for.
+    await pg.waitForSelector('.kit-row .kit-box', { timeout: 6000 });
+    await pg.click('.kit-row .kit-box');
+    const selected = await until(pg, () =>
+      (document.querySelector('.kit-primary')?.textContent ?? '')
+        .trim()
+        .startsWith('Decide '),
+    );
+    check('Attention has a selection (primary reads Decide N)', selected);
+
+    // Show Rules: Attention's open item and selection stay, hidden.
+    await pg.evaluate(() => {
+      location.hash = '#/rules';
+    });
+    await until(
+      pg,
+      () =>
+        document
+          .querySelector('.kit-ctl[data-id="rules"]')
+          ?.classList.contains('on') ?? false,
+    );
+
+    // r and d first: they only open a sheet, while a failing a settles the
+    // proposal r would act on.
+    await pressWithFocus(pg, 'r');
+    await pg.waitForTimeout(500);
+    const rSheet = await sheetOpen(pg);
+    check(
+      'on #/rules, "r" does not open the reject sheet for the hidden item',
+      !rSheet,
+    );
+    if (rSheet) {
+      await pg.keyboard.press('Escape');
+      await pg.waitForTimeout(300);
+    }
+
+    await pressWithFocus(pg, 'd');
+    await pg.waitForTimeout(500);
+    const dSheet = await sheetOpen(pg);
+    check(
+      'on #/rules, "d" does not open decide for the invisible selection',
+      !dSheet,
+    );
+    if (dSheet) {
+      await pg.keyboard.press('Escape');
+      await pg.waitForTimeout(300);
+    }
+
+    await pressWithFocus(pg, 'a');
+    await pg.waitForTimeout(1500);
+    check(
+      'on #/rules, "a" does not accept Attention\'s hidden open proposal',
+      (await proposalState()) === 'pending',
+    );
+
+    // Back on Attention the same keys work again.
+    await pg.evaluate((k) => {
+      location.hash = '#/item/' + encodeURIComponent(k);
+    }, key);
+    await until(
+      pg,
+      () => !!document.querySelector('.kit-read .cb-proposal-card'),
+      undefined,
+      8000,
+    );
+    await pressWithFocus(pg, 'd');
+    const dBack = await until(
+      pg,
+      () => !!document.querySelector('.kit-sheet'),
+      undefined,
+      4000,
+    );
+    check('back on Attention, "d" opens decide for the selection', dBack);
+    if (dBack) {
+      await pg.keyboard.press('Escape');
+      await until(pg, () => !document.querySelector('.kit-sheet'));
+    }
+    await pressWithFocus(pg, 'a');
+    check(
+      'back on Attention, "a" accepts the open item\'s proposal',
+      await eventually(async () => (await proposalState()) === 'accepted'),
+    );
+  } finally {
+    await pg.close();
+  }
+}
+
 async function run() {
   const browser = await findChrome();
   if (!browser) {
@@ -1591,6 +1750,11 @@ async function run() {
     // PROBE_ONLY=composer runs only the Task 7 scenarios (their own serve).
     if (process.env.PROBE_ONLY === 'composer') {
       await composerScenarios(context);
+      return;
+    }
+    // PROBE_ONLY=keys runs only the section-key scenario (its own serve).
+    if (process.env.PROBE_ONLY === 'keys') {
+      await keyScopeScenarios(context);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -5827,6 +5991,9 @@ async function run() {
 
     // ---- Task 7 (its own seeded serve, so its place in the run is free) -----
     await composerScenarios(context);
+
+    // ---- section keys (their own seeded serve too) --------------------------
+    await keyScopeScenarios(context);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

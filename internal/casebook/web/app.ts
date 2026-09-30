@@ -14,6 +14,7 @@ import {
   type Api,
   createKeys,
   type Keys,
+  type KeyBinding,
   live,
   type LiveStatus,
   initTheme,
@@ -64,6 +65,19 @@ export interface Section {
    */
   onLive(type: string, data: unknown): void;
   primary(): Primary | null;
+  /**
+   * keys are the section's own keys (Attention's a / r / d; Rules and Apply
+   * their own). app.ts registers them with ctx.keys when the section is shown
+   * and unregisters them when another section is shown, so they act only in
+   * the active section: a hidden section keeps its open item and selection,
+   * and a key must not reach them. It also lets two sections bind the same
+   * key, which the kit's registry otherwise refuses (a clash throws).
+   *
+   * A section never calls ctx.keys.register for a key of its own: that binds
+   * it page-wide. ctx.keys.register is for page-wide keys (the dock's, and
+   * family keys like /).
+   */
+  keys?: KeyBinding[];
 }
 
 export interface DockHandle {
@@ -287,6 +301,22 @@ export function boot(): void {
     fetch: (url, init) => fetch(url, init),
   });
 
+  // ---- section keys ---------------------------------------------------------
+
+  // Only the active section's keys are registered (Section.keys). A route
+  // within the same section keeps them; a route to another section swaps them.
+  let keyedSection: Section | undefined;
+  let unbindSectionKeys: Array<() => void> = [];
+  function bindSectionKeys(sec: Section | undefined): void {
+    if (sec === keyedSection) return;
+    for (const unbind of unbindSectionKeys) unbind();
+    unbindSectionKeys = [];
+    keyedSection = sec;
+    for (const b of sec?.keys ?? []) {
+      unbindSectionKeys.push(ctx.keys.register(b));
+    }
+  }
+
   // ---- routing --------------------------------------------------------------
 
   onRoute((r) => {
@@ -309,6 +339,7 @@ export function boot(): void {
       if (!active) sec.hide();
     }
     const activeSec = sections.get(sectionId);
+    bindSectionKeys(activeSec);
     if (activeSec) {
       activeSec.show(r.sub);
     } else {
