@@ -414,6 +414,18 @@ async function keyboardScenario(shared, t) {
               !!document.querySelector('.kit-primary')?.hidden,
           ),
         );
+        // serve announces the decision before it answers (it pushes and
+        // rebuilds first): the sheet stays, modal, until the answer. Keys
+        // wait while a sheet is open, so the next key waits for it to close.
+        check(
+          'the decide sheet closes when serve answers',
+          await until(
+            pg,
+            () => !document.querySelector('.kit-sheet'),
+            undefined,
+            10000,
+          ),
+        );
 
         // a accepts the open item's proposal; r rejects it (its sheet).
         // An item opening (#/item/<key>) reloads the list too. Here that
@@ -455,17 +467,33 @@ async function keyboardScenario(shared, t) {
           'the open item shows its pending proposal (keep), its list reload still on its way',
           await openItem(KB_KEY(41)),
         );
+        const accepts = [];
+        const onAccept = async (r) => {
+          if (!r.url().includes('/api/proposals/accept')) return;
+          accepts.push(`${r.status()} ${await r.text().catch(() => '')}`);
+        };
+        pg.on('response', onAccept);
+        const atPress = await pg.evaluate(() => ({
+          active: `${document.activeElement?.tagName}.${document.activeElement?.className}`,
+          sheet: !!document.querySelector('.kit-sheet'),
+          hash: location.hash,
+          kicker: document.querySelector('.kit-read .cb-kicker')?.textContent,
+        }));
         await press(pg, 'a');
         hold = false;
+        let seen41 = '';
+        const accepted = await eventually(async () => {
+          const v = await item(KB_KEY(41));
+          const states = (v?.proposals ?? []).map((p) => p.state).join(',');
+          seen41 = `proposals ${states || 'none'}, decision ${v?.item?.decision?.disposition ?? 'none'}`;
+          return (
+            states === 'accepted' && v?.item?.decision?.disposition === 'keep'
+          );
+        });
+        pg.off('response', onAccept);
         check(
-          'a accepts the open proposal: serve has it accepted, and the item decided keep',
-          await eventually(async () => {
-            const v = await item(KB_KEY(41));
-            return (
-              (v?.proposals ?? []).map((p) => p.state).join(',') ===
-                'accepted' && v?.item?.decision?.disposition === 'keep'
-            );
-          }),
+          `a accepts the open proposal: serve has it accepted, and the item decided keep (${seen41}; accept calls: ${accepts.join(' | ') || 'none'}; at the press: ${atPress.active}, sheet ${atPress.sheet}, ${atPress.hash}, "${atPress.kicker}")`,
+          accepted,
         );
         check(
           'the next open item shows its pending proposal (close), its list reload still on its way',
