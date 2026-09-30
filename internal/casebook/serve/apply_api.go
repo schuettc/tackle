@@ -106,8 +106,15 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	// Filter items: all to-apply or only the requested keys.
 	var items []engine.Item
 	if in.All {
+		// An item already in a plan Court hasn't approved (or discarded) is
+		// left out: "plan all" twice doesn't plan the same steps twice.
+		planned, err := s.plannedKeys(ctx)
+		if err != nil {
+			reply(w, nil, err)
+			return
+		}
 		for _, it := range res.Items {
-			if it.Status == item.StatusToApply && it.Decision != nil {
+			if it.Status == item.StatusToApply && it.Decision != nil && !planned[it.ID] {
 				items = append(items, it)
 			}
 		}
@@ -159,6 +166,24 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	s.publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobPlanned})
 
 	reply(w, PlanView{Plan: plan, Groups: plan.Groups(), Job: job}, nil)
+}
+
+// plannedKeys is the set of item keys with a step in an unapproved plan.
+func (s *Server) plannedKeys(ctx context.Context) (map[string]bool, error) {
+	jobs, err := s.Apply.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, j := range jobs {
+		if j.State != apply.JobPlanned {
+			continue
+		}
+		for _, st := range j.Steps {
+			out[st.Key] = true
+		}
+	}
+	return out, nil
 }
 
 // postApplyApprove is POST /api/apply/approve.
