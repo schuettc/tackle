@@ -46,6 +46,33 @@ pane inside the chosen session.
 Sessions live on **per-project tmux servers** (one server per project root), so
 a crash or runaway in one project never takes down another.
 
+### Restoring after a reboot
+
+`proj` remembers every work session it sees in
+`~/.local/state/proj/sessions.json`: its name, directory, agent, and the
+agent conversation it holds (the `@harness_session` id that pi and Claude Code
+announce). tmux hooks that `proj` installs on each of its servers keep the
+record current as sessions are created, renamed, or switch conversation. The
+record only grows: a reboot, a crash or a plain `tmux kill-session` leaves the
+session restorable. Reaping it with `^x` in the picker is what removes it.
+
+`tab` at the picker's entrance cycles **folders → sessions → saved**. The saved
+scope lists every remembered session, grouped by the Ghostty window it sat in:
+
+| Key | Effect |
+|-----|--------|
+| `space` | check / uncheck the highlighted session (everything not open is checked by default) |
+| `^r` | restore the checked sessions and rebuild their Ghostty windows and tabs |
+| `enter` | restore just the highlighted session and jump to it |
+| `^s` | save the current Ghostty window/tab layout (nothing records it automatically) |
+| `^x` | forget the session (reaping it too if it is running) |
+
+A restored session is recreated in its saved directory with its sidebar, and
+its agent reopens the saved conversation (`pi --session <id>` /
+`claude --resume <id>`). A session whose conversation file is gone shows
+`(no transcript)` and starts a fresh agent under the same name. Unchecked
+sessions stay saved for next time.
+
 `proj` also understands non-interactive invocations that agents use safely:
 
 | Command | Effect |

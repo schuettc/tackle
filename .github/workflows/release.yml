@@ -1,22 +1,13 @@
 name: release
 
-# Releases fire on a PREFIXED tag: <tool>/v<semver> (e.g. scratch/v0.15.1).
-# Pushing one tag builds and releases exactly one tool — the others are never
-# touched. The tag prefix names the tool; the semver is stripped of its leading
-# v for the asset filenames and the (future) /dl path + latest pointer.
-#
-# Assets follow the family distribution contract:
-#   <tool>_<os>_<arch>.tar.gz  +  <tool>_<os>_<arch>.tar.gz.sha256 (shasum format)
-#   <os> in {darwin,linux}, <arch> in {arm64,amd64}  (Go GOOS/GOARCH)
-# The GitHub release is also the invisible durable backing store for the binaries.
-#
-# Assets are ALSO published to the tools-ops Downloads bucket under
-# tackle.tools/dl/<tool>/<version>/ (+ a /dl/<tool>/latest pointer for real
-# releases), so `curl tackle.tools/install.sh | sh` can fetch them. The upload
-# job assumes the tools-ops ReleaseRole via OIDC — trust is scoped to the
-# `release` GitHub environment (declared on the job), not a ref, so it works
-# with the prefixed-tag trigger. A prerelease tag (version with a '-', e.g.
-# scratch/v1.0.0-rc.1) publishes its versioned path but NEVER moves latest.
+# Releases fire on a PREFIXED tag: <tool>/v<semver> (e.g. scratch/v0.5.4).
+# Pushing one tag builds and releases exactly one tool; the others are never
+# touched. Built through the family release actions (schuettc/tools-actions:
+# release-version in prefixed-tag mode + go-release): signed and notarized
+# macOS binaries (Developer ID), a stamp check, the GitHub release, and the
+# family download contract at tackle.tools/dl/<tool>/<version>/ with
+# /dl/<tool>/latest moved only for a real release. A tag whose version has a
+# '-' (scratch/v1.0.0-rc.1) is a pre-release: versioned paths only.
 
 on:
   push:
@@ -25,111 +16,43 @@ on:
 
 permissions:
   contents: write
+  # OIDC: go-release assumes the tools-ops Release role to write to the
+  # tackle.tools Downloads bucket. Trust is this repo's `release` environment.
   id-token: write
 
 jobs:
   release:
-    runs-on: macos-latest
+    # macOS: codesign and notarytool exist nowhere else.
+    runs-on: macos-26
     environment: release
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+      - id: rel
+        uses: schuettc/tools-actions/release-version@v0.10.1
         with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
+          mode: prefixed-tag
+      - uses: schuettc/tools-actions/go-release@v0.10.1
         with:
-          go-version-file: go.mod
-
-      - name: Parse tool + version from the tag
-        id: tag
-        run: |
-          set -euo pipefail
-          ref="${GITHUB_REF#refs/tags/}"        # e.g. scratch/v0.15.1
-          tool="${ref%%/*}"                      # scratch
-          vertag="${ref#*/}"                     # v0.15.1
-          version="${vertag#v}"                  # 0.15.1
-          if [ ! -d "cmd/$tool" ]; then
-            echo "tag names tool '$tool' but cmd/$tool does not exist" >&2
-            exit 1
-          fi
-          echo "tool=$tool"       >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $tool $version (tag $ref)"
-
-      - name: Cross-compile + package the four targets
-        id: build
-        env:
-          TOOL: ${{ steps.tag.outputs.tool }}
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          # Stamp the shared internal/version vars (per-tool build, from this tag).
-          COMMIT="$(git rev-parse --short HEAD)"
-          BUILD_DATE="$(date -u +%Y-%m-%d)"
-          VPKG=github.com/schuettc/tackle/internal/version
-          LDFLAGS="-X ${VPKG}.version=${VERSION} -X ${VPKG}.commit=${COMMIT} -X ${VPKG}.date=${BUILD_DATE}"
-          for os in darwin linux; do
-            for arch in arm64 amd64; do
-              out="dist/${TOOL}_${os}_${arch}"
-              GOOS="$os" GOARCH="$arch" CGO_ENABLED=0 \
-                go build -trimpath -ldflags "$LDFLAGS" -o "$out/$TOOL" "./cmd/$TOOL"
-              tarball="dist/${TOOL}_${os}_${arch}.tar.gz"
-              tar -C "$out" -czf "$tarball" "$TOOL"
-              ( cd dist && shasum -a 256 "${TOOL}_${os}_${arch}.tar.gz" \
-                  > "${TOOL}_${os}_${arch}.tar.gz.sha256" )
-              rm -rf "$out"
-            done
-          done
-          ls -1 dist
-
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TOOL: ${{ steps.tag.outputs.tool }}
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "${GITHUB_REF#refs/tags/}" \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "$TOOL $VERSION" \
-            --generate-notes \
-            dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256
-
-      - name: Configure AWS credentials (downloads)
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.TACKLE_RELEASE_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Publish binaries to tackle.tools/dl
-        env:
-          BUCKET: ${{ secrets.TACKLE_DOWNLOADS_BUCKET }}
-          TOOL: ${{ steps.tag.outputs.tool }}
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          for f in dist/${TOOL}_*.tar.gz dist/${TOOL}_*.tar.gz.sha256; do
-            base="$(basename "$f")"
-            ct=application/gzip
-            case "$base" in *.sha256) ct=text/plain ;; esac
-            aws s3 cp "$f" "s3://$BUCKET/dl/$TOOL/$VERSION/$base" \
-              --cache-control 'public,max-age=31536000,immutable' --content-type "$ct"
-          done
-
-      - name: Update latest pointer + invalidate (real releases only)
-        env:
-          BUCKET: ${{ secrets.TACKLE_DOWNLOADS_BUCKET }}
-          TOOL: ${{ steps.tag.outputs.tool }}
-          VERSION: ${{ steps.tag.outputs.version }}
-        run: |
-          set -euo pipefail
-          # A prerelease version (contains '-', e.g. 1.0.0-rc.1) publishes its
-          # versioned path but must never regress/hijack the latest pointer.
-          case "$VERSION" in
-            *-*) echo "prerelease $VERSION — leaving /dl/$TOOL/latest untouched"; exit 0 ;;
-          esac
-          printf '%s' "$VERSION" | aws s3 cp - "s3://$BUCKET/dl/$TOOL/latest" \
-            --content-type text/plain --cache-control 'public,max-age=60,must-revalidate'
-          aws cloudfront create-invalidation \
-            --distribution-id E1W6J149JZCAEG --paths "/dl/$TOOL/latest"
+          binaries: ${{ steps.rel.outputs.tool }}=./cmd/${{ steps.rel.outputs.tool }}
+          # One shared version package for every tool in the monorepo.
+          ldflags: >-
+            -X github.com/schuettc/tackle/internal/version.version={version}
+            -X github.com/schuettc/tackle/internal/version.commit={commit}
+            -X github.com/schuettc/tackle/internal/version.date={date}
+          stamp-check: ${{ steps.rel.outputs.tool }}
+          tag: ${{ steps.rel.outputs.tag }}
+          version: ${{ steps.rel.outputs.version }}
+          commit: ${{ steps.rel.outputs.commit }}
+          date: ${{ steps.rel.outputs.date }}
+          create: ${{ steps.rel.outputs.create }}
+          prerelease: ${{ steps.rel.outputs.prerelease }}
+          release-title: ${{ steps.rel.outputs.tool }} ${{ steps.rel.outputs.version }}
+          apple-developer-id-p12: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          apple-developer-id-p12-password: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          apple-notary-key: ${{ secrets.APPLE_NOTARY_KEY }}
+          apple-notary-key-id: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          apple-notary-issuer-id: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          dl-tool: ${{ steps.rel.outputs.tool }}
+          dl-role-arn: ${{ secrets.TACKLE_RELEASE_ROLE_ARN }}
+          dl-bucket: ${{ secrets.TACKLE_DOWNLOADS_BUCKET }}
+          dl-distribution-id: E1W6J149JZCAEG

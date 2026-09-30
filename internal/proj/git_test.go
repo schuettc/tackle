@@ -12,11 +12,18 @@ func TestGitStatus(t *testing.T) {
 		t.Skip("no git")
 	}
 	dir := t.TempDir()
-	run := func(a ...string) { _ = exec.Command("git", append([]string{"-C", dir}, a...)...).Run() }
+	run := func(a ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, a...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", a, err, out)
+		}
+	}
 	run("init", "-b", "main")
 	run("config", "user.email", "t@t")
 	run("config", "user.name", "t")
-	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	run("add", ".")
 	run("commit", "-m", "one")
 	_ = os.WriteFile(filepath.Join(dir, "b.txt"), []byte("y"), 0o644) // untracked ⇒ dirty

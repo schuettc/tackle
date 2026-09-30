@@ -176,7 +176,7 @@ func (s *Server) finishDecides(ctx context.Context, n int, errs []string) (bool,
 // decideAll records decisions (one commit each), pushes once, retires the
 // pending proposals for those keys (except keep, the one being accepted),
 // rebuilds the index and announces it.
-func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, []string, bool, error) {
+func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, []string, bool) {
 	if o.By == "" {
 		o.By = s.App.Cfg.User
 	}
@@ -196,7 +196,7 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 		s.publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
 	}
 	pushed, errs := s.finishDecides(ctx, n, errs)
-	return n, done, errs, pushed, nil
+	return n, done, errs, pushed
 }
 
 func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
@@ -264,8 +264,8 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 		reply(w, DecideResult{Decided: 0, DecidedKeys: []string{}, Errors: nonNil(errs), Pushed: false}, nil)
 		return
 	}
-	n, done, errs, pushed, err := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
-	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, err)
+	n, done, errs, pushed := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, nil)
 }
 
 func proposalOpts(p propose.Proposal) app.DecideOptions {
@@ -332,12 +332,12 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	}
 	o := proposalOpts(p)
 	o.Until, o.Note = in.Until, in.Note
-	n, done, errs, pushed, err := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
-	if err == nil && n == 1 {
+	n, done, errs, pushed := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
+	if n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
 		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
 	}
-	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, err)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, nil)
 }
 
 func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {

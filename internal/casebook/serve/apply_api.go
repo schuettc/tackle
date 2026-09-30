@@ -530,7 +530,7 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 	}
 	words, err := apply.ShellSplit(restore)
 	if err != nil || len(words) < 4 {
-		return fmt.Errorf("could not parse restore command %q: %v", restore, err)
+		return fmt.Errorf("could not parse restore command %q: %w", restore, err)
 	}
 	// words[0]="git", words[1]="-C", words[2]=dir, words[3:]= subcommand
 	dir := words[2]
@@ -539,9 +539,9 @@ func runRestoreCommand(ctx context.Context, restore string, runGit func(ctx cont
 		return err
 	}
 	// Fallback to exec (only reached when runGit is nil, i.e., in degenerate tests).
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, words[3:]...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, words[3:]...)...) //nolint:gosec // restore command is validated (git -C only) and run by design
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

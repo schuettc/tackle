@@ -26,7 +26,7 @@ func LoadGitHub(path string) (*GitHub, error) {
 	}
 	g := NewGitHub()
 	if err := json.Unmarshal(b, g); err != nil || g.Version != CacheVersion {
-		return NewGitHub(), nil
+		return NewGitHub(), nil //nolint:nilerr // corrupt/old cache → start fresh, not an error
 	}
 	if g.Owners == nil {
 		g.Owners = map[string]*Owner{}

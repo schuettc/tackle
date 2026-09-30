@@ -40,7 +40,7 @@ func Scan(ctx context.Context, roots []string, machine string) (Snapshot, []erro
 		}
 		_ = filepath.WalkDir(real, func(p string, de fs.DirEntry, err error) error {
 			if err != nil || !de.IsDir() {
-				return nil
+				return nil //nolint:nilerr // best-effort walk: skip an unreadable entry, keep scanning
 			}
 			if p != real && skipDirs[de.Name()] {
 				return filepath.SkipDir

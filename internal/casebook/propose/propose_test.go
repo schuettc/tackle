@@ -2,6 +2,7 @@ package propose
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -54,7 +55,7 @@ func TestSettleAndTally(t *testing.T) {
 	_ = s.Settle(ctx, ps[1].ID, Changed, "decided keep")
 	*now = now.Add(time.Minute)
 	_ = s.Settle(ctx, ps[2].ID, Rejected, "still in use")
-	if err := s.Settle(ctx, ps[0].ID, Rejected, ""); err != ErrNotFound {
+	if err := s.Settle(ctx, ps[0].ID, Rejected, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("settling twice: %v", err)
 	}
 	tal, _ := s.Tally(ctx, "pi:s1", since)

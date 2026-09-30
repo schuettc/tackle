@@ -30,7 +30,7 @@ import (
 var (
 	openBrowser      = localweb.OpenBrowser
 	startDetached    = defaultStartDetached
-	newSettledClient = func() *channel.Client { return channel.NewClient() }
+	newSettledClient = channel.NewClient
 )
 
 func init() {
@@ -104,7 +104,8 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 						Open: func(url string) error { return openBrowser(url) }})
 				}
 				adv, err := serve.Running()
-				if errors.Is(err, serve.ErrNotRunning) {
+				switch {
+				case errors.Is(err, serve.ErrNotRunning):
 					if _, err := open(); err != nil {
 						return err
 					}
@@ -112,9 +113,9 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 						return err
 					}
 					_, _ = fmt.Fprintf(out, "casebook serve started: %s\n", adv.Base)
-				} else if err != nil {
+				case err != nil:
 					return err
-				} else {
+				default:
 					_, _ = fmt.Fprintf(out, "casebook serve is running: %s\n", adv.Base)
 				}
 				if !boolFlag(fs, "no-open") {

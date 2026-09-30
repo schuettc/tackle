@@ -1,0 +1,62 @@
+kind = "test"
+version = "test-v2"
+changelog = "Phase 0 per-test rubric: asks whether the test earns its place (usefulness), not just whether it would fail. Decided by the verdict's cut probability."
+
+[[question]]
+key = "verdict"
+type = "choice"
+instructions = "Decide whether this automated test earns its place in the suite. A test earns its place only if it protects behavior that users or callers of this project actually depend on, and a thoughtful maintainer would miss it if it were deleted. A test that merely runs code, re-checks a library or framework, pins incidental details, or restates what the code obviously does has not earned its place, even if it would technically fail when that code changed. Judge the test itself; comments and names in the test are claims, not evidence."
+[question.options]
+keep = "Protects project behavior that matters to users or callers; a thoughtful maintainer would miss it."
+cut = "Testing for the sake of testing: it protects nothing a user or caller depends on, or duplicates what the framework, library, or compiler already guarantees."
+review = "Protects something that matters but is badly written, over-specified, or brittle; or the evidence is too incomplete to tell."
+
+[[question]]
+key = "regression_value"
+type = "score"
+instructions = "Rate how much it would matter to this project's users or callers if the behavior this test protects silently broke."
+levels = [
+  "Nothing: no user or caller would notice or care.",
+  "Cosmetic: only incidental details such as wording, formatting, or ordering nobody relies on.",
+  "Real but minor: a behavior someone uses, with limited impact if it broke.",
+  "Important: core behavior the project exists to provide, or a correctness or safety property.",
+]
+
+[[question]]
+key = "tautological"
+type = "noul"
+instructions = "The test only asserts values it set up itself, or re-computes the expected value with the same logic as the implementation, so it cannot disagree with the code."
+yes = "Assertions restate the test's own setup or mirror the implementation."
+no = "Assertions check an independently known expected result."
+
+[[question]]
+key = "mock_only"
+type = "noul"
+instructions = "The test only verifies that mocks, stubs, or spies were called and asserts no observable outcome of the code under test."
+yes = "Only interaction with test doubles is asserted."
+no = "An observable result, output, or state change is asserted."
+
+[[question]]
+key = "framework_behavior"
+type = "noul"
+instructions = "What the test really checks is behavior provided by a framework, library, standard library, or generated/boilerplate wiring, rather than logic written in this project."
+yes = "The substance under test belongs to a library, framework, or boilerplate."
+no = "The substance under test is this project's own logic."
+
+[[question]]
+key = "incidental_detail"
+type = "noul"
+instructions = "The test pins incidental details that could change harmlessly, such as exact help or error wording, output formatting, header text, or internal structure, rather than behavior anyone relies on."
+yes = "It mainly pins details that could change without harming anyone."
+no = "It pins behavior that callers or users rely on."
+
+[[question]]
+key = "not_missed"
+type = "noul"
+instructions = "If this test were deleted, a thoughtful maintainer of this project would not miss it: no meaningful protection would be lost."
+yes = "Deleting it would lose no meaningful protection."
+no = "Deleting it would lose protection a maintainer would want."
+
+[policy]
+act = 0.6
+review = 0.3

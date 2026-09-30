@@ -403,11 +403,11 @@ func commands(stdin io.Reader) []tools.Command {
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := briefFlags()
 				if _, err := parse(fs, args, io.Discard); err != nil {
-					return nil
+					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
 				a, err := app.Open(newRunner())
 				if err != nil {
-					return nil
+					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
 				cwd := strFlag(fs, "cwd")
 				if cwd == "" {
@@ -415,7 +415,7 @@ func commands(stdin io.Reader) []tools.Command {
 				}
 				res, snaps, err := a.Build(ctx)
 				if err != nil {
-					return nil
+					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
 				repo := ""
 				if url, err := gitx.Run(ctx, cwd, "remote", "get-url", "origin"); err == nil {
@@ -443,10 +443,10 @@ func commands(stdin io.Reader) []tools.Command {
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := recordFlags()
 				if _, err := parse(fs, args, io.Discard); err != nil {
-					return nil
+					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
 				if _, err := config.Load(); err != nil {
-					return nil
+					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
 				record.Main(strFlag(fs, "harness"), stdin, config.SpoolDir(), time.Now())
 				return nil

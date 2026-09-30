@@ -33,7 +33,6 @@ func TestPageOpenFlagAtomic(t *testing.T) {
 	var openWG sync.WaitGroup
 	openWG.Add(N)
 	for i := range closes {
-		i := i
 		go func() {
 			defer openWG.Done()
 			closes[i] = stream(t, r.url, "")
@@ -48,7 +47,6 @@ func TestPageOpenFlagAtomic(t *testing.T) {
 	var closeWG sync.WaitGroup
 	closeWG.Add(N)
 	for _, c := range closes {
-		c := c
 		go func() {
 			defer closeWG.Done()
 			c()

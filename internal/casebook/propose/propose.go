@@ -391,6 +391,10 @@ func (s *Store) ClearProgress(ctx context.Context, session string) (time.Duratio
 			l.At = tm(at)
 			lines = append(lines, l)
 		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
 		if err := rows.Close(); err != nil {
 			return err
 		}

@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,8 +236,8 @@ func TestShimPassthroughPreservesExit(t *testing.T) {
 	cmd.Dir = r.repo
 	cmd.Stdin = strings.NewReader("refs/heads/main 1 refs/heads/main 0\n")
 	err := cmd.Run()
-	ee, ok := err.(*exec.ExitError)
-	if !ok || ee.ExitCode() != 7 {
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) || ee.ExitCode() != 7 {
 		t.Fatalf("shim exit = %v, want 7", err)
 	}
 	// No repo hook at all: exit 0.

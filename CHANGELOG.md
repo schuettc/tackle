@@ -1,8 +1,51 @@
 # Changelog
 
-All notable changes to `scratch` are documented here. The format follows
+All notable changes to `scratch` and `proj` are documented here (proj entries are headed `proj`; older proj releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [proj 0.6.1] - 2026-09-29
+
+### Changed
+- The picker's layout is fixed: the footer is pinned to the bottom two lines
+  (a message line, then the keys, with `tab` and `?` right-aligned), the list
+  and preview keep a constant height, and `?` shows the key list inside the
+  preview frame instead of growing the footer.
+- The list scrolls only when the cursor reaches its top or bottom edge, and
+  the highlight stays on its session when a refresh adds rows above it.
+- One row layout on every tab: a status cell (`▸` folder, `●` session, `[x]`
+  saved) then the name, so names line up. The title shows all three tabs with
+  the current one highlighted; saved window groups are header lines.
+- The first frame draws at once (folders need no tmux scan); sessions and
+  saved show "loading…" until the background scan lands.
+
+## [proj 0.6.0] - 2026-09-29
+
+### Added
+- Restore after a reboot. proj records every work session it sees (name,
+  directory, agent, and the pi / Claude Code conversation it holds) in
+  `~/.local/state/proj/sessions.json`, kept current by tmux hooks it installs
+  on its servers. The record only grows; `^x` (reap) is the one removal path.
+- A **saved** scope in the picker (`tab` cycles folders, sessions, saved). It
+  lists sessions that need restoring, grouped by Ghostty window: `space`
+  toggles, `^r` restores the checked ones and rebuilds their Ghostty windows
+  and tabs, `enter` restores one and jumps to it, `^s` saves the Ghostty
+  layout, `^x` forgets.
+- Restored agents reopen their conversation (`pi --session <id>` /
+  `claude --resume <id>`); a missing transcript starts fresh under the same
+  name.
+
+### Changed
+- The picker's discovery runs in the background, so keys no longer wait on
+  tmux while it refreshes.
+
+## [0.5.5] — 2026-09-29
+
+### Changed
+- macOS binaries are signed with the Developer ID and notarized, so a copy
+  downloaded in a browser runs instead of being quarantined by Gatekeeper.
+  Built through the family release actions (`schuettc/tools-actions`); the
+  assets and `/dl` paths are unchanged.
 
 ## [0.5.4] — 2026-09-28
 

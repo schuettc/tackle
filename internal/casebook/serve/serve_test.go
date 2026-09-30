@@ -750,7 +750,7 @@ func stream(t *testing.T, base, token string) func() {
 	if token != "" {
 		req.Header.Set("X-Local-Token", token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // closed by the returned cancel func
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("stream: %v %v", resp, err)
 	}

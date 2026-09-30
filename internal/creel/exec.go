@@ -179,13 +179,17 @@ func mergeEnv(base []string, pairs []envPair) []string {
 // runExec is the `creel exec` entry point. Exit codes: 2 for any usage error,
 // a missing var, or a dest outside cwd; 127 for a command that cannot be found
 // or launched. On success the process is replaced and this never returns.
-func runExec(cwd string, argv []string, stdout, stderr io.Writer) int {
+func runExec(cwd string, argv []string, stdout, stderr io.Writer) int { //nolint:unparam // stdout completes the stdout/stderr pair the tests assert no secret leaks to
 	e, err := parseExecArgs(argv)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2
 	}
 	dest, err := ResolveDest(cwd, e.dest)
+	if errors.Is(err, ErrDestOutsideCwd) {
+		_, _ = fmt.Fprintln(stderr, "creel exec: "+destOutsideCwdHelp)
+		return 2
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "creel exec: %v\n", err)
 		return 2

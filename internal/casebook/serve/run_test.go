@@ -38,13 +38,17 @@ func TestRunAdvertStopAndInterrupt(t *testing.T) {
 	}
 	// Header auth works for the channel; no token is refused.
 	req, _ := http.NewRequest("GET", adv.Base+"/api/summary", nil)
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusUnauthorized {
+	resp, _ := http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("no token: %d", resp.StatusCode)
 	}
+	_ = resp.Body.Close()
 	req.Header.Set(localweb.TokenHeader, adv.Token)
-	if resp, _ := http.DefaultClient.Do(req); resp.StatusCode != http.StatusOK {
+	resp, _ = http.DefaultClient.Do(req)
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("token: %d", resp.StatusCode)
 	}
+	_ = resp.Body.Close()
 	if err := Run(context.Background(), r.App, Options{}); err == nil {
 		t.Fatal("second serve started")
 	}

@@ -1,0 +1,980 @@
+package apply
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/schuettc/tackle/internal/cull/check"
+	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/schuettc/tackle/internal/cull/verify"
+
+	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
+)
+
+// fixtureFile writes content to root/relpath (parents created) with mode.
+func fixtureFile(t *testing.T, root, relpath, content string, mode os.FileMode) {
+	t.Helper()
+	p := filepath.Join(root, filepath.FromSlash(relpath))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, []byte(content), mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(p, mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// goProject makes a temp Go module with the given files (relpath ->
+// content) and returns its root.
+func goProject(t *testing.T, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	root := t.TempDir()
+	fixtureFile(t, root, "go.mod", "module example.com/fixture\n\ngo 1.22\n", 0o644)
+	for rel, content := range files {
+		fixtureFile(t, root, rel, content, 0o644)
+	}
+	return root
+}
+
+// writeReport extracts the tests in relpaths with the real extractors (so
+// ids, hashes and spans are real), marks those whose name is in cut with
+// verdict "cut" (the rest "keep"), records every file's sha256 and test
+// inventory, and writes it as <root>/.cull/last.json.
+func writeReport(t *testing.T, root string, relpaths []string, cut ...string) check.Report {
+	t.Helper()
+	cutSet := map[string]bool{}
+	for _, c := range cut {
+		cutSet[c] = true
+	}
+	r := check.Report{Root: root, Mode: "suite", Files: map[string]check.FileInfo{}}
+	for _, rel := range relpaths {
+		ex := extract.ForFile(rel)
+		if ex == nil {
+			t.Fatalf("no extractor for %s", rel)
+		}
+		res, err := ex.Extract(root, []string{rel}, 24000)
+		if err != nil {
+			t.Fatalf("extract %s: %v", rel, err)
+		}
+		if len(res.Cases) == 0 {
+			t.Fatalf("extract %s: no cases (skipped: %+v)", rel, res.Skipped)
+		}
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		fi := check.FileInfo{SHA256: hex.EncodeToString(sum[:])}
+		for _, c := range res.Cases {
+			v := "keep"
+			if cutSet[c.Name] || cutSet[c.ID] {
+				v = "cut"
+			}
+			r.Tests = append(r.Tests, check.TestResult{TestCase: c, Verdict: v})
+			fi.Tests = append(fi.Tests, check.FileTest{ID: c.ID, Hash: c.Hash})
+		}
+		r.Files[rel] = fi
+	}
+	writeLastJSON(t, root, r)
+	return r
+}
+
+func readFile(t *testing.T, root, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var ee *ExitError
+	if errors.As(err, &ee) {
+		return ee.Code
+	}
+	return -1
+}
+
+func runApply(t *testing.T, opt Options) (Outcome, error) {
+	t.Helper()
+	if opt.Timeout == 0 {
+		opt.Timeout = 5 * time.Minute
+	}
+	return Run(context.Background(), opt)
+}
+
+const calcGo = `package calc
+
+func Add(a, b int) int { return a + b }
+`
+
+const calcTestGo = `package calc
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestAdd(t *testing.T) {
+	if Add(1, 2) != 3 {
+		t.Fatal("bad")
+	}
+}
+
+func TestUpper(t *testing.T) {
+	if strings.ToUpper("a") != "A" {
+		t.Fatal("bad")
+	}
+}
+`
+
+func TestApplyRemovesAndVerifies(t *testing.T) {
+	for _, forced := range []bool{false, true} {
+		t.Run(withFallback(forced), func(t *testing.T) {
+			forceGoTidyFallback = forced
+			defer func() { forceGoTidyFallback = false }()
+			testApplyRemovesAndVerifies(t)
+		})
+	}
+}
+
+func testApplyRemovesAndVerifies(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v\n%+v", code, err, out)
+	}
+	want := `package calc
+
+import (
+	"testing"
+)
+
+func TestAdd(t *testing.T) {
+	if Add(1, 2) != 3 {
+		t.Fatal("bad")
+	}
+}
+`
+	if got := readFile(t, root, "calc_test.go"); got != want {
+		t.Errorf("calc_test.go =\n%s\nwant\n%s", got, want)
+	}
+	if len(out.Applied) != 1 || out.Applied[0] != "go:calc_test.go:TestUpper" {
+		t.Errorf("Applied = %v", out.Applied)
+	}
+	if len(out.Files) != 1 || out.Files[0] != "calc_test.go" {
+		t.Errorf("Files = %v", out.Files)
+	}
+	if got := out.ImportsRemoved["calc_test.go"]; len(got) != 1 || got[0] != "strings" {
+		t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
+	}
+	if len(out.Baseline) != 1 || !out.Baseline[0].OK || len(out.After) != 1 || !out.After[0].OK {
+		t.Errorf("Baseline = %+v After = %+v", out.Baseline, out.After)
+	}
+	if out.RolledBack {
+		t.Error("RolledBack = true")
+	}
+	if out.Snapshot == "" {
+		t.Error("Snapshot empty")
+	}
+}
+
+func TestApplyRollsBackOnFailure(t *testing.T) {
+	src := `package calc
+
+import "testing"
+
+func TestA(t *testing.T) {
+	if Add(1, 1) != 2 {
+		t.Fatal("bad")
+	}
+}
+
+func TestB(t *testing.T) {
+	TestA(t)
+}
+`
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": src})
+	writeReport(t, root, []string{"calc_test.go"}, "TestA")
+
+	out, err := runApply(t, Options{Root: root, IDs: []string{"go:calc_test.go:TestA"}})
+	if code := exitCode(err); code != 1 {
+		t.Fatalf("exit %d, want 1: %v", code, err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != src {
+		t.Errorf("not restored byte-for-byte:\n%s", got)
+	}
+	if !out.RolledBack {
+		t.Error("RolledBack = false")
+	}
+	if len(out.After) != 1 || out.After[0].OK || !strings.Contains(out.After[0].OutputTail, "TestA") {
+		t.Errorf("After = %+v, want a failure whose tail mentions TestA", out.After)
+	}
+	if out.Snapshot == "" || !strings.Contains(err.Error(), out.Snapshot) {
+		t.Errorf("error %q should name snapshot %q", err, out.Snapshot)
+	}
+}
+
+func TestApplyRefusesWhenBaselineFails(t *testing.T) {
+	src := `package calc
+
+import "testing"
+
+func TestA(t *testing.T) {}
+
+func TestBroken(t *testing.T) {
+	t.Fatal("already broken")
+}
+`
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": src})
+	writeReport(t, root, []string{"calc_test.go"}, "TestA")
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "tests already fail before any change") {
+		t.Errorf("err = %v", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != src {
+		t.Errorf("file changed:\n%s", got)
+	}
+	if out.Snapshot != "" || out.RolledBack {
+		t.Errorf("Snapshot = %q RolledBack = %v; want nothing written", out.Snapshot, out.RolledBack)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".cull", "rollback")); !os.IsNotExist(err) {
+		t.Errorf("rollback dir exists (err %v); nothing should be written", err)
+	}
+	if len(out.Baseline) != 1 || out.Baseline[0].OK {
+		t.Errorf("Baseline = %+v", out.Baseline)
+	}
+}
+
+// TestApplyBaselineStartFailure: a baseline command that cannot start is
+// reported as such, not as "tests already fail" (M-3).
+func TestApplyBaselineStartFailure(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	orig := runVerify
+	runVerify = func(ctx context.Context, _ []verify.Command, timeout time.Duration) []verify.Result {
+		return orig(ctx, []verify.Command{{Dir: root, Argv: []string{filepath.Join(root, "no-such-test-binary")}}}, timeout)
+	}
+	t.Cleanup(func() { runVerify = orig })
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if strings.Contains(err.Error(), "tests already fail") || !strings.Contains(err.Error(), "test command could not start") {
+		t.Errorf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "no-such-test-binary") {
+		t.Errorf("err %v should name the command", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo || out.Snapshot != "" {
+		t.Errorf("Snapshot = %q; file changed:\n%s", out.Snapshot, got)
+	}
+}
+
+// afterOnly swaps runVerify so the baseline runs the real commands but the
+// after-run runs cmds instead (e.g. a missing binary that fails to start).
+func afterOnly(t *testing.T, after []verify.Command) {
+	t.Helper()
+	orig := runVerify
+	calls := 0
+	runVerify = func(ctx context.Context, cmds []verify.Command, timeout time.Duration) []verify.Result {
+		calls++
+		if calls == 1 {
+			return orig(ctx, cmds, timeout)
+		}
+		return orig(ctx, after, timeout)
+	}
+	t.Cleanup(func() { runVerify = orig })
+}
+
+func TestApplyRestoresOnStartFailure(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	fixtureFile(t, root, ".cull.toml", "test_command = \"go test ./...\"\n", 0o644)
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	afterOnly(t, []verify.Command{{Dir: root, Argv: []string{filepath.Join(root, "no-such-test-binary")}}})
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "go test ./..."})
+	// A command that cannot start is not a test failure: exit 2.
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if len(out.After) == 1 && !strings.Contains(err.Error(), out.After[0].OutputTail) {
+		t.Errorf("err %q should carry the start error %q", err, out.After[0].OutputTail)
+	}
+	if !strings.Contains(err.Error(), "could not start") || !strings.Contains(err.Error(), out.Snapshot) {
+		t.Errorf("err = %v", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
+		t.Errorf("not restored:\n%s", got)
+	}
+	if !out.RolledBack || len(out.After) != 1 || out.After[0].OK || out.After[0].ExitCode != -1 {
+		t.Errorf("RolledBack = %v After = %+v", out.RolledBack, out.After)
+	}
+	if len(out.Baseline) != 1 || out.Baseline[0].Command != "go test ./..." {
+		t.Errorf("Baseline = %+v, want the test_command", out.Baseline)
+	}
+}
+
+func TestApplyAfterTimeoutIsTestFailure(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	orig := runVerify
+	calls := 0
+	runVerify = func(ctx context.Context, cmds []verify.Command, timeout time.Duration) []verify.Result {
+		calls++
+		if calls == 1 {
+			return orig(ctx, cmds, timeout)
+		}
+		return []verify.Result{{Command: "go test ./...", ExitCode: -1, TimedOut: true}}
+	}
+	t.Cleanup(func() { runVerify = orig })
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 1 {
+		t.Fatalf("exit %d, want 1: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo || !out.RolledBack {
+		t.Errorf("RolledBack = %v; file:\n%s", out.RolledBack, got)
+	}
+}
+
+// failWrites swaps writeFile so each call for which fail(call number,
+// 1-based) is true writes garbage and returns an error; the rest write
+// normally.
+func failWrites(t *testing.T, fail func(call int) bool) {
+	t.Helper()
+	orig := writeFile
+	calls := 0
+	writeFile = func(path string, data []byte, mode os.FileMode) error {
+		calls++
+		if fail(calls) {
+			_ = orig(path, []byte("garbage"), mode)
+			return errors.New("injected write failure")
+		}
+		return orig(path, data, mode)
+	}
+	t.Cleanup(func() { writeFile = orig })
+}
+
+func twoFileProject(t *testing.T) (root, a, b string) {
+	t.Helper()
+	a = calcTestGo
+	b = strings.Replace(strings.Replace(calcTestGo, "TestAdd", "TestAdd2", 1), "TestUpper", "TestUpper2", 1)
+	root = goProject(t, map[string]string{"calc.go": calcGo, "a_test.go": a, "b_test.go": b})
+	writeReport(t, root, []string{"a_test.go", "b_test.go"}, "TestUpper", "TestUpper2")
+	return root, a, b
+}
+
+func TestApplyRestoresOnWriteError(t *testing.T) {
+	root, a, b := twoFileProject(t)
+	// The second edit write fails (after leaving garbage); restores work.
+	failWrites(t, func(call int) bool { return call == 2 })
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "injected write failure") {
+		t.Errorf("err = %v", err)
+	}
+	if readFile(t, root, "a_test.go") != a || readFile(t, root, "b_test.go") != b {
+		t.Error("files not restored")
+	}
+	if !out.RolledBack || out.Snapshot == "" {
+		t.Errorf("RolledBack = %v Snapshot = %q", out.RolledBack, out.Snapshot)
+	}
+	if len(out.After) != 0 {
+		t.Errorf("After = %+v, want no after-run", out.After)
+	}
+}
+
+func TestApplyRestoreMismatchIsHardError(t *testing.T) {
+	root, _, _ := twoFileProject(t)
+	// The edit writes (2) succeed; the restore writes corrupt the file.
+	failWrites(t, func(call int) bool { return call > 2 })
+	afterOnly(t, []verify.Command{{Dir: root, Argv: []string{"false"}}})
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if out.Snapshot == "" || !strings.Contains(err.Error(), out.Snapshot) {
+		t.Errorf("err %q should name the snapshot dir %q", err, out.Snapshot)
+	}
+	if out.RolledBack || !out.RollbackFailed {
+		t.Errorf("RolledBack = %v RollbackFailed = %v; want false, true", out.RolledBack, out.RollbackFailed)
+	}
+	snap, rerr := os.ReadFile(filepath.Join(out.Snapshot, "a_test.go"))
+	if rerr != nil || string(snap) != calcTestGo {
+		t.Errorf("snapshot copy = %q, %v", snap, rerr)
+	}
+}
+
+func TestApplyRefusesChangedFile(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	changed := calcTestGo + "\n// edited after check\n"
+	fixtureFile(t, root, "calc_test.go", changed, 0o644)
+
+	t.Run("ids", func(t *testing.T) {
+		out, err := runApply(t, Options{Root: root, IDs: []string{"go:calc_test.go:TestUpper"}})
+		if code := exitCode(err); code != 2 {
+			t.Fatalf("exit %d, want 2: %v", code, err)
+		}
+		if len(out.Refused) != 1 || !strings.Contains(out.Refused[0].Reason, "file changed since cull check") {
+			t.Errorf("Refused = %+v", out.Refused)
+		}
+		if len(out.Applied) != 0 || out.Snapshot != "" {
+			t.Errorf("Applied = %v Snapshot = %q", out.Applied, out.Snapshot)
+		}
+	})
+	t.Run("verdict", func(t *testing.T) {
+		out, err := runApply(t, Options{Root: root, VerdictCut: true})
+		if code := exitCode(err); code != 0 {
+			t.Fatalf("exit %d, want 0: %v", code, err)
+		}
+		if len(out.Refused) != 1 || out.Refused[0].ID != "go:calc_test.go:TestUpper" {
+			t.Errorf("Refused = %+v", out.Refused)
+		}
+		if len(out.Applied) != 0 || out.Snapshot != "" || len(out.Baseline) != 0 {
+			t.Errorf("Applied = %v Snapshot = %q Baseline = %+v", out.Applied, out.Snapshot, out.Baseline)
+		}
+	})
+	if got := readFile(t, root, "calc_test.go"); got != changed {
+		t.Errorf("file touched:\n%s", got)
+	}
+}
+
+func TestApplyRefusesUnknownID(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	out, err := runApply(t, Options{Root: root, IDs: []string{"go:calc_test.go:TestUpper", "go:calc_test.go:TestNope"}})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if len(out.Refused) != 1 || out.Refused[0].Reason != "not in last.json" {
+		t.Errorf("Refused = %+v", out.Refused)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
+		t.Errorf("file touched:\n%s", got)
+	}
+}
+
+func TestApplyNeedsAgentForSubtests(t *testing.T) {
+	src := `package calc
+
+import "testing"
+
+func TestAdd(t *testing.T) {
+	t.Run("one", func(t *testing.T) {
+		if Add(1, 0) != 1 {
+			t.Fatal("bad")
+		}
+	})
+	t.Run("two", func(t *testing.T) {
+		if Add(1, 1) != 2 {
+			t.Fatal("bad")
+		}
+	})
+}
+`
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": src})
+	r := writeReport(t, root, []string{"calc_test.go"})
+	var sub string
+	for i, tc := range r.Tests {
+		if tc.Parent != "" {
+			r.Tests[i].Verdict = "cut"
+			sub = tc.ID
+			break
+		}
+	}
+	if sub == "" {
+		t.Fatalf("no subtest extracted: %+v", r.Tests)
+	}
+	writeLastJSON(t, root, r)
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d, want 0: %v", code, err)
+	}
+	if len(out.NeedsAgent) != 1 || out.NeedsAgent[0].ID != sub || len(out.Applied) != 0 {
+		t.Errorf("NeedsAgent = %v Applied = %v", out.NeedsAgent, out.Applied)
+	}
+
+	out, err = runApply(t, Options{Root: root, IDs: []string{sub}})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("--ids subtest: exit %d, want 2: %v", code, err)
+	}
+	if len(out.Refused) != 1 || !strings.Contains(out.Refused[0].Reason, "edit it by hand") {
+		t.Errorf("Refused = %+v", out.Refused)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != src {
+		t.Errorf("file touched:\n%s", got)
+	}
+}
+
+func TestApplyNoVerify(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	orig := runVerify
+	runVerify = func(context.Context, []verify.Command, time.Duration) []verify.Result {
+		t.Error("verify ran under NoVerify")
+		return nil
+	}
+	defer func() { runVerify = orig }()
+
+	// A test command that could never pass: NoVerify must not run it.
+	out, err := runApply(t, Options{Root: root, VerdictCut: true, NoVerify: true, TestCommand: "exit 1"})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	if strings.Contains(readFile(t, root, "calc_test.go"), "TestUpper") {
+		t.Error("TestUpper not removed")
+	}
+	if len(out.Applied) != 1 || out.Baseline != nil || out.After != nil {
+		t.Errorf("Applied = %v Baseline = %+v After = %+v", out.Applied, out.Baseline, out.After)
+	}
+}
+
+func TestApplySnapshotWritten(t *testing.T) {
+	root := goProject(t, map[string]string{"pkg/calc.go": calcGo})
+	fixtureFile(t, root, "pkg/calc_test.go", calcTestGo, 0o640)
+	writeReport(t, root, []string{"pkg/calc_test.go"}, "TestUpper")
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	rollback := filepath.Join(root, ".cull", "rollback")
+	if filepath.Dir(out.Snapshot) != rollback {
+		t.Fatalf("Snapshot = %q, want a dir under %s", out.Snapshot, rollback)
+	}
+	if _, err := time.Parse("20060102T150405Z", filepath.Base(out.Snapshot)); err != nil {
+		t.Errorf("snapshot dir name %q: %v", filepath.Base(out.Snapshot), err)
+	}
+	for _, d := range []string{rollback, out.Snapshot, filepath.Join(out.Snapshot, "pkg")} {
+		fi, err := os.Stat(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Perm() != 0o700 {
+			t.Errorf("%s mode = %o, want 700", d, fi.Mode().Perm())
+		}
+	}
+	snap := filepath.Join(out.Snapshot, "pkg", "calc_test.go")
+	fi, err := os.Stat(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o600 {
+		t.Errorf("snapshot file mode = %o, want 600", fi.Mode().Perm())
+	}
+	if got := readFile(t, root, filepath.ToSlash(filepath.Join(".cull", "rollback", filepath.Base(out.Snapshot), "pkg", "calc_test.go"))); got != calcTestGo {
+		t.Errorf("snapshot contents = %q, want the pre-edit file", got)
+	}
+	// The edited file keeps its own permission bits.
+	efi, err := os.Stat(filepath.Join(root, "pkg", "calc_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if efi.Mode().Perm() != 0o640 {
+		t.Errorf("edited file mode = %o, want 640", efi.Mode().Perm())
+	}
+}
+
+func TestApplyNothingSelected(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"})
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	if len(out.Applied) != 0 || out.Snapshot != "" || out.Baseline != nil {
+		t.Errorf("out = %+v", out)
+	}
+}
+
+func TestApplyRequiresExactlyOneSelector(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	for _, opt := range []Options{
+		{Root: root},
+		{Root: root, VerdictCut: true, IDs: []string{"go:calc_test.go:TestUpper"}},
+	} {
+		if _, err := runApply(t, opt); exitCode(err) != 2 {
+			t.Errorf("%+v: err = %v, want exit 2", opt, err)
+		}
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
+		t.Errorf("file touched")
+	}
+}
+
+func TestApplyPython(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	src := `import os
+import unittest
+
+
+def test_keep():
+    assert 1 + 1 == 2
+
+
+def test_env():
+    assert os.sep
+`
+	root := t.TempDir()
+	fixtureFile(t, root, "pyproject.toml", "[project]\nname = \"fixture\"\n", 0o644)
+	fixtureFile(t, root, "test_calc.py", src, 0o644)
+	writeReport(t, root, []string{"test_calc.py"}, "test_env")
+
+	cmd := "python3 -m py_compile test_calc.py"
+	out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: cmd})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v\n%+v", code, err, out)
+	}
+	// Exact bytes (I-7): os went with test_env; unittest was already
+	// unused before the cut, so it stays (I-4); no trailing blank lines.
+	want := "import unittest\n\n\ndef test_keep():\n    assert 1 + 1 == 2\n"
+	if got := readFile(t, root, "test_calc.py"); got != want {
+		t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
+	}
+	if len(out.After) != 1 || !out.After[0].OK || out.After[0].Command != cmd {
+		t.Errorf("After = %+v", out.After)
+	}
+}
+
+// TestApplyInterruptBeforeFirstWrite: an interrupt that lands after the
+// baseline passed but before the first write changes nothing (I-5).
+func TestApplyInterruptBeforeFirstWrite(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	orig := runVerify
+	calls := 0
+	runVerify = func(c context.Context, cmds []verify.Command, timeout time.Duration) []verify.Result {
+		calls++
+		rs := orig(c, cmds, timeout)
+		cancel() // the signal arrives just after the baseline passed
+		return rs
+	}
+	t.Cleanup(func() { runVerify = orig })
+	writes := 0
+	origWrite := writeFile
+	writeFile = func(p string, d []byte, m os.FileMode) error { writes++; return origWrite(p, d, m) }
+	t.Cleanup(func() { writeFile = origWrite })
+
+	out, err := Run(ctx, Options{Root: root, VerdictCut: true, Timeout: time.Minute})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") || !strings.Contains(err.Error(), "nothing changed") {
+		t.Errorf("err = %v", err)
+	}
+	if writes != 0 || calls != 1 || out.RolledBack {
+		t.Errorf("writes = %d verify calls = %d RolledBack = %v; want nothing written", writes, calls, out.RolledBack)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != calcTestGo {
+		t.Errorf("file changed:\n%s", got)
+	}
+}
+
+// TestApplyNoVerifyInterruptRestores: under --no-verify an interrupt
+// during the writes is not reported as success; every file is restored.
+func TestApplyNoVerifyInterruptRestores(t *testing.T) {
+	root, a, b := twoFileProject(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	origWrite := writeFile
+	writeFile = func(p string, d []byte, m os.FileMode) error { cancel(); return origWrite(p, d, m) }
+	t.Cleanup(func() { writeFile = origWrite })
+
+	out, err := Run(ctx, Options{Root: root, VerdictCut: true, NoVerify: true})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("exit %d, want 2: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "interrupted") || !out.RolledBack {
+		t.Errorf("err = %v RolledBack = %v", err, out.RolledBack)
+	}
+	if readFile(t, root, "a_test.go") != a || readFile(t, root, "b_test.go") != b {
+		t.Error("files not restored")
+	}
+}
+
+// TestApplySnapshotNotice: the snapshot path goes to Notice even when the
+// progress writer (Stderr) is nil, as in --json mode (I-5).
+func TestApplySnapshotNotice(t *testing.T) {
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo})
+	writeReport(t, root, []string{"calc_test.go"}, "TestUpper")
+	var notice strings.Builder
+	out, err := runApply(t, Options{Root: root, VerdictCut: true, NoVerify: true, Notice: &notice})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Snapshot == "" || !strings.Contains(notice.String(), out.Snapshot) {
+		t.Errorf("notice = %q, want the snapshot %q", notice.String(), out.Snapshot)
+	}
+}
+
+// TestApplyGoFallbackHint: without goimports, an import the fallback had
+// to keep ("go-util" is not an identifier) breaks the build; the rollback
+// message says to install goimports (I-3).
+func TestApplyGoFallbackHint(t *testing.T) {
+	forceGoTidyFallback = true
+	defer func() { forceGoTidyFallback = false }()
+	src := `package calc
+
+import (
+	"testing"
+
+	"example.com/fixture/go-util"
+)
+
+func TestA(t *testing.T) {}
+
+func TestUtil(t *testing.T) {
+	if util.X() != 1 {
+		t.Fatal("bad")
+	}
+}
+`
+	root := goProject(t, map[string]string{
+		"go-util/u.go": "package util\n\nfunc X() int { return 1 }\n",
+		"calc.go":      calcGo, "calc_test.go": src,
+	})
+	fixtureFile(t, root, ".cull.toml", "test_command = \"go test ./...\"\n", 0o644)
+	writeReport(t, root, []string{"calc_test.go"}, "TestUtil")
+
+	_, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "go test ./..."})
+	if code := exitCode(err); code != 1 {
+		t.Fatalf("exit %d, want 1: %v", code, err)
+	}
+	if !strings.Contains(err.Error(), "goimports") {
+		t.Errorf("err = %v; want a hint to install goimports", err)
+	}
+	if got := readFile(t, root, "calc_test.go"); got != src {
+		t.Errorf("not restored:\n%s", got)
+	}
+}
+
+// TestApplyWontEmptyAFile (I-8): cutting every test in a file would leave
+// a file pytest/vitest reject; those tests go to needs_agent (with
+// --verdict cut) or are refused (with --ids), and the file is untouched.
+func TestApplyWontEmptyAFile(t *testing.T) {
+	only := "package calc\n\nimport \"testing\"\n\nfunc TestOnlyA(t *testing.T) {\n\t_ = Add(1, 1)\n}\n\nfunc TestOnlyB(t *testing.T) {\n\t_ = Add(2, 2)\n}\n"
+	root := goProject(t, map[string]string{"calc.go": calcGo, "calc_test.go": calcTestGo, "only_test.go": only})
+	writeReport(t, root, []string{"calc_test.go", "only_test.go"}, "TestUpper", "TestOnlyA", "TestOnlyB")
+
+	out, err := runApply(t, Options{Root: root, VerdictCut: true})
+	if code := exitCode(err); code != 0 {
+		t.Fatalf("exit %d: %v", code, err)
+	}
+	if got := readFile(t, root, "only_test.go"); got != only {
+		t.Errorf("only_test.go changed:\n%s", got)
+	}
+	if len(out.Applied) != 1 || out.Applied[0] != "go:calc_test.go:TestUpper" {
+		t.Errorf("Applied = %v", out.Applied)
+	}
+	want := "would leave only_test.go with no tests"
+	if len(out.NeedsAgent) != 2 || out.NeedsAgent[0].Reason != want || out.NeedsAgent[1].Reason != want {
+		t.Errorf("NeedsAgent = %+v, want both only_test.go tests with %q", out.NeedsAgent, want)
+	}
+
+	_, err = runApply(t, Options{Root: root, IDs: []string{"go:only_test.go:TestOnlyA", "go:only_test.go:TestOnlyB"}})
+	if code := exitCode(err); code != 2 {
+		t.Fatalf("--ids: exit %d, want 2: %v", code, err)
+	}
+	if got := readFile(t, root, "only_test.go"); got != only {
+		t.Errorf("only_test.go changed by --ids:\n%s", got)
+	}
+}
+
+// requireTSApply skips unless node and a typescript package ($CULL_TS)
+// are available, like the extractor tests.
+func requireTSApply(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not on PATH")
+	}
+	if os.Getenv("CULL_TS") == "" {
+		t.Skip("CULL_TS not set")
+	}
+}
+
+// TestApplyTidyOnlyWhatTheCutOrphaned (I-4): imports already unused
+// before the edit (autouse fixtures, usefixtures strings, React for JSX)
+// are never removed; only the import the removed test used goes.
+func TestApplyTidyOnlyWhatTheCutOrphaned(t *testing.T) {
+	t.Run("python", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		src := "import os\nimport pytest\nfrom fixtures import auto_cleanup, db\n\n\n@pytest.mark.usefixtures(\"db\")\ndef test_keep():\n    assert pytest\n\n\ndef test_env():\n    assert os.sep\n"
+		root := t.TempDir()
+		fixtureFile(t, root, "test_calc.py", src, 0o644)
+		writeReport(t, root, []string{"test_calc.py"}, "test_env")
+		out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"})
+		if code := exitCode(err); code != 0 {
+			t.Fatalf("exit %d: %v", code, err)
+		}
+		want := "import pytest\nfrom fixtures import auto_cleanup, db\n\n\n@pytest.mark.usefixtures(\"db\")\ndef test_keep():\n    assert pytest\n"
+		// Trailing blank lines are I-1's business (exact bytes in TestApplyPythonExact).
+		if got := readFile(t, root, "test_calc.py"); strings.TrimRight(got, "\n") != strings.TrimRight(want, "\n") {
+			t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
+		}
+		if fmt.Sprint(out.ImportsRemoved["test_calc.py"]) != "[os]" {
+			t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
+		}
+	})
+	t.Run("typescript", func(t *testing.T) {
+		requireTSApply(t)
+		src := "import React from \"react\";\nimport { parse } from \"./parse\";\n\ntest(\"keeps\", () => {\n  expect(<div />).toBeTruthy();\n});\n\ntest(\"parses\", () => {\n  expect(parse(\"x\")).toBe(1);\n});\n"
+		root := t.TempDir()
+		fixtureFile(t, root, "web/calc.test.tsx", src, 0o644)
+		writeReport(t, root, []string{"web/calc.test.tsx"}, "parses")
+		out, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"})
+		if code := exitCode(err); code != 0 {
+			t.Fatalf("exit %d: %v", code, err)
+		}
+		got := readFile(t, root, "web/calc.test.tsx")
+		if !strings.HasPrefix(got, "import React from \"react\";\n\ntest(") {
+			t.Errorf("calc.test.tsx =\n%q", got)
+		}
+		if fmt.Sprint(out.ImportsRemoved["web/calc.test.tsx"]) != `["./parse".parse]` {
+			t.Errorf("ImportsRemoved = %v", out.ImportsRemoved)
+		}
+	})
+}
+
+// assertPyGaps is a formatter-free style check: every top-level def,
+// class or decorator block after the first is preceded by exactly two
+// blank lines (the input's own separator), and the file ends with
+// exactly one newline.
+func assertPyGaps(t *testing.T, src string) {
+	t.Helper()
+	lines := strings.Split(src, "\n")
+	for i, l := range lines {
+		if i == 0 || (!strings.HasPrefix(l, "def ") && !strings.HasPrefix(l, "class ") && !strings.HasPrefix(l, "@")) {
+			continue
+		}
+		if strings.HasPrefix(lines[i-1], "@") {
+			continue // a decorated def: the gap is above the decorator
+		}
+		if i < 3 || lines[i-1] != "" || lines[i-2] != "" || lines[i-3] == "" {
+			t.Errorf("line %d %q is not preceded by exactly two blank lines:\n%s", i+1, l, src)
+		}
+	}
+	if !strings.HasSuffix(src, "\n") || strings.HasSuffix(src, "\n\n") {
+		t.Errorf("file does not end with exactly one newline: %q", src)
+	}
+}
+
+// assertTSStyle: no line holding only ";", no blank line before EOF,
+// no leading blank lines, no two blank lines in a row.
+func assertTSStyle(t *testing.T, src string) {
+	t.Helper()
+	for i, l := range strings.Split(src, "\n") {
+		if strings.TrimSpace(l) == ";" {
+			t.Errorf("line %d holds only \";\":\n%s", i+1, src)
+		}
+	}
+	if strings.HasPrefix(src, "\n") || strings.HasSuffix(src, "\n\n") || strings.Contains(src, "\n\n\n") {
+		t.Errorf("stray blank lines: %q", src)
+	}
+}
+
+// TestApplyPythonExact (I-1, I-7): exact bytes for the middle, first and
+// last test of a Python file, a surgical multi-line import edit, and the
+// file's two-blank-line separator kept.
+func TestApplyPythonExact(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	src := "import json\nfrom os import (\n    path,\n    sep,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_b():\n    assert sep\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"
+	for _, c := range []struct {
+		cut  []string
+		want string
+	}{
+		{[]string{"test_b"},
+			"import json\nfrom os import (\n    path,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"},
+		{[]string{"test_a"},
+			"import json\nfrom os import (\n    path,\n    sep,\n)\n\n\ndef test_b():\n    assert sep\n\n\ndef test_c():\n    assert json\n\n\ndef test_d():\n    assert path.sep\n"},
+		{[]string{"test_c", "test_d"},
+			"import json\nfrom os import (\n    path,\n    sep,\n)\n\n\n@pytest_mark\ndef test_a():\n    assert json.dumps(1) and path\n\n\ndef test_b():\n    assert sep\n"},
+	} {
+		t.Run(strings.Join(c.cut, ","), func(t *testing.T) {
+			root := t.TempDir()
+			fixtureFile(t, root, "test_calc.py", "pytest_mark = lambda f: f\n"+src, 0o644)
+			writeReport(t, root, []string{"test_calc.py"}, c.cut...)
+			if _, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "python3 -m py_compile test_calc.py"}); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, root, "test_calc.py")
+			if want := "pytest_mark = lambda f: f\n" + c.want; got != want {
+				t.Errorf("test_calc.py =\n%q\nwant\n%q", got, want)
+			}
+			assertPyGaps(t, strings.TrimPrefix(got, "pytest_mark = lambda f: f\n"))
+		})
+	}
+}
+
+// TestApplyTypeScriptExact (I-1, I-7): exact bytes for a semicolon-style
+// TS file (middle, first and last test), a surgical multi-line import
+// edit, and no line left holding only ";".
+func TestApplyTypeScriptExact(t *testing.T) {
+	requireTSApply(t)
+	src := "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"
+	for _, c := range []struct {
+		cut  string
+		want string
+	}{
+		{"subs", "import { describe } from \"vitest\";\nimport {\n  add,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"},
+		{"adds", "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n\ntest(\"adds again\", () => {\n  expect(add(2, 2)).toBe(4);\n});\n"},
+		{"adds again", "import { describe } from \"vitest\";\nimport {\n  add,\n  sub,\n} from \"./calc\";\n\ntest(\"adds\", () => {\n  expect(add(1, 2)).toBe(3);\n});\n\ntest(\"subs\", () => {\n  expect(sub(2, 1)).toBe(1);\n});\n"},
+	} {
+		t.Run(c.cut, func(t *testing.T) {
+			root := t.TempDir()
+			fixtureFile(t, root, "web/calc.test.ts", src, 0o644)
+			writeReport(t, root, []string{"web/calc.test.ts"}, c.cut)
+			if _, err := runApply(t, Options{Root: root, VerdictCut: true, TestCommand: "true"}); err != nil {
+				t.Fatal(err)
+			}
+			got := readFile(t, root, "web/calc.test.ts")
+			if got != c.want {
+				t.Errorf("calc.test.ts =\n%q\nwant\n%q", got, c.want)
+			}
+			assertTSStyle(t, got)
+		})
+	}
+}

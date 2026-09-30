@@ -33,7 +33,7 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 	var res SyncResult
 	for attempt := 0; attempt < 3; attempt++ {
 		if _, err := gitx.Run(ctx, r.Dir, "fetch", "-q", "origin"); err != nil {
-			return res, fmt.Errorf("%w: %v", ErrOffline, err)
+			return res, fmt.Errorf("%w: %w", ErrOffline, err)
 		}
 		if _, err := gitx.Run(ctx, r.Dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/main"); err == nil {
 			ahead, _ := gitx.Run(ctx, r.Dir, "rev-list", "--count", "HEAD..origin/main")
@@ -57,7 +57,7 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 		if errors.As(err, &ge) && (strings.Contains(ge.Stderr, "non-fast-forward") || strings.Contains(ge.Stderr, "fetch first") || strings.Contains(ge.Stderr, "rejected")) {
 			continue
 		}
-		return res, fmt.Errorf("%w: %v", ErrOffline, err)
+		return res, fmt.Errorf("%w: %w", ErrOffline, err)
 	}
 	return res, fmt.Errorf("push kept racing other machines; try again")
 }
@@ -70,12 +70,12 @@ func (r *Repo) rebase(ctx context.Context, res *SyncResult) error {
 	for i := 0; err != nil; i++ {
 		if !r.rebasing(ctx) || i > 1000 {
 			r.abort(ctx)
-			return fmt.Errorf("rebase onto the casebook remote failed: %v", err)
+			return fmt.Errorf("rebase onto the casebook remote failed: %w", err)
 		}
 		files, _ := gitx.Run(ctx, r.Dir, "diff", "--name-only", "--diff-filter=U")
 		if files == "" && i == 0 {
 			r.abort(ctx)
-			return fmt.Errorf("rebase onto the casebook remote failed: %v", err)
+			return fmt.Errorf("rebase onto the casebook remote failed: %w", err)
 		}
 		if files != "" {
 			for _, f := range strings.Split(files, "\n") {

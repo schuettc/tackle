@@ -200,7 +200,7 @@ func (r *Repo) Decisions() (map[string]item.Decision, []error) {
 	root := r.abs("items")
 	_ = filepath.WalkDir(root, func(p string, de fs.DirEntry, err error) error {
 		if err != nil || de.IsDir() {
-			return nil
+			return nil //nolint:nilerr // best-effort walk: skip an unreadable entry, keep scanning
 		}
 		rel, _ := filepath.Rel(r.Dir, p)
 		rel = filepath.ToSlash(rel)
@@ -289,7 +289,7 @@ func (r *Repo) Validate() []error {
 	root := r.abs("items")
 	_ = filepath.WalkDir(root, func(p string, de fs.DirEntry, err error) error {
 		if err != nil || de.IsDir() {
-			return nil
+			return nil //nolint:nilerr // best-effort walk: skip an unreadable entry, keep scanning
 		}
 		rel, _ := filepath.Rel(r.Dir, p)
 		rel = filepath.ToSlash(rel)
