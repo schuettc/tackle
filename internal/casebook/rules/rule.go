@@ -106,6 +106,13 @@ var allDispositions = func() []string {
 	return out
 }()
 
+// SameMeaning reports whether a and b match the same items and propose the
+// same thing: the same conditions, in order, and the same [propose]. That is
+// what edited_at dates (spec §4.1); a rename or an exclusion is not an edit.
+func SameMeaning(a, b Rule) bool {
+	return slices.Equal(a.Match, b.Match) && a.Propose == b.Propose
+}
+
 // Validate reports any structural errors in r.
 // It checks:
 //   - id non-empty and matches ^[a-z0-9-]+$

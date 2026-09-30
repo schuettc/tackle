@@ -98,10 +98,15 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		in.Status = rules.StatusDraft
 		in.CreatedBy = existing.CreatedBy
 		in.CreatedAt = existing.CreatedAt
-		in.EditedAt = now
+		in.EditedAt = editedAt(*existing, in, now)
 		msg = "rule " + in.ID + " edited by " + by
 	}
 
+	if unchanged(existing, in) {
+		rec, _ := rules.RuleRecord(ctx, s.Props, in.ID)
+		reply(w, RuleDetailView{Rule: in, Record: rec, Matches: buildPreview(in, s.Index.Result(), now, 0, 200)}, nil)
+		return
+	}
 	if err := s.App.Repo.WriteRule(ctx, in, msg); err != nil {
 		reply(w, nil, bad("%v", err))
 		return
@@ -477,10 +482,15 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Rule.CreatedBy = existing.CreatedBy
 		in.Rule.CreatedAt = existing.CreatedAt
-		in.Rule.EditedAt = now
+		in.Rule.EditedAt = editedAt(*existing, in.Rule, now)
 		msg = "rule " + in.Rule.ID + " edited by " + by
 	}
 
+	if unchanged(existing, in.Rule) {
+		rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
+		reply(w, RuleDetailView{Rule: in.Rule, Record: rec, Matches: buildPreview(in.Rule, s.Index.Result(), now, 0, 200)}, nil)
+		return
+	}
 	if err := s.App.Repo.WriteRule(ctx, in.Rule, msg); err != nil {
 		reply(w, nil, bad("%v", err))
 		return
@@ -491,6 +501,27 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
 	preview := buildPreview(in.Rule, s.Index.Result(), now, 0, 200)
 	reply(w, RuleDetailView{Rule: in.Rule, Record: rec, Matches: preview}, nil)
+}
+
+// editedAt is a saved draft's edited_at: now when its conditions or its
+// proposal changed, else the existing one (spec §4.1). A re-save or a rename
+// must not re-open the items Court rejected for the rule (§4.2).
+func editedAt(existing, next rules.Rule, now time.Time) time.Time {
+	if rules.SameMeaning(existing, next) {
+		return existing.EditedAt
+	}
+	return now
+}
+
+// unchanged reports whether saving next would write existing's file again,
+// byte for byte: nothing to write, commit or announce.
+func unchanged(existing *rules.Rule, next rules.Rule) bool {
+	if existing == nil {
+		return false
+	}
+	a, errA := rules.Encode(*existing)
+	b, errB := rules.Encode(next)
+	return errA == nil && errB == nil && string(a) == string(b)
 }
 
 // buildPreview runs MatchAll on r against res and returns a paginated,
