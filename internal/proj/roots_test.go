@@ -1,6 +1,7 @@
 package proj
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,7 +83,7 @@ func TestRootsNegativeCasesAndExclusions(t *testing.T) {
 func TestLoadRootsMissingFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "x"))
-	if _, err := LoadRoots(); err != ErrNoRoots {
+	if _, err := LoadRoots(); !errors.Is(err, ErrNoRoots) {
 		t.Fatalf("want ErrNoRoots, got %v", err)
 	}
 }

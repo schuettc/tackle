@@ -71,6 +71,8 @@ func Dispatch(args []string, out, errw io.Writer) int {
 	switch args[0] {
 	case "__autojoin-project":
 		return cmdAutojoinProject()
+	case "__snapshot":
+		return cmdSnapshot(args[1:])
 	// list/current/new/sidebar now flow through Dispatch (which parses their
 	// flags, calls Run, and maps UsageError/ExitError to the right exit code)
 	// instead of the bare-project fallback below — a name match here MUST
@@ -143,9 +145,25 @@ func cmdAutojoinProject() int {
 	return 0
 }
 
+// cmdSnapshot is the hidden `proj __snapshot --socket <name>` the tmux hooks
+// run (see proj.InstallHooks). It always exits 0 and prints nothing: it runs
+// from run-shell -b, where any output or failure would only surface as noise
+// in the operator's pane.
+func cmdSnapshot(args []string) int {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--socket" {
+			_ = proj.Snapshot(args[i+1])
+			break
+		}
+	}
+	return 0
+}
+
 // runPicker builds the Bubble Tea model, runs it, and executes the user's
 // Result: "new" → EnsureSession then Goto; "jump" → Goto.
 func runPicker(project, agent string) int {
+	// The picker primes the record (hooks + a snapshot of every live server)
+	// in the background from Init; see projtui withRecord.
 	m, err := projtui.NewFor(project, agent)
 	if err != nil {
 		if errors.Is(err, proj.ErrNoRoots) {
@@ -186,6 +204,8 @@ func runPicker(project, agent string) int {
 			fmt.Fprintf(os.Stderr, "proj: %v\n", err)
 			return 1
 		}
+	case "restore":
+		return runRestore(res.Names, res.Name, os.Stdout)
 	}
 	return 0
 }

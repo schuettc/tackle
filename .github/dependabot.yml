@@ -1,0 +1,21 @@
+# tools-common is the family's shared Go module; take each release as a PR
+# (CI runs on it like any change). Other dependencies are updated by hand.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    allow:
+      - dependency-name: github.com/schuettc/tools-common*
+    commit-message:
+      prefix: "chore(deps)"
+  # The family release (and CI) actions: take each tools-actions release as a PR.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    allow:
+      - dependency-name: "schuettc/tools-actions"

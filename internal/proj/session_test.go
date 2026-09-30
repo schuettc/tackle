@@ -9,7 +9,7 @@ import (
 func TestEnsureSessionFromHomeSetsLabel(t *testing.T) {
 	requireTmux(t)
 	sock := "proj-phase1-sess"
-	defer Run(sock, "kill-server")
+	defer func() { _, _ = Run(sock, "kill-server") }()
 	dir := t.TempDir()
 	// tmux canonicalizes pane paths; resolve symlinks (macOS /var → /private/var)
 	// so the pane_current_path contract holds cross-platform.

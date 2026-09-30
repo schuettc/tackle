@@ -66,3 +66,11 @@ func TestRunNewHelp(t *testing.T) {
 		t.Fatalf("proj new -h: output missing usage line: %q", out)
 	}
 }
+
+func TestSnapshotRoute(t *testing.T) {
+	t.Setenv("PROJ_HOME", t.TempDir())
+	out, code := captureStdout(t, []string{"__snapshot", "--socket", "proj-restoretest-none"})
+	if code != 0 || out != "" {
+		t.Fatalf("__snapshot: exit %d output %q; want 0 and silence", code, out)
+	}
+}

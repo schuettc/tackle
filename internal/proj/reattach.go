@@ -13,11 +13,11 @@ type Action struct {
 }
 
 func PlanGoto(currentServer, targetSocket, name string) Action {
-	switch {
-	case currentServer == "":
+	switch currentServer {
+	case "":
 		return Action{Kind: "print",
 			Print: fmt.Sprintf("exec tmux -L %s attach -t %s", targetSocket, quoteTarget(name))}
-	case currentServer == targetSocket:
+	case targetSocket:
 		return Action{Kind: "switch", Cmd: []string{"switch-client", "-t", "=" + name}}
 	default:
 		return Action{Kind: "detach", Cmd: []string{"detach", "-E",

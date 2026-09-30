@@ -69,3 +69,26 @@ func TestAgentLaunchCmdMissingBinDegrades(t *testing.T) {
 		}
 	}
 }
+
+func TestResumeLaunchCmd(t *testing.T) {
+	stubBins(t, "claude", "pi", "cursor-agent")
+	cases := []struct{ agent, conv, want string }{
+		{"pi", "01a0ed7a-431e", "pi --session '01a0ed7a-431e'"},
+		{"claude", "78834978-6102", "claude --resume '78834978-6102'"},
+		// No conversation, or an agent proj cannot resume: no resume command,
+		// so the caller falls back to a fresh launch. Never `--session ''`.
+		{"pi", "", ""},
+		{"claude", "", ""},
+		{"cursor", "x", ""},
+		{"none", "x", ""},
+	}
+	for _, c := range cases {
+		if got := resumeLaunchCmd(c.agent, c.conv); got != c.want {
+			t.Errorf("resumeLaunchCmd(%q, %q) = %q want %q", c.agent, c.conv, got, c.want)
+		}
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got := resumeLaunchCmd("pi", "x"); got != "" {
+		t.Errorf("pi not installed: got %q want \"\"", got)
+	}
+}
