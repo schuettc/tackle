@@ -39,15 +39,17 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions, _ := s.Queue.Sessions(ctx)
 	reply(w, SummaryView{
-		Machine:       s.App.Cfg.Machine,
-		User:          s.App.Cfg.User,
-		Head:          s.Index.Head(),
-		BuiltAt:       s.Index.BuiltAt(),
-		SyncedAt:      synced,
-		OfflineQueued: queued,
-		Counts:        s.Index.Counts(pending),
-		Notices:       s.Index.Notices(),
-		Sessions:      len(sessions),
+		Machine:        s.App.Cfg.Machine,
+		User:           s.App.Cfg.User,
+		Head:           s.Index.Head(),
+		BuiltAt:        s.Index.BuiltAt(),
+		SyncedAt:       synced,
+		OfflineQueued:  queued,
+		Counts:         s.Index.Counts(pending),
+		Notices:        s.Index.Notices(),
+		Sessions:       len(sessions),
+		SyncIntervalMS: s.syncIntervalFor().Milliseconds(),
+		Syncing:        s.Syncing(),
 	}, nil)
 }
 

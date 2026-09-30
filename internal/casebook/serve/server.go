@@ -71,8 +71,11 @@ type Server struct {
 	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
 	ruleCountRuns    atomic.Int32      // rules counted (MatchAll runs) for the rules list; for tests
 	ruleCountMu      sync.Mutex
-	ruleCounts       map[string]ruleCount // rule id → its match count for one content + index
-	life             context.Context      // Run's context; done while shutting down
+	ruleCounts       map[string]ruleCount            // rule id → its match count for one content + index
+	syncMu           sync.Mutex                      // guards syncing
+	syncing          bool                            // a sync POST /api/sync started is running
+	runSync          func(ctx context.Context) error // test seam for syncNow (nil: App.Sync)
+	life             context.Context                 // Run's context; done while shutting down
 	stop             context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
@@ -554,6 +557,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/deliveries/release", s.postRelease)
 	m.HandleFunc("POST /api/deliveries/move", s.postMoveDelivery)
 	m.HandleFunc("POST /api/stop", s.postStop)
+	m.HandleFunc("POST /api/sync", s.postSync)
 	// agent (casebook channel)
 	m.HandleFunc("POST /api/agent/presence", s.agentPresence)
 	m.HandleFunc("GET /api/agent/wait", s.agentWait)

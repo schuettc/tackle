@@ -26,6 +26,8 @@ export interface SummaryView {
   counts: Record<string, number> | null;
   notices: string[] | null;
   sessions: number;
+  sync_interval_ms: number;
+  syncing: boolean;
 }
 
 export interface ItemsView {
@@ -209,6 +211,16 @@ export interface AnswerResult {
 export interface UndoResult {
   step_id: number;
   sent: boolean;
+}
+
+export interface SyncView {
+  running: boolean;
+  started: boolean;
+}
+
+export interface SyncEvent {
+  state: string;
+  error?: string;
 }
 
 export interface SessionProgressView {

@@ -23,6 +23,12 @@ type SummaryView struct {
 	Counts        map[string]int `json:"counts"`
 	Notices       []string       `json:"notices"`
 	Sessions      int            `json:"sessions"`
+	// SyncIntervalMS is one sync interval: a plan refuses an index built
+	// longer ago than this (built_at), so the page can say how old the
+	// observations are.
+	SyncIntervalMS int64 `json:"sync_interval_ms"`
+	// Syncing: a sync POST /api/sync started is running.
+	Syncing bool `json:"syncing"`
 }
 
 // ItemsView is the response body of GET /api/items.
