@@ -142,29 +142,29 @@ func runCheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string
 
 // writeGroupCheck renders a GroupCheck as a human-readable table.
 func writeGroupCheck(w io.Writer, gc check.GroupCheck) {
-	fmt.Fprintf(w, "%s  %s\n", gc.ID, gc.File)
-	fmt.Fprintf(w, "  originals gone: %v\n", gc.OriginalsGone)
+	_, _ = fmt.Fprintf(w, "%s  %s\n", gc.ID, gc.File)
+	_, _ = fmt.Fprintf(w, "  originals gone: %v\n", gc.OriginalsGone)
 	if len(gc.StillPresent) > 0 {
-		fmt.Fprintf(w, "    still present: %s\n", strings.Join(gc.StillPresent, ", "))
+		_, _ = fmt.Fprintf(w, "    still present: %s\n", strings.Join(gc.StillPresent, ", "))
 	}
 	if len(gc.NewTests) > 0 {
-		fmt.Fprintf(w, "  new tests: %s\n", strings.Join(gc.NewTests, ", "))
+		_, _ = fmt.Fprintf(w, "  new tests: %s\n", strings.Join(gc.NewTests, ", "))
 	}
 	if len(gc.MissingRows) > 0 {
-		fmt.Fprintf(w, "  missing rows: %s\n", strings.Join(gc.MissingRows, ", "))
+		_, _ = fmt.Fprintf(w, "  missing rows: %s\n", strings.Join(gc.MissingRows, ", "))
 	}
 	if len(gc.Flagged) > 0 {
-		fmt.Fprintf(w, "  flagged: %s\n", strings.Join(gc.Flagged, ", "))
+		_, _ = fmt.Fprintf(w, "  flagged: %s\n", strings.Join(gc.Flagged, ", "))
 	}
 	if len(gc.Unjudged) > 0 {
-		fmt.Fprintf(w, "  unjudged: %s\n", strings.Join(gc.Unjudged, ", "))
+		_, _ = fmt.Fprintf(w, "  unjudged: %s\n", strings.Join(gc.Unjudged, ", "))
 	}
 	for _, r := range gc.Verify {
 		status := "ok"
 		if !r.OK {
 			status = "fail"
 		}
-		fmt.Fprintf(w, "  verify %s: %s\n", status, r.Command)
+		_, _ = fmt.Fprintf(w, "  verify %s: %s\n", status, r.Command)
 	}
-	fmt.Fprintf(w, "  ok: %v\n", gc.OK)
+	_, _ = fmt.Fprintf(w, "  ok: %v\n", gc.OK)
 }

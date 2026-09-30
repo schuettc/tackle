@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -369,7 +370,7 @@ func runOne(ctx context.Context, c Command, timeout time.Duration, env []string)
 	case err := <-done:
 		exitCode := 0
 		if err != nil {
-			if ee, ok := err.(*exec.ExitError); ok {
+			if ee := (*exec.ExitError)(nil); errors.As(err, &ee) {
 				exitCode = ee.ExitCode()
 			} else {
 				exitCode = -1

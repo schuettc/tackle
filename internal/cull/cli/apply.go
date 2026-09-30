@@ -76,7 +76,7 @@ func runApply(args []string, out, errw io.Writer) error {
 	}
 
 	jsonMode := boolFlag(fs, "json")
-	var progress io.Writer = errw
+	progress := errw
 	if jsonMode {
 		progress = nil // stderr gets only the snapshot line and the JSON error envelope
 	}
@@ -112,15 +112,15 @@ func runApply(args []string, out, errw io.Writer) error {
 // that have something in them.
 func writeOutcome(w io.Writer, o apply.Outcome) {
 	if len(o.Refused) > 0 {
-		fmt.Fprintf(w, "refused (%d):\n", len(o.Refused))
+		_, _ = fmt.Fprintf(w, "refused (%d):\n", len(o.Refused))
 		for _, r := range o.Refused {
-			fmt.Fprintf(w, "  %s: %s\n", r.ID, r.Reason)
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", r.ID, r.Reason)
 		}
 	}
 	if len(o.NeedsAgent) > 0 {
-		fmt.Fprintf(w, "needs an agent (%d):\n", len(o.NeedsAgent))
+		_, _ = fmt.Fprintf(w, "needs an agent (%d):\n", len(o.NeedsAgent))
 		for _, r := range o.NeedsAgent {
-			fmt.Fprintf(w, "  %s: %s\n", r.ID, r.Reason)
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", r.ID, r.Reason)
 		}
 	}
 	writeResults(w, "baseline tests", o.Baseline)
@@ -132,33 +132,33 @@ func writeOutcome(w io.Writer, o apply.Outcome) {
 		case o.RollbackFailed:
 			label = "attempted (ROLLBACK FAILED)"
 		}
-		fmt.Fprintf(w, "%s (%d):\n", label, len(o.Applied))
+		_, _ = fmt.Fprintf(w, "%s (%d):\n", label, len(o.Applied))
 		for _, id := range o.Applied {
-			fmt.Fprintf(w, "  %s\n", id)
+			_, _ = fmt.Fprintf(w, "  %s\n", id)
 		}
-		fmt.Fprintf(w, "files (%d):\n", len(o.Files))
+		_, _ = fmt.Fprintf(w, "files (%d):\n", len(o.Files))
 		for _, f := range o.Files {
-			fmt.Fprintf(w, "  %s\n", f)
+			_, _ = fmt.Fprintf(w, "  %s\n", f)
 		}
 	}
 	writeByFile(w, "imports removed", o.Files, o.ImportsRemoved)
 	writeByFile(w, "orphaned helpers (reported, not deleted)", o.Files, o.OrphanedHelpers)
 	writeResults(w, "tests after removal", o.After)
 	if o.RolledBack {
-		fmt.Fprintln(w, "rolled back: every file restored to its pre-edit bytes")
+		_, _ = fmt.Fprintln(w, "rolled back: every file restored to its pre-edit bytes")
 	}
 	if o.RollbackFailed {
-		fmt.Fprintf(w, "ROLLBACK FAILED: files were NOT fully restored; these may still be edited (%d):\n", len(o.Files))
+		_, _ = fmt.Fprintf(w, "ROLLBACK FAILED: files were NOT fully restored; these may still be edited (%d):\n", len(o.Files))
 		for _, f := range o.Files {
-			fmt.Fprintf(w, "  %s\n", f)
+			_, _ = fmt.Fprintf(w, "  %s\n", f)
 		}
-		fmt.Fprintf(w, "copy the pre-edit files back by hand from %s\n", o.Snapshot)
+		_, _ = fmt.Fprintf(w, "copy the pre-edit files back by hand from %s\n", o.Snapshot)
 	}
 	if o.Snapshot != "" {
-		fmt.Fprintf(w, "snapshot: %s\n", o.Snapshot)
+		_, _ = fmt.Fprintf(w, "snapshot: %s\n", o.Snapshot)
 	}
 	if len(o.Applied) == 0 && len(o.Refused) == 0 && len(o.NeedsAgent) == 0 {
-		fmt.Fprintln(w, "nothing to apply")
+		_, _ = fmt.Fprintln(w, "nothing to apply")
 	}
 }
 
@@ -166,10 +166,10 @@ func writeByFile(w io.Writer, heading string, files []string, m map[string][]str
 	if len(m) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%s:\n", heading)
+	_, _ = fmt.Fprintf(w, "%s:\n", heading)
 	for _, f := range files {
 		if names := m[f]; len(names) > 0 {
-			fmt.Fprintf(w, "  %s: %s\n", f, strings.Join(names, ", "))
+			_, _ = fmt.Fprintf(w, "  %s: %s\n", f, strings.Join(names, ", "))
 		}
 	}
 }
@@ -178,19 +178,19 @@ func writeResults(w io.Writer, heading string, rs []verify.Result) {
 	if len(rs) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "%s:\n", heading)
+	_, _ = fmt.Fprintf(w, "%s:\n", heading)
 	for _, r := range rs {
 		switch {
 		case r.OK:
-			fmt.Fprintf(w, "  ok    %s\n", r.Command)
+			_, _ = fmt.Fprintf(w, "  ok    %s\n", r.Command)
 		case r.TimedOut:
-			fmt.Fprintf(w, "  FAIL  %s (timed out)\n", r.Command)
+			_, _ = fmt.Fprintf(w, "  FAIL  %s (timed out)\n", r.Command)
 		default:
-			fmt.Fprintf(w, "  FAIL  %s (exit %d)\n", r.Command, r.ExitCode)
+			_, _ = fmt.Fprintf(w, "  FAIL  %s (exit %d)\n", r.Command, r.ExitCode)
 		}
 		if !r.OK && r.OutputTail != "" {
 			for _, line := range strings.Split(strings.TrimRight(r.OutputTail, "\n"), "\n") {
-				fmt.Fprintf(w, "        %s\n", line)
+				_, _ = fmt.Fprintf(w, "        %s\n", line)
 			}
 		}
 	}

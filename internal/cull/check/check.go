@@ -125,7 +125,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		return Report{}, err
 	}
 	for _, sk := range changedSkipped {
-		fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
+		_, _ = fmt.Fprintf(stderr, "cull: skipped %s: %s\n", sk.File, sk.Reason)
 	}
 	skipped = append(skipped, changedSkipped...)
 

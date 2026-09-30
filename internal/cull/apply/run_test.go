@@ -885,7 +885,7 @@ func assertPyGaps(t *testing.T, src string) {
 	t.Helper()
 	lines := strings.Split(src, "\n")
 	for i, l := range lines {
-		if i == 0 || !(strings.HasPrefix(l, "def ") || strings.HasPrefix(l, "class ") || strings.HasPrefix(l, "@")) {
+		if i == 0 || (!strings.HasPrefix(l, "def ") && !strings.HasPrefix(l, "class ") && !strings.HasPrefix(l, "@")) {
 			continue
 		}
 		if strings.HasPrefix(lines[i-1], "@") {

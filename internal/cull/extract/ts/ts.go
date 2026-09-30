@@ -225,7 +225,7 @@ func Tidy(root, relpath string, before, src []byte) ([]byte, []string, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("extract/ts: temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 	if err := os.Chmod(tmpDir, 0o700); err != nil {
 		return nil, nil, fmt.Errorf("extract/ts: chmod temp dir: %w", err)
 	}
