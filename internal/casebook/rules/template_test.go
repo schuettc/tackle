@@ -177,3 +177,22 @@ func TestLandedHowMultiValuedCondition(t *testing.T) {
 		t.Error("landed-how is merged-pr: want true for item with both routes")
 	}
 }
+
+// NoteTokens is what the page lists under a rule's note: exactly the
+// placeholders Render expands, each with what it stands for.
+func TestNoteTokensAreTheOnesRenderExpands(t *testing.T) {
+	f := engine.Fields{Kind: "branch", Repo: "o/r", Title: "t", Age: 48 * time.Hour, Tip: "abc"}
+	m := Match{Key: "branch:o/r@t", Reason: "in main"}
+	toks := NoteTokens()
+	if len(toks) != 5 {
+		t.Fatalf("NoteTokens = %v, want the 5 Render expands", toks)
+	}
+	for _, tok := range toks {
+		if tok.Meaning == "" {
+			t.Errorf("%s has no meaning", tok.Token)
+		}
+		if got := Render(tok.Token, f, m); got == tok.Token || got == "" {
+			t.Errorf("Render(%q) = %q: not a token Render expands", tok.Token, got)
+		}
+	}
+}

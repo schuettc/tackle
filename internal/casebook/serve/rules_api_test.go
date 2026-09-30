@@ -190,6 +190,14 @@ func TestVocabularyEndpointListsFields(t *testing.T) {
 			t.Errorf("field %q missing from vocabulary", want)
 		}
 	}
+	// The note's placeholders, for the page's hint (T8 re-review c).
+	var toks []string
+	for _, tk := range vocab.NoteTokens {
+		toks = append(toks, tk.Token)
+	}
+	if got := strings.Join(toks, " "); got != "{how} {tip} {age} {repo} {title}" {
+		t.Errorf("note tokens %q", got)
+	}
 }
 
 func TestRulesListAndDetail(t *testing.T) {

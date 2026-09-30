@@ -165,6 +165,7 @@ export interface MatchRow {
 
 export interface VocabularyView {
   fields: Field[] | null;
+  note_tokens: NoteToken[] | null;
 }
 
 export interface DecisionVocabView {
@@ -382,6 +383,11 @@ export interface Field {
   type: number;
   ops: string[] | null;
   values: string[] | null;
+}
+
+export interface NoteToken {
+  token: string;
+  meaning: string;
 }
 
 export interface KindVocab {

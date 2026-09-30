@@ -230,6 +230,8 @@ type MatchRow struct {
 // VocabularyView is the response body of GET /api/rules/vocabulary.
 type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`
+	// NoteTokens are the placeholders a rule's note may use.
+	NoteTokens []rules.NoteToken `json:"note_tokens"`
 }
 
 // DecisionVocabView is the response body of GET /api/decisions/vocabulary.

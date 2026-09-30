@@ -510,7 +510,7 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 
 // getRulesVocabulary handles GET /api/rules/vocabulary.
 func (s *Server) getRulesVocabulary(w http.ResponseWriter, r *http.Request) {
-	reply(w, VocabularyView{Fields: rules.Vocabulary()}, nil)
+	reply(w, VocabularyView{Fields: rules.Vocabulary(), NoteTokens: rules.NoteTokens()}, nil)
 }
 
 // agentRuleDraft handles POST /api/agent/rule-draft.
