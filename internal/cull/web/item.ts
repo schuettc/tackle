@@ -55,14 +55,17 @@ export function backLink(ctx: Ctx): HTMLElement {
 }
 
 export function noteBlock(ctx: Ctx, it: Item): HTMLElement[] {
-  return [
-    h('div', { class: 'kit-label' }, 'note (optional)'),
-    noteField({
-      value: ctx.noteOf(it),
-      placeholder: 'why — n',
-      onCommit: (v) => ctx.setNote(it, v),
-    }),
-  ];
+  const field = noteField({
+    value: ctx.noteOf(it),
+    placeholder: 'why — n',
+    onCommit: (v) => ctx.setNote(it, v),
+  });
+  // The kit's Enter handler (added first) commits; leave the field after it so
+  // the next page key (1, b, …) isn't typed into the note.
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) field.blur();
+  });
+  return [h('div', { class: 'kit-label' }, 'note (optional)'), field];
 }
 
 export function testItem(ctx: Ctx, t: TestItem): HTMLElement {

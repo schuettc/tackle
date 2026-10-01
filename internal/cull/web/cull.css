@@ -134,3 +134,9 @@ button.back:focus-visible {
   outline: 1px solid var(--kit-signal);
   outline-offset: 2px;
 }
+
+/* a long unbroken test name wraps instead of widening the reading column */
+.kit-doc h1 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

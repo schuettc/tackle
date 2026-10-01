@@ -266,14 +266,15 @@ function backLink(ctx) {
   );
 }
 function noteBlock(ctx, it) {
-  return [
-    h("div", { class: "kit-label" }, "note (optional)"),
-    noteField({
-      value: ctx.noteOf(it),
-      placeholder: "why — n",
-      onCommit: (v) => ctx.setNote(it, v)
-    })
-  ];
+  const field = noteField({
+    value: ctx.noteOf(it),
+    placeholder: "why — n",
+    onCommit: (v) => ctx.setNote(it, v)
+  });
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) field.blur();
+  });
+  return [h("div", { class: "kit-label" }, "note (optional)"), field];
 }
 function testItem(ctx, t) {
   const a = ctx.answerOf(t.id);

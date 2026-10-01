@@ -126,3 +126,7 @@ button.back:focus-visible {
   outline: 1px solid var(--kit-signal);
   outline-offset: 2px;
 }
+.kit-doc h1 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

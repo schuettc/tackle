@@ -233,6 +233,35 @@ async function main() {
     JSON.stringify(rows),
   );
 
+  // ---- a long unbroken name wraps inside the reading column
+  console.log('long names');
+  {
+    const longName = 'test_' + 'a_very_long_unbroken_name_'.repeat(6);
+    await page.goto(
+      pageUrl({}, `#/p/${pid}/${encodeURIComponent(expectBuckets.cut[0].id)}`),
+    );
+    await page.waitForSelector('.kit-doc h1');
+    const m = await page.evaluate((name) => {
+      const h1 = document.querySelector('.kit-doc h1');
+      h1.textContent = name;
+      const read = document.querySelector('main.kit-read');
+      return {
+        h: [h1.scrollWidth, h1.clientWidth],
+        r: [read.scrollWidth, read.clientWidth],
+      };
+    }, longName);
+    check(
+      'a 120+ character name wraps in the h1',
+      longName.length >= 120 && m.h[0] <= m.h[1],
+      JSON.stringify(m),
+    );
+    check(
+      'the reading column does not scroll sideways',
+      m.r[0] <= m.r[1],
+      JSON.stringify(m),
+    );
+  }
+
   // ---- 5/4/3. keys, an item answered with 1, then cut all on its concern
   console.log('keys and group actions');
   const top = expectBuckets.cut[0];
@@ -271,10 +300,11 @@ async function main() {
   await page.keyboard.press('n');
   await page.keyboard.type('pinned on purpose');
   await page.keyboard.press('Enter');
-  await page.evaluate(
-    () =>
-      document.activeElement instanceof HTMLElement &&
-      document.activeElement.blur(),
+  check(
+    'Enter leaves the note field',
+    await page.evaluate(
+      () => !document.activeElement?.classList.contains('kit-note'),
+    ),
   );
   await page.keyboard.press('1');
   check(
@@ -296,6 +326,11 @@ async function main() {
         (await page.locator('.kit-doc h1').innerText()) ===
         expectBuckets.cut[1].name,
     ),
+  );
+  check(
+    'the note field never swallowed a page key',
+    (await page.locator('.kit-note').count()) === 0 ||
+      !(await page.locator('.kit-note').first().inputValue()).includes('1'),
   );
   await page.keyboard.press('b');
   check(
@@ -601,11 +636,6 @@ async function main() {
   await failing.keyboard.press('n');
   await failing.keyboard.type('keep this note');
   await failing.keyboard.press('Enter');
-  await failing.evaluate(
-    () =>
-      document.activeElement instanceof HTMLElement &&
-      document.activeElement.blur(),
-  );
   await failing.keyboard.press('1');
   check(
     'a failed save says "Not saved: …" in the bar',
