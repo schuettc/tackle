@@ -824,10 +824,11 @@ async function applyScenariosOn(context, t, serveHandle) {
         ),
       );
 
-      // The list row: its lanes, the bar, n/total, what needs Court.
-      const row = await pg.$eval(
-        `.cb-apply-list .kit-row[data-job="${jobId}"]`,
-        (e) => ({
+      // The list row: its lanes, the bar, n/total, what needs Court. Steps
+      // keep finishing while this reads, so read the row and serve's job until
+      // both are from the same moment (the row's n/total equals serve's count).
+      const readRow = () =>
+        pg.$eval(`.cb-apply-list .kit-row[data-job="${jobId}"]`, (e) => ({
           lanes: [...e.querySelectorAll('.cb-lanename')].map(
             (l) => `${l.textContent}=${getComputedStyle(l).color}`,
           ),
@@ -840,12 +841,20 @@ async function applyScenariosOn(context, t, serveHandle) {
           subColour: e.querySelector('.kit-sub')
             ? getComputedStyle(e.querySelector('.kit-sub')).color
             : '',
-        }),
-      );
-      jv = await job(jobId);
-      const finished = jv.job.steps.filter((s) =>
-        ['verified', 'reported', 'skipped', 'failed'].includes(s.state),
-      ).length;
+        }));
+      const finishedOf = (v) =>
+        v.job.steps.filter((s) =>
+          ['verified', 'reported', 'skipped', 'failed'].includes(s.state),
+        ).length;
+      let row;
+      let finished;
+      for (let i = 0; i < 50; i++) {
+        row = await readRow();
+        jv = await job(jobId);
+        finished = finishedOf(jv);
+        if (row.meta === `${finished}/${jv.job.steps.length}`) break;
+        await pg.waitForTimeout(100);
+      }
       checkList('the row names its lanes in their colours', row.lanes, [
         `casebook \u00b7 local=${signal}`,
         `pi \u00b7 outward=${agentC}`,
