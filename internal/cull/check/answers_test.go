@@ -1,15 +1,19 @@
 package check
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/schuettc/tools-common/sqlitedb"
 )
 
 const testSrc = "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n"
@@ -28,6 +32,8 @@ func openStore(t *testing.T) *store.Store {
 
 func fixture(t *testing.T, src string) string {
 	t.Helper()
+	// Each test gets its own Jev answer cache (cache dir derives from CULL_HOME).
+	t.Setenv("CULL_HOME", t.TempDir())
 	root := t.TempDir()
 	goModule(t, root)
 	withEgress(t, root)
@@ -35,8 +41,8 @@ func fixture(t *testing.T, src string) string {
 	return root
 }
 
-// runCheck refreshes: the Jev answer cache is shared across tests here and
-// keyed by state, so cached answers from another fake would leak in.
+// runCheck refreshes so the second run of a test asks Jev again; the cache
+// itself is per-test (see fixture).
 func runCheck(t *testing.T, root string, f *fakeEval, s *store.Store) Report {
 	t.Helper()
 	var se strings.Builder
@@ -184,6 +190,35 @@ func TestRunRecorded(t *testing.T) {
 	if a.Verdict != "review" || a.Rule != "review_band" || b.Verdict != "keep" || b.Rule != "court" {
 		t.Fatalf("a=%+v b=%+v", a, b)
 	}
+	// The recorded state is exactly what Jev saw: same hash, same bytes.
+	sent := map[string][]byte{}
+	for _, st := range f.sent() {
+		sent[judge.StateHash(st)] = mustJSON(st)
+	}
+	for _, it := range items {
+		var st any
+		switch it.Kind {
+		case "test":
+			var v judge.State
+			if err := json.Unmarshal(it.State, &v); err != nil {
+				t.Fatal(err)
+			}
+			st = v
+		default:
+			var v judge.GroupState
+			if err := json.Unmarshal(it.State, &v); err != nil {
+				t.Fatal(err)
+			}
+			st = v
+		}
+		want, ok := sent[judge.StateHash(st)]
+		if !ok {
+			t.Fatalf("item %s: recorded state hash was never sent to Jev", it.Name)
+		}
+		if !bytes.Equal(it.State, want) {
+			t.Fatalf("item %s: stored state %s != sent %s", it.Name, it.State, want)
+		}
+	}
 	for _, it := range []store.Item{a, b} {
 		if it.Kind != "test" || it.Hash == "" || it.Model != "fake-model" || len(it.State) == 0 || len(it.Jev) == 0 || it.File == "" {
 			t.Fatalf("item %+v", it)
@@ -232,5 +267,67 @@ func TestDryRunTouchesNoStore(t *testing.T) {
 	p, _ := s.Project(bg, dry.Root)
 	if _, _, err := s.LatestRun(bg, p.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("run recorded: %v", err)
+	}
+}
+
+const wrongKindGroupSrc = dupGroupSrc
+
+func TestGroupWrongKindAnswerIgnored(t *testing.T) {
+	root := fixture(t, wrongKindGroupSrc)
+	s := openStore(t)
+	f := &fakeEval{review: map[string]bool{"TestA1": true, "TestA2": true}}
+	first := runCheck(t, root, f, s)
+	if len(first.Groups) != 1 || first.Groups[0].Verdict != "review" {
+		t.Fatalf("first groups %+v", first.Groups)
+	}
+	answerLatest(t, s, first.Root, first.Groups[0].ID, "group", "keep", "")
+	second := runCheck(t, root, f, s)
+	g := second.Groups[0]
+	if g.Verdict != "review" || g.Rule == "court" || second.Summary["answered"] != 0 {
+		t.Fatalf("%+v %v", g, second.Summary)
+	}
+}
+
+func TestRecordRunFailureWarnsAndWritesLastJSON(t *testing.T) {
+	root := fixture(t, testSrc)
+	path := filepath.Join(t.TempDir(), "cull.db")
+	s, err := store.Open(bg, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	f := &fakeEval{review: map[string]bool{"TestA": true}}
+	first := runCheck(t, root, f, s)
+	answerLatest(t, s, first.Root, first.Tests[0].ID, "test", "cut", "")
+	// Reads and answer saves still work; only recording a new run fails.
+	d, err := sqlitedb.Open(bg, path, sqlitedb.Options{Migrations: store.Migrations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	err = d.Tx(bg, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(bg, "CREATE TRIGGER no_runs BEFORE INSERT ON runs BEGIN SELECT RAISE(ABORT, 'runs are read-only'); END")
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var se strings.Builder
+	r, err := Run(bg, f, Options{Path: root, Store: s, Stderr: &se, Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(se.String(), "cull: review store unavailable: ") {
+		t.Fatalf("stderr %q", se.String())
+	}
+	if r.Tests[0].Verdict != "cut" || r.Tests[0].Rule != "court" {
+		t.Fatalf("%+v", r.Tests[0])
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".cull", "last.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"court"`) {
+		t.Fatalf("last.json lacks applied answer: %s", b)
 	}
 }

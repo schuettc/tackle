@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -33,12 +34,24 @@ type fakeEval struct {
 	errOnTest   map[string]bool // per-test judge.State call for this test name errors
 	errOnGroup  map[string]bool // group judge.GroupState call errors if any member matches
 	review      map[string]bool // test name (or any group member) whose act option gets 0.5: the review band
+
+	mu     sync.Mutex
+	states []any // every state sent to Evaluate
+}
+
+func (f *fakeEval) sent() []any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]any(nil), f.states...)
 }
 
 func f64(v float64) *float64 { return &v }
 
 func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questions map[string]any) (jev.Response, error) {
 	f.calls.Add(1)
+	f.mu.Lock()
+	f.states = append(f.states, state)
+	f.mu.Unlock()
 	act, actP := "keep", 0.9
 	switch s := state.(type) {
 	case judge.State:

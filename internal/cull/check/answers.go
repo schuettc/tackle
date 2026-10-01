@@ -137,7 +137,7 @@ func (r *reviewStore) record(ctx context.Context, rep Report, items []store.Item
 func mustJSON(v any) json.RawMessage {
 	b, err := json.Marshal(v)
 	if err != nil {
-		return nil
+		panic(err) // states and answers are plain data, as in judge.StateHash
 	}
 	return b
 }
