@@ -29,6 +29,11 @@ type Server struct {
 	streams      atomic.Int32 // open event streams
 	writeTimeout time.Duration
 
+	ag       agents
+	now      func() time.Time // presence clock; nil: time.Now
+	waitUnit time.Duration    // one "second" of a wait timeout; 0: a second
+	pageURL  string           // the page's address with the token, for agents
+
 	mu   sync.Mutex
 	life context.Context // Run's context; nil outside Run
 	stop context.CancelFunc
@@ -81,6 +86,7 @@ func Run(ctx context.Context, st *store.Store, o Options) error {
 	if err != nil {
 		return err
 	}
+	s.pageURL = srv.URL
 	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC()}
 	if err := writeAdvert(adv); err != nil {
 		cancel()

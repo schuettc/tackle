@@ -19,6 +19,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
+	"github.com/schuettc/tackle/internal/cull/key"
 	"github.com/schuettc/tackle/internal/cull/rubric"
 	tools "github.com/schuettc/tools-common"
 )
@@ -29,8 +30,7 @@ var judgeFlags = flags("judge", "cull judge [--kind test|group] [--rubric name|p
 	"Judge tests (TestCase JSONL) or near-duplicate groups (group JSONL) with Jev and write one\n"+
 		"JSON line per item: the verdict, the rule, the reasons and Jev's raw answers. Plumbing:\n"+
 		"no extraction, no git, no writes. Reads the file, or stdin for - or no argument.\n"+
-		"Sends test source to "+endpoint+": requires --egress. The key comes from TYPESAFE_API_KEY:\n"+
-		"  creel exec TYPESAFE_API_KEY -- cull judge --egress cases.jsonl",
+		"Sends test source to "+endpoint+": requires --egress. The key comes from TYPESAFE_API_KEY or the key file cull init writes.",
 	func(fs *flag.FlagSet) {
 		fs.String("kind", rubric.KindTest, "test or group")
 		fs.String("rubric", "", "rubric name (test-v<N>, group-v<N>) or file; default by kind")
@@ -116,9 +116,9 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		if !boolFlag(fs, "egress") {
 			return tools.Exitf(2, "judge sends test source to %s; pass --egress to allow it (or --dry-run to see what would be sent)", endpoint)
 		}
-		key := os.Getenv("TYPESAFE_API_KEY")
-		if key == "" {
-			return tools.Exitf(2, "TYPESAFE_API_KEY is not set").WithHint("creel exec TYPESAFE_API_KEY -- cull judge --egress ...")
+		apiKey, _, err := key.Load()
+		if err != nil {
+			return tools.Exitf(2, "%v", err).WithHint("cull init")
 		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -132,12 +132,12 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			truncated[i] = it.truncated
 			pins[i] = it.pins
 		}
-		js, results, err := check.JudgeAndDecide(ctx, jev.NewClient(key), states, truncated, pins, r, judge.Options{
+		js, results, err := check.JudgeAndDecide(ctx, jev.NewClient(apiKey), states, truncated, pins, r, judge.Options{
 			Model: str(fs, "model"), Concurrency: conc, Refresh: boolFlag(fs, "refresh"),
 			Cache: &judge.Cache{Dir: filepath.Join(tools.CacheDir("cull"), "answers")},
 		})
 		if errors.Is(err, jev.ErrUnauthorized) {
-			return tools.Exitf(2, "%v", err).WithHint("creel exec TYPESAFE_API_KEY -- cull judge --egress ...")
+			return tools.Exitf(2, "%v", err).WithHint("cull init")
 		}
 		if err != nil {
 			return tools.Exitf(2, "judge stopped: %v (completed answers are cached)", err)

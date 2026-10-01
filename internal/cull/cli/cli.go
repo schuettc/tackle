@@ -16,6 +16,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 		Domain:  "tackle.tools",
 		Version: tools.Version{Number: version.Number(), Commit: version.Commit(), Date: version.Date()},
 		Groups: []tools.Group{
+			{Key: "setup", Heading: "Setup"},
 			{Key: "check", Heading: "Check"},
 			{Key: "judge", Heading: "Judge"},
 		},

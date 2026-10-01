@@ -71,12 +71,23 @@ func Start(exe string, port int) (Advert, error) {
 		return Advert{}, err
 	}
 	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
 	for i := 0; i < 100; i++ {
-		if adv, err := Running(); err == nil && adv.PID == pid {
+		// Any live serve will do: a concurrent starter may have won the race
+		// and our child exited with "already running".
+		if adv, err := Running(); err == nil {
 			return adv, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-exited:
+			// One last look: the winner's advert may have just landed.
+			if adv, err := Running(); err == nil {
+				return adv, nil
+			}
+			return Advert{}, fmt.Errorf("cull serve (pid %d) exited before it started; see %s", pid, logPath)
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	return Advert{}, fmt.Errorf("cull serve (pid %d) didn't start; see %s", pid, logPath)
 }

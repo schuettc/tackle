@@ -24,6 +24,26 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: serveFlags, Run: runServe,
 		},
 		{
+			Name: "channel", Group: "check", Synopsis: "",
+			Summary:  "MCP server for an agent session: check, apply, review and Court's answers as events",
+			NewFlags: channelFlags, Run: runChannel(stdin),
+		},
+		{
+			Name: "wait", Group: "check", Synopsis: "[path] [--timeout D]",
+			Summary:  "wait until Court sends his answers for this project, then print what to do (for sessions without the cull channel)",
+			NewFlags: waitFlags, Run: runWait,
+		},
+		{
+			Name: "init", Group: "setup", Synopsis: "[path]",
+			Summary:  "store your TypeSafe key, allow egress for the project, ignore .cull/ (terminal only)",
+			NewFlags: initFlags, Run: runInit(stdin),
+		},
+		{
+			Name: "doctor", Group: "setup", Synopsis: "[path]",
+			Summary:  "check what cull needs: key, egress, python3, node, test command, serve, agent setup",
+			NewFlags: doctorFlags, Run: runDoctor,
+		},
+		{
 			Name: "judge", Group: "judge", Synopsis: "[file|-]",
 			Summary:  "judge tests or duplicate groups with Jev (plumbing; JSONL in, JSONL out)",
 			NewFlags: judgeFlags, Run: runJudge(stdin),

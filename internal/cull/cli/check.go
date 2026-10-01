@@ -14,6 +14,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
+	"github.com/schuettc/tackle/internal/cull/key"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -24,8 +25,7 @@ var checkFlags = flags("check", "cull check [path] [--diff base] [--json] [--dry
 		"Also records the run's uncertain items and applies Court's saved answers from the review\n"+
 		"database (cull serve's page); if that database can't be opened, it warns on stderr and\n"+
 		"writes last.json without them.\n"+
-		"Sends test source to "+endpoint+". The key comes from TYPESAFE_API_KEY:\n"+
-		"  creel exec TYPESAFE_API_KEY -- cull check ...",
+		"Sends test source to "+endpoint+". The key comes from TYPESAFE_API_KEY or the key file cull init writes.",
 	func(fs *flag.FlagSet) {
 		fs.String("diff", "", "base ref; judge only tests changed since it (default: the whole suite)")
 		fs.Bool("json", false, "print the full report as JSON instead of a table")
@@ -59,11 +59,11 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 
 		var ev judge.Evaluator
 		if !dryRun {
-			key := os.Getenv("TYPESAFE_API_KEY")
-			if key == "" {
-				return tools.Exitf(2, "TYPESAFE_API_KEY is not set").WithHint("creel exec TYPESAFE_API_KEY -- cull check ...")
+			k, _, err := key.Load()
+			if err != nil {
+				return tools.Exitf(2, "%v", err).WithHint("cull init")
 			}
-			ev = jev.NewClient(key)
+			ev = jev.NewClient(k)
 		}
 
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -79,7 +79,7 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			Path: path, Diff: str(fs, "diff"), DryRun: dryRun, Refresh: boolFlag(fs, "refresh"), Stdout: out, Stderr: errw,
 		})
 		if errors.Is(err, jev.ErrUnauthorized) {
-			return tools.Exitf(2, "%v", err).WithHint("creel exec TYPESAFE_API_KEY -- cull check ...")
+			return tools.Exitf(2, "%v", err).WithHint("cull init")
 		}
 		if err != nil {
 			return tools.Exitf(2, "%v", err)
@@ -117,7 +117,7 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 func runCheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, opt check.Options, jsonMode bool, out io.Writer) error {
 	gc, err := check.CheckGroup(ctx, ev, root, groupID, opt)
 	if errors.Is(err, jev.ErrUnauthorized) {
-		return tools.Exitf(2, "%v", err).WithHint("creel exec TYPESAFE_API_KEY -- cull check ...")
+		return tools.Exitf(2, "%v", err).WithHint("cull init")
 	}
 	if err != nil {
 		return tools.Exitf(2, "%v", err)
