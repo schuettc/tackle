@@ -32,24 +32,31 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: extractions/setup-just@v4.0.0
-      # casebook's page (internal/casebook/web) is TypeScript: verify-extra runs
-      # its gate and the committed-bundle freshness check.
+      # casebook's and cull's pages (internal/{casebook,cull}/web) are TypeScript:
+      # verify-extra runs their gates and the committed-bundle freshness checks.
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: internal/casebook/web/package-lock.json
+          cache-dependency-path: |
+            internal/casebook/web/package-lock.json
+            internal/cull/web/package-lock.json
       # setup-node's `cache: npm` caches the download cache, not node_modules.
-      # Keyed on the lockfile: a hit lets `_casebook-web-deps` skip `npm ci`.
+      # Keyed on each lockfile: a hit lets `_<page>-web-deps` skip `npm ci`.
       - name: Cache casebook web/node_modules
         uses: actions/cache@v6
         with:
           path: internal/casebook/web/node_modules
           key: casebook-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/casebook/web/package-lock.json') }}
+      - name: Cache cull web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/cull/web/node_modules
+          key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
       - run: just verify-extra
 
-  # casebook's page in a real headless chromium (`just verify-slow`): too slow
-  # for the push gate, so its own required job.
+  # The casebook and cull pages in a real headless chromium (`just verify-slow`):
+  # too slow for the push gate, so their own required job.
   probe:
     runs-on: macos-26
     steps:
@@ -62,17 +69,28 @@ jobs:
         with:
           node-version: 24
           cache: npm
-          cache-dependency-path: internal/casebook/web/package-lock.json
+          cache-dependency-path: |
+            internal/casebook/web/package-lock.json
+            internal/cull/web/package-lock.json
+      # setup-node's `cache: npm` caches the download cache, not node_modules.
+      # Keyed on each lockfile: a hit lets `_<page>-web-deps` skip `npm ci`.
       - name: Cache casebook web/node_modules
         uses: actions/cache@v6
         with:
           path: internal/casebook/web/node_modules
           key: casebook-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/casebook/web/package-lock.json') }}
+      - name: Cache cull web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/cull/web/node_modules
+          key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
       - name: Install web dependencies
-        working-directory: internal/casebook/web
-        run: '[ -d node_modules ] || npm ci'
+        run: |
+          (cd internal/casebook/web && { [ -d node_modules ] || npm ci; })
+          (cd internal/cull/web && { [ -d node_modules ] || npm ci; })
       # playwright-core's own CLI (the version that launches), and the headless
-      # shell, which is what chromium.launch() actually runs.
+      # shell, which is what chromium.launch() actually runs. One install serves
+      # both pages (the shared ms-playwright cache).
       - name: Install chromium
         working-directory: internal/casebook/web
         run: node node_modules/playwright-core/cli.js install --with-deps chromium chromium-headless-shell

@@ -142,7 +142,7 @@ func TestExtractHonorsMaxContext(t *testing.T) {
 	requirePython3(t)
 	// test_add's single callee ("add") source is 51 bytes; a budget of
 	// 10 must truncate it away and mark the case Truncated, unlike the
-	// default-24000 case in TestPlainFunctionParity where it fits whole.
+	// default-budget case in TestPlainFunctionParity where it fits whole.
 	res := extractAll(t, testdataDir, 10)
 	tc := caseByID(t, res, "py:tests/test_calc.py:test_add")
 	if !tc.Truncated {
@@ -519,5 +519,189 @@ func TestPyTidyEditsImportsInPlace(t *testing.T) {
 				t.Errorf("removed = %v, want %d", removed, len(c.gone))
 			}
 		})
+	}
+}
+
+func calleeSymbols(cs []cases.Callee) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Symbol
+	}
+	return out
+}
+
+func TestReferencedConstantIsCodeUnderTest(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_const")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "HONEST_SEASONS" {
+		t.Fatalf("Callees = %v, want [HONEST_SEASONS]", calleeSymbols(tc.Callees))
+	}
+	if want := "HONEST_SEASONS = (2022, 2023, 2024)\n"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+	if tc.Callees[0].File != "src/pkg/consts.py" {
+		t.Errorf("file = %q", tc.Callees[0].File)
+	}
+}
+
+func TestReferencedClassIsCodeUnderTest(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_class")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Cause" {
+		t.Fatalf("Callees = %v, want [Cause] (deduped)", calleeSymbols(tc.Callees))
+	}
+	if want := "class Cause:\n    kind = \"x\"\n"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+}
+
+func TestInnerImportResolved(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_inner_import")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "OTHER" || tc.Callees[0].Source != "OTHER = 1\n" {
+		t.Fatalf("Callees = %+v, want [OTHER]", tc.Callees)
+	}
+}
+
+func TestCallsBeforeReferencedNames(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_order")
+	got := strings.Join(calleeSymbols(tc.Callees), ",")
+	if want := "helper,LIMIT,HONEST_SEASONS"; got != want {
+		t.Errorf("order = %s", got)
+	}
+}
+
+func TestReferencedNameHonorsBudget(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 10)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_const")
+	if len(tc.Callees) != 0 || tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and not truncated (referenced names are skipped silently)", calleeSymbols(tc.Callees), tc.Truncated)
+	}
+}
+
+func TestFromImportedModuleAliasResolves(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_alias_load")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "ld.LOADERS" ||
+		tc.Callees[0].Source != "LOADERS: tuple = (\"a\", \"b\")\n" || tc.Callees[0].File != "src/pkg/loaders.py" {
+		t.Fatalf("alias load Callees = %+v", tc.Callees)
+	}
+	tc = caseByID(t, res, "py:tests/test_from.py:test_alias_call")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "ld.load" {
+		t.Fatalf("alias call Callees = %+v", tc.Callees)
+	}
+	tc = caseByID(t, res, "py:tests/test_from.py:test_inner")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "loaders.LOADERS" {
+		t.Fatalf("inner Callees = %+v", tc.Callees)
+	}
+}
+
+func TestNamesInTopLevelBlocksAreDefinitions(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_guarded")
+	got := map[string]string{}
+	for _, c := range tc.Callees {
+		got[c.Symbol] = c.Source
+	}
+	want := map[string]string{
+		"guarded.GUARD":    "    GUARD = 1\n",
+		"guarded.FIRST":    "    FIRST = \"first\"\n",
+		"guarded.TRIED":    "    TRIED = 1\n",
+		"guarded.FINAL":    "    FINAL = 3\n",
+		"guarded.Ctx":      "    class Ctx:\n        pass\n",
+		"guarded.tried_fn": "    def tried_fn():\n        return 1\n",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestTopLevelDuplicatesLastWinsBlocksFillGaps(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_dups")
+	got := map[string]string{}
+	for _, c := range tc.Callees {
+		got[c.Symbol] = c.Source
+	}
+	want := map[string]string{
+		"dups.twice": "def twice():\n    return 2\n",
+		"dups.both":  "def both():\n    return \"top\"\n",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestOversizedReferencedNameIsSkippedNotTruncated(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "py:tests/test_budget.py:test_skips_big_reference")
+	if got := strings.Join(calleeSymbols(tc.Callees), ","); got != "SMALL" || tc.Truncated {
+		t.Errorf("callees=%s truncated=%v, want SMALL and not truncated", got, tc.Truncated)
+	}
+}
+
+func TestOversizedCallTargetStillTruncates(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "py:tests/test_budget.py:test_big_call_target_truncates")
+	if len(tc.Callees) != 0 || !tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
+	}
+}
+
+func TestPinsSetting(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 24000)
+	want := map[string]bool{
+		"test_const":                          true,
+		"test_hasattr":                        true,
+		"test_enum":                           true,
+		"test_method_on_constant":             true,
+		"test_module_attribute":               true,
+		"test_setting_in_test_file":           true,
+		"test_big_setting_over_budget":        true,
+		"test_module_attribute_read":          true,
+		"test_literals_only":                  false,
+		"test_annotated_setting_in_test_file": true,
+		"test_builtin_fixture":                true,
+		"test_calls_project_function":         false,
+		"test_constructs_project_class":       false,
+		"test_calls_through_module":           false,
+		"test_method_on_constructed_constant": false,
+		"test_same_file_helper":               false,
+		"test_fixture_parameter":              false,
+		"test_no_code_under_test":             false,
+	}
+	for name, pins := range want {
+		tc := caseByID(t, res, "py:tests/test_pins.py:"+name)
+		if tc.PinsSetting != pins {
+			t.Errorf("%s: PinsSetting = %v, want %v (callees %v)", name, tc.PinsSetting, pins, calleeSymbols(tc.Callees))
+		}
+	}
+}
+
+func TestPinsSettingOverBudget(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 300)
+	tc := caseByID(t, res, "py:tests/test_pins.py:test_big_setting_over_budget")
+	if len(tc.Callees) != 0 {
+		t.Fatalf("setting fit the budget (%v); the test needs a smaller budget", calleeSymbols(tc.Callees))
+	}
+	if !tc.PinsSetting {
+		t.Errorf("PinsSetting = false for a setting dropped by the byte budget")
 	}
 }

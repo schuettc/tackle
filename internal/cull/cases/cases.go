@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// DefaultMaxContextBytes caps the setup and callee source sent with one test
+// (and a group's total test source). 64 KB fit every test of a large Python
+// suite (nfl-dk, 2026-09-30: largest 53 KB); at 24 KB, 179 of its 3,147 tests
+// lost a callee and went to review for that alone.
+const DefaultMaxContextBytes = 64000
+
 // Span is a byte range [Start, End) in the test's file.
 type Span struct {
 	Start int `json:"start"`
@@ -37,6 +43,10 @@ type TestCase struct {
 	Span      Span     `json:"span"`
 	Callees   []Callee `json:"callees"`
 	Truncated bool     `json:"truncated"`
+	// PinsSetting: the test runs none of the project's code; it only reads a
+	// project setting or class and compares it to fixed values. Set by the
+	// extractors; not part of the state Jev sees.
+	PinsSetting bool `json:"pins_setting,omitempty"`
 }
 
 // HashBody identifies a test's exact source.

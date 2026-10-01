@@ -28,7 +28,7 @@ func init() {
 }
 
 // defaultMaxContext matches pyext.py's MAX_CTX.
-const defaultMaxContext = 24000
+const defaultMaxContext = cases.DefaultMaxContextBytes
 
 // helperEnvFunc is extract.HelperEnv, indirected so tests can observe the
 // environment Tidy computes for the subprocess.
@@ -67,6 +67,8 @@ type helperLine struct {
 	Callees   []cases.Callee `json:"callees"`
 	Truncated bool           `json:"truncated"`
 	Span      cases.Span     `json:"span"`
+
+	PinsSetting bool `json:"pins_setting"`
 }
 
 // Extract runs the embedded helper over relpaths and turns its JSONL
@@ -138,18 +140,19 @@ func (pythonExtractor) Extract(root string, relpaths []string, maxContext int) (
 			continue
 		}
 		res.Cases = append(res.Cases, cases.TestCase{
-			ID:        hl.ID,
-			Hash:      cases.HashBody(hl.Body),
-			Lang:      hl.Lang,
-			Framework: hl.Framework,
-			File:      hl.File,
-			Name:      hl.Name,
-			Parent:    hl.Parent,
-			Body:      hl.Body,
-			Context:   hl.Context,
-			Span:      hl.Span,
-			Callees:   hl.Callees,
-			Truncated: hl.Truncated,
+			ID:          hl.ID,
+			Hash:        cases.HashBody(hl.Body),
+			Lang:        hl.Lang,
+			Framework:   hl.Framework,
+			File:        hl.File,
+			Name:        hl.Name,
+			Parent:      hl.Parent,
+			Body:        hl.Body,
+			Context:     hl.Context,
+			Span:        hl.Span,
+			Callees:     hl.Callees,
+			Truncated:   hl.Truncated,
+			PinsSetting: hl.PinsSetting,
 		})
 	}
 	if err := scanner.Err(); err != nil {

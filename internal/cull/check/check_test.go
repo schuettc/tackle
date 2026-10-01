@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -32,13 +33,26 @@ type fakeEval struct {
 	consolidate map[string]bool
 	errOnTest   map[string]bool // per-test judge.State call for this test name errors
 	errOnGroup  map[string]bool // group judge.GroupState call errors if any member matches
+	review      map[string]bool // test name (or any group member) whose act option gets 0.5: the review band
+
+	mu     sync.Mutex
+	states []any // every state sent to Evaluate
+}
+
+func (f *fakeEval) sent() []any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]any(nil), f.states...)
 }
 
 func f64(v float64) *float64 { return &v }
 
 func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questions map[string]any) (jev.Response, error) {
 	f.calls.Add(1)
-	act := "keep"
+	f.mu.Lock()
+	f.states = append(f.states, state)
+	f.mu.Unlock()
+	act, actP := "keep", 0.9
 	switch s := state.(type) {
 	case judge.State:
 		if f.errOnTest != nil && f.errOnTest[s.TestName] {
@@ -46,6 +60,9 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 		}
 		if f.cut != nil && f.cut[s.TestName] {
 			act = "cut"
+		}
+		if f.review[s.TestName] {
+			act, actP = "cut", 0.5
 		}
 	case judge.GroupState:
 		for _, t := range s.Tests {
@@ -57,6 +74,9 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 		for _, t := range s.Tests {
 			if f.consolidate != nil && f.consolidate[t.Name] {
 				act = "consolidate"
+			}
+			if f.review[t.Name] {
+				act, actP = "consolidate", 0.5
 			}
 		}
 	}
@@ -74,7 +94,7 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 			for o := range opts {
 				probs[o] = 0.05
 			}
-			probs[act] = 0.9
+			probs[act] = actP
 			ans[k] = jev.Answer{Type: "choice", Choice: act, Probabilities: probs, Confidence: f64(0.85)}
 		}
 	}
@@ -151,7 +171,7 @@ func TestConfigDefaultsAndUnknownKey(t *testing.T) {
 	if found {
 		t.Error("found = true with no .cull.toml")
 	}
-	if cfg.Model != "jev-latest" || cfg.MaxContextBytes != 24000 || cfg.Concurrency != 6 ||
+	if cfg.Model != "jev-latest" || cfg.MaxContextBytes != 64000 || cfg.Concurrency != 6 ||
 		len(cfg.Exclude) != 0 || cfg.TestRubric != rubric.DefaultTest || cfg.GroupRubric != rubric.DefaultGroup || cfg.Egress {
 		t.Fatalf("defaults = %+v", cfg)
 	}

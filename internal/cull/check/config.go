@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/schuettc/tackle/internal/cull/cases"
 	"github.com/schuettc/tackle/internal/cull/rubric"
 )
 
@@ -30,7 +31,7 @@ type Config struct {
 func defaultConfig() Config {
 	return Config{
 		Model:           "jev-latest",
-		MaxContextBytes: 24000,
+		MaxContextBytes: cases.DefaultMaxContextBytes,
 		Concurrency:     6,
 		TestRubric:      rubric.DefaultTest,
 		GroupRubric:     rubric.DefaultGroup,

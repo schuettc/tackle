@@ -24,8 +24,11 @@ var osascript = func(script string, args ...string) (string, error) {
 
 // readTitlesScript prints one "W" line per window and one "T<tab><title>" line
 // per tab, in Ghostty's window and tab order. `character id 9` rather than
-// `tab`: inside the tell block `tab` names Ghostty's tab class.
+// `tab`: inside the tell block `tab` names Ghostty's tab class. It prints
+// nothing when Ghostty is not running: a bare `tell` would launch it, and the
+// attach hook fires for clients in other terminals too.
 const readTitlesScript = `set out to ""
+if application "Ghostty" is running then
 tell application "Ghostty"
 repeat with w in windows
 set out to out & "W" & linefeed
@@ -34,6 +37,7 @@ set out to out & "T" & (character id 9) & (name of t) & linefeed
 end repeat
 end repeat
 end tell
+end if
 return out`
 
 // ghosttyTitles returns every window's tab titles, in order.
@@ -89,21 +93,104 @@ func MatchLayout(titles [][]string, live map[string]bool) [][]string {
 	return wins
 }
 
-// SaveLayout captures the current Ghostty arrangement of live sessions into
-// the record, replacing any earlier one. It reports the windows and tabs kept.
-// A Ghostty failure leaves the record untouched.
+// mergeLayout folds the current Ghostty arrangement (cur) into the saved one
+// (old). Every session with a tab now sits where its tab is. A saved session
+// with no tab now (not restored yet, detached, or in another terminal) keeps
+// its saved window: it is appended to the current window that holds the most
+// of that saved window's sessions, or stays a window of its own when none of
+// them have a tab. Like the record, the layout never shrinks on what is
+// merely absent, so attaching one session before restoring the rest cannot
+// overwrite the saved layout with a one-tab window.
+func mergeLayout(old, cur [][]string) [][]string {
+	tabbed := map[string]int{} // session -> index of its current window
+	for i, w := range cur {
+		for _, s := range w {
+			tabbed[s] = i
+		}
+	}
+	// Walk the saved windows in order. Each one either maps onto the current
+	// window holding most of its sessions (lowest index on a tie), handing it
+	// its untabbed sessions, or survives on its own. Current windows no saved
+	// window maps onto follow, in Ghostty's order.
+	extra := make([][]string, len(cur))
+	placed := make([]bool, len(cur))
+	var order [][]string // nil entry = a current window, resolved below
+	var curAt []int      // for each nil entry in order, its cur index
+	for _, w := range old {
+		votes := map[int]int{}
+		var rest []string
+		for _, s := range w {
+			if i, ok := tabbed[s]; ok {
+				votes[i]++
+			} else {
+				rest = append(rest, s)
+			}
+		}
+		best := -1
+		for i, v := range votes {
+			if best < 0 || v > votes[best] || (v == votes[best] && i < best) {
+				best = i
+			}
+		}
+		if best < 0 {
+			if len(rest) > 0 { // an empty saved window would read as a nil marker
+				order = append(order, rest)
+			}
+			continue
+		}
+		extra[best] = append(extra[best], rest...)
+		if !placed[best] {
+			placed[best] = true
+			order = append(order, nil)
+			curAt = append(curAt, best)
+		}
+	}
+	for i := range cur {
+		if !placed[i] {
+			order = append(order, nil)
+			curAt = append(curAt, i)
+		}
+	}
+	var out [][]string
+	seen := map[string]bool{}
+	k := 0
+	for _, w := range order {
+		if w == nil {
+			i := curAt[k]
+			k++
+			w = append(append([]string{}, cur[i]...), extra[i]...)
+		}
+		var keep []string
+		for _, s := range w {
+			if !seen[s] {
+				seen[s] = true
+				keep = append(keep, s)
+			}
+		}
+		if len(keep) > 0 {
+			out = append(out, keep)
+		}
+	}
+	return out
+}
+
+// SaveLayout captures the current Ghostty arrangement of live sessions and
+// merges it into the record's layout (see mergeLayout). It reports the windows
+// and tabs saved. A Ghostty failure leaves the record untouched.
 func SaveLayout(live map[string]bool) (windows, tabs int, err error) {
 	titles, err := ghosttyTitles()
 	if err != nil {
 		return 0, 0, err
 	}
-	wins := MatchLayout(titles, live)
-	for _, w := range wins {
-		tabs += len(w)
-	}
+	cur := MatchLayout(titles, live)
 	err = UpdateRecord(func(r *Record) bool {
+		wins := mergeLayout(r.Layout.Windows, cur)
+		windows = len(wins)
+		for _, w := range wins {
+			tabs += len(w)
+		}
 		r.Layout = GhosttyLayout{SavedAt: time.Now(), Windows: wins}
 		return true
 	})
-	return len(wins), tabs, err
+	return windows, tabs, err
 }

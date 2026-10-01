@@ -4,6 +4,18 @@ All notable changes to `scratch` and `proj` are documented here (proj entries ar
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [proj 0.6.2] - 2026-10-01
+
+### Changed
+- The Ghostty layout saves itself. A `client-attached` /
+  `client-session-changed` hook (installed with the others when the picker
+  starts) runs `proj __save-layout`, which waits two seconds for attaches to
+  settle, then folds the current tabs into the saved layout. `^s` still works.
+- Saving merges instead of replacing: a session with no tab right now keeps
+  its saved window, so attaching one session before a restore cannot shrink
+  the layout to one window.
+- Reading Ghostty's tabs no longer launches Ghostty when it is not running.
+
 ## [proj 0.6.1] - 2026-09-29
 
 ### Changed

@@ -3,6 +3,7 @@ package proj
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -72,13 +73,51 @@ func TestSaveLayoutWritesRecord(t *testing.T) {
 		t.Fatalf("layout = %+v", rec.Layout)
 	}
 
-	fakeOsascript(t, "W\nT\tc/1\n", nil)
+	// c/1 moves into a/1's window; b/1 has no tab now and keeps its place.
+	fakeOsascript(t, "W\nT\tc/1\nT\ta/1\n", nil)
 	if _, _, err := SaveLayout(live); err != nil {
 		t.Fatal(err)
 	}
 	rec, _ = LoadRecord()
-	if !slices.EqualFunc(rec.Layout.Windows, [][]string{{"c/1"}}, slices.Equal[[]string]) {
-		t.Fatalf("second save did not replace: %q", rec.Layout.Windows)
+	if !slices.EqualFunc(rec.Layout.Windows, [][]string{{"c/1", "a/1", "b/1"}}, slices.Equal[[]string]) {
+		t.Fatalf("second save = %q", rec.Layout.Windows)
+	}
+}
+
+func TestMergeLayout(t *testing.T) {
+	cases := []struct {
+		name          string
+		old, cur, out [][]string
+	}{
+		{"first save", nil, [][]string{{"a"}, {"b"}}, [][]string{{"a"}, {"b"}}},
+		{"ghostty closed keeps everything",
+			[][]string{{"a", "b"}, {"c"}}, nil, [][]string{{"a", "b"}, {"c"}}},
+		// The reboot case: one session attached by hand before the restore.
+		{"one early attach cannot shrink the layout",
+			[][]string{{"a", "b"}, {"c", "d"}}, [][]string{{"c"}},
+			[][]string{{"a", "b"}, {"c", "d"}}},
+		{"tab moved between windows",
+			[][]string{{"a", "b"}, {"c"}}, [][]string{{"a"}, {"c", "b"}},
+			[][]string{{"a"}, {"c", "b"}}},
+		{"new window appended",
+			[][]string{{"a"}}, [][]string{{"a"}, {"z"}}, [][]string{{"a"}, {"z"}}},
+		{"untabbed joins the window holding most of its old window",
+			[][]string{{"a", "b", "c", "x"}}, [][]string{{"a"}, {"b", "c"}},
+			[][]string{{"b", "c", "x"}, {"a"}}},
+		{"empty saved window dropped",
+			[][]string{{}, {"a"}}, [][]string{{"a"}}, [][]string{{"a"}}},
+	}
+	for _, c := range cases {
+		got := mergeLayout(c.old, c.cur)
+		if !slices.EqualFunc(got, c.out, slices.Equal[[]string]) {
+			t.Errorf("%s: mergeLayout = %q want %q", c.name, got, c.out)
+		}
+	}
+}
+
+func TestReadTitlesScriptNeverLaunchesGhostty(t *testing.T) {
+	if !strings.HasPrefix(readTitlesScript, "set out to \"\"\nif application \"Ghostty\" is running then\n") {
+		t.Fatalf("title read is not guarded by `is running`:\n%s", readTitlesScript)
 	}
 }
 
