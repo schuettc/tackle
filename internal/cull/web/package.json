@@ -14,7 +14,8 @@
     "build:js": "esbuild entry.ts --bundle --format=esm --external:/_kit/* --charset=utf8 --outfile=../serve/assets/cull.js",
     "build:css": "esbuild cull.css --bundle --charset=utf8 --outfile=../serve/assets/cull.css",
     "test": "node --test *.test.ts",
-    "build": "npm run --silent build:js && npm run --silent build:css"
+    "build": "npm run --silent build:js && npm run --silent build:css",
+    "probe": "node probe.mjs"
   },
   "devDependencies": {
     "esbuild": "0.28.1",

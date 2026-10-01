@@ -1,1 +1,128 @@
-body{font:15px/1.6 system-ui,sans-serif;margin:3rem auto;max-width:36rem}
+/* cull.css */
+.kit-doc .lead {
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 0 22px;
+}
+.kit-doc .why {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--kit-muted);
+  margin: 6px 0 14px;
+}
+.kit-doc .notice {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  border-left: 3px solid var(--kit-wait);
+  padding: 6px 12px;
+  margin: 0 0 22px;
+  background: var(--kit-card);
+  border-radius: 0 6px 6px 0;
+}
+table.ov {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 0 0 14px;
+}
+table.ov th {
+  white-space: nowrap;
+  font: 10.5px var(--kit-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kit-muted);
+  text-align: left;
+  font-weight: 400;
+  padding: 12px 14px;
+}
+table.ov td {
+  padding: 12px 14px;
+  border-top: 1px solid var(--kit-line);
+  vertical-align: middle;
+}
+table.ov td .why {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--kit-muted);
+  max-width: 22em;
+}
+table.ov td.n,
+table.ov td.n + td.n {
+  font: 14px var(--kit-mono);
+  color: var(--kit-muted);
+  white-space: nowrap;
+}
+table.ov td .kit-btns {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+table.ov.rows td {
+  font: 12.5px var(--kit-mono);
+  white-space: nowrap;
+}
+table.ov.rows td:first-child {
+  color: var(--kit-fg);
+}
+table.ov.rows td:not(:first-child) {
+  color: var(--kit-muted);
+}
+.scroll {
+  overflow-x: auto;
+  margin: 0 0 14px;
+}
+.scroll table.ov {
+  margin: 0;
+  width: max-content;
+  min-width: 100%;
+}
+table.sig {
+  width: 100%;
+  border-collapse: collapse;
+  border-top: 1px solid var(--kit-line);
+}
+table.sig td {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--kit-line);
+  font-size: 14px;
+}
+table.sig td:last-child {
+  width: 240px;
+  white-space: nowrap;
+}
+table.sig .bar {
+  display: inline-block;
+  width: 120px;
+  height: 6px;
+  border-radius: 3px;
+  vertical-align: middle;
+  background: var(--kit-line);
+  overflow: hidden;
+  margin-right: 12px;
+}
+table.sig .bar i {
+  display: block;
+  height: 100%;
+  background: var(--kit-agent);
+  border-radius: 3px;
+}
+table.sig .v {
+  font: 13px var(--kit-mono);
+  color: var(--kit-muted);
+}
+button.back {
+  font: 12px var(--kit-mono);
+  color: var(--kit-signal);
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0 0 14px;
+  cursor: pointer;
+}
+button.back:focus-visible {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: 2px;
+}

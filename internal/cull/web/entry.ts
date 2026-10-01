@@ -1,3 +1,2 @@
-// entry.ts — the esbuild entry point. The page itself arrives in the next task.
-
-export {};
+// entry.ts — the esbuild entry point: mounts the review page.
+import './app.ts';
