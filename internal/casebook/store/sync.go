@@ -16,6 +16,11 @@ import (
 // and go out at the next sync.
 var ErrOffline = errors.New("casebook remote unreachable; changes are queued locally")
 
+// ErrRefused means the remote received the push and refused it (a
+// pre-receive hook, branch protection); local commits stay queued. The
+// error carries git's rejected line and the remote's own message.
+var ErrRefused = errors.New("the casebook remote refused the push")
+
 // Views are rendered files: on a rebase conflict the upstream copy is taken
 // and the next render replaces it.
 var Views = []string{"README.md", "CONTRIBUTIONS.md", "MACHINES.md"}
@@ -55,12 +60,61 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 			return res, nil
 		}
 		var ge *gitx.Error
-		if errors.As(err, &ge) && (strings.Contains(ge.Stderr, "non-fast-forward") || strings.Contains(ge.Stderr, "fetch first") || strings.Contains(ge.Stderr, "rejected")) {
+		if !errors.As(err, &ge) {
+			return res, fmt.Errorf("%w: %w", ErrOffline, err)
+		}
+		if raced(ge.Stderr) {
 			continue
+		}
+		if why := refusal(ge.Stderr); why != "" {
+			return res, fmt.Errorf("%w: %s", ErrRefused, why)
 		}
 		return res, fmt.Errorf("%w: %w", ErrOffline, err)
 	}
 	return res, fmt.Errorf("push kept racing other machines; try again")
+}
+
+// raced reports a push git rejected because the remote moved since the
+// fetch ("! [rejected] … (fetch first)" or "(non-fast-forward)"): another
+// machine pushed in between, so fetch, rebase and push again. Only git's own
+// rejected line counts, so a remote hook whose message happens to say
+// "non-fast-forward" is still a refusal.
+func raced(stderr string) bool {
+	for _, l := range strings.Split(stderr, "\n") {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "! [rejected]") && (strings.Contains(l, "(fetch first)") || strings.Contains(l, "(non-fast-forward)")) {
+			return true
+		}
+	}
+	return false
+}
+
+// refusal is the reason a remote refused a push (a pre-receive hook, branch
+// protection: "! [remote rejected] … (pre-receive hook declined)"), or
+// any other rejection that isn't a race: git's rejected lines, then the
+// remote's own "remote:" lines. "" when stderr holds no rejection (the
+// remote couldn't be reached).
+func refusal(stderr string) string {
+	var rejected, remote []string
+	for _, l := range strings.Split(stderr, "\n") {
+		l = strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(l, "! [") && strings.Contains(l, "rejected]"):
+			rejected = append(rejected, strings.Join(strings.Fields(strings.TrimPrefix(l, "!")), " "))
+		case strings.HasPrefix(l, "remote:"):
+			if m := strings.TrimSpace(strings.TrimPrefix(l, "remote:")); m != "" {
+				remote = append(remote, m)
+			}
+		}
+	}
+	if len(rejected) == 0 {
+		return ""
+	}
+	why := strings.Join(rejected, "; ")
+	if len(remote) > 0 {
+		why += " · remote: " + strings.Join(remote, " ")
+	}
+	return why
 }
 
 // lockedRebase runs the rebase under casebook-data's exclusive lock. The

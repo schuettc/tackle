@@ -601,3 +601,40 @@ func serveURL(t *testing.T, s *Server) string {
 	t.Cleanup(hs.Close)
 	return hs.URL
 }
+
+// TestRemoteRefusalReachesTheSummary: a casebook remote whose pre-receive
+// hook refuses the push is a push failure the page shows (push_error with
+// git's "remote rejected" line and the remote's words, the decision still
+// queued), not "kept racing" and not offline (which would hide the strip).
+func TestRemoteRefusalReachesTheSummary(t *testing.T) {
+	r := newRig(t)
+	r.s.Log = writerFunc(func(b []byte) (int, error) { return len(b), nil })
+	hook := filepath.Join(r.Remote, "hooks", "pre-receive")
+	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'main is protected: casebook pushes are paused' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := r.s.Bus.Head(ctx)
+	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "keep"}, nil); c != 200 {
+		t.Fatalf("decide %d", c)
+	}
+	evs := waitPushes(t, r, before, 1)
+	waitIdle(t, r)
+	if evs[0].State != PushFailed {
+		t.Fatalf("push event %+v, want %s", evs[0], PushFailed)
+	}
+	sum := r.summary(t)
+	if sum.OfflineQueued != 1 {
+		t.Errorf("offline_queued %d, want 1 (the decision stays queued)", sum.OfflineQueued)
+	}
+	for _, want := range []string{"refused", "remote rejected", "main is protected: casebook pushes are paused"} {
+		if !strings.Contains(sum.PushError, want) {
+			t.Errorf("push_error %q lacks %q", sum.PushError, want)
+		}
+	}
+	if strings.Contains(sum.PushError, "racing") {
+		t.Errorf("push_error %q reads as a race", sum.PushError)
+	}
+}

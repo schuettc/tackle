@@ -93,7 +93,9 @@ func (a *App) DecideBatch(ctx context.Context, entries []TriageEntry, o DecideOp
 // remote under this machine's sync lock, so it never runs beside a sync:
 // ErrSyncBusy when a sync holds the lock (try again later), store.ErrOffline
 // when the remote can't be reached (the commits stay queued for the next push
-// or sync). serve's background push is its caller.
+// or sync), store.ErrRefused when the remote refused the push (a hook, branch
+// protection; queued too, with the remote's reason). serve's background push
+// is its caller.
 func (a *App) Push(ctx context.Context) error {
 	unlock, err := LockSync()
 	if err != nil {
