@@ -162,21 +162,24 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
+	// The kit's live() sends its cursor as ?since= (an EventSource cannot set
+	// Last-Event-ID on its first connection); a browser's own reconnect sends
+	// the header. ?since= wins.
 	var cursor int64
-	lastID := r.Header.Get("Last-Event-ID")
+	lastID := r.URL.Query().Get("since")
+	if lastID == "" {
+		lastID = r.Header.Get("Last-Event-ID")
+	}
+	reset := false
 	if lastID == "" {
 		cursor = s.events.latest()
-	} else {
-		cursor, ok = s.events.resume(lastID)
-		if !ok {
-			cursor = s.events.latest()
-			if !write(": ok\n\nid: %s\ndata: {\"type\":\"reset\",\"data\":{}}\n\n", s.events.format(cursor)) {
-				return
-			}
-			lastID = "reset"
+	} else if cursor, ok = s.events.resume(lastID); !ok {
+		cursor, reset = s.events.latest(), true
+		if !write(": ok\n\nid: %s\ndata: {\"type\":\"reset\",\"data\":{}}\n\n", s.events.format(cursor)) {
+			return
 		}
 	}
-	if lastID != "reset" && !write(": ok\n\n") {
+	if !reset && !write(": ok\n\n") {
 		return
 	}
 	beat := time.NewTicker(15 * time.Second)

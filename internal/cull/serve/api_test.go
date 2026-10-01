@@ -335,8 +335,19 @@ func TestRetentionCap(t *testing.T) {
 // sse opens /api/events and returns a channel of "id|data" strings.
 func sse(t *testing.T, url, lastID string) (<-chan string, func()) {
 	t.Helper()
+	return sseReq(t, url+"/api/events", lastID)
+}
+
+// sseSince connects the way the kit's live() does: the cursor in ?since=.
+func sseSince(t *testing.T, url, since string) (<-chan string, func()) {
+	t.Helper()
+	return sseReq(t, url+"/api/events?since="+since, "")
+}
+
+func sseReq(t *testing.T, u, lastID string) (<-chan string, func()) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url+"/api/events", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if lastID != "" {
 		req.Header.Set("Last-Event-ID", lastID)
 	}
@@ -686,5 +697,27 @@ func TestReviewCursorOnNoRunPath(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &m)
 	if c, _ := m["cursor"].(string); c == "" || m["run"] != nil {
 		t.Fatalf("%s", w.Body)
+	}
+}
+
+// The kit's live() resumes through ?since=, and ?since= wins over a header.
+func TestSSEResumeFromSinceQuery(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 4; i++ {
+		f.put(f.run, "h1")
+	}
+	ts := httptest.NewServer(f.h)
+	defer ts.Close()
+	c, cancel := sseSince(t, ts.URL, f.cur(2))
+	defer cancel()
+	for _, n := range []int{3, 4} {
+		if v := next(t, c); !strings.HasPrefix(v, f.cur(n)+"|") || strings.Contains(v, "reset") {
+			t.Fatalf("event %d: %s", n, v)
+		}
+	}
+	c2, cancel2 := sseSince(t, ts.URL, "banana")
+	defer cancel2()
+	if v := next(t, c2); !strings.Contains(v, `"type":"reset"`) {
+		t.Fatalf("malformed since: %s", v)
 	}
 }
