@@ -95,7 +95,7 @@ func TestRunRoundTrip(t *testing.T) {
 }
 
 func TestPruneKeepsFiveRunsAndAllAnswers(t *testing.T) {
-	s, p0 := open(t)
+	s, _ := open(t)
 	p, _ := s.Project(ctx, "/x")
 	other, _ := s.Project(ctx, "/other")
 	if _, err := s.RecordRun(ctx, Run{ProjectID: other.ID}, items(1)); err != nil {
@@ -123,7 +123,6 @@ func TestPruneKeepsFiveRunsAndAllAnswers(t *testing.T) {
 	if len(as) != 1 {
 		t.Fatalf("answers %v", as)
 	}
-	_ = p0
 }
 
 func TestSaveAnswersUpsert(t *testing.T) {
@@ -144,13 +143,20 @@ func TestSaveAnswersUpsert(t *testing.T) {
 		t.Fatalf("sent %d", n)
 	}
 	time.Sleep(5 * time.Millisecond)
-	a.Value, a.Note, a.Blind = "keep", "n2", false
-	if err := s.SaveAnswers(ctx, p.ID, run, []Answer{a}); err != nil {
+	run2, err := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Value, a.Note, a.Blind, a.Via = "keep", "n2", false, "group"
+	a.Model, a.QuestionsHash, a.Jev = "m2", "q2", json.RawMessage(`{"k":2}`)
+	if err := s.SaveAnswers(ctx, p.ID, run2, []Answer{a}); err != nil {
 		t.Fatal(err)
 	}
 	m, _ = s.Answers(ctx, p.ID)
 	second := m[k]
-	if second.Value != "keep" || second.Note != "n2" || second.Blind || !second.AnsweredAt.Equal(first.AnsweredAt) || !second.SentAt.IsZero() {
+	if second.Value != "keep" || second.Note != "n2" || second.Blind ||
+		second.Via != "group" || second.Model != "m2" || second.QuestionsHash != "q2" || second.RunID != run2 || run2 == run ||
+		string(second.Jev) != `{"k":2}` || !second.AnsweredAt.Equal(first.AnsweredAt) || !second.SentAt.IsZero() {
 		t.Fatalf("%+v", second)
 	}
 	if err := s.DeleteAnswer(ctx, p.ID, k); err != nil {
@@ -221,6 +227,16 @@ func TestHelperSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	idx := os.Getenv("CULL_STORE_HELPER_N")
+	// Start barrier: wait for the parent's go file so all children collide.
+	goFile := os.Getenv("CULL_STORE_HELPER_GO")
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(time.Millisecond) {
+		if _, err := os.Stat(goFile); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("go file never appeared")
+		}
+	}
 	s, err := Open(ctx, p)
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +247,11 @@ func TestHelperSave(t *testing.T) {
 		if err := s.SaveAnswers(ctx, proj, run, []Answer{a}); err != nil {
 			t.Fatal(err)
 		}
+		// All children also write the same key.
+		sh := Answer{ItemID: "shared", Hash: "hs", Kind: "test", Value: "keep", Via: "item", Note: "child" + idx}
+		if err := s.SaveAnswers(ctx, proj, run, []Answer{sh}); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -238,7 +259,8 @@ func TestConcurrentProcesses(t *testing.T) {
 	s, path := open(t)
 	p, _ := s.Project(ctx, "/x")
 	const n = 4
-	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(n))
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, append(items(n), Item{ID: "shared", Kind: "test", Hash: "hs", Verdict: "keep"}))
+	goFile := filepath.Join(t.TempDir(), "go")
 	var wg sync.WaitGroup
 	errs := make(chan error, n)
 	for i := 0; i < n; i++ {
@@ -246,12 +268,16 @@ func TestConcurrentProcesses(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			cmd := exec.Command(os.Args[0], "-test.run=^TestHelperSave$", "-test.count=1")
-			cmd.Env = append(os.Environ(), "CULL_STORE_HELPER_PATH="+path,
+			cmd.Env = append(os.Environ(), "CULL_STORE_HELPER_PATH="+path, "CULL_STORE_HELPER_GO="+goFile,
 				fmt.Sprintf("CULL_STORE_HELPER_IDS=%d %d", p.ID, run), fmt.Sprintf("CULL_STORE_HELPER_N=%d", i))
 			if out, err := cmd.CombinedOutput(); err != nil {
 				errs <- fmt.Errorf("%w\n%s", err, out)
 			}
 		}()
+	}
+	time.Sleep(200 * time.Millisecond) // let children start and reach the barrier
+	if err := os.WriteFile(goFile, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	wg.Wait()
 	close(errs)
@@ -259,7 +285,21 @@ func TestConcurrentProcesses(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, err := s.Answers(ctx, p.ID)
-	if err != nil || len(m) != n {
+	if err != nil || len(m) != n+1 {
 		t.Fatalf("answers %d %v", len(m), err)
+	}
+	for i := 0; i < n; i++ {
+		a, ok := m[Key{fmt.Sprintf("t%d", i), fmt.Sprintf("h%d", i)}]
+		if !ok || a.Note != "9" || a.Value != "cut" {
+			t.Fatalf("own key %d: %+v", i, a)
+		}
+	}
+	sh := m[Key{"shared", "hs"}]
+	valid := false
+	for i := 0; i < n; i++ {
+		valid = valid || sh.Note == fmt.Sprintf("child%d", i)
+	}
+	if !valid || sh.Value != "keep" || sh.Via != "item" || sh.RunID != run {
+		t.Fatalf("shared key: %+v", sh)
 	}
 }
