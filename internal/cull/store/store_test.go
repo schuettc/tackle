@@ -303,3 +303,25 @@ func TestConcurrentProcesses(t *testing.T) {
 		t.Fatalf("shared key: %+v", sh)
 	}
 }
+
+func TestLatestRunIDs(t *testing.T) {
+	s, _ := open(t)
+	got, err := s.LatestRunIDs(ctx)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("empty: %v %v", got, err)
+	}
+	a, _ := s.Project(ctx, "/a")
+	b, _ := s.Project(ctx, "/b")
+	c, _ := s.Project(ctx, "/c") // no run
+	r1, _ := s.RecordRun(ctx, Run{ProjectID: a.ID}, nil)
+	r2, _ := s.RecordRun(ctx, Run{ProjectID: b.ID}, nil)
+	r3, _ := s.RecordRun(ctx, Run{ProjectID: a.ID}, nil)
+	_ = r1
+	got, err = s.LatestRunIDs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[a.ID] != r3 || got[b.ID] != r2 {
+		t.Fatalf("got %v (c=%d)", got, c.ID)
+	}
+}

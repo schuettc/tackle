@@ -380,3 +380,21 @@ func (s *Store) MarkSent(ctx context.Context, projectID int64) (int, error) {
 	n, err := res.RowsAffected()
 	return int(n), err
 }
+
+// LatestRunIDs returns the newest run id of every project that has a run.
+func (s *Store) LatestRunIDs(ctx context.Context) (map[int64]int64, error) {
+	rs, err := s.db.QueryContext(ctx, `SELECT project_id, MAX(id) FROM runs GROUP BY project_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rs.Close() }()
+	out := map[int64]int64{}
+	for rs.Next() {
+		var p, id int64
+		if err := rs.Scan(&p, &id); err != nil {
+			return nil, err
+		}
+		out[p] = id
+	}
+	return out, rs.Err()
+}
