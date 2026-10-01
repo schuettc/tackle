@@ -20,6 +20,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/db"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
 // pushEvents returns the "push" events published after cursor, in order.
@@ -62,6 +63,16 @@ func (r *rig) offlineQueued(t *testing.T) int {
 		t.Fatalf("summary %d", c)
 	}
 	return sum.OfflineQueued
+}
+
+// summary reads GET /api/summary.
+func (r *rig) summary(t *testing.T) SummaryView {
+	t.Helper()
+	var sum SummaryView
+	if c := r.do(t, "GET", "/api/summary", nil, &sum); c != http.StatusOK {
+		t.Fatalf("summary %d", c)
+	}
+	return sum
 }
 
 // remoteLog is the bare remote's main, subjects only.
@@ -280,8 +291,8 @@ func TestFailedPushLeavesOfflineQueued(t *testing.T) {
 			t.Fatalf("push event %+v, want %s", last, PushOffline)
 		}
 	}
-	if n := r.offlineQueued(t); n != 2 {
-		t.Fatalf("offline_queued %d after two unpushed decisions, want 2", n)
+	if sum := r.summary(t); sum.OfflineQueued != 2 || sum.PushError != "" {
+		t.Fatalf("after two unpushed decisions: offline_queued %d, push_error %q; want 2 and none (offline isn't a push failure)", sum.OfflineQueued, sum.PushError)
 	}
 	if err := os.Rename(gone, r.Remote); err != nil {
 		t.Fatal(err)
@@ -470,13 +481,103 @@ func TestPushErrorIsAnnounced(t *testing.T) {
 		t.Fatalf("push event %+v", evs[0])
 	}
 	waitIdle(t, r)
-	if n := r.offlineQueued(t); n != 1 {
-		t.Fatalf("offline_queued %d after a failed push, want 1", n)
+	if sum := r.summary(t); sum.OfflineQueued != 1 || sum.PushError != "rebase onto the casebook remote failed" {
+		t.Fatalf("after a failed push: offline_queued %d, push_error %q; want 1 and serve's reason", sum.OfflineQueued, sum.PushError)
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	if !strings.Contains(log.String(), "push: rebase") {
 		t.Fatalf("not logged: %q", log.String())
+	}
+	mu.Unlock()
+
+	// A push that can't reach the remote after it keeps the reason (the
+	// last push failure that wasn't the network) ...
+	mid, _ := r.s.Bus.Head(ctx)
+	r.s.runPush = func(context.Context) error { return fmt.Errorf("%w: no route", store.ErrOffline) }
+	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#5"}, "disposition": "keep"}, nil)
+	waitPushes(t, r, mid, 1)
+	waitIdle(t, r)
+	if sum := r.summary(t); sum.OfflineQueued != 2 || sum.PushError != "rebase onto the casebook remote failed" {
+		t.Fatalf("after an offline push: offline_queued %d, push_error %q", sum.OfflineQueued, sum.PushError)
+	}
+	// ... and the next push that succeeds clears it.
+	mid, _ = r.s.Bus.Head(ctx)
+	r.s.runPush = nil
+	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#6"}, "disposition": "keep"}, nil)
+	if evs := waitPushes(t, r, mid, 1); evs[0].State != PushDone {
+		t.Fatalf("push event %+v, want done", evs[0])
+	}
+	waitIdle(t, r)
+	if sum := r.summary(t); sum.OfflineQueued != 0 || sum.PushError != "" {
+		t.Fatalf("after a push that succeeded: offline_queued %d, push_error %q; want 0 and none", sum.OfflineQueued, sum.PushError)
+	}
+}
+
+// TestPushFailureClearsWhenNothingQueued: once nothing is queued (a sync,
+// serve's or another process's, pushed it all), the summary forgets the
+// last push failure: the next decide's push in flight isn't "offline", and
+// no push error stays shown.
+func TestPushFailureClearsWhenNothingQueued(t *testing.T) {
+	r := newRig(t)
+	before, _ := r.s.Bus.Head(ctx)
+	r.s.runPush = func(context.Context) error { return errors.New("sync conflict in notes.txt") }
+	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "keep"}, nil)
+	waitPushes(t, r, before, 1)
+	waitIdle(t, r)
+	if sum := r.summary(t); sum.OfflineQueued != 1 || sum.PushError == "" {
+		t.Fatalf("after a failed push: %+v", sum)
+	}
+	// Another sync pushes everything.
+	if err := r.App.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sum := r.summary(t); sum.OfflineQueued != 0 || sum.PushError != "" {
+		t.Fatalf("nothing queued: offline_queued %d, push_error %q; want 0 and none", sum.OfflineQueued, sum.PushError)
+	}
+	r.s.runPush = nil
+	started, release := blockPush(t, r)
+	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#5"}, "disposition": "keep"}, nil)
+	<-started
+	if n := r.offlineQueued(t); n != 0 {
+		t.Fatalf("offline_queued %d while a push is in flight after the failure was cleared, want 0", n)
+	}
+	release()
+	waitIdle(t, r)
+}
+
+// TestNoPushStartsOnceServeIsStopping: a decide that lands while serve is
+// stopping leaves its commit queued and starts no push (no pusher beside
+// the database closing, no WaitGroup.Add racing Run's Wait).
+func TestNoPushStartsOnceServeIsStopping(t *testing.T) {
+	r := newRig(t)
+	life, stop := context.WithCancel(context.Background())
+	d, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "second.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	s, err := New(life, r.App, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pushes atomic.Int32
+	s.runPush = func(context.Context) error { pushes.Add(1); return nil }
+	r2 := &rig{Rig: r.Rig, s: s, url: serveURL(t, s)}
+	stop()
+	s.stopPushes()
+	if c := r2.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "keep"}, nil); c != 200 {
+		t.Fatalf("decide %d", c)
+	}
+	within(t, time.Second, "the pusher", s.pushWG.Wait)
+	time.Sleep(100 * time.Millisecond)
+	s.pushMu.Lock()
+	running := s.pushRunning
+	s.pushMu.Unlock()
+	if n := pushes.Load(); n != 0 || running {
+		t.Fatalf("a push started while serve was stopping (%d pushes, running %v)", n, running)
+	}
+	if out, _ := git(t, r.App.Repo.Dir, "rev-list", "--count", "origin/main..HEAD"); out != "1" {
+		t.Fatalf("queued %q, want the decision queued", out)
 	}
 }
 

@@ -26,7 +26,11 @@ import (
 //     the next sync (App.Sync pushes local commits first), sends them.
 //     Stopping serve mid-push loses nothing for the same reason.
 //   - Every push that ends is announced (the "push" event, PushEvent), so the
-//     page asks for the summary again.
+//     page asks for the summary again. One that failed for a reason other
+//     than the network is also kept for the summary (push_error: the page
+//     says "push failed · N queued" and shows why) until a push succeeds or
+//     nothing is queued.
+//   - Once serve is stopping no push starts (stopPushes).
 //
 // Locks, always taken in this order (never the reverse):
 //
@@ -35,9 +39,18 @@ import (
 //  2. the machine's sync lock (app.LockSync, a flock), which App.Push and
 //     App.Sync take: no push beside a sync in another process (launchd, the
 //     CLI). While another holds it, the push tries again on serve's clock.
-//  3. store.Repo's own mutex, held per local mutation (a commit, a rebase)
-//     and never while taking 1 or 2: a decide's commit can land while a push
-//     waits on the network, but never inside its rebase.
+//  3. casebook-data's lock (store/lock.go): an RWMutex for this process,
+//     then a flock on .git/casebook.lock for every other casebook process.
+//     Held exclusive per local mutation (a write and its commit, Batch; a
+//     rebase) and shared by serve's rebuild (Read); never held while taking
+//     1 or 2. A decide's commit can land while a push waits on the network,
+//     but never inside its rebase; a rebuild never reads a tree mid-rebase
+//     or mid-write. The rebase runs on a context serve's shutdown doesn't
+//     cancel (bounded by store.RebaseTimeout), so stopping never leaves
+//     casebook-data mid-rebase.
+//
+// rebuildMu (server.go) comes before 3 (rebuild takes the shared lock while
+// holding it); nothing holding 3 takes rebuildMu.
 //
 // s.pushMu guards only the pusher's state and is never held across git.
 
@@ -63,9 +76,17 @@ func (s *Server) wait(d time.Duration) <-chan time.Time {
 
 // schedulePush asks for a push of everything committed so far. It starts one
 // when none is in flight, else queues one follow-up (however many ask).
+//
+// Once serve is stopping (stopPushes, or its context done) it starts
+// nothing: the commit stays queued for the next push or sync. Checking under
+// pushMu, which stopPushes takes before Run waits on pushWG, means no
+// pushWG.Add races that Wait.
 func (s *Server) schedulePush() {
 	s.pushMu.Lock()
 	defer s.pushMu.Unlock()
+	if s.pushStopped || s.laneCtx().Err() != nil {
+		return
+	}
 	if s.pushRunning {
 		s.pushAgain = true
 		return
@@ -82,6 +103,14 @@ func (s *Server) pushLoop(ctx context.Context) {
 		err := s.pushOnce(ctx)
 		s.pushMu.Lock()
 		s.pushFailed = err != nil
+		switch {
+		case err == nil:
+			s.pushError = ""
+		case errors.Is(err, store.ErrOffline) || ctx.Err() != nil:
+			// The network, or serve stopping: not a reason to show.
+		default:
+			s.pushError = err.Error()
+		}
 		again := s.pushAgain && ctx.Err() == nil
 		s.pushAgain = false
 		if !again {
@@ -137,19 +166,36 @@ func (s *Server) announcePush(ctx context.Context, err error) {
 	s.publish(ctx, "push", ev)
 }
 
-// offlineQueued counts the local commits the casebook remote doesn't have,
-// for the summary. While a push is in flight it is 0 unless the push before
-// it failed: a decision on its way out isn't offline.
-func (s *Server) offlineQueued(ctx context.Context) int {
+// stopPushes is Run's, once serve's context is cancelled and before it waits
+// on pushWG: no push starts after it.
+func (s *Server) stopPushes() {
+	s.pushMu.Lock()
+	s.pushStopped = true
+	s.pushMu.Unlock()
+}
+
+// pushState is the summary's view of the pusher: the local commits the
+// casebook remote doesn't have, and why the last push failed when that
+// wasn't the network (PushError). While a push is in flight the count is 0
+// unless the push before it failed: a decision on its way out isn't
+// offline. Once nothing is queued (a push or a sync, serve's or another
+// process's, sent it all) the last failure is forgotten.
+func (s *Server) pushState(ctx context.Context) (queued int, pushErr string) {
 	s.pushMu.Lock()
 	pushing, failed := s.pushRunning, s.pushFailed
 	s.pushMu.Unlock()
 	if pushing && !failed {
-		return 0
+		return 0, ""
 	}
 	out, err := gitx.Run(ctx, s.App.Repo.Dir, "rev-list", "--count", "origin/main..HEAD")
 	if err != nil {
-		return 0
+		return 0, ""
 	}
-	return atoi(out)
+	queued = atoi(out)
+	s.pushMu.Lock()
+	defer s.pushMu.Unlock()
+	if queued == 0 {
+		s.pushFailed, s.pushError = false, ""
+	}
+	return queued, s.pushError
 }

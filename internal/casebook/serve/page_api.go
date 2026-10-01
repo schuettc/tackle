@@ -26,7 +26,7 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	queued := s.offlineQueued(ctx)
+	queued, pushErr := s.pushState(ctx)
 	var synced time.Time
 	if fi, err := os.Stat(config.CachePath()); err == nil {
 		synced = fi.ModTime().UTC()
@@ -39,6 +39,7 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		BuiltAt:        s.Index.BuiltAt(),
 		SyncedAt:       synced,
 		OfflineQueued:  queued,
+		PushError:      pushErr,
 		Counts:         s.Index.Counts(pending),
 		Notices:        s.Index.Notices(),
 		Sessions:       len(sessions),

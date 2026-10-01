@@ -85,6 +85,8 @@ type Server struct {
 	pushRunning bool                                   // a push is in flight (or about to start)
 	pushAgain   bool                                   // a decide landed during it: push once more after it
 	pushFailed  bool                                   // the last push ended offline or failed
+	pushError   string                                 // why the last push failed, when not offline (cleared by a push that succeeds, or nothing queued)
+	pushStopped bool                                   // serve is stopping: schedulePush starts nothing
 	pushWG      sync.WaitGroup                         // Run waits for the pusher before closing the database
 	runPush     func(ctx context.Context) error        // test seam for App.Push
 	after       func(d time.Duration) <-chan time.Time // serve's clock for the pusher's retries (nil: time.After)
@@ -758,6 +760,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	}
 	err = srv.Wait()
 	cancel()          // serve is stopping: a push in flight ends, its commits stay queued
+	s.stopPushes()    // and none starts now (a handler still running may ask)
 	s.pushWG.Wait()   // the pusher writes events: the database closes after it
 	s.streamWG.Wait() // streams end with ctx; the database closes after them
 	return err

@@ -23,10 +23,17 @@ type SummaryView struct {
 	// yet (the page says "offline · N queued"). While serve's background
 	// push is in flight it is 0, unless the push before it failed: a
 	// decision on its way out isn't offline.
-	OfflineQueued int            `json:"offline_queued"`
-	Counts        map[string]int `json:"counts"`
-	Notices       []string       `json:"notices"`
-	Sessions      int            `json:"sessions"`
+	OfflineQueued int `json:"offline_queued"`
+	// PushError is why serve's last push failed, when it failed for a
+	// reason other than the network (a sync conflict it can't resolve, the
+	// remote refusing), in serve's words; the page says "push failed · N
+	// queued" and shows it. Cleared by the next push that succeeds, and
+	// whenever nothing is queued. Empty while pushes merely can't reach the
+	// remote ("offline · N queued").
+	PushError string         `json:"push_error,omitempty"`
+	Counts    map[string]int `json:"counts"`
+	Notices   []string       `json:"notices"`
+	Sessions  int            `json:"sessions"`
 	// SyncIntervalMS is one sync interval: a plan refuses an index built
 	// longer ago than this (built_at), so the page can say how old the
 	// observations are.
