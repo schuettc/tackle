@@ -24,6 +24,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: serveFlags, Run: runServe,
 		},
 		{
+			Name: "channel", Group: "check", Synopsis: "",
+			Summary:  "MCP server for an agent session: check, apply, review and Court's answers as events",
+			NewFlags: channelFlags, Run: runChannel(stdin),
+		},
+		{
 			Name: "init", Group: "setup", Synopsis: "[path]",
 			Summary:  "store your TypeSafe key, allow egress for the project, ignore .cull/ (terminal only)",
 			NewFlags: initFlags, Run: runInit(stdin),
