@@ -42,6 +42,9 @@ func Stop(ctx context.Context) error {
 	return fmt.Errorf("cull serve (pid %d) did not stop", adv.PID)
 }
 
+// newCommand builds the detached process; tests replace it.
+var newCommand = exec.Command
+
 // Start runs exe as `cull serve --foreground --no-open` in its own process group,
 // logging to StateDir/serve.log, and waits for its advert.
 func Start(exe string, port int) (Advert, error) {
@@ -61,7 +64,7 @@ func Start(exe string, port int) (Advert, error) {
 	if port > 0 {
 		args = append(args, "--port", strconv.Itoa(port))
 	}
-	cmd := exec.Command(exe, args...)
+	cmd := newCommand(exe, args...)
 	cmd.Stdout, cmd.Stderr = logf, logf
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
