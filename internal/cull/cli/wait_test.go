@@ -118,7 +118,7 @@ func TestWaitPrintsTheSendAndExits0(t *testing.T) {
 	case r := <-res:
 		want := "Court sent his answers for " + filepath.Base(root) + ": 1 cut, 0 keep, 0 merge, 0 separate.\n" +
 			"Notes:\n- TestMaybe: not needed\n" +
-			"Next: run cull_check, then cull_apply to remove the cuts."
+			"Next: run cull_check, then cull_apply to remove the cuts.\n"
 		if r.code != 0 || r.out != want {
 			t.Errorf("code %d\nout  %q\nwant %q\nerr  %q", r.code, r.out, want, r.errw)
 		}

@@ -101,7 +101,7 @@ func runWait(args []string, out, errw io.Writer) error {
 			return tools.Exitf(1, "%v", err)
 		}
 		if code == http.StatusOK && got.Text != "" {
-			_, _ = io.WriteString(out, got.Text)
+			_, _ = io.WriteString(out, got.Text+"\n")
 			return nil
 		}
 	}
