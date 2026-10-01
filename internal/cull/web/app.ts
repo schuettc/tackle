@@ -23,6 +23,7 @@ import { groupItem } from './group.ts';
 import { testItem } from './item.ts';
 import { actP, concern, lean, strength } from './model.ts';
 import { retryDelay } from './retry.ts';
+import { sentText } from './text.ts';
 import {
   BLIND_BUCKET,
   GROUP_BUCKETS,
@@ -747,16 +748,12 @@ export function boot(): void {
 
   async function send(): Promise<void> {
     try {
-      const n = await api.send(project);
+      const { sent: n, to } = await api.send(project);
       const now = new Date().toISOString();
       for (const it of review?.items ?? [])
         if (it.answer && !it.answer.sent_at) it.answer.sent_at = now;
       refreshBar();
-      flash(
-        n
-          ? `Sent ${plural(n, 'answer')}. The agent is told in a later release; cull check uses them now.`
-          : 'Nothing to send.',
-      );
+      flash(sentText(n, to));
     } catch (err) {
       if (!(err instanceof ApiError && err.isStale))
         flash(`Not sent: ${(err as Error).message}`, 'danger');

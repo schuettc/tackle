@@ -22,8 +22,10 @@ function client(api) {
       await api.del(`/answers?${q.toString()}`);
     },
     async send(project) {
-      const r = await api.post("/send", { project });
-      return r?.sent ?? 0;
+      const r = await api.post("/send", {
+        project
+      });
+      return { sent: r?.sent ?? 0, to: r?.to ?? "" };
     }
   };
 }
@@ -236,6 +238,11 @@ function assertLines(lang, body) {
     default:
       return [];
   }
+}
+function sentText(n, to) {
+  if (n === 0) return "Nothing to send.";
+  const what = `${n} ${n === 1 ? "answer" : "answers"}`;
+  return to ? `Sent ${what} to ${to}.` : `Sent ${what}. The next agent that opens cull in this project gets them.`;
 }
 
 // item.ts
@@ -1340,14 +1347,12 @@ function boot() {
   }
   async function send() {
     try {
-      const n = await api.send(project);
+      const { sent: n, to } = await api.send(project);
       const now = (/* @__PURE__ */ new Date()).toISOString();
       for (const it of review?.items ?? [])
         if (it.answer && !it.answer.sent_at) it.answer.sent_at = now;
       refreshBar();
-      flash(
-        n ? `Sent ${plural(n, "answer")}. The agent is told in a later release; cull check uses them now.` : "Nothing to send."
-      );
+      flash(sentText(n, to));
     } catch (err) {
       if (!(err instanceof ApiError && err.isStale))
         flash(`Not sent: ${err.message}`, "danger");

@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"time"
 
 	tools "github.com/schuettc/tools-common"
@@ -21,7 +22,7 @@ import (
 )
 
 // SchemaVersion is the schema version this binary targets.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // keepRuns is how many runs per project are kept.
 const keepRuns = 5
@@ -77,9 +78,28 @@ CREATE TABLE answers (
 );
 `
 
+// schemaV2 adds the project's review owner (the agent session that last opened
+// its review) and the sends: one row per press of Send, kept until delivered.
+const schemaV2 = `
+ALTER TABLE projects ADD COLUMN owner_session TEXT NOT NULL DEFAULT '';
+ALTER TABLE projects ADD COLUMN owner_label   TEXT NOT NULL DEFAULT '';
+CREATE TABLE sends (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id   INTEGER NOT NULL REFERENCES projects(id),
+  created_at   INTEGER NOT NULL,
+  counts       TEXT NOT NULL,
+  notes        TEXT NOT NULL,
+  owner        TEXT NOT NULL DEFAULT '',
+  delivered_to TEXT,
+  delivered_at INTEGER
+);
+CREATE INDEX sends_project ON sends(project_id, id);
+`
+
 // Migrations is the append-only list of schema steps.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
+	sqlitedb.SQL(schemaV2),
 }
 
 // ErrStale is returned when an answer names an item (or hash) that is not in
@@ -108,6 +128,9 @@ func (s *Store) Close() error { return s.db.Close() }
 type Project struct {
 	ID   int64
 	Root string
+	// OwnerSession and OwnerLabel name the agent session that last opened the
+	// project's review ("" when none has).
+	OwnerSession, OwnerLabel string
 }
 
 // Project returns the project for an absolute root, creating it if new.
@@ -117,7 +140,8 @@ func (s *Store) Project(ctx context.Context, root string) (Project, error) {
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO projects(root) VALUES (?)`, root); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT id FROM projects WHERE root = ?`, root).Scan(&p.ID)
+		return tx.QueryRowContext(ctx, `SELECT id, owner_session, owner_label FROM projects WHERE root = ?`, root).
+			Scan(&p.ID, &p.OwnerSession, &p.OwnerLabel)
 	})
 	return p, err
 }
@@ -125,8 +149,15 @@ func (s *Store) Project(ctx context.Context, root string) (Project, error) {
 // ProjectByID returns a registered project; sql.ErrNoRows if unknown.
 func (s *Store) ProjectByID(ctx context.Context, id int64) (Project, error) {
 	p := Project{ID: id}
-	err := s.db.QueryRowContext(ctx, `SELECT root FROM projects WHERE id = ?`, id).Scan(&p.Root)
+	err := s.db.QueryRowContext(ctx, `SELECT root, owner_session, owner_label FROM projects WHERE id = ?`, id).
+		Scan(&p.Root, &p.OwnerSession, &p.OwnerLabel)
 	return p, err
+}
+
+// SetOwner makes session (shown as label) the owner of the project's review.
+func (s *Store) SetOwner(ctx context.Context, projectID int64, session, label string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE projects SET owner_session = ?, owner_label = ? WHERE id = ?`, session, label, projectID)
+	return err
 }
 
 // Item is one uncertain item of a run.
@@ -284,7 +315,7 @@ type Answer struct {
 	RunID                                int64
 	Jev                                  json.RawMessage
 	Model, QuestionsHash                 string
-	AnsweredAt, SentAt                   time.Time // SentAt is zero until MarkSent
+	AnsweredAt, SentAt                   time.Time // SentAt is zero until Send
 }
 
 // Answers returns every answer of the project, sent or not.
@@ -386,14 +417,177 @@ func (s *Store) DeleteAnswer(ctx context.Context, projectID int64, k Key) error 
 	return err
 }
 
-// MarkSent marks the project's unsent answers sent and returns how many.
-func (s *Store) MarkSent(ctx context.Context, projectID int64) (int, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE answers SET sent_at = ? WHERE project_id = ? AND sent_at = 0`, time.Now().UnixMilli(), projectID)
+// Counts is how many answers of each value one Send carried.
+type Counts struct {
+	Cut      int `json:"cut"`
+	Keep     int `json:"keep"`
+	Merge    int `json:"merge"`
+	Separate int `json:"separate"`
+}
+
+// Total is every answer counted.
+func (c Counts) Total() int { return c.Cut + c.Keep + c.Merge + c.Separate }
+
+// Note is Court's note on one answer, with the test (or group) it is about.
+type Note struct {
+	Name string `json:"name"`
+	Note string `json:"note"`
+}
+
+// Send is one press of Send: what was sent and where it went. ID is 0 when
+// nothing was unsent (no row is recorded then).
+type Send struct {
+	ID, ProjectID int64
+	CreatedAt     time.Time
+	Counts        Counts
+	Notes         []Note
+	Owner         string // the review owner's session at send time ("" if none)
+	DeliveredTo   string // "" until delivered
+	DeliveredAt   time.Time
+}
+
+// Send marks the project's unsent answers sent and records one send row for
+// them, in one transaction. owner is the review owner's session at this
+// moment. With nothing unsent it returns a zero Send (ID 0) and records
+// nothing.
+func (s *Store) Send(ctx context.Context, projectID int64, owner string) (Send, error) {
+	now := time.Now()
+	sd := Send{ProjectID: projectID, CreatedAt: now, Owner: owner}
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		// The first statement is a write (the main connection begins deferred).
+		rs, err := tx.QueryContext(ctx, `UPDATE answers SET sent_at = ? WHERE project_id = ? AND sent_at = 0
+			RETURNING item_id, run_id, value, note`, now.UnixMilli(), projectID)
+		if err != nil {
+			return err
+		}
+		type row struct {
+			id, value, note string
+			run             int64
+		}
+		var got []row
+		for rs.Next() {
+			var r row
+			if err := rs.Scan(&r.id, &r.run, &r.value, &r.note); err != nil {
+				_ = rs.Close()
+				return err
+			}
+			got = append(got, r)
+		}
+		if err := rs.Err(); err != nil {
+			_ = rs.Close()
+			return err
+		}
+		if err := rs.Close(); err != nil {
+			return err
+		}
+		if len(got) == 0 {
+			return nil
+		}
+		sort.Slice(got, func(i, j int) bool { return got[i].id < got[j].id })
+		for _, r := range got {
+			switch r.value {
+			case "cut":
+				sd.Counts.Cut++
+			case "keep":
+				sd.Counts.Keep++
+			case "merge":
+				sd.Counts.Merge++
+			case "separate":
+				sd.Counts.Separate++
+			}
+			if r.note == "" {
+				continue
+			}
+			name := r.id
+			var n string
+			if err := tx.QueryRowContext(ctx, `SELECT name FROM items WHERE run_id = ? AND item_id = ?`, r.run, r.id).Scan(&n); err == nil && n != "" {
+				name = n
+			}
+			sd.Notes = append(sd.Notes, Note{Name: name, Note: r.note})
+		}
+		counts, _ := json.Marshal(sd.Counts)
+		notes, _ := json.Marshal(append([]Note{}, sd.Notes...))
+		res, err := tx.ExecContext(ctx, `INSERT INTO sends(project_id, created_at, counts, notes, owner) VALUES (?,?,?,?,?)`,
+			projectID, now.UnixMilli(), string(counts), string(notes), owner)
+		if err != nil {
+			return err
+		}
+		sd.ID, err = res.LastInsertId()
+		return err
+	})
 	if err != nil {
-		return 0, err
+		return Send{}, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	return sd, nil
+}
+
+const sendCols = `id, project_id, created_at, counts, notes, owner, delivered_to, delivered_at`
+
+type scanner interface{ Scan(...any) error }
+
+func scanSend(r scanner) (Send, error) {
+	var (
+		sd           Send
+		at           int64
+		counts, note string
+		to           sql.NullString
+		dat          sql.NullInt64
+	)
+	if err := r.Scan(&sd.ID, &sd.ProjectID, &at, &counts, &note, &sd.Owner, &to, &dat); err != nil {
+		return Send{}, err
+	}
+	sd.CreatedAt, sd.DeliveredTo, sd.DeliveredAt = fromMS(at), to.String, fromMS(dat.Int64)
+	if err := json.Unmarshal([]byte(counts), &sd.Counts); err != nil {
+		return Send{}, err
+	}
+	if err := json.Unmarshal([]byte(note), &sd.Notes); err != nil {
+		return Send{}, err
+	}
+	return sd, nil
+}
+
+// ClaimSend delivers to session the oldest undelivered send of the project
+// that it may take, marking it delivered in the same statement, so concurrent
+// claimers never both get one. It does not look at the send's owner: serve
+// decides who may call (the project's current owner when present, else any
+// present session of the project). ok is false when nothing is undelivered.
+func (s *Store) ClaimSend(ctx context.Context, projectID int64, session string) (Send, bool, error) {
+	var sd Send
+	found := true
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		var err error
+		sd, err = scanSend(tx.QueryRowContext(ctx, `UPDATE sends SET delivered_to = ?, delivered_at = ?
+			WHERE id = (SELECT id FROM sends WHERE project_id = ? AND delivered_to IS NULL
+			            ORDER BY id LIMIT 1)
+			AND delivered_to IS NULL RETURNING `+sendCols, session, time.Now().UnixMilli(), projectID))
+		if errors.Is(err, sql.ErrNoRows) {
+			found = false
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return Send{}, false, err
+	}
+	return sd, found, nil
+}
+
+// Undelivered lists the project's sends not yet delivered, oldest first.
+func (s *Store) Undelivered(ctx context.Context, projectID int64) ([]Send, error) {
+	rs, err := s.db.QueryContext(ctx, `SELECT `+sendCols+` FROM sends WHERE project_id = ? AND delivered_to IS NULL ORDER BY id`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rs.Close() }()
+	var out []Send
+	for rs.Next() {
+		sd, err := scanSend(rs)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, sd)
+	}
+	return out, rs.Err()
 }
 
 // LatestRunIDs returns the newest run id of every project that has a run.

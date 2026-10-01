@@ -1,8 +1,20 @@
 # Changelog
 
-All notable changes to `scratch`, `proj` and `casebook` are documented here (proj and casebook entries are headed with the tool's name; older proj and casebook releases have none). The format follows
+All notable changes to `scratch`, `proj`, `casebook` and `cull` are documented here (proj, casebook and cull entries are headed with the tool's name; older proj and casebook releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [cull 0.1.0] - 2026-10-01
+
+### Added
+- `cull check`: judge tests with TypeSafe's Jev, for the whole suite or a diff.
+  `--group` judges near-duplicate groups.
+- `cull apply`: remove the tests judged cut, tidy imports, verify, and roll
+  back on failure.
+- `cull serve` and the review page, where you decide what Jev wasn't sure of.
+- `cull channel`: the agent side, over MCP, for Claude Code and pi.
+- `cull wait` for sessions without the channel.
+- `cull init`, `cull doctor`, and `cull judge` (plumbing).
 
 ## [casebook 0.2.0] - 2026-10-01
 

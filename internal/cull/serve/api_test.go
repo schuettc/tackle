@@ -224,10 +224,10 @@ func TestDeleteAndSend(t *testing.T) {
 	f := newFixture(t)
 	f.put(f.run, "h1")
 	w := f.do("POST", "/api/send", fmt.Sprintf(`{"project":%d}`, f.proj.ID))
-	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"sent":1}` {
+	if w.Code != 200 || strings.TrimSpace(w.Body.String()) != `{"sent":1,"to":""}` {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
-	if w := f.do("POST", "/api/send", fmt.Sprintf(`{"project":%d}`, f.proj.ID)); strings.TrimSpace(w.Body.String()) != `{"sent":0}` {
+	if w := f.do("POST", "/api/send", fmt.Sprintf(`{"project":%d}`, f.proj.ID)); strings.TrimSpace(w.Body.String()) != `{"sent":0,"to":""}` {
 		t.Fatalf("%s", w.Body)
 	}
 	if _, evs := f.events(""); len(evs) != 2 { // put + first send only

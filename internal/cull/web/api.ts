@@ -18,7 +18,7 @@ export interface Client {
   review(project: number): Promise<Review>;
   put(project: number, run: number, answers: AnswerIn[]): Promise<void>;
   del(project: number, id: string, hash: string): Promise<void>;
-  send(project: number): Promise<number>;
+  send(project: number): Promise<{ sent: number; to: string }>;
 }
 
 /** The client over a kit Api (base /api; the page's cookie authenticates). */
@@ -34,8 +34,10 @@ export function client(api: Api): Client {
       await api.del(`/answers?${q.toString()}`);
     },
     async send(project) {
-      const r = await api.post<{ sent: number }>('/send', { project });
-      return r?.sent ?? 0;
+      const r = await api.post<{ sent: number; to?: string }>('/send', {
+        project,
+      });
+      return { sent: r?.sent ?? 0, to: r?.to ?? '' };
     },
   };
 }

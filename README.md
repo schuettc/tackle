@@ -10,6 +10,8 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
 - **creel** — masked capture of an API key/secret into a local `.env`, so it never passes through an agent's chat. Run it bare (or via `prefix S`), or let the pi `request_secret` tool drive it. Consume a captured key with `creel exec NAME -- <command>`, which runs the command with the value in its environment only — never printed, never in the agent's context.
 - **casebook** — records the intended fate of every repo, pull request, issue, branch and worktree you own or touch, journals git/gh activity from any agent or terminal, and shows what needs attention. Its data lives in your own private git repo. (Preview.)
   Install: `kempt apply -manifest cmd/casebook/kempt.toml -packages casebook`, then `casebook init` (creates a private `<you>/casebook-data` if needed) and `casebook hooks install`.
+- **cull** — judges the tests an agent wrote, using TypeSafe's Jev, cuts the ones Jev is sure about, and puts the rest in front of you on a local page. (Preview.)
+  Install: `kempt apply -manifest cmd/cull/kempt.toml -packages cull`, then `cull init` in each project.
 
 ## Install
 
@@ -229,6 +231,50 @@ Open a new terminal window inside a project directory — it should land on the
 
 **Rolling back** — revert step 3 (re-enable the old functions) and step 2
 (remove the `source` line). The binary stays installed and harmless.
+
+---
+
+## cull
+
+cull looks at the tests an agent wrote and asks TypeSafe's Jev whether each one
+is worth keeping. It cuts what Jev is sure of, and leaves the rest for you to
+decide on a local page. It also finds near-duplicate tests and asks whether to
+merge them.
+
+**Install:** `kempt apply -manifest cmd/cull/kempt.toml -packages cull`. This
+installs the binary and registers the `cull` channel for Claude Code and pi.
+Then run `cull init` in each project: it stores your TypeSafe key, allows the
+project to send test code to Jev, and adds `.cull/` to the project's ignore file.
+
+**Commands**
+
+- `cull check` judges the tests (the whole suite, or only your diff) and writes `.cull/last.json`.
+- `cull apply` removes the tests judged cut, tidies imports, verifies, and rolls back if that fails.
+- `cull serve` opens the review page (starting the local server if needed).
+- `cull wait` waits until you send your answers, then prints what to do.
+- `cull doctor` checks the key, whether the project allows sending test source to TypeSafe, python3 and node (when the project needs them), the test command, the review page server and the agent setup.
+- `cull judge` is plumbing: JSONL in, JSONL out.
+
+**The agent loop.** An agent in your project has five channel tools:
+`cull_check`, `cull_check_group`, `cull_review`, `cull_apply` and `cull_status`.
+On its own it checks the tests it wrote and applies the cuts Jev is sure of. It
+sends the unsure ones to the page with `cull_review`, then stops and waits for
+you.
+
+**The page.** For each test you see the code, Jev's verdict and why, and
+you choose cut or keep. Duplicate groups ask whether to merge or keep separate.
+Add a note if you like, then press Send. Your answers go to the agent that is
+working in the project, which applies the cuts you chose.
+
+**Hearing the channel.** Claude Code only listens to Send when launched with
+`claude --dangerously-load-development-channels server:cull`. pi gets it
+through `channels.tools`. For any other session, run `cull wait` in it: it
+returns when you press Send.
+
+**Where things live.** `.cull/` in the project holds the last check. Your key is
+in `~/.config/cull`, the review database in `~/.local/state/cull`, and Jev's
+cached answers in `~/.cache/cull`. `cull serve --stop` stops the server, but
+while an agent's channel is running it starts again within seconds.
 
 ---
 

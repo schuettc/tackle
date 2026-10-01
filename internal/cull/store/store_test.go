@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/schuettc/tools-common/sqlitedb"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -139,8 +141,8 @@ func TestSaveAnswersUpsert(t *testing.T) {
 	if !first.Blind || first.Value != "cut" || string(first.Jev) != `{"k":1}` || first.RunID != run || first.AnsweredAt.IsZero() || !first.SentAt.IsZero() {
 		t.Fatalf("%+v", first)
 	}
-	if n, _ := s.MarkSent(ctx, p.ID); n != 1 {
-		t.Fatalf("sent %d", n)
+	if sd, _ := s.Send(ctx, p.ID, ""); sd.Counts.Total() != 1 {
+		t.Fatalf("sent %+v", sd)
 	}
 	time.Sleep(5 * time.Millisecond)
 	run2, err := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(2))
@@ -196,7 +198,7 @@ func TestSaveAnswersStaleAndInvalid(t *testing.T) {
 	}
 }
 
-func TestMarkSentCountsOnlyUnsent(t *testing.T) {
+func TestSendCountsOnlyUnsent(t *testing.T) {
 	s, _ := open(t)
 	p, _ := s.Project(ctx, "/x")
 	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(3))
@@ -204,15 +206,15 @@ func TestMarkSentCountsOnlyUnsent(t *testing.T) {
 		return Answer{ItemID: fmt.Sprintf("t%d", i), Hash: fmt.Sprintf("h%d", i), Kind: "test", Value: "keep", Via: "item"}
 	}
 	_ = s.SaveAnswers(ctx, p.ID, run, []Answer{ans(0), ans(1)})
-	if n, _ := s.MarkSent(ctx, p.ID); n != 2 {
-		t.Fatalf("n=%d", n)
+	if sd, _ := s.Send(ctx, p.ID, ""); sd.Counts.Total() != 2 {
+		t.Fatalf("n=%+v", sd)
 	}
-	if n, _ := s.MarkSent(ctx, p.ID); n != 0 {
-		t.Fatalf("n=%d", n)
+	if sd, _ := s.Send(ctx, p.ID, ""); sd.Counts.Total() != 0 {
+		t.Fatalf("n=%+v", sd)
 	}
 	_ = s.SaveAnswers(ctx, p.ID, run, []Answer{ans(2)})
-	if n, _ := s.MarkSent(ctx, p.ID); n != 1 {
-		t.Fatalf("n=%d", n)
+	if sd, _ := s.Send(ctx, p.ID, ""); sd.Counts.Total() != 1 {
+		t.Fatalf("n=%+v", sd)
 	}
 }
 
@@ -356,5 +358,198 @@ func TestSaveAnswersGroupNeverReplacesItem(t *testing.T) {
 	err := s.SaveAnswers(ctx, p.ID, run, []Answer{{ItemID: "zz", Hash: "h", Kind: "test", Value: "cut", Via: "group"}})
 	if !errors.Is(err, ErrStale) {
 		t.Fatalf("%v", err)
+	}
+}
+
+func answerOf(i int, value, note string) Answer {
+	kind, via := "test", "item"
+	if value == "merge" || value == "separate" {
+		kind, via = "group", "group"
+	}
+	return Answer{ItemID: fmt.Sprintf("t%d", i), Hash: fmt.Sprintf("h%d", i), Kind: kind, Value: value, Note: note, Via: via}
+}
+
+func TestSendRecordsCountsAndNotes(t *testing.T) {
+	s, _ := open(t)
+	p, _ := s.Project(ctx, "/x")
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(4))
+	if err := s.SaveAnswers(ctx, p.ID, run, []Answer{
+		answerOf(0, "cut", ""), answerOf(1, "keep", "needed for the edge"), answerOf(2, "merge", ""), answerOf(3, "separate", "different rules"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, p.ID, "sess-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sd.ID == 0 || sd.Counts != (Counts{Cut: 1, Keep: 1, Merge: 1, Separate: 1}) || sd.Owner != "sess-a" || sd.ProjectID != p.ID {
+		t.Fatalf("%+v", sd)
+	}
+	if len(sd.Notes) != 2 {
+		t.Fatalf("notes %+v", sd.Notes)
+	}
+	// Nothing new: no send row, zero counts.
+	again, err := s.Send(ctx, p.ID, "sess-a")
+	if err != nil || again.ID != 0 || again.Counts.Total() != 0 {
+		t.Fatalf("%+v %v", again, err)
+	}
+	pend, err := s.Undelivered(ctx, p.ID)
+	if err != nil || len(pend) != 1 || pend[0].ID != sd.ID {
+		t.Fatalf("%+v %v", pend, err)
+	}
+}
+
+func TestClaimSendRules(t *testing.T) {
+	s, _ := open(t)
+	p, _ := s.Project(ctx, "/x")
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(3))
+	send := func(i int, owner string) Send {
+		t.Helper()
+		if err := s.SaveAnswers(ctx, p.ID, run, []Answer{answerOf(i, "cut", "")}); err != nil {
+			t.Fatal(err)
+		}
+		sd, err := s.Send(ctx, p.ID, owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sd
+	}
+	sd := send(0, "A")
+	// The store does not filter on the send's owner: serve decides who calls.
+	// A send made for A is claimable by B (the owner has since moved).
+	got, ok, err := s.ClaimSend(ctx, p.ID, "B")
+	if err != nil || !ok || got.ID != sd.ID || got.DeliveredTo != "B" || got.DeliveredAt.IsZero() {
+		t.Fatalf("%+v %v %v", got, ok, err)
+	}
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "A"); ok {
+		t.Fatal("delivered twice")
+	}
+	sd2 := send(1, "A")
+	got, ok, _ = s.ClaimSend(ctx, p.ID, "A")
+	if !ok || got.ID != sd2.ID || got.DeliveredTo != "A" {
+		t.Fatalf("%+v %v", got, ok)
+	}
+	// Another project's sends are never taken.
+	q, _ := s.Project(ctx, "/y")
+	if _, ok, _ := s.ClaimSend(ctx, q.ID, "B"); ok {
+		t.Fatal("claimed in another project")
+	}
+	// Oldest first.
+	a := send(2, "")
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "C"); !ok {
+		t.Fatalf("ownerless send %d not claimed", a.ID)
+	}
+}
+
+func TestClaimSendOneWinner(t *testing.T) {
+	s, _ := open(t)
+	p, _ := s.Project(ctx, "/x")
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(1))
+	_ = s.SaveAnswers(ctx, p.ID, run, []Answer{answerOf(0, "cut", "")})
+	if _, err := s.Send(ctx, p.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var wins atomic.Int32
+	var wg sync.WaitGroup
+	for i := range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, ok, err := s.ClaimSend(ctx, p.ID, fmt.Sprintf("s%d", i)); err != nil {
+				t.Error(err)
+			} else if ok {
+				wins.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if wins.Load() != 1 {
+		t.Fatalf("%d winners", wins.Load())
+	}
+}
+
+func TestOwnerAndSendsSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cull.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := s.Project(ctx, "/x")
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(1))
+	_ = s.SaveAnswers(ctx, p.ID, run, []Answer{answerOf(0, "cut", "")})
+	if err := s.SetOwner(ctx, p.ID, "sess", "pi: x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Send(ctx, p.ID, "sess"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	q, _ := s.ProjectByID(ctx, p.ID)
+	if q.OwnerSession != "sess" || q.OwnerLabel != "pi: x" {
+		t.Fatalf("%+v", q)
+	}
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "sess"); !ok {
+		t.Fatal("send lost across reopen")
+	}
+}
+
+func TestUpgradeFromV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cull.db")
+	d, err := sqlitedb.Open(ctx, path, sqlitedb.Options{Migrations: Migrations[:1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := d.Version(ctx); v != 1 {
+		t.Fatalf("version %d", v)
+	}
+	err = d.Tx(ctx, func(tx *sql.Tx) error {
+		for _, q := range []string{
+			`INSERT INTO projects(id, root) VALUES (1, '/old')`,
+			`INSERT INTO runs(id, project_id, at, total) VALUES (1, 1, 1000, 1)`,
+			`INSERT INTO answers(project_id, item_id, hash, kind, value, note, via, run_id, answered_at)
+			 VALUES (1, 't1', 'h1', 'test', 'cut', 'old note', 'item', 1, 1000)`,
+		} {
+			if _, err := tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if v, _ := s.db.Version(ctx); v != SchemaVersion {
+		t.Fatalf("version %d after upgrade", v)
+	}
+	p, err := s.Project(ctx, "/old")
+	if err != nil || p.ID != 1 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	as, err := s.Answers(ctx, p.ID)
+	if err != nil || len(as) != 1 || as[Key{"t1", "h1"}].Value != "cut" || as[Key{"t1", "h1"}].Note != "old note" {
+		t.Fatalf("%+v %v", as, err)
+	}
+	if err := s.SetOwner(ctx, p.ID, "sess", "pi: old"); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, p.ID, "sess")
+	if err != nil || sd.Counts.Cut != 1 {
+		t.Fatalf("%+v %v", sd, err)
+	}
+	got, ok, err := s.ClaimSend(ctx, p.ID, "sess")
+	if err != nil || !ok || got.ID != sd.ID {
+		t.Fatalf("%+v %v %v", got, ok, err)
 	}
 }
