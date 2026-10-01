@@ -1,8 +1,43 @@
 # Changelog
 
-All notable changes to `scratch` and `proj` are documented here (proj entries are headed `proj`; older proj releases have none). The format follows
+All notable changes to `scratch`, `proj` and `casebook` are documented here (proj and casebook entries are headed with the tool's name; older proj and casebook releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [casebook 0.2.0] - 2026-10-01
+
+### Added
+- `casebook serve`: a local page for working through casebook's attention
+  list, started on demand on loopback. Four sections:
+  - **Attention**: views (waiting on you, new, due, proposed), a board view,
+    the item with its evidence and history, decide one or many, and accept or
+    reject the agent's proposals.
+  - **The agent panel**: the attached session, threads with delivery state,
+    a message box with the attached context, a batch tray, the agent's live
+    progress line, and a waiting strip. Messages wait for the end of the
+    agent's turn.
+  - **Rules**: standing rules with a conditions editor, live match previews,
+    exclusions and a draft/active lifecycle. Rules propose; they never
+    decide. An agent can draft a rule; only the user activates it.
+  - **To apply**: plans that show the exact command for every step, approval
+    with an explicit session for outward steps, jobs with needs-you cards for
+    public comments, restore records, verification, pause, resume and undo.
+    A stale plan offers to sync first; an item is in at most one unfinished
+    job.
+- `casebook channel`: the agent side, over MCP, for Claude Code and pi
+  (`pi-casebook` 0.2.0).
+- The keyboard layer (`?` lists the keys), and clear states for a lost
+  connection, a restarted server, and decisions waiting to be pushed.
+
+### Changed
+- A decision replies once it is committed; the push to casebook-data runs in
+  the background. A failed push shows as `push failed · N queued` with its
+  reason; plain offline stays `offline · N queued`.
+- Writes to casebook-data take one lock shared by serve, the background sync
+  and the CLI, so a commit never picks up another process's half-written
+  files. casebook-data ignores casebook's temporary files.
+- Agent-facing text names the configured user.
+- The macOS binary is signed and notarized.
 
 ## [proj 0.6.2] - 2026-10-01
 
