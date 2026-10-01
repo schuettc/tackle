@@ -32,13 +32,14 @@ type fakeEval struct {
 	consolidate map[string]bool
 	errOnTest   map[string]bool // per-test judge.State call for this test name errors
 	errOnGroup  map[string]bool // group judge.GroupState call errors if any member matches
+	review      map[string]bool // test name (or any group member) whose act option gets 0.5: the review band
 }
 
 func f64(v float64) *float64 { return &v }
 
 func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questions map[string]any) (jev.Response, error) {
 	f.calls.Add(1)
-	act := "keep"
+	act, actP := "keep", 0.9
 	switch s := state.(type) {
 	case judge.State:
 		if f.errOnTest != nil && f.errOnTest[s.TestName] {
@@ -46,6 +47,9 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 		}
 		if f.cut != nil && f.cut[s.TestName] {
 			act = "cut"
+		}
+		if f.review[s.TestName] {
+			act, actP = "cut", 0.5
 		}
 	case judge.GroupState:
 		for _, t := range s.Tests {
@@ -57,6 +61,9 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 		for _, t := range s.Tests {
 			if f.consolidate != nil && f.consolidate[t.Name] {
 				act = "consolidate"
+			}
+			if f.review[t.Name] {
+				act, actP = "consolidate", 0.5
 			}
 		}
 	}
@@ -74,7 +81,7 @@ func (f *fakeEval) Evaluate(ctx context.Context, model string, state any, questi
 			for o := range opts {
 				probs[o] = 0.05
 			}
-			probs[act] = 0.9
+			probs[act] = actP
 			ans[k] = jev.Answer{Type: "choice", Choice: act, Probabilities: probs, Confidence: f64(0.85)}
 		}
 	}

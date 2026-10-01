@@ -23,6 +23,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/policy"
 	"github.com/schuettc/tackle/internal/cull/rubric"
 	"github.com/schuettc/tackle/internal/cull/similar"
+	"github.com/schuettc/tackle/internal/cull/store"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -35,8 +36,9 @@ type Options struct {
 	Diff    string // base ref; "" means suite mode
 	DryRun  bool
 	Refresh bool
-	Stdout  io.Writer // dry-run states go here (as `cull judge --dry-run`); defaults to io.Discard
-	Stderr  io.Writer // one "cull: skipped <file>: <reason>" line per skipped file (dry-run too); defaults to io.Discard
+	Stdout  io.Writer    // dry-run states go here (as `cull judge --dry-run`); defaults to io.Discard
+	Store   *store.Store // nil: Run opens store.Path() itself (never in dry-run)
+	Stderr  io.Writer    // one "cull: skipped <file>: <reason>" line per skipped file (dry-run too); defaults to io.Discard
 }
 
 // ResolveConfig finds the project root for path and loads its .cull.toml,
@@ -231,11 +233,17 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		groupOut[i] = gr
 	}
 
+	// Court's stored answers settle the review items; the run is then recorded.
+	sess := openReviewStore(ctx, opt.Store, stderr)
+	defer sess.close()
+	as := sess.answers(ctx, root, stderr)
+	applyAnswers(tests, groupOut, as)
 	report := Report{
 		Root: root, Mode: mode, Base: opt.Diff,
 		Tests: tests, Groups: groupOut, Files: fileInv, Skipped: skipped,
 		Summary: summarize(tests, groupOut, skipped),
 	}
+	sess.record(ctx, report, recordItems(keptCases, testJudged, tests, groupStates, groupJudged, groupOut), testRubric.QuestionsHash(), len(keptCases), stderr)
 	if err := writeLastJSON(root, report); err != nil {
 		return report, err
 	}
