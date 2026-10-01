@@ -178,11 +178,10 @@ func (ch *Channel) check(ctx context.Context, path, base string) (string, error)
 }
 
 func (ch *Channel) checkGroup(ctx context.Context, path, id string) (string, error) {
-	p, root, ev, err := ch.judging(path)
+	_, root, ev, err := ch.judging(path)
 	if err != nil {
 		return "", err
 	}
-	_ = p
 	gc, err := check.CheckGroup(ctx, ev, root, id, check.Options{Stdout: io.Discard, Stderr: ch.Log})
 	if err != nil {
 		return "", judgeErr(err)
@@ -226,7 +225,6 @@ func (ch *Channel) apply(ctx context.Context, path string, ids []string) (string
 			exit = "rolled back"
 		}
 	}
-	lines := func(rs []verifyLine) []verifyLine { return rs }
 	var results []verifyLine
 	verifyState := "skipped"
 	if len(out.After) > 0 {
@@ -243,7 +241,7 @@ func (ch *Channel) apply(ctx context.Context, path string, ids []string) (string
 	res := map[string]any{
 		"root": root, "exit": exit, "applied": nilToEmpty(out.Applied), "needs_agent": out.NeedsAgent, "refused": out.Refused,
 		"files": nilToEmpty(out.Files), "imports_removed": out.ImportsRemoved, "orphaned_helpers": out.OrphanedHelpers,
-		"verify": verifyState, "verify_results": lines(results),
+		"verify": verifyState, "verify_results": results,
 		"rolled_back": out.RolledBack, "rollback_failed": out.RollbackFailed,
 	}
 	if reason != "" {

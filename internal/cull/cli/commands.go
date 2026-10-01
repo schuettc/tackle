@@ -29,6 +29,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: channelFlags, Run: runChannel(stdin),
 		},
 		{
+			Name: "wait", Group: "check", Synopsis: "[path] [--timeout D]",
+			Summary:  "wait until Court sends his answers for this project, then print what to do (for sessions without the cull channel)",
+			NewFlags: waitFlags, Run: runWait,
+		},
+		{
 			Name: "init", Group: "setup", Synopsis: "[path]",
 			Summary:  "store your TypeSafe key, allow egress for the project, ignore .cull/ (terminal only)",
 			NewFlags: initFlags, Run: runInit(stdin),
