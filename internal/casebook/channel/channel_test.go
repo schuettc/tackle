@@ -914,3 +914,21 @@ func TestChannelJobStepAndAskTools(t *testing.T) {
 		t.Fatalf("casebook_job_ask is not registered as a tool: %q", out2)
 	}
 }
+
+// TestAgentTextNamesNoOne: the channel's standing instructions and every
+// tool's description and schema say "the user", never a hard-coded name
+// (the binary has no config at hand here).
+func TestAgentTextNamesNoOne(t *testing.T) {
+	texts := map[string]string{"instructions": Instructions}
+	for _, tool := range Tools() {
+		texts[tool.Name] = tool.Description + " " + string(tool.InputSchema)
+	}
+	for name, text := range texts {
+		if strings.Contains(text, "Court") {
+			t.Errorf("%s names Court: %s", name, text)
+		}
+	}
+	if !strings.Contains(Instructions, "the user") {
+		t.Errorf("the instructions don't say who: %s", Instructions)
+	}
+}

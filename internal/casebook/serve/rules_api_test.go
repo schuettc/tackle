@@ -286,8 +286,8 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("agent activate: want 400, got %d", code)
 	}
-	if msg, _ := out["error"].(string); !strings.Contains(strings.ToLower(msg), "active") {
-		t.Fatalf("error %q does not mention active", msg)
+	if msg, _ := out["error"].(string); !strings.Contains(strings.ToLower(msg), "active") || !strings.Contains(msg, "schuettc activates rules") {
+		t.Fatalf("error %q does not mention active, or who activates", msg)
 	}
 
 	// Writing a draft works and records created_by = "pi:s1".
@@ -332,6 +332,9 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	}, &out2)
 	if code != 400 {
 		t.Fatalf("editing active rule via agent: want 400, got %d", code)
+	}
+	if msg, _ := out2["error"].(string); !strings.Contains(msg, "only schuettc can edit active rules") {
+		t.Fatalf("error %q doesn't say who can", msg)
 	}
 }
 

@@ -55,6 +55,27 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 	reply(w, nil, err)
 }
 
+// userName names the person casebook works for in what serve says to an
+// agent: the configured user (the login decisions are recorded "by"), or
+// "the user" when none is configured.
+func (s *Server) userName() string {
+	if s.App != nil {
+		if u := strings.TrimSpace(s.App.Cfg.User); u != "" {
+			return u
+		}
+	}
+	return "the user"
+}
+
+// userSubject is userName at the start of a sentence: a login keeps its
+// case, "the user" becomes "The user".
+func (s *Server) userSubject() string {
+	if u := s.userName(); u != "the user" {
+		return u
+	}
+	return "The user"
+}
+
 // overruledShown caps the proposals listed one by one in a since-summary.
 const overruledShown = 10
 
@@ -66,7 +87,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 	var parts []string
 	if t, err := s.Props.Tally(ctx, source(sess), since); err == nil {
 		if n := t.Accepted + t.Changed + t.Rejected; n > 0 {
-			p := fmt.Sprintf("Court accepted %d of your %d settled proposals", t.Accepted, n)
+			p := fmt.Sprintf("%s accepted %d of your %d settled proposals", s.userSubject(), t.Accepted, n)
 			if t.Changed > 0 {
 				p += fmt.Sprintf(", changed %d", t.Changed)
 			}
@@ -80,7 +101,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 	_ = s.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE kind = 'decided' AND created_at >= ?
 		AND json_extract(payload, '$.proposed_by') = ''`, since.UnixMilli()).Scan(&direct)
 	if direct > 0 {
-		parts = append(parts, fmt.Sprintf("Court made %d decision batch(es) directly", direct))
+		parts = append(parts, fmt.Sprintf("%s made %d decision batch(es) directly", s.userSubject(), direct))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -92,7 +113,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 		if reason == "" {
 			reason = "no reason given"
 		}
-		out += fmt.Sprintf("\n- %s: you proposed %s; Court %s it: %s", p.Key, p.Disposition, p.State, reason)
+		out += fmt.Sprintf("\n- %s: you proposed %s; %s %s it: %s", p.Key, p.Disposition, s.userName(), p.State, reason)
 	}
 	if total > len(over) {
 		out += fmt.Sprintf("\n- and %d more (casebook_show an item for the rest)", total-len(over))
@@ -129,7 +150,7 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 				!prev.FinishedAt.IsZero() && d.Messages[0].QueuedAt.Before(prev.FinishedAt) {
 				working = prev.Messages[0].Body
 			}
-			text := deliver.Render(*d, working, summary, time.Local)
+			text := deliver.Render(*d, working, summary, s.App.Cfg.User, time.Local)
 			// The messages are already marked 'delivered' in the DB (see
 			// deliver.Queue.Next). Handing d to the HTTP response is the
 			// moment the agent receives them; the delivery stays in-flight
@@ -660,7 +681,7 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 		return fmt.Errorf("dispatchAgentJob: create thread: %w", err)
 	}
 
-	body, err := buildJobBody(job)
+	body, err := buildJobBody(job, s.userName())
 	if err != nil {
 		return fmt.Errorf("dispatchAgentJob: %w", err)
 	}
@@ -676,7 +697,7 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 // It lists every agent-lane step with its command and precondition, calls out
 // steps that post public text (requiring casebook_job_ask before posting), and
 // describes the protocol for working the job with casebook_job_step.
-func buildJobBody(job apply.Job) (string, error) {
+func buildJobBody(job apply.Job, user string) (string, error) {
 	var b strings.Builder
 
 	// Count agent-lane steps.
@@ -694,9 +715,9 @@ func buildJobBody(job apply.Job) (string, error) {
 	// The batch is not confirmed until Court says so. The agent must not touch
 	// the world until then, and must do nothing at all if Court skips it.
 	b.WriteString("\nWAIT FOR THE BATCH:\n")
-	b.WriteString("Do not run any step until Court confirms the batch.\n")
+	fmt.Fprintf(&b, "Do not run any step until %s confirms the batch.\n", user)
 	b.WriteString("The confirmation arrives as a message in this thread.\n")
-	b.WriteString("If Court skips the batch, run nothing.\n")
+	fmt.Fprintf(&b, "If %s skips the batch, run nothing.\n", user)
 
 	// List agent-lane steps.
 	if len(agentSteps) > 0 {
@@ -713,7 +734,7 @@ func buildJobBody(job apply.Job) (string, error) {
 			fmt.Fprintf(&b, "  precondition: %s\n", desc)
 		}
 		if st.Posts {
-			b.WriteString("  ⚠ posts public text: draft text first with casebook_job_ask; wait for Court's approval before running\n")
+			fmt.Fprintf(&b, "  ⚠ posts public text: draft text first with casebook_job_ask; wait for %s's approval before running\n", user)
 		}
 	}
 
@@ -721,7 +742,7 @@ func buildJobBody(job apply.Job) (string, error) {
 	b.WriteString("\nPROTOCOL for each step:\n")
 	fmt.Fprintf(&b, "  1. casebook_job_step(job=%d, step=<step_id>, state=\"started\")\n", job.ID)
 	b.WriteString("  2. [if posts=true] casebook_job_ask(job=<id>, step=<step_id>, text=\"<your draft>\")\n")
-	b.WriteString("     Wait for Court's answer (a message in this thread with the approved text).\n")
+	fmt.Fprintf(&b, "     Wait for %s's answer (a message in this thread with the approved text).\n", user)
 	b.WriteString("     Run the command with exactly that text.\n")
 	fmt.Fprintf(&b, "  3. casebook_job_step(job=%d, step=<step_id>, state=\"reported\") on success\n", job.ID)
 	fmt.Fprintf(&b, "  4. casebook_job_step(job=%d, step=<step_id>, state=\"paused\", detail=\"reason\") if precondition fails\n", job.ID)

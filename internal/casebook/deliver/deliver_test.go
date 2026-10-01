@@ -495,7 +495,7 @@ func TestRenderGolden(t *testing.T) {
 	_, _, _ = q.Reply(ctx, "s1", []int64{first.ID}, Answered, "done")
 	d, _ := q.Next(ctx, "s1")
 	prev, _ := q.Previous(ctx, "s1", d.ID)
-	got := Render(*d, prev.Messages[0].Body, "Court accepted 31 of your 40 proposals and changed 9 to keep.", time.UTC)
+	got := Render(*d, prev.Messages[0].Body, "schuettc accepted 31 of your 40 proposals and changed 9 to keep.", "schuettc", time.UTC)
 	golden := filepath.Join("testdata", "delivery.golden")
 	if *update {
 		_ = os.WriteFile(golden, []byte(got), 0o644)
@@ -523,7 +523,7 @@ func TestRenderSingleMessageSettleIt(t *testing.T) {
 	if len(d.Messages) != 1 {
 		t.Fatalf("want 1 message, got %d", len(d.Messages))
 	}
-	got := Render(*d, "", "", time.UTC)
+	got := Render(*d, "", "", "schuettc", time.UTC)
 	if !strings.Contains(got, "Settle it with casebook_reply") {
 		t.Errorf("single-message render should say \"Settle it\"; got:\n%s", got)
 	}
@@ -757,5 +757,24 @@ func TestMoveDeliveryKeepsOrder(t *testing.T) {
 	}
 	if want := "sent first|sent later"; strings.Join(got, "|") != want {
 		t.Fatalf("s2 delivery order = %q, want %s", got, want)
+	}
+}
+
+// TestRenderNamesTheConfiguredUser: a delivery says whose messages they are
+// by the configured user, or "the user" when there is none; never a
+// hard-coded name.
+func TestRenderNamesTheConfiguredUser(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	post(t, q, th, "please do the thing", false)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next: %v, %v", d, err)
+	}
+	for from, want := range map[string]string{"lena": "casebook: 1 message from lena.", "": "casebook: 1 message from the user."} {
+		got := Render(*d, "", "", from, time.UTC)
+		if !strings.HasPrefix(got, want) || strings.Contains(got, "Court") {
+			t.Errorf("from %q: got\n%s\nwant it to start %q", from, got, want)
+		}
 	}
 }

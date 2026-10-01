@@ -9,16 +9,19 @@ import (
 // Render is the text a delivery puts into the agent's session (casebook
 // workbench spec §6.3). workingOn is the first message of the delivery the
 // agent was working on when these were queued ("" if none); summary is the
-// "since you last looked" paragraph ("" if nothing changed); loc formats the
-// times.
-func Render(d Delivery, workingOn, summary string, loc *time.Location) string {
+// "since you last looked" paragraph ("" if nothing changed); from names who
+// sent them (the configured user; "" says "the user"); loc formats the times.
+func Render(d Delivery, workingOn, summary, from string, loc *time.Location) string {
 	var b strings.Builder
 	n := len(d.Messages)
 	noun := "message"
 	if n != 1 {
 		noun = "messages"
 	}
-	fmt.Fprintf(&b, "casebook: %d %s from Court", n, noun)
+	if from = strings.TrimSpace(from); from == "" {
+		from = "the user"
+	}
+	fmt.Fprintf(&b, "casebook: %d %s from %s", n, noun, from)
 	if workingOn != "" && n > 0 {
 		first, last := d.Messages[0].QueuedAt, d.Messages[n-1].QueuedAt
 		fmt.Fprintf(&b, ", sent while you were working on %q (%s–%s)", snippet(workingOn, 60), first.In(loc).Format("15:04"), last.In(loc).Format("15:04"))

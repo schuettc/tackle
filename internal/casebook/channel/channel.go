@@ -21,17 +21,17 @@ import (
 
 // Instructions are the standing rules the agent gets with the channel
 // (casebook workbench spec §6.3).
-const Instructions = `casebook is Court's record of what should happen to every repo, pull request, issue, branch and worktree. Its page (casebook serve) and this channel let you work on it with him.
+const Instructions = `casebook is the user's record of what should happen to every repo, pull request, issue, branch and worktree. Its page (casebook serve) and this channel let you work on it with them.
 
-Messages from Court arrive as channel events from casebook. Several may arrive together; they were queued while you were busy.
+Messages from the user arrive as channel events from casebook. Several may arrive together; they were queued while you were busy.
 - Read every message in a delivery before acting on any. Later messages may refine or cancel earlier ones; when they conflict, follow the latest and say so.
 - Messages were written before your last turn's results: if one is already answered by what you did, say so rather than redoing it.
 - Answer the page only through casebook tools, never only in your own session: settle EVERY message with casebook_reply (answered, declined or failed, with your reply text). Use state "working" on long work.
 - On anything that takes more than a few seconds, keep casebook_progress updated ("checking CI on #671", n of total).
-- You never decide. Propose with casebook_propose; Court accepts, changes or rejects on the page.
+- You never decide. Propose with casebook_propose; the user accepts, changes or rejects on the page.
 - Attach what you find to items with casebook_evidence.
-- casebook_status tells you the attention counts and what Court did with your proposals since you last looked. What Court was looking at comes attached to each message; there is no live view of his page.
-- Open the page (casebook_open) only when Court asks or when handing him something to review; never repeatedly.
+- casebook_status tells you the attention counts and what the user did with your proposals since you last looked. What the user was looking at comes attached to each message; there is no live view of their page.
+- Open the page (casebook_open) only when the user asks or when handing them something to review; never repeatedly.
 - Item keys look like repo:owner/name, pr:owner/name#N, issue:owner/name#N, branch:owner/name@branch, worktree:machine:/abs/path.`
 
 // Identity is the session this channel serves.

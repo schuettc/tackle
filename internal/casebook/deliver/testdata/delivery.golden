@@ -1,4 +1,4 @@
-casebook: 3 messages from Court, sent while you were working on "propose decisions for the 40 chime PRs" (09:41–09:46). Read all of them before acting. Later messages may refine or cancel earlier ones; when they conflict, follow the latest and say so. They were written before your last turn's results. If one is already answered by what you did, say so rather than redoing it. Settle each with casebook_reply.
+casebook: 3 messages from schuettc, sent while you were working on "propose decisions for the 40 chime PRs" (09:41–09:46). Read all of them before acting. Later messages may refine or cancel earlier ones; when they conflict, follow the latest and say so. They were written before your last turn's results. If one is already answered by what you did, say so rather than redoing it. Settle each with casebook_reply.
 
 [m-2] 09:41 · attached: 4 items (pr:recreational-spreadsheeting/bettor-help-platform#670, pr:recreational-spreadsheeting/bettor-help-platform#671, pr:recreational-spreadsheeting/bettor-help-platform#672, pr:recreational-spreadsheeting/bettor-help-platform#673)
   Merge these if CI is green.
@@ -9,4 +9,4 @@ casebook: 3 messages from Court, sent while you were working on "propose decisio
 [m-4] 09:46 · batch b-1 (2 of 2)
   Actually skip #673, it's a major bump.
 
-Since you last looked: Court accepted 31 of your 40 proposals and changed 9 to keep.
+Since you last looked: schuettc accepted 31 of your 40 proposals and changed 9 to keep.

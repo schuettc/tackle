@@ -118,7 +118,7 @@ func TestTurnAwareDeliveryOverHTTP(t *testing.T) {
 	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w1); c != 200 || len(w1.Delivery.Messages) != 1 || w1.Delivery.Messages[0].ID != m1.ID {
 		t.Fatalf("first wait %d %+v", c, w1)
 	}
-	if !strings.Contains(w1.Text, "casebook: 1 message from Court") || !strings.Contains(w1.Text, "propose decisions for the chime PRs") {
+	if !strings.Contains(w1.Text, "casebook: 1 message from schuettc") || !strings.Contains(w1.Text, "propose decisions for the chime PRs") {
 		t.Fatalf("text %q", w1.Text)
 	}
 	m2 := r.send(t, th, "and skip #12", false)
@@ -351,7 +351,7 @@ func TestProposeAcceptWritesDecision(t *testing.T) {
 		Since string `json:"since"`
 	}
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &v)
-	if !strings.Contains(v.Since, "Court accepted 1 of your 1 settled proposals") {
+	if !strings.Contains(v.Since, "schuettc accepted 1 of your 1 settled proposals") {
 		t.Fatalf("since %q", v.Since)
 	}
 }
@@ -722,13 +722,13 @@ func TestSinceListsOverruledWithReasons(t *testing.T) {
 		PageOpen bool           `json:"page_open"`
 	}
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &st)
-	if !strings.HasPrefix(st.Since, "Court accepted 0 of your 14 settled proposals, changed 1, rejected 13.") {
+	if !strings.HasPrefix(st.Since, "schuettc accepted 0 of your 14 settled proposals, changed 1, rejected 13.") {
 		t.Fatalf("since %q", st.Since)
 	}
 	if n := strings.Count(st.Since, "\n- "); n != 11 { // 10 listed + "and N more"
 		t.Fatalf("%d lines in %q", n, st.Since)
 	}
-	if !strings.Contains(st.Since, "you proposed close; Court rejected it: still in use") || !strings.Contains(st.Since, "- and 4 more") {
+	if !strings.Contains(st.Since, "you proposed close; schuettc rejected it: still in use") || !strings.Contains(st.Since, "- and 4 more") {
 		t.Fatalf("since %q", st.Since)
 	}
 	if st.Counts == nil || st.PageOpen {
@@ -739,7 +739,7 @@ func TestSinceListsOverruledWithReasons(t *testing.T) {
 	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"issue:schuettc/hail#5"}, "disposition": "close"}, &res)
 	r.do(t, "POST", "/api/proposals/change", map[string]any{"id": res.Proposals[0].ID, "disposition": "wait", "until": "date(2026-12-01)", "note": "after the demo"}, nil)
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &st)
-	if !strings.Contains(st.Since, "issue:schuettc/hail#5: you proposed close; Court changed it: decided wait until date(2026-12-01): after the demo") {
+	if !strings.Contains(st.Since, "issue:schuettc/hail#5: you proposed close; schuettc changed it: decided wait until date(2026-12-01): after the demo") {
 		t.Fatalf("since %q", st.Since)
 	}
 }

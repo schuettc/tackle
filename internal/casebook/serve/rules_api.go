@@ -541,7 +541,7 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse status="active" with a clear error.
 	if in.Rule.Status == rules.StatusActive {
-		reply(w, nil, bad("casebook_rule_draft cannot set status to active; Court activates rules on the page"))
+		reply(w, nil, bad("casebook_rule_draft cannot set status to active; %s activates rules on the page", s.userName()))
 		return
 	}
 	in.Rule.Status = rules.StatusDraft
@@ -574,7 +574,7 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Refuse to edit an active rule.
 		if existing.Status == rules.StatusActive {
-			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only Court can edit active rules"))
+			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only %s can edit active rules", s.userName()))
 			return
 		}
 		// Fix 3: an agent may only edit drafts it created itself.

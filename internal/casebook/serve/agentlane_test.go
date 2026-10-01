@@ -552,7 +552,7 @@ func TestKnownPreconditionIsDescribed(t *testing.T) {
 		}
 		return out
 	}()}
-	body, err := buildJobBody(job)
+	body, err := buildJobBody(job, "schuettc")
 	if err != nil {
 		t.Fatalf("buildJobBody: %v", err)
 	}

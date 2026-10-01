@@ -28,7 +28,7 @@ func TestAttachedSectionReachesTheAgent(t *testing.T) {
 	if got := d.Messages[0].Attached.Section; got != "rules" {
 		t.Fatalf("the stored message lost its section: %q", got)
 	}
-	if got := Render(*d, "", "", time.UTC); !strings.Contains(got, "attached: section rules\n") {
+	if got := Render(*d, "", "", "schuettc", time.UTC); !strings.Contains(got, "attached: section rules\n") {
 		t.Fatalf("delivery text does not say \"attached: section rules\":\n%s", got)
 	}
 }

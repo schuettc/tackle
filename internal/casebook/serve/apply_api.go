@@ -810,9 +810,9 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 		// that text and close. Court confirms; casebook never runs gh itself.
 		if job.Session != "" {
 			body := fmt.Sprintf(
-				"Court approved text for job %d step %d [%s].\n"+
+				"%s approved text for job %d step %d [%s].\n"+
 					"Post this exact text and close:\n\n%s",
-				job.ID, card.StepID, step.Key, text)
+				s.userSubject(), job.ID, card.StepID, step.Key, text)
 			thread, err := s.findOrCreateJobThread(ctx, job)
 			if err != nil {
 				return card, fmt.Errorf("find job thread: %w", err)
@@ -827,9 +827,9 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 		// Tell the agent to close without a comment.
 		if job.Session != "" {
 			body := fmt.Sprintf(
-				"Court approved close-without-comment for job %d step %d [%s].\n"+
+				"%s approved close-without-comment for job %d step %d [%s].\n"+
 					"Close it without posting any comment.",
-				job.ID, card.StepID, step.Key)
+				s.userSubject(), job.ID, card.StepID, step.Key)
 			thread, err := s.findOrCreateJobThread(ctx, job)
 			if err != nil {
 				return card, fmt.Errorf("find job thread: %w", err)
@@ -856,7 +856,7 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 	case "skip":
 		// Mark the step skipped and return the card as answered.
 		if card.StepID != 0 {
-			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
+			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by "+s.userName()); err != nil {
 				return card, fmt.Errorf("SetStepState skipped: %w", err)
 			}
 			s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
@@ -879,11 +879,11 @@ func (s *Server) answerFailed(ctx context.Context, card apply.NeedsYou, job appl
 			}
 		}
 		body := fmt.Sprintf(
-			"casebook-lane step %d [%s] failed and Court handed it to you.\n"+
+			"casebook-lane step %d [%s] failed and %s handed it to you.\n"+
 				"Reason: %s\n\n"+
 				"Command that failed: %s\n"+
 				"Please handle this step and report back with casebook_job_step.",
-			step.ID, step.Key, card.Question, step.Command)
+			step.ID, step.Key, s.userName(), card.Question, step.Command)
 		thread, err := s.findOrCreateJobThread(ctx, job)
 		if err != nil {
 			return card, fmt.Errorf("find job thread for hand-to-agent: %w", err)
@@ -918,9 +918,9 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 				s.startCasebookLane(job)
 			} else if job.Session != "" {
 				body := fmt.Sprintf(
-					"Court resumed job %d step %d [%s].\n"+
+					"%s resumed job %d step %d [%s].\n"+
 						"Resume that step: run it now, following the usual protocol.",
-					job.ID, step.ID, step.Key)
+					s.userSubject(), job.ID, step.ID, step.Key)
 				thread, err := s.findOrCreateJobThread(ctx, job)
 				if err != nil {
 					return card, fmt.Errorf("find job thread for resume: %w", err)
@@ -934,7 +934,7 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "resume")
 	case "skip":
 		if card.StepID != 0 {
-			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
+			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by "+s.userName()); err != nil {
 				return card, fmt.Errorf("skip paused step: %w", err)
 			}
 			s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
