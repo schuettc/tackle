@@ -1636,12 +1636,12 @@ textarea.cb-needs-edit:focus {
  * Danger is its colour: an error state, as "offline · N queued" is.
  */
 .kit-app {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
 }
 .kit-app > .kit-list,
 .kit-app > .kit-read,
 .kit-app > .kit-rail {
-  grid-row: 3;
+  grid-row: 4;
 }
 .kit-app > .cb-down {
   grid-row: 2;
@@ -1657,6 +1657,20 @@ textarea.cb-needs-edit:focus {
 }
 .kit-app > .cb-down[hidden] {
   display: none;
+}
+/*
+ * Push failed (serve's last push failed for a reason other than the
+ * network): the same strip, in the third row, one line; the whole reason is
+ * its title.
+ */
+.kit-app > .cb-down.cb-push-error {
+  grid-row: 3;
+}
+.kit-app > .cb-push-error .cb-down-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 /*
  * The retry is neutral (it destroys nothing): the page's ground and a muted

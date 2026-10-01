@@ -296,11 +296,37 @@ export function boot(): void {
     retryBtn.textContent = 'retry';
   }
 
+  // ---- push failed -----------------------------------------------------------
+
+  // serve's last push failed for a reason other than the network (a sync
+  // conflict it can't resolve, the remote refusing): the status says
+  // "push failed · N queued", and this one-line strip under the bar says why,
+  // in serve's words. It goes when a push succeeds or nothing is queued
+  // (serve clears push_error); plain offline has no strip.
+  const pushText = h('span', { class: 'cb-down-text' });
+  const pushStrip = h(
+    'div',
+    {
+      class: 'cb-down cb-push-error',
+      role: 'alert',
+      'data-testid': 'push-error',
+    },
+    pushText,
+  );
+  pushStrip.hidden = true;
+  function paintPushError(reason: string): void {
+    const text = reason ? `push failed \u00b7 ${reason}` : '';
+    if (pushText.textContent !== text) pushText.textContent = text;
+    pushStrip.title = reason;
+    pushStrip.hidden = !reason;
+  }
+
   // ---- sections -------------------------------------------------------------
 
-  // The app grid (.kit-app): bar | the disconnected banner | list+read | rail
+  // The app grid (.kit-app): bar | the disconnected banner | the push strip |
+  // list+read | rail
   const app = h('div', { class: 'kit-app' });
-  app.append(handle.el, banner);
+  app.append(handle.el, banner, pushStrip);
 
   // Build context for section makers
   let currentRoute: Route = { section: 'attention', sub: '' };
@@ -556,8 +582,10 @@ export function boot(): void {
   function paintStatus(): void {
     const s = summary;
     if (!s) return;
+    paintPushError(s.push_error ?? '');
     if (s.offline_queued > 0) {
-      handle.setStatus(`offline \u00b7 ${s.offline_queued} queued`, {
+      const why = s.push_error ? 'push failed' : 'offline';
+      handle.setStatus(`${why} \u00b7 ${s.offline_queued} queued`, {
         tone: 'danger',
       });
       return;

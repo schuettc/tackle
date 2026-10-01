@@ -163,9 +163,11 @@ export function renderRule(
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   // How many rows Court has asked to see: "show more" raises it, an edit
-  // starts again at a page. A preview in flight reads it as it pages, so a
+  // starts again at a page, and so does serve's copy of the rule changing
+  // (draw, applyExclusions). A preview in flight reads it as it pages, so a
   // re-preview landing while "show more" loads still brings what he asked
-  // for (loadMore's own answer is then dropped as older).
+  // for; loadMore's own answer is then dropped (older, or its rows already
+  // shown).
   let opened = PAGE;
   // One request at a time (Activate, Deactivate, propose once), in the order
   // Court asked. serve announces a change before it replies, so the page can
@@ -738,12 +740,17 @@ export function renderRule(
   }
 
   async function loadMore(): Promise<void> {
-    const q = `?offset=${shown.length}&limit=${PAGE}`;
-    opened = Math.max(opened, shown.length + PAGE);
+    const from = shown.length;
+    const q = `?offset=${from}&limit=${PAGE}`;
+    opened = Math.max(opened, from + PAGE);
     const mine = seq;
     try {
       const p = await ctx.api.post<MatchPreview>(`/rules/preview${q}`, body());
-      if (mine !== seq) return;
+      // Dropped when a newer preview started (it pages to what Court
+      // opened), or when the rows shown changed since this asked: a
+      // re-preview already in flight at the click read the raised `opened`
+      // and brought these rows itself.
+      if (mine !== seq || shown.length !== from) return;
       shown = [...shown, ...(p.page ?? [])];
       preview = { ...p, page: shown };
       drawMatches();
@@ -764,6 +771,7 @@ export function renderRule(
       void previewNow(Math.max(PAGE, opened, shown.length));
     } else {
       seq++; // a preview in flight is older than this
+      opened = PAGE; // serve's matches: page one, as shown
       setPreview(d.matches);
     }
     drawFacts();
@@ -1142,6 +1150,7 @@ export function renderRule(
     if (timer !== null) clearTimeout(timer);
     timer = null;
     seq++;
+    opened = PAGE; // serve's copy of the rule changed: page one again
     saved = d;
     base = d.rule;
     // A conflict over this very copy no longer holds.

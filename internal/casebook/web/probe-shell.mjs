@@ -195,6 +195,7 @@ export async function shellScenarios(shared, t) {
     ['the stale pill', staleScenario],
     ['offline · N queued', offlineQueuedScenario],
     ['a slow push', slowPushScenario],
+    ['push failed', pushFailedScenario],
     ['the stale pill from an API call', staleApiScenario],
     ['200 rows and "show more"', pageCapScenario],
     ["the board's search", boardSearchScenario],
@@ -1484,6 +1485,15 @@ async function offlineQueuedScenario(shared, t) {
                 s.color === danger,
             );
           }
+          const strip = await pg.$eval('[data-testid="push-error"]', (e) => ({
+            hidden: e.hidden,
+            height: e.getBoundingClientRect().height,
+          }));
+          const sum = await agent.api('GET', '/api/summary');
+          check(
+            `plain offline is no push failure: no push_error (${JSON.stringify(sum.push_error ?? null)}) and no strip (hidden ${strip.hidden}, ${strip.height} px)`,
+            !sum.push_error && strip.hidden && strip.height === 0,
+          );
         } finally {
           await pg.close();
         }
@@ -1622,6 +1632,185 @@ async function slowPushScenario(shared, t) {
           check(
             `and nothing is queued after it (status "${status}")`,
             after && /^synced \d+m ago · probe$/.test(status ?? ''),
+          );
+        } finally {
+          await pg.close();
+        }
+      }),
+  );
+}
+
+// ---- push failed ---------------------------------------------------------------
+
+// pushFailedScenario: serve's push fails for a reason other than the
+// network (here a rebase conflict in a file casebook doesn't resolve, set up
+// on a local bare remote by serve.mjs's conflictRemote). The status says
+// "push failed · N queued" in danger, and a one-line strip under the bar
+// says why in serve's words. Plain queued commits (nothing has failed yet)
+// read "offline · N queued" with no strip, and a push that succeeds takes
+// the strip away.
+async function pushFailedScenario(shared, t) {
+  const { check, until, eventually } = t;
+  console.log('\nscenario: a push that fails says so, and why');
+  const PF = 'pf-probe';
+  await withServe(
+    {
+      conflictRemote: true,
+      seedRepos: [
+        seedRepo(PF, [
+          [81, 'decide into a conflict', 'vic'],
+          [82, 'decide once it clears', 'vic'],
+        ]),
+      ],
+    },
+    (serveHandle) =>
+      withContext(shared, async (context) => {
+        const remote = `${serveHandle.home}/remotes/casebook-data.git`;
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        const pg = await context.newPage();
+        try {
+          await pg.setViewportSize({ width: 1600, height: 900 });
+          await pg.goto(`${serveHandle.url}&q=${PF}#/attention/waiting`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          const look = () =>
+            pg.evaluate(() => {
+              const st = document.querySelector('.kit-status');
+              const strip = document.querySelector(
+                '[data-testid="push-error"]',
+              );
+              const down = document.querySelector(
+                '[data-testid="down-banner"]',
+              );
+              const r = strip.getBoundingClientRect();
+              const cs = getComputedStyle(strip);
+              const bar = document
+                .querySelector('.kit-bar')
+                .getBoundingClientRect();
+              const list = document
+                .querySelector('.kit-app > .kit-list:not([hidden])')
+                ?.getBoundingClientRect();
+              const text = strip.querySelector('.cb-down-text');
+              const lh = parseFloat(getComputedStyle(text).lineHeight) || 20;
+              // The disconnected banner's look, shown for a moment to read it.
+              down.hidden = false;
+              const dcs = getComputedStyle(down);
+              const downLook = `${dcs.color} ${dcs.backgroundColor} ${dcs.borderBottomStyle} ${dcs.borderBottomColor} ${dcs.font}`;
+              down.hidden = true;
+              return {
+                status: st?.textContent ?? '',
+                tone: st?.dataset.tone,
+                statusColor: st ? getComputedStyle(st).color : '',
+                hidden: strip.hidden,
+                role: strip.getAttribute('role'),
+                text: text?.textContent ?? '',
+                title: strip.title,
+                top: r.top,
+                height: r.height,
+                oneLine: text.getBoundingClientRect().height <= lh * 1.5,
+                barBottom: bar.bottom,
+                listTop: list?.top ?? -1,
+                look: `${cs.color} ${cs.backgroundColor} ${cs.borderBottomStyle} ${cs.borderBottomColor} ${cs.font}`,
+                downLook,
+              };
+            });
+          const q0 = await until(
+            pg,
+            () =>
+              document.querySelector('.kit-status')?.textContent ===
+              'offline \u00b7 1 queued',
+            undefined,
+            10000,
+          );
+          const l0 = await look();
+          check(
+            `a commit queued before any push failed reads "${l0.status}", with no strip (hidden ${l0.hidden})`,
+            q0 && l0.hidden && l0.height === 0,
+          );
+
+          await agent.api('POST', '/api/decide', {
+            keys: [`pr:schuettc/${PF}#81`],
+            disposition: 'keep',
+          });
+          let sum = {};
+          const failed = await eventually(async () => {
+            sum = await agent.api('GET', '/api/summary');
+            return !!sum.push_error && sum.offline_queued === 2;
+          }, 10000);
+          check(
+            `serve's push fails on the conflict: push_error "${sum.push_error}", ${sum.offline_queued} queued`,
+            failed && /conflict in notes\.txt/.test(sum.push_error ?? ''),
+          );
+          const shown = await until(
+            pg,
+            () =>
+              document.querySelector('.kit-status')?.textContent ===
+                'push failed \u00b7 2 queued' &&
+              !document.querySelector('[data-testid="push-error"]').hidden,
+            undefined,
+            10000,
+          );
+          const danger = await cssColor(pg, 'var(--kit-danger)');
+          const l1 = await look();
+          check(
+            `the status reads "${l1.status}" in danger (${l1.tone}, ${l1.statusColor}), live`,
+            shown &&
+              l1.status === 'push failed \u00b7 2 queued' &&
+              l1.tone === 'danger' &&
+              l1.statusColor === danger,
+          );
+          check(
+            `a one-line alert strip under the bar says why, in serve's words: "${l1.text}"`,
+            !l1.hidden &&
+              l1.role === 'alert' &&
+              l1.text === `push failed \u00b7 ${sum.push_error}` &&
+              l1.title === sum.push_error &&
+              l1.oneLine &&
+              Math.abs(l1.top - l1.barBottom) < 0.5 &&
+              Math.abs(l1.listTop - (l1.top + l1.height)) < 0.5,
+          );
+          check(
+            `the strip looks like the disconnected banner (${l1.look} vs ${l1.downLook})`,
+            l1.look === l1.downLook,
+          );
+          check(
+            `the strip gives Court no command to run ("${l1.text}")`,
+            !/`|\brun\b|casebook (sync|decide|push)|git /.test(l1.text),
+          );
+          await pg.evaluate(() => document.activeElement?.blur());
+          await pg.screenshot({ path: '/tmp/fr1-push-failed.png' });
+          console.log('  screenshot: /tmp/fr1-push-failed.png');
+
+          // The remote moves back to the base both share: the next push
+          // goes through, and the failure goes with it.
+          probeGit(
+            remote,
+            'update-ref refs/heads/main main~1',
+            serveHandle.home,
+          );
+          await agent.api('POST', '/api/decide', {
+            keys: [`pr:schuettc/${PF}#82`],
+            disposition: 'keep',
+          });
+          const cleared = await eventually(async () => {
+            sum = await agent.api('GET', '/api/summary');
+            return !sum.push_error && sum.offline_queued === 0;
+          }, 10000);
+          const gone = await until(
+            pg,
+            () =>
+              document.querySelector('[data-testid="push-error"]').hidden &&
+              /^synced \d+m ago · probe$/.test(
+                document.querySelector('.kit-status')?.textContent ?? '',
+              ),
+            undefined,
+            10000,
+          );
+          const l2 = await look();
+          check(
+            `a push that succeeds clears it: no push_error, nothing queued, no strip, status "${l2.status}"`,
+            cleared && gone && l2.height === 0,
           );
         } finally {
           await pg.close();

@@ -258,8 +258,25 @@ function boot() {
     retryBtn.disabled = false;
     retryBtn.textContent = "retry";
   }
+  const pushText = h("span", { class: "cb-down-text" });
+  const pushStrip = h(
+    "div",
+    {
+      class: "cb-down cb-push-error",
+      role: "alert",
+      "data-testid": "push-error"
+    },
+    pushText
+  );
+  pushStrip.hidden = true;
+  function paintPushError(reason) {
+    const text = reason ? `push failed · ${reason}` : "";
+    if (pushText.textContent !== text) pushText.textContent = text;
+    pushStrip.title = reason;
+    pushStrip.hidden = !reason;
+  }
   const app = h("div", { class: "kit-app" });
-  app.append(handle.el, banner);
+  app.append(handle.el, banner, pushStrip);
   let currentRoute = { section: "attention", sub: "" };
   const dockHandles = [];
   let lastAttached = {};
@@ -437,8 +454,10 @@ function boot() {
   function paintStatus() {
     const s = summary;
     if (!s) return;
+    paintPushError(s.push_error ?? "");
     if (s.offline_queued > 0) {
-      handle.setStatus(`offline · ${s.offline_queued} queued`, {
+      const why = s.push_error ? "push failed" : "offline";
+      handle.setStatus(`${why} · ${s.offline_queued} queued`, {
         tone: "danger"
       });
       return;
@@ -5535,12 +5554,13 @@ ${dispositions.join(" ")}`;
     }, PREVIEW_DEBOUNCE_MS);
   }
   async function loadMore() {
-    const q = `?offset=${shown.length}&limit=${PAGE2}`;
-    opened = Math.max(opened, shown.length + PAGE2);
+    const from = shown.length;
+    const q = `?offset=${from}&limit=${PAGE2}`;
+    opened = Math.max(opened, from + PAGE2);
     const mine = seq;
     try {
       const p = await ctx.api.post(`/rules/preview${q}`, body());
-      if (mine !== seq) return;
+      if (mine !== seq || shown.length !== from) return;
       shown = [...shown, ...p.page ?? []];
       preview = { ...p, page: shown };
       drawMatches();
@@ -5555,6 +5575,7 @@ ${dispositions.join(" ")}`;
       void previewNow(Math.max(PAGE2, opened, shown.length));
     } else {
       seq++;
+      opened = PAGE2;
       setPreview(d.matches);
     }
     drawFacts();
@@ -5872,6 +5893,7 @@ ${dispositions.join(" ")}`;
     if (timer !== null) clearTimeout(timer);
     timer = null;
     seq++;
+    opened = PAGE2;
     saved = d;
     base = d.rule;
     if (conflict && conflict.detail.version === d.version) conflict = null;

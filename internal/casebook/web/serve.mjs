@@ -152,6 +152,7 @@ function setupHome(
   seedClones = [],
   syncInterval = '30m',
   slowRemote = false,
+  conflictRemote = false,
 ) {
   const fixture = join(here, 'testdata', 'home');
   const home =
@@ -198,6 +199,7 @@ function setupHome(
   }
 
   if (slowRemote) makeSlowRemote(home, repoPath);
+  if (conflictRemote) makeConflictRemote(home, repoPath);
 
   // Copy the github cache to the state directory, which is where CachePath()
   // looks: $CASEBOOK_HOME/state/github.json (tools.StateDir("casebook") joins
@@ -355,6 +357,32 @@ exit 0
   );
 }
 
+// makeConflictRemote gives the casebook-data clone a bare "origin" under
+// <home>/remotes, as makeSlowRemote does (no hook), then puts two different
+// notes.txt on it: one pushed from another clone (another machine) and one
+// committed in this clone, queued. serve's push then fails for a reason
+// other than the network: rebasing onto the remote meets a conflict in a
+// file casebook doesn't resolve. Moving the remote's main back one commit
+// (to the base both share) lets the next push through. Local only.
+function makeConflictRemote(home, repoPath) {
+  const remote = join(home, 'remotes', 'casebook-data.git');
+  const other = join(home, 'remotes', 'other-machine');
+  mkdirSync(dirname(remote), { recursive: true });
+  const git = (dir, args) => probeGit(dir, args, home);
+  git(home, `init -q --bare "${remote}"`);
+  git(repoPath, `remote set-url origin "${remote}"`);
+  git(repoPath, 'push -q origin HEAD:main');
+  git(repoPath, 'fetch -q origin');
+  git(home, `clone -q -b main "${remote}" "${other}"`);
+  writeFileSync(join(other, 'notes.txt'), 'from another machine\n');
+  git(other, 'add notes.txt');
+  git(other, 'commit -q -m "another machine: a note"');
+  git(other, 'push -q origin HEAD:main');
+  writeFileSync(join(repoPath, 'notes.txt'), 'from this machine\n');
+  git(repoPath, 'add notes.txt');
+  git(repoPath, 'commit -q -m "probe: a note of its own"');
+}
+
 // Wait up to timeoutMs for the advert file to appear and return its contents.
 function waitForAdvert(advertPath, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
@@ -392,6 +420,7 @@ export async function startServe(opts = {}) {
     opts.seedClones,
     opts.syncInterval,
     opts.slowRemote,
+    opts.conflictRemote,
   );
   const advertPath = join(home, 'state', 'live', 'serve.json');
 

@@ -2964,6 +2964,110 @@ async function rulesScenariosOn(context, serveHandle) {
     }
   }
 
+  // ---- scenario: rules — "show more" during a re-preview in flight ----------
+  console.log(
+    '\nscenario: rules — "show more" while a re-preview is already in flight',
+  );
+  {
+    const pg = await context.newPage();
+    try {
+      await pg.setViewportSize({ width: 1600, height: 900 });
+      await pg.goto(serveHandle.url + '#/rules/r8-many', {
+        waitUntil: 'domcontentloaded',
+      });
+      const paged = await until(
+        pg,
+        () =>
+          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+            .length === 200 &&
+          document.querySelector('.cb-mr-more .cb-mr-k')?.textContent ===
+            '\u2026 3 more',
+        undefined,
+        8000,
+      );
+      // Let the previews the page was already making (events replayed on
+      // connect) finish first.
+      const previews = [];
+      const onPreview = (r) => {
+        if (r.method() === 'POST' && r.url().includes('/api/rules/preview'))
+          previews.push(r.url());
+      };
+      pg.on('request', onPreview);
+      await eventually(async () => {
+        const n = previews.length;
+        await sleep(600);
+        return previews.length === n;
+      });
+      // The order 49f7f70 left open, forced: a live re-preview's page one
+      // is held; Court clicks "show 3 more" (its request is held too); the
+      // re-preview, answered, reads what he opened and brings rows 200-202
+      // itself; then "show more"'s answer arrives, last.
+      let releaseFirst, releaseMore;
+      const firstGate = new Promise((r) => (releaseFirst = r));
+      const moreGate = new Promise((r) => (releaseMore = r));
+      let firstHeld = false;
+      let moreHeld = false;
+      const hold = async (route) => {
+        const paging = route.request().url().includes('offset=');
+        if (!paging && !firstHeld) {
+          firstHeld = true;
+          await firstGate;
+        } else if (paging && !moreHeld) {
+          moreHeld = true;
+          await moreGate;
+        }
+        await route.continue();
+      };
+      await pg.route(/\/api\/rules\/preview/, hold);
+      await agent.api('POST', '/api/decide', {
+        keys: [R8_BR('r8-many', 'feat/n004')],
+        disposition: 'keep',
+      });
+      const rePreviewHeld = await eventually(async () => firstHeld, 8000);
+      await pg.click('.cb-mr-more .cb-link');
+      const moreAsked = await eventually(async () => moreHeld);
+      releaseFirst();
+      const rePreviewed = await until(
+        pg,
+        () =>
+          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+            .length === 203,
+        undefined,
+        8000,
+      );
+      const moreAnswered = pg
+        .waitForResponse(
+          (r) =>
+            r.url().includes('/api/rules/preview') &&
+            r.url().includes('offset=200'),
+          { timeout: 8000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      releaseMore();
+      const answered = await moreAnswered;
+      await sleep(300);
+      const keys = await r8Read.ticked(pg);
+      check(
+        `"show 3 more" clicked during a re-preview in flight shows the 3 rows once (page ${paged}, held ${rePreviewHeld}/${moreAsked}, re-previewed ${rePreviewed}, answered ${answered}: ${keys.length} rows, ${new Set(keys).size} different, more row ${!!(await pg.$('.cb-mr-more'))})`,
+        paged &&
+          rePreviewHeld &&
+          moreAsked &&
+          rePreviewed &&
+          answered &&
+          keys.length === 203 &&
+          new Set(keys).size === 203 &&
+          !(await pg.$('.cb-mr-more')),
+      );
+      await pg.unroute(/\/api\/rules\/preview/, hold);
+      pg.off('request', onPreview);
+    } finally {
+      await pg.close();
+    }
+  }
+
   // ---- scenario: rules — activate proposes ---------------------------------
   console.log('\nscenario: rules — activate proposes');
   {
@@ -4533,7 +4637,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 656;
+const MIN_CHECKS = 665;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
