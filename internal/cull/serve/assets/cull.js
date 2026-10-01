@@ -478,6 +478,12 @@ function groupItem(ctx, g) {
   );
 }
 
+// retry.ts
+var STEPS = [1e3, 2e3, 5e3];
+function retryDelay(attempt) {
+  return STEPS[attempt] ?? 1e4;
+}
+
 // overview.ts
 import { buttons as buttons3, card as card3, facts as facts3, h as h3 } from "/_kit/kit.js";
 var TEST_BUCKETS = [
@@ -759,7 +765,10 @@ function boot() {
   let dirty = false;
   let liveHandle = null;
   let statusTimer;
-  let wasDown = false;
+  let prevLive = "live";
+  let loadAttempt = 0;
+  let loadTimer;
+  const conflicted = [];
   let flashing = false;
   let reloadNote = "";
   const pending = /* @__PURE__ */ new Map();
@@ -906,20 +915,7 @@ function boot() {
     },
     onSelect(sel) {
       selCount.textContent = sel.length ? `${sel.length} selected` : "";
-      const [no, yes] = section === "tests" ? ["keep", "cut"] : ["separate", "merge"];
-      footBtns.replaceChildren(
-        sel.length ? buttons4([
-          {
-            label: `${no} ${sel.length}`,
-            run: () => ctx.answer(sel, no, "group")
-          },
-          {
-            label: `${yes} ${sel.length}`,
-            danger: yes === "cut",
-            run: () => ctx.answer(sel, yes, "group")
-          }
-        ]) : ""
-      );
+      footBtns.replaceChildren(footButtons(sel));
     },
     foot: h4(
       "span",
@@ -929,12 +925,40 @@ function boot() {
       footBtns
     )
   });
+  function footButtons(sel) {
+    if (!sel.length) return "";
+    if (bucket === "answered") {
+      return buttons4([
+        {
+          label: `unanswer ${sel.length}`,
+          run() {
+            l.clearSelection();
+            sel.forEach(unanswer);
+          }
+        }
+      ]);
+    }
+    const targets = bulkTargets(sel, answerMap());
+    if (!targets.length) return "";
+    const [no, yes] = section === "tests" ? ["keep", "cut"] : ["separate", "merge"];
+    return buttons4([
+      {
+        label: `${no} ${targets.length}`,
+        run: () => ctx.answer(bulkTargets(sel, answerMap()), no, "group")
+      },
+      {
+        label: `${yes} ${targets.length}`,
+        danger: yes === "cut",
+        run: () => ctx.answer(bulkTargets(sel, answerMap()), yes, "group")
+      }
+    ]);
+  }
   function chips() {
     const bk = bucketsNow(section);
     const out = [
       ...wordsOf(section).map((w) => ({ id: w.id, label: w.label })),
       { id: "answered", label: "answered" }
-    ].map((w) => ({ ...w, count: bk[w.id].length, on: bucket === w.id }));
+    ].map((w) => ({ ...w, count: bk[w.id].length, on: bucket === w.id })).filter((c) => c.count > 0 || c.on || c.id === "answered");
     l.setChips("view", out);
   }
   const ctx = {
@@ -1007,6 +1031,7 @@ function boot() {
     chips();
     const shown = listItems();
     l.setItems(shown);
+    footBtns.replaceChildren(footButtons(l.selected()));
     const view = `${section}/${bucket}/${openId ?? ""}`;
     if (it) {
       const idx = shown.findIndex((x) => x.id === it.id);
@@ -1015,9 +1040,13 @@ function boot() {
         l.open(idx);
         syncing = false;
       }
-      read.replaceChildren(
-        it.kind === "test" ? testItem(ctx, it) : groupItem(ctx, it)
-      );
+      const oldNote = read.querySelector(".kit-note");
+      const hadFocus = !!oldNote && document.activeElement === oldNote;
+      const keepNote = oldNote && lastView === view && (document.activeElement === oldNote || oldNote.value !== ctx.noteOf(it));
+      const doc = it.kind === "test" ? testItem(ctx, it) : groupItem(ctx, it);
+      if (keepNote) doc.querySelector(".kit-note")?.replaceWith(oldNote);
+      read.replaceChildren(doc);
+      if (keepNote && hadFocus) oldNote.focus();
     } else {
       const words = wordsOf(section).find((w) => w.id === bucket) ?? null;
       read.replaceChildren(
@@ -1067,6 +1096,7 @@ function boot() {
     }
     if (r.project !== project || !review) {
       project = r.project;
+      loadAttempt = 0;
       openId = r.item || null;
       void load();
       return;
@@ -1076,8 +1106,10 @@ function boot() {
     render();
   }
   async function load() {
+    clearTimeout(loadTimer);
     try {
       const r = await api.review(project);
+      loadAttempt = 0;
       review = r;
       const known = openId && r.items.some((i) => i.id === openId);
       if (!known) openId = null;
@@ -1097,7 +1129,12 @@ function boot() {
       review = null;
       l.setItems([]);
       refreshBar();
-      const msg = err instanceof ApiError && err.status === 404 ? "cull does not know that project; open this page with cull serve <path>" : `could not load the review: ${String(err.message ?? err)}`;
+      if (err instanceof ApiError && err.isStale) return;
+      const notFound = err instanceof ApiError && err.status === 404;
+      if (!notFound) {
+        loadTimer = setTimeout(() => void load(), retryDelay(loadAttempt++));
+      }
+      const msg = notFound ? "cull does not know that project; open this page with cull serve <path>" : "cull serve is not answering; retrying.";
       read.replaceChildren(
         h4("div", { class: "kit-doc" }, h4("p", { class: "lead" }, msg))
       );
@@ -1122,20 +1159,29 @@ function boot() {
     render();
   }
   async function reload() {
-    if (!project) return;
+    if (!project) return true;
     if (inflight > 0 || loading) {
       dirty = true;
-      return;
+      return true;
     }
     loading = true;
     try {
       do {
         dirty = false;
         applyReview(await api.review(project));
+        conflicted.length = 0;
       } while (dirty && inflight === 0);
+      return true;
     } catch (err) {
-      if (!(err instanceof ApiError && err.isStale))
+      if (err instanceof ApiError && err.isStale) return false;
+      if (conflicted.length) {
+        conflicted.splice(0).forEach((u) => u());
+        render();
+        flash("Could not reload; refresh the page.", "danger");
+      } else {
         flash(`could not reload: ${err.message}`, "danger");
+      }
+      return false;
     } finally {
       loading = false;
     }
@@ -1157,16 +1203,14 @@ function boot() {
           goStale();
           return;
         }
+        const was = prevLive;
+        prevLive = s;
         if (s === "down") {
-          wasDown = true;
           b.setLive("down", "disconnected");
           return;
         }
         b.setLive(s);
-        if (wasDown) {
-          wasDown = false;
-          void reload();
-        }
+        if (s === "live" && was !== "live") void reload();
       }
     });
   }
@@ -1181,6 +1225,7 @@ function boot() {
     op().catch((err) => {
       if (err instanceof ApiError && err.status === 409) {
         reloadNote = "The review changed; reloaded.";
+        conflicted.push(undo);
         dirty = true;
         return;
       }
@@ -1191,8 +1236,8 @@ function boot() {
     }).finally(() => {
       inflight--;
       if (inflight === 0 && dirty) {
-        void reload().then(() => {
-          if (reloadNote) flash(reloadNote);
+        void reload().then((ok) => {
+          if (ok && reloadNote) flash(reloadNote);
           reloadNote = "";
         });
       }
@@ -1202,6 +1247,7 @@ function boot() {
     if (!review?.run || !items.length) return;
     const run = review.run.id;
     const prev = items.map((it) => it.answer);
+    const waiting = items.map((it) => pending.get(it.id));
     const viewing = openId;
     const idx = viewing ? listItems().findIndex((x) => x.id === viewing) : -1;
     const body = items.map((it) => {
@@ -1231,6 +1277,8 @@ function boot() {
       () => api.put(p, run, body),
       () => items.forEach((it, i) => {
         it.answer = prev[i];
+        const w = waiting[i];
+        if (w !== void 0) pending.set(it.id, w);
       })
     );
   }
@@ -1247,7 +1295,8 @@ function boot() {
       }
     );
   }
-  function setNote(it, text) {
+  function setNote(shown, text) {
+    const it = review?.items.find((i) => i.id === shown.id) ?? shown;
     const a = it.answer;
     if (!a || !review?.run) {
       if (text) pending.set(it.id, text);

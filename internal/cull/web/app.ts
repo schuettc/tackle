@@ -18,10 +18,11 @@ import {
   type StatusTone,
 } from '/_kit/kit.js';
 import { ApiError, client, newApi, type AnswerIn } from './api.ts';
-import { buckets as bucketsOf } from './bulk.ts';
+import { buckets as bucketsOf, bulkTargets } from './bulk.ts';
 import { groupItem } from './group.ts';
 import { testItem } from './item.ts';
 import { actP, concern, lean, strength } from './model.ts';
+import { retryDelay } from './retry.ts';
 import {
   BLIND_BUCKET,
   GROUP_BUCKETS,
@@ -100,7 +101,10 @@ export function boot(): void {
   let dirty = false;
   let liveHandle: ReturnType<typeof live> | null = null;
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
-  let wasDown = false;
+  let prevLive: LiveStatus = 'live';
+  let loadAttempt = 0;
+  let loadTimer: ReturnType<typeof setTimeout> | undefined;
+  const conflicted: (() => void)[] = []; // undo for answers a 409 dropped
   let flashing = false;
   let reloadNote = '';
   const pending = new Map<string, string>(); // notes waiting for an answer
@@ -277,23 +281,7 @@ export function boot(): void {
     },
     onSelect(sel) {
       selCount.textContent = sel.length ? `${sel.length} selected` : '';
-      const [no, yes] =
-        section === 'tests' ? ['keep', 'cut'] : ['separate', 'merge'];
-      footBtns.replaceChildren(
-        sel.length
-          ? buttons([
-              {
-                label: `${no} ${sel.length}`,
-                run: () => ctx.answer(sel, no, 'group'),
-              },
-              {
-                label: `${yes} ${sel.length}`,
-                danger: yes === 'cut',
-                run: () => ctx.answer(sel, yes, 'group'),
-              },
-            ])
-          : '',
-      );
+      footBtns.replaceChildren(footButtons(sel));
     },
     foot: h(
       'span',
@@ -304,12 +292,46 @@ export function boot(): void {
     ),
   });
 
+  // The foot never overwrites an answer: in answered it only unanswers; in an
+  // open bucket it answers what has no answer yet.
+  function footButtons(sel: Item[]): Node | string {
+    if (!sel.length) return '';
+    if (bucket === 'answered') {
+      return buttons([
+        {
+          label: `unanswer ${sel.length}`,
+          run() {
+            l.clearSelection();
+            sel.forEach(unanswer);
+          },
+        },
+      ]);
+    }
+    const targets = bulkTargets(sel, answerMap());
+    if (!targets.length) return '';
+    const [no, yes] =
+      section === 'tests' ? ['keep', 'cut'] : ['separate', 'merge'];
+    return buttons([
+      {
+        label: `${no} ${targets.length}`,
+        run: () => ctx.answer(bulkTargets(sel, answerMap()), no, 'group'),
+      },
+      {
+        label: `${yes} ${targets.length}`,
+        danger: yes === 'cut',
+        run: () => ctx.answer(bulkTargets(sel, answerMap()), yes, 'group'),
+      },
+    ]);
+  }
+
   function chips(): void {
     const bk = bucketsNow(section);
     const out: Chip[] = [
       ...wordsOf(section).map((w) => ({ id: w.id, label: w.label })),
       { id: 'answered', label: 'answered' },
-    ].map((w) => ({ ...w, count: bk[w.id].length, on: bucket === w.id }));
+    ]
+      .map((w) => ({ ...w, count: bk[w.id].length, on: bucket === w.id }))
+      .filter((c) => c.count > 0 || c.on || c.id === 'answered');
     l.setChips('view', out);
   }
 
@@ -389,6 +411,7 @@ export function boot(): void {
     chips();
     const shown = listItems();
     l.setItems(shown);
+    footBtns.replaceChildren(footButtons(l.selected()));
     const view = `${section}/${bucket}/${openId ?? ''}`;
     if (it) {
       const idx = shown.findIndex((x) => x.id === it.id);
@@ -397,9 +420,18 @@ export function boot(): void {
         l.open(idx);
         syncing = false;
       }
-      read.replaceChildren(
-        it.kind === 'test' ? testItem(ctx, it) : groupItem(ctx, it),
-      );
+      // A half-typed note survives a re-render (another tab's change).
+      const oldNote = read.querySelector<HTMLInputElement>('.kit-note');
+      const hadFocus = !!oldNote && document.activeElement === oldNote;
+      const keepNote =
+        oldNote &&
+        lastView === view &&
+        (document.activeElement === oldNote ||
+          oldNote.value !== ctx.noteOf(it));
+      const doc = it.kind === 'test' ? testItem(ctx, it) : groupItem(ctx, it);
+      if (keepNote) doc.querySelector('.kit-note')?.replaceWith(oldNote);
+      read.replaceChildren(doc);
+      if (keepNote && hadFocus) oldNote.focus();
     } else {
       const words = wordsOf(section).find((w) => w.id === bucket) ?? null;
       read.replaceChildren(
@@ -453,6 +485,7 @@ export function boot(): void {
     }
     if (r.project !== project || !review) {
       project = r.project;
+      loadAttempt = 0;
       openId = r.item || null;
       void load();
       return;
@@ -464,8 +497,10 @@ export function boot(): void {
 
   // ---- loading and live ------------------------------------------------------
   async function load(): Promise<void> {
+    clearTimeout(loadTimer);
     try {
       const r = await api.review(project);
+      loadAttempt = 0;
       review = r;
       const known = openId && r.items.some((i) => i.id === openId);
       if (!known) openId = null;
@@ -488,10 +523,14 @@ export function boot(): void {
       review = null;
       l.setItems([]);
       refreshBar();
-      const msg =
-        err instanceof ApiError && err.status === 404
-          ? 'cull does not know that project; open this page with cull serve <path>'
-          : `could not load the review: ${String((err as Error).message ?? err)}`;
+      if (err instanceof ApiError && err.isStale) return;
+      const notFound = err instanceof ApiError && err.status === 404;
+      if (!notFound) {
+        loadTimer = setTimeout(() => void load(), retryDelay(loadAttempt++));
+      }
+      const msg = notFound
+        ? 'cull does not know that project; open this page with cull serve <path>'
+        : 'cull serve is not answering; retrying.';
       read.replaceChildren(
         h('div', { class: 'kit-doc' }, h('p', { class: 'lead' }, msg)),
       );
@@ -517,21 +556,31 @@ export function boot(): void {
     render();
   }
 
-  async function reload(): Promise<void> {
-    if (!project) return;
+  async function reload(): Promise<boolean> {
+    if (!project) return true;
     if (inflight > 0 || loading) {
       dirty = true;
-      return;
+      return true;
     }
     loading = true;
     try {
       do {
         dirty = false;
         applyReview(await api.review(project));
+        conflicted.length = 0;
       } while (dirty && inflight === 0);
+      return true;
     } catch (err) {
-      if (!(err instanceof ApiError && err.isStale))
+      if (err instanceof ApiError && err.isStale) return false;
+      if (conflicted.length) {
+        // The answers a 409 dropped cannot be replaced by the server's truth.
+        conflicted.splice(0).forEach((u) => u());
+        render();
+        flash('Could not reload; refresh the page.', 'danger');
+      } else {
         flash(`could not reload: ${(err as Error).message}`, 'danger');
+      }
+      return false;
     } finally {
       loading = false;
     }
@@ -554,16 +603,14 @@ export function boot(): void {
           goStale();
           return;
         }
+        const was = prevLive;
+        prevLive = s;
         if (s === 'down') {
-          wasDown = true;
           b.setLive('down', 'disconnected');
           return;
         }
         b.setLive(s);
-        if (wasDown) {
-          wasDown = false;
-          void reload();
-        }
+        if (s === 'live' && was !== 'live') void reload();
       },
     });
   }
@@ -583,6 +630,7 @@ export function boot(): void {
         if (err instanceof ApiError && err.status === 409) {
           // The run moved on under this answer: drop it and reload.
           reloadNote = 'The review changed; reloaded.';
+          conflicted.push(undo);
           dirty = true;
           return;
         }
@@ -594,8 +642,8 @@ export function boot(): void {
       .finally(() => {
         inflight--;
         if (inflight === 0 && dirty) {
-          void reload().then(() => {
-            if (reloadNote) flash(reloadNote);
+          void reload().then((ok) => {
+            if (ok && reloadNote) flash(reloadNote);
             reloadNote = '';
           });
         }
@@ -606,6 +654,7 @@ export function boot(): void {
     if (!review?.run || !items.length) return;
     const run = review.run.id;
     const prev = items.map((it) => it.answer);
+    const waiting = items.map((it) => pending.get(it.id));
     const viewing = openId;
     const idx = viewing ? listItems().findIndex((x) => x.id === viewing) : -1;
     const body: AnswerIn[] = items.map((it) => {
@@ -643,6 +692,8 @@ export function boot(): void {
       () =>
         items.forEach((it, i) => {
           it.answer = prev[i];
+          const w = waiting[i];
+          if (w !== undefined) pending.set(it.id, w);
         }),
     );
   }
@@ -661,7 +712,9 @@ export function boot(): void {
     );
   }
 
-  function setNote(it: Item, text: string): void {
+  function setNote(shown: Item, text: string): void {
+    // The field may outlive a re-render: write to the item the page holds now.
+    const it = review?.items.find((i) => i.id === shown.id) ?? shown;
     const a = it.answer;
     if (!a || !review?.run) {
       if (text) pending.set(it.id, text);

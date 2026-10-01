@@ -346,6 +346,31 @@ async function main() {
     ),
   );
 
+  // ---- the selection foot: in answered it only unanswers
+  console.log('selection foot');
+  const fp = await open(pageUrl());
+  await fp.locator('.kit-chip', { hasText: 'answered' }).click();
+  await fp.waitForSelector('.kit-row .kit-box');
+  await fp.locator('.kit-row .kit-box').nth(0).click();
+  await fp.locator('.kit-row .kit-box').nth(1).click();
+  const footBtn = (await fp.locator('.kit-foot button').allInnerTexts()).map(
+    (t) => t.replace(/\s+/g, ' ').trim(),
+  );
+  check(
+    'two answered rows selected: the foot offers only unanswer 2',
+    footBtn.length === 1 && footBtn[0] === 'unanswer 2',
+    footBtn.join(' | '),
+  );
+  const answeredBefore = (await answered()).length;
+  if (footBtn[0] === 'unanswer 2')
+    await fp.locator('.kit-foot button', { hasText: 'unanswer 2' }).click();
+  check(
+    'unanswer 2 removes exactly those two answers',
+    await until(async () => (await answered()).length === answeredBefore - 2),
+    String((await answered()).length),
+  );
+  await fp.close();
+
   // ---- 7. a second page sees an answer within 3 s
   console.log('two tabs');
   const other = await open(pageUrl());
@@ -382,6 +407,16 @@ async function main() {
     !(await blind.locator('.kit-list').innerText())
       .toLowerCase()
       .includes('leans'),
+  );
+  const metas = await blind.locator('.kit-row .kit-meta').allInnerTexts();
+  const listText = (await blind.locator('.kit-list').innerText()).toLowerCase();
+  check(
+    'blind rows show "·" as meta for open rows and no leaning words',
+    metas.length > 0 &&
+      metas.every((m) => m.trim() === '·') &&
+      !listText.includes('leaning') &&
+      !listText.includes('slightly'),
+    metas.slice(0, 3).join('|'),
   );
   const open1 = await blind.locator('.kit-row').first();
   const blindName = norm(await open1.locator('.kit-title').innerText());
@@ -422,10 +457,9 @@ async function main() {
   await page.locator('.kit-ctl', { hasText: 'groups' }).click();
   const gchips = (await chipText(page)).map(norm);
   check(
-    'groups chips: leans merge 3, leans separate 5, undecided 0',
-    ['leans merge 3', 'leans separate 5', 'undecided 0'].every((c) =>
-      gchips.includes(c),
-    ),
+    'groups chips: leans merge 3, leans separate 5; the empty undecided chip is hidden',
+    ['leans merge 3', 'leans separate 5'].every((c) => gchips.includes(c)) &&
+      !gchips.some((c) => c.startsWith('undecided')),
     gchips.join(' | '),
   );
   check(
@@ -507,12 +541,7 @@ async function main() {
   );
   check(
     'nothing was stored for the changed test',
-    !(await answered()).some(
-      (i) =>
-        i.id === victim.id &&
-        i.answer?.value === 'keep' &&
-        i.hash.startsWith('sha256:mutated'),
-    ),
+    !(await answered()).some((i) => i.id === victim.id),
   );
   // A new run arrives while an item is open: the page reloads on its own; the
   // open item changed, so it goes back to the overview with a note.
@@ -536,12 +565,155 @@ async function main() {
   const keepOpen = expectBuckets.review[2];
   await live.goto(pageUrl({}, `#/p/${pid}/${encodeURIComponent(keepOpen.id)}`));
   await live.waitForSelector('.kit-doc h1');
-  serve.reseed({ mutate: changed.id });
-  await sleep(3500);
+  const undecided = async () =>
+    norm((await chipText(live)).find((c) => c.startsWith('undecided')) ?? '');
+  const undBefore = await undecided();
+  const dropped = expectBuckets.review[3];
+  serve.reseed({ mutate: changed.id, drop: dropped.id });
+  const wantUnd = `undecided ${Number(undBefore.split(' ')[1]) - 1}`;
+  check(
+    'the new run arrives (the undecided count drops by one)',
+    await until(async () => (await undecided()) === wantUnd, 6000),
+    `${undBefore} -> ${await undecided()}`,
+  );
   check(
     'a new run that leaves the open test alone keeps it open',
     (await live.locator('.kit-doc h1').innerText()) === keepOpen.name,
   );
+
+  // ---- a failure that is not a 409 rolls the answer back
+  console.log('failed save');
+  const failing = await ctx.newPage();
+  failing.on('pageerror', (e) => errors.push(String(e)));
+  const target = expectBuckets.review[4];
+  const targetFrag = `#/p/${pid}/${encodeURIComponent(target.id)}`;
+  await failing.goto(pageUrl({}, targetFrag));
+  await failing.waitForSelector('.kit-doc h1');
+  await failing.route('**/api/answers*', (r) =>
+    r.request().method() === 'PUT'
+      ? r.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'disk on fire' }),
+        })
+      : r.continue(),
+  );
+  await failing.keyboard.press('n');
+  await failing.keyboard.type('keep this note');
+  await failing.keyboard.press('Enter');
+  await failing.evaluate(
+    () =>
+      document.activeElement instanceof HTMLElement &&
+      document.activeElement.blur(),
+  );
+  await failing.keyboard.press('1');
+  check(
+    'a failed save says "Not saved: …" in the bar',
+    await until(async () =>
+      norm(await failing.locator('.kit-status').innerText()).startsWith(
+        'Not saved:',
+      ),
+    ),
+    await failing.locator('.kit-status').innerText(),
+  );
+  check(
+    'the failed answer was rolled back (nothing stored)',
+    !(await answered()).some((i) => i.id === target.id),
+  );
+  await failing.evaluate((f) => {
+    location.hash = f;
+  }, `#/p/${pid}`);
+  await failing.evaluate((f) => {
+    location.hash = f;
+  }, targetFrag);
+  check(
+    'the item is open again, unanswered',
+    await until(
+      async () =>
+        (await failing.locator('.kit-doc h1').innerText()) === target.name &&
+        (await failing.getByText('unanswer (u)').count()) === 0,
+    ),
+  );
+  check(
+    'the note waits for the next answer (a rolled back note stays pending)',
+    (await failing.locator('.kit-note').inputValue()) === 'keep this note',
+    JSON.stringify(await failing.locator('.kit-note').inputValue()),
+  );
+  await failing.close();
+
+  // ---- a half-typed note survives another tab's change
+  console.log('half-typed note');
+  const typing = await open(
+    pageUrl({}, `#/p/${pid}/${encodeURIComponent(expectBuckets.review[5].id)}`),
+  );
+  await typing.waitForSelector('.kit-doc h1');
+  await typing.keyboard.press('n');
+  await typing.keyboard.type('half typed');
+  const rv = await review();
+  const mate = rv.items.find((i) => i.id === expectBuckets.review[6].id);
+  await api('/api/answers', {
+    method: 'PUT',
+    body: JSON.stringify({
+      project: pid,
+      run: rv.run.id,
+      answers: [
+        {
+          id: mate.id,
+          hash: mate.hash,
+          kind: mate.kind,
+          value: 'keep',
+          note: '',
+          via: 'item',
+          blind: false,
+        },
+      ],
+    }),
+  });
+  await until(async () =>
+    (await typing.locator('.kit-chip').allInnerTexts())
+      .map(norm)
+      .some((c) => c.startsWith('answered') && !c.endsWith(' 0')),
+  );
+  await sleep(1500);
+  check(
+    'the note field keeps its text and focus after a re-render',
+    (await typing.locator('.kit-note').inputValue()) === 'half typed' &&
+      (await typing.evaluate(() =>
+        document.activeElement?.classList.contains('kit-note'),
+      )),
+    JSON.stringify([
+      await typing.locator('.kit-note').inputValue(),
+      await typing.evaluate(() => document.activeElement?.className),
+    ]),
+  );
+  await typing.close();
+
+  // ---- the first load fails, then the page retries
+  console.log('first load retry');
+  const retry = await ctx.newPage();
+  retry.on('pageerror', (e) => errors.push(String(e)));
+  let refused = 0;
+  await retry.route('**/api/review*', (r) =>
+    refused++ < 1 ? r.abort() : r.continue(),
+  );
+  await retry.goto(pageUrl());
+  check(
+    'a failed first load says cull serve is not answering',
+    await until(async () =>
+      (await retry.locator('main.kit-read').innerText()).includes(
+        'cull serve is not answering; retrying.',
+      ),
+    ),
+    await retry.locator('main.kit-read').innerText(),
+  );
+  check(
+    'the page loads on its own once serve answers',
+    !!(await until(
+      async () => (await retry.locator('.kit-chip').count()) > 0,
+      5000,
+    )),
+  );
+  await retry.close();
 
   check('no page errors', errors.length === 0, errors.join('; '));
   console.log('  screenshots:', shots.join(' '));
