@@ -151,6 +151,7 @@ function setupHome(
   seedFiles = {},
   seedClones = [],
   syncInterval = '30m',
+  slowRemote = false,
 ) {
   const fixture = join(here, 'testdata', 'home');
   const home =
@@ -195,6 +196,8 @@ function setupHome(
     git('add -A');
     git('commit -q -m "probe: seed machine snapshots"');
   }
+
+  if (slowRemote) makeSlowRemote(home, repoPath);
 
   // Copy the github cache to the state directory, which is where CachePath()
   // looks: $CASEBOOK_HOME/state/github.json (tools.StateDir("casebook") joins
@@ -322,6 +325,36 @@ function makeClone(home, c) {
   };
 }
 
+// makeSlowRemote gives the casebook-data clone a bare "origin" under
+// <home>/remotes (instead of the fixture bundle, which can't take a push),
+// holding everything the clone has, so nothing is queued at the start. Its
+// pre-receive hook holds every push after that: it touches
+// <home>/push-gate/started, then waits (up to 60 s) for
+// <home>/push-gate/release. The hook is local: the push never leaves the
+// probe's temp home.
+function makeSlowRemote(home, repoPath) {
+  const remote = join(home, 'remotes', 'casebook-data.git');
+  const gate = join(home, 'push-gate');
+  mkdirSync(dirname(remote), { recursive: true });
+  mkdirSync(gate, { recursive: true });
+  const git = (dir, args) => probeGit(dir, args, home);
+  git(home, `init -q --bare "${remote}"`);
+  git(repoPath, `remote set-url origin "${remote}"`);
+  git(repoPath, 'push -q origin HEAD:main');
+  git(repoPath, 'fetch -q origin');
+  writeFileSync(
+    join(remote, 'hooks', 'pre-receive'),
+    `#!/bin/sh
+cat >/dev/null
+touch '${gate}/started'
+i=0
+while [ ! -f '${gate}/release' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+exit 0
+`,
+    { mode: 0o755 },
+  );
+}
+
 // Wait up to timeoutMs for the advert file to appear and return its contents.
 function waitForAdvert(advertPath, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
@@ -358,6 +391,7 @@ export async function startServe(opts = {}) {
     opts.seedFiles,
     opts.seedClones,
     opts.syncInterval,
+    opts.slowRemote,
   );
   const advertPath = join(home, 'state', 'live', 'serve.json');
 
@@ -421,6 +455,14 @@ export async function startServe(opts = {}) {
     base: adv.base,
     token: adv.token,
     home,
+    /**
+     * The slow remote's gate (opts.slowRemote): started() says a push is
+     * being held, release() lets every push through from now on.
+     */
+    pushGate: {
+      started: () => existsSync(join(home, 'push-gate', 'started')),
+      release: () => writeFileSync(join(home, 'push-gate', 'release'), ''),
+    },
     /** Every gh call serve made (to the fake), one line each. */
     ghCalls() {
       const log = join(home, 'gh-calls.log');

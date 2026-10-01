@@ -12,8 +12,10 @@
 //   serve isn't answering …        spec §2.4 "serve dies": the banner, retry
 //   a restarted serve …            spec §2.4: the stale pill, the tab stops
 //   decisions queued offline …     spec §2.4 "offline": offline · N queued
+//   a slow push …                  the decide sheet closes on serve's answer,
+//                                  not on the push after it
 
-import { startServe } from './serve.mjs';
+import { probeGit, startServe } from './serve.mjs';
 import { createAgent } from './agent.mjs';
 
 let serves = [];
@@ -192,6 +194,7 @@ export async function shellScenarios(shared, t) {
     ['the disconnected banner', downScenario],
     ['the stale pill', staleScenario],
     ['offline · N queued', offlineQueuedScenario],
+    ['a slow push', slowPushScenario],
     ['the stale pill from an API call', staleApiScenario],
     ['200 rows and "show more"', pageCapScenario],
     ["the board's search", boardSearchScenario],
@@ -415,17 +418,13 @@ async function keyboardScenario(shared, t) {
               !!document.querySelector('.kit-primary')?.hidden,
           ),
         );
-        // serve announces the decision before it answers (it pushes and
-        // rebuilds first): the sheet stays, modal, until the answer. Keys
-        // wait while a sheet is open, so the next key waits for it to close.
+        // serve announces the decision (and the rebuilt index) just before
+        // it answers, so the rows can leave while the sheet, modal, is still
+        // open. Keys wait while a sheet is open: the next key waits for it
+        // to close.
         check(
           'the decide sheet closes when serve answers',
-          await until(
-            pg,
-            () => !document.querySelector('.kit-sheet'),
-            undefined,
-            10000,
-          ),
+          await until(pg, () => !document.querySelector('.kit-sheet')),
         );
 
         // a accepts the open item's proposal; r rejects it (its sheet).
@@ -1409,7 +1408,7 @@ async function staleScenario(shared, t) {
 // ---- decisions queued offline ---------------------------------------------------
 
 async function offlineQueuedScenario(shared, t) {
-  const { check, until } = t;
+  const { check, until, eventually } = t;
   console.log(
     '\nscenario: decisions queued offline show as "offline · N queued"',
   );
@@ -1464,7 +1463,13 @@ async function offlineQueuedScenario(shared, t) {
               keys: [`pr:schuettc/${OQ}#${pr}`],
               disposition: 'keep',
             });
-            const sum = await agent.api('GET', '/api/summary');
+            // serve answers before its push to the casebook remote; the
+            // count is the push's to say once it has failed.
+            let sum = {};
+            await eventually(async () => {
+              sum = await agent.api('GET', '/api/summary');
+              return sum.offline_queued === n;
+            });
             const shown = await until(
               pg,
               (w) => document.querySelector('.kit-status')?.textContent === w,
@@ -1479,6 +1484,145 @@ async function offlineQueuedScenario(shared, t) {
                 s.color === danger,
             );
           }
+        } finally {
+          await pg.close();
+        }
+      }),
+  );
+}
+
+// ---- a slow push ------------------------------------------------------------------
+
+// slowPushScenario: serve answers a decide once the decision is committed
+// and the index rebuilt; the push to the casebook remote follows. Here the
+// remote (a bare repo in the temp home) holds every push in its pre-receive
+// hook until released: the decide sheet closes, and the keys come back,
+// while the push is held, and the status doesn't call it offline.
+async function slowPushScenario(shared, t) {
+  const { check, until, eventually } = t;
+  console.log("\nscenario: a slow push doesn't hold the decide sheet");
+  const SP = 'sp-probe';
+  const KEY = `pr:schuettc/${SP}#71`;
+  await withServe(
+    {
+      slowRemote: true,
+      seedRepos: [
+        seedRepo(SP, [
+          [71, 'decide while the push is held', 'uma'],
+          [72, 'stay in the list', 'uma'],
+        ]),
+      ],
+    },
+    (serveHandle) =>
+      withContext(shared, async (context) => {
+        const remote = `${serveHandle.home}/remotes/casebook-data.git`;
+        const remoteLog = () =>
+          probeGit(remote, 'log --format=%s main', serveHandle.home);
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        const sum0 = await agent.api('GET', '/api/summary');
+        check(
+          `the slow remote has everything at the start (offline_queued ${sum0.offline_queued})`,
+          sum0.offline_queued === 0,
+        );
+        const pg = await context.newPage();
+        try {
+          await pg.setViewportSize({ width: 1600, height: 900 });
+          await pg.goto(`${serveHandle.url}&q=${SP}#/attention/waiting`, {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          const two = await until(
+            pg,
+            (sel) => document.querySelectorAll(`${sel} .kit-row`).length === 2,
+            SHOWN,
+            15000,
+          );
+          const rows = await rowsOf(pg);
+          const at = rows.findIndex((r) =>
+            r.title.includes('decide while the push is held'),
+          );
+          check(
+            `two rows, the one to decide among them (row ${at})`,
+            two && at >= 0,
+          );
+          // Put the cursor on it and select it.
+          for (let i = 0; i < 4 && (await curOf(pg)) !== at; i++) {
+            const cur = await curOf(pg);
+            await press(pg, cur < at ? 'j' : 'k');
+          }
+          await press(pg, 'x');
+          check(
+            'x selects it: "Decide 1"',
+            await until(
+              pg,
+              () =>
+                document.querySelector('.kit-primary')?.textContent ===
+                'Decide 1',
+            ),
+          );
+          await pg.click('.kit-primary');
+          await until(pg, () => !!document.querySelector('.kit-sheet'));
+          await pg.click('.kit-sheet .cb-sheet-disp:has-text("keep")');
+          const t0 = Date.now();
+          await pg.click('.kit-sheet .kit-btn:has-text("Decide 1")');
+          const closed = await until(
+            pg,
+            () => !document.querySelector('.kit-sheet'),
+            undefined,
+            3000,
+          );
+          const ms = Date.now() - t0;
+          const held = await eventually(async () =>
+            serveHandle.pushGate.started(),
+          );
+          const onRemote = remoteLog().includes(`decide ${KEY}`);
+          check(
+            `the decide sheet closes on serve's answer (${ms} ms) while the push is held (held ${held}, on the remote ${onRemote})`,
+            closed && held && !onRemote && ms < 3000,
+          );
+          const v = await agent.api(
+            'GET',
+            `/api/item?key=${encodeURIComponent(KEY)}`,
+          );
+          check(
+            `serve has it decided (keep) while its push is held (${v?.item?.decision?.disposition})`,
+            v?.item?.decision?.disposition === 'keep' &&
+              serveHandle.pushGate.started() &&
+              !remoteLog().includes(`decide ${KEY}`),
+          );
+          await pg.waitForTimeout(300);
+          const during = await pg.$eval('.kit-status', (e) => e.textContent);
+          check(
+            `a push on its way isn't offline: the status reads "${during}"`,
+            /^synced \d+m ago · probe$/.test(during ?? ''),
+          );
+          await press(pg, '?');
+          const keysBack = await until(
+            pg,
+            () => !!document.querySelector('.kit-keys'),
+          );
+          await pg.keyboard.press('Escape');
+          check(
+            `the keys work again while the push is held (? opens the overlay: ${keysBack})`,
+            keysBack && !remoteLog().includes(`decide ${KEY}`),
+          );
+          serveHandle.pushGate.release();
+          check(
+            'released, the push puts the decision on the remote',
+            await eventually(
+              async () => remoteLog().includes(`decide ${KEY}`),
+              10000,
+            ),
+          );
+          const after = await eventually(async () => {
+            const sum = await agent.api('GET', '/api/summary');
+            return sum.offline_queued === 0;
+          });
+          const status = await pg.$eval('.kit-status', (e) => e.textContent);
+          check(
+            `and nothing is queued after it (status "${status}")`,
+            after && /^synced \d+m ago · probe$/.test(status ?? ''),
+          );
         } finally {
           await pg.close();
         }

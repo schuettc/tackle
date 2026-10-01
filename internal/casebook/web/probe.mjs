@@ -4500,7 +4500,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 647;
+const MIN_CHECKS = 656;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5112,7 +5112,6 @@ async function run() {
                   keys.length > 1
                     ? [keys[1] + ': disposition not allowed for this kind']
                     : [],
-                pushed: false,
               }),
             });
           });
