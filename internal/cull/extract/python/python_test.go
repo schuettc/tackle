@@ -521,3 +521,66 @@ func TestPyTidyEditsImportsInPlace(t *testing.T) {
 		})
 	}
 }
+
+func calleeSymbols(cs []cases.Callee) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Symbol
+	}
+	return out
+}
+
+func TestReferencedConstantIsCodeUnderTest(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_const")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "HONEST_SEASONS" {
+		t.Fatalf("Callees = %v, want [HONEST_SEASONS]", calleeSymbols(tc.Callees))
+	}
+	if want := "HONEST_SEASONS = (2022, 2023, 2024)\n"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+	if tc.Callees[0].File != "src/pkg/consts.py" {
+		t.Errorf("file = %q", tc.Callees[0].File)
+	}
+}
+
+func TestReferencedClassIsCodeUnderTest(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_class")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Cause" {
+		t.Fatalf("Callees = %v, want [Cause] (deduped)", calleeSymbols(tc.Callees))
+	}
+	if want := "class Cause:\n    kind = \"x\"\n"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+}
+
+func TestInnerImportResolved(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_inner_import")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "OTHER" || tc.Callees[0].Source != "OTHER = 1\n" {
+		t.Fatalf("Callees = %+v, want [OTHER]", tc.Callees)
+	}
+}
+
+func TestCallsBeforeReferencedNames(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_order")
+	got := strings.Join(calleeSymbols(tc.Callees), ",")
+	if want := "helper,LIMIT,HONEST_SEASONS"; got != want {
+		t.Errorf("order = %s", got)
+	}
+}
+
+func TestReferencedNameHonorsBudget(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 10)
+	tc := caseByID(t, res, "py:tests/test_refs.py:test_const")
+	if len(tc.Callees) != 0 || !tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
+	}
+}

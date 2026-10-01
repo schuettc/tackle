@@ -323,6 +323,8 @@ def top_defs(path):
             for t in n.targets:
                 if isinstance(t, ast.Name):
                     out[t.id] = seg(src, n)
+        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            out[n.target.id] = seg(src, n)
     return out, tree, src
 
 
@@ -408,6 +410,31 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
             hit = (f.id, resolve(imports[f.id], f.id))
         elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in attr_mods:
             hit = (f"{f.value.id}.{f.attr}", resolve(attr_mods[f.value.id], f.attr))
+        if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1]):
+            callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
+    # Referenced names (constants, classes, functions read but not called),
+    # after the call targets, in first-reference order.
+    call_funcs = {id(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    refs = []
+    for r in ast.walk(fn):
+        if isinstance(r, ast.Name) and isinstance(r.ctx, ast.Load):
+            refs.append(r)
+        elif (
+            isinstance(r, ast.Attribute)
+            and isinstance(r.ctx, ast.Load)
+            and isinstance(r.value, ast.Name)
+        ):
+            refs.append(r)
+    refs.sort(key=lambda r: (r.lineno, r.col_offset))
+    for r in refs:
+        if id(r) in call_funcs:
+            continue
+        hit = None
+        if isinstance(r, ast.Name):
+            if r.id in imports:
+                hit = (r.id, resolve(imports[r.id], r.id))
+        elif r.value.id in attr_mods:
+            hit = (f"{r.value.id}.{r.attr}", resolve(attr_mods[r.value.id], r.attr))
         if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1]):
             callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
 

@@ -435,3 +435,51 @@ func TestTsTidyEditsImportsInPlace(t *testing.T) {
 		})
 	}
 }
+
+func calleeSymbols(cs []cases.Callee) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Symbol
+	}
+	return out
+}
+
+func TestReferencedConstIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:const")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "SEASONS" {
+		t.Fatalf("Callees = %v, want [SEASONS]", calleeSymbols(tc.Callees))
+	}
+	if want := "export const SEASONS = [2022, 2023, 2024];"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+}
+
+func TestReferencedClassIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:class")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Cause" {
+		t.Fatalf("Callees = %v, want [Cause]", calleeSymbols(tc.Callees))
+	}
+}
+
+func TestReferencedEnumIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:enum")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Color" {
+		t.Fatalf("Callees = %v, want [Color]", calleeSymbols(tc.Callees))
+	}
+}
+
+func TestNamespaceImportMembers(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:namespace")
+	got := strings.Join(calleeSymbols(tc.Callees), ",")
+	if got != "c.helper" {
+		t.Errorf("Callees = %s, want c.helper", got)
+	}
+}

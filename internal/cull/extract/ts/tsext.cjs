@@ -73,6 +73,7 @@ function topDecls(sf) {
       (ts.isFunctionDeclaration(st) ||
         ts.isClassDeclaration(st) ||
         ts.isInterfaceDeclaration(st) ||
+        ts.isEnumDeclaration(st) ||
         ts.isTypeAliasDeclaration(st)) &&
       st.name
     ) {
@@ -166,12 +167,14 @@ function extractMain(args) {
   const byteAt = utf16ToByteMap(src);
   const local = topDecls(sf);
   const imports = Object.create(null);
+  const nsImports = Object.create(null); // import * as ns -> file
   for (const st of sf.statements) {
     if (!ts.isImportDeclaration(st) || !st.importClause) continue;
     if (!ts.isStringLiteralLike(st.moduleSpecifier)) continue;
     const target = resolveImport(file, st.moduleSpecifier.text);
     if (!target) continue;
     const nb = st.importClause.namedBindings;
+    if (nb && ts.isNamespaceImport(nb)) nsImports[nb.name.text] = target;
     if (nb && ts.isNamedImports(nb)) {
       for (const el of nb.elements) imports[el.name.text] = { file: target, orig: (el.propertyName ?? el.name).text };
     }
@@ -219,6 +222,27 @@ function extractMain(args) {
         if (s && !callees.some((c) => c.symbol === n) && add(s)) {
           callees.push({ symbol: n, file: path.relative(root, imp.file).split(path.sep).join("/"), source: s });
         }
+      }
+    }
+
+    // ns.NAME through a namespace import, in first-reference order.
+    const nsRefs = [];
+    (function walkNs(n) {
+      if (
+        ts.isPropertyAccessExpression(n) &&
+        ts.isIdentifier(n.expression) &&
+        nsImports[n.expression.text] &&
+        ts.isIdentifier(n.name)
+      ) {
+        nsRefs.push({ ns: n.expression.text, name: n.name.text });
+      }
+      ts.forEachChild(n, walkNs);
+    })(node);
+    for (const { ns, name } of nsRefs) {
+      const symbol = `${ns}.${name}`;
+      const s = declsOf(nsImports[ns])[name];
+      if (s && !callees.some((c) => c.symbol === symbol) && add(s)) {
+        callees.push({ symbol, file: path.relative(root, nsImports[ns]).split(path.sep).join("/"), source: s });
       }
     }
 
