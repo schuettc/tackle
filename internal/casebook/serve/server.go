@@ -371,7 +371,9 @@ func (s *Server) repoHead(ctx context.Context) string {
 // §4.2 updated: rules run in serve, not in casebook sync).
 //
 // rebuild is serialized by rebuildMu so that rule evaluation never runs twice
-// at once. Rule-error notices are set atomically with the rebuilt result under
+// at once. It reads casebook-data under the store's shared lock (Repo.Read),
+// so every caller (a decide, a rule write, a sync, the watch loop) sees one
+// whole tree. Rule-error notices are set atomically with the rebuilt result under
 // one Index lock (via Index.set), so a concurrent reader never sees a new Head
 // without the accompanying notices.
 func (s *Server) rebuild(ctx context.Context) error {
@@ -381,17 +383,33 @@ func (s *Server) rebuild(ctx context.Context) error {
 
 	s.rebuilds.Add(1)
 
-	// Build the engine result first (outside any Index lock).
+	// Build the engine result first (outside any Index lock), from one whole
+	// tree: the head, the build and the rules are read under casebook-data's
+	// shared lock, so no rebase (serve's push, another process's sync) or
+	// write+commit is halfway meanwhile. Mid-rebase the tree is the remote's
+	// commits without the local ones: a decision just made would read as
+	// undecided, and an active rule would propose it.
 	now := s.Now()
-	head := s.repoHead(ctx)
-	res, err := s.build(ctx)
-	if err != nil {
+	var (
+		head     string
+		res      engine.Result
+		allRules []rules.Rule
+		ruleErrs []error
+	)
+	if err := s.App.Repo.Read(ctx, func() error {
+		head = s.repoHead(ctx)
+		var err error
+		if res, err = s.build(ctx); err != nil {
+			return err
+		}
+		allRules, ruleErrs = s.App.Repo.Rules()
+		return nil
+	}); err != nil {
 		return err
 	}
 
-	// Load rules and evaluate active ones. Rule-load and validation errors are
-	// collected as notices; they never abort the rebuild.
-	allRules, ruleErrs := s.App.Repo.Rules()
+	// Rule-load and validation errors are collected as notices; they never
+	// abort the rebuild.
 	var notices []string
 	for _, re := range ruleErrs {
 		notices = append(notices, "rule: "+re.Error())
