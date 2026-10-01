@@ -529,7 +529,20 @@ export async function startServe(opts = {}) {
     },
     stop() {
       if (!exited) proc.kill();
-      rmSync(home, { recursive: true, force: true });
+      // serve shuts down gracefully and may still be finishing a background
+      // push into home for a moment after the kill, so a single rm can meet
+      // ENOTEMPTY. Retry with backoff; a home that still can't be removed is
+      // a temp-dir leak, never a reason to fail the run.
+      try {
+        rmSync(home, {
+          recursive: true,
+          force: true,
+          maxRetries: 20,
+          retryDelay: 100,
+        });
+      } catch (err) {
+        console.error(`probe: could not remove ${home}: ${err.code ?? err}`);
+      }
     },
   };
 }
