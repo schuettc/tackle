@@ -19,6 +19,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/observe"
 	"github.com/schuettc/tackle/internal/casebook/record"
+	"github.com/schuettc/tackle/internal/casebook/store"
 	"github.com/schuettc/tackle/internal/casebook/temppath"
 	tools "github.com/schuettc/tools-common"
 )
@@ -403,6 +404,39 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
+			Name: "prune", Group: "setup", Synopsis: "prune --temp [--apply] [--no-push] [--json]",
+			Summary:  "remove journalled git activity in temp folders (dry run unless --apply)",
+			Help:     "Only this machine's journal files and machines/<machine>.json change; other lines stay byte for byte.\nHistory is not rewritten: removed lines stay recoverable from casebook-data's git log.",
+			NewFlags: pruneFlags,
+			Run: func(args []string, out, errw io.Writer) error {
+				fs := pruneFlags()
+				if _, err := parse(fs, args, out); err != nil {
+					return err
+				}
+				if !boolFlag(fs, "temp") {
+					return tools.UsageError{Msg: "prune needs --temp (the only kind of prune there is)"}
+				}
+				a, err := open()
+				if err != nil {
+					return err
+				}
+				rep, err := a.PruneTemp(ctx, app.PruneOptions{Apply: boolFlag(fs, "apply"), NoPush: boolFlag(fs, "no-push")})
+				switch {
+				case errors.Is(err, app.ErrSyncBusy):
+					return tools.Exitf(1, "a casebook sync is running on this machine; nothing was changed").WithHint("casebook prune --temp --apply (again, once it is done)")
+				case errors.Is(err, store.ErrLocked):
+					return tools.Exitf(1, "another casebook process holds casebook-data's lock; nothing was changed").WithHint("casebook prune --temp --apply (again, in a moment)")
+				case err != nil:
+					return err
+				}
+				if boolFlag(fs, "json") {
+					return tools.PrintJSON(out, rep)
+				}
+				printPrune(out, rep)
+				return nil
+			},
+		},
+		{
 			Name: "brief", Group: "plumbing", Summary: "session-start briefing for the repo at --cwd (silent when nothing to say)",
 			NewFlags: briefFlags,
 			Run: func(args []string, out, errw io.Writer) error {
@@ -562,10 +596,7 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 // machine's scan roots: casebook never journals one, so adopting it would
 // only rewrite its hooks for nothing.
 func refuseTemp(repo string) error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
+	cfg, _ := config.Load() // uninitialized: no scan roots to exempt
 	abs, err := filepath.Abs(repo)
 	if err != nil {
 		return err
@@ -598,6 +629,15 @@ func briefFlags() *flag.FlagSet {
 	return flags("brief", "casebook brief [--cwd DIR] [--max N]", "", func(fs *flag.FlagSet) {
 		fs.String("cwd", "", "directory of the session (default: current)")
 		fs.String("max", "8", "most items to list")
+	})()
+}
+
+func pruneFlags() *flag.FlagSet {
+	return flags("prune", "casebook prune --temp [--apply] [--no-push] [--json]", "Without --apply, prints what would be removed and changes nothing.", func(fs *flag.FlagSet) {
+		fs.Bool("temp", false, "remove events journalled in temp folders (/tmp, /var/folders, $TMPDIR)")
+		fs.Bool("apply", false, "rewrite this machine's journal files, commit and push")
+		fs.Bool("no-push", false, "commit locally only")
+		fs.Bool("json", false, "print the report as JSON")
 	})()
 }
 

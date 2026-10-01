@@ -235,3 +235,46 @@ func TestRecordSkipsTempFolders(t *testing.T) {
 		t.Errorf("spool after record:\n%s %v", b, err)
 	}
 }
+
+func TestPruneTemp(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("sync", "--no-github")
+	a, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := `{"v":1,"ts":"2026-09-24T10:00:00Z","src":"git-hook","hook":"post-commit","cwd":"` + e.clone + `","machine":"mbp"}` + "\n"
+	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","machine":"mbp"}` + "\n"
+	rel := "journal/mbp/2026/09-24.jsonl"
+	_ = os.MkdirAll(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026"), 0o755)
+	_ = os.WriteFile(filepath.Join(a.Repo.Dir, filepath.FromSlash(rel)), []byte(real+tmp+real), 0o644)
+	if _, err := a.Repo.Commit(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errw := e.run("", "prune"); code != 2 || !strings.Contains(errw, "--temp") {
+		t.Errorf("prune without --temp: exit %d %q", code, errw)
+	}
+	out := e.ok("prune", "--temp")
+	for _, want := range []string{"dry run", rel, "remove 1", "keep 2", "/tmp/casebook-probe-*", "--apply"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run output lacks %q:\n%s", want, out)
+		}
+	}
+	if b, _ := a.Repo.ReadFile(rel); string(b) != real+tmp+real {
+		t.Fatal("the dry run changed the journal")
+	}
+	var rep struct {
+		Removed int  `json:"removed"`
+		Applied bool `json:"applied"`
+	}
+	if err := json.Unmarshal([]byte(e.ok("prune", "--temp", "--apply", "--json")), &rep); err != nil || rep.Removed != 1 || !rep.Applied {
+		t.Fatalf("apply: %+v %v", rep, err)
+	}
+	if b, _ := a.Repo.ReadFile(rel); string(b) != real+real {
+		t.Errorf("journal after apply:\n%s", b)
+	}
+	if out := e.ok("prune", "--temp", "--apply"); !strings.Contains(out, "nothing to prune") {
+		t.Errorf("second apply:\n%s", out)
+	}
+}

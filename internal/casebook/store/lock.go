@@ -115,6 +115,32 @@ func (r *Repo) Batch(ctx context.Context, msg string, write func() error) (bool,
 	return r.commit(ctx, msg)
 }
 
+// ErrLocked means casebook-data's lock stayed held by another writer for
+// the whole wait BatchWithin allows.
+var ErrLocked = errors.New("casebook-data is locked by another casebook process")
+
+// BatchWithin is Batch that waits at most wait for casebook-data's lock and
+// then gives up with ErrLocked, having written nothing. Once the lock is
+// held, the write and the commit run on ctx alone.
+func (r *Repo) BatchWithin(ctx context.Context, wait time.Duration, msg string, write func() error) (bool, error) {
+	lctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	unlock, err := r.lock(lctx, true)
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return false, ErrLocked
+		}
+		return false, err
+	}
+	defer unlock()
+	if write != nil {
+		if err := write(); err != nil {
+			return false, err
+		}
+	}
+	return r.commit(ctx, msg)
+}
+
 // Read runs fn under casebook-data's shared lock: no write, commit or rebase
 // (in this process or another) runs meanwhile, so fn sees one whole tree.
 // fn must not call a locking Repo method.

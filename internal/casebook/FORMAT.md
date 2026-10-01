@@ -79,7 +79,10 @@ one of an agent command's actions ran in one (a gh action naming its repo with
 `-R` is about that repo wherever it ran). The temp roots are `os.TempDir()`,
 `$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders` and `/private/var/folders`,
 compared by whole path segments with symlinks resolved; a path inside one of
-the machine's configured scan roots is never temp.
+the machine's configured scan roots is never temp. `casebook prune --temp
+--apply` removes such events journalled before this rule from the machine's
+own day files (and temp clones from its snapshot) in one commit, keeping
+every other line byte for byte; history keeps the removed lines.
 
 Never stored: command lines, commit or tag messages, titles, bodies, field values, header values, query strings, or URL credentials.
 

@@ -4,6 +4,27 @@ All notable changes to `scratch`, `proj` and `casebook` are documented here (pro
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.2.1] - 2026-10-01
+
+### Fixed
+- Git activity in temp folders is never journalled: `casebook hook`,
+  `casebook record` and the spool drain at `casebook sync` drop events whose
+  working directory, git dir or (for an agent's command) every action's
+  directory is under a temp root (`os.TempDir()`, `$TMPDIR`, `/tmp`,
+  `/var/folders`, and their `/private` real paths). Paths are compared by
+  whole segments with symlinks resolved; a configured scan root is never
+  temp. Copier and pytest checkouts, `tmp.*` clones, casebook's own probe
+  homes and scratch clones made most of the journal. `casebook hooks adopt`
+  refuses a temp clone.
+
+### Added
+- `casebook prune --temp`: removes temp-folder events journalled before the
+  fix. A dry run by default (per-file and total counts, the top temp
+  prefixes, the derived records it would clean); `--apply` rewrites only
+  this machine's journal files, keeping every other line byte for byte, and
+  drops temp clones from its snapshot, under casebook-data's lock, in one
+  commit that is then pushed. History is not rewritten.
+
 ## [casebook 0.2.0] - 2026-10-01
 
 ### Added

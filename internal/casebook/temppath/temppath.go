@@ -148,6 +148,32 @@ func (m *Matcher) Event(ev journal.Event) bool {
 	return true
 }
 
+// Root returns the longest temp root p is under, and p as it matched
+// (written, or with symlinks resolved); "" when p is not temp.
+func (m *Matcher) Root(p string) (root, matched string) {
+	if !m.Path(p) {
+		return "", ""
+	}
+	p = filepath.Clean(p)
+	if r := longest(p, m.temp); r != "" {
+		return r, p
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return longest(real, m.temp), real
+	}
+	return "", ""
+}
+
+func longest(p string, roots []string) string {
+	best := ""
+	for _, r := range roots {
+		if under(p, r) && len(r) > len(best) {
+			best = r
+		}
+	}
+	return best
+}
+
 // Where returns the temp path that makes ev temp (its git dir, working
 // directory or an action's dir), or "" when ev is not temp.
 func (m *Matcher) Where(ev journal.Event) string {
