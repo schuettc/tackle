@@ -205,29 +205,33 @@ function extractMain(args) {
     const callees = [];
     let size = 0;
     let truncated = false;
-    const add = (t) => {
+    // soft: a referenced (not called) name that doesn't fit is left out
+    // without counting as truncation.
+    const add = (t, soft = false) => {
       if (size + t.length > MAX_CTX) {
-        truncated = true;
+        if (!soft) truncated = true;
         return false;
       }
       size += t.length;
       return true;
     };
-    for (const n of [...used].sort()) {
-      if (local[n] && add(local[n])) ctx.push(local[n]);
-      const imp = imports[n];
-      if (imp) {
-        const decls = declsOf(imp.file);
-        const s = decls[imp.orig];
-        if (s && !callees.some((c) => c.symbol === n) && add(s)) {
-          callees.push({ symbol: n, file: path.relative(root, imp.file).split(path.sep).join("/"), source: s });
+    // Which identifiers / ns.NAME accesses are call targets (vs. merely
+    // referenced).
+    const calledIds = new Set();
+    const calledNs = new Set();
+    const nsRefs = [];
+    (function walkCalls(n) {
+      if (ts.isCallExpression(n)) {
+        if (ts.isIdentifier(n.expression)) calledIds.add(n.expression.text);
+        else if (
+          ts.isPropertyAccessExpression(n.expression) &&
+          ts.isIdentifier(n.expression.expression) &&
+          ts.isIdentifier(n.expression.name)
+        ) {
+          calledNs.add(`${n.expression.expression.text}.${n.expression.name.text}`);
         }
       }
-    }
-
-    // ns.NAME through a namespace import, in first-reference order.
-    const nsRefs = [];
-    (function walkNs(n) {
+      // ns.NAME through a namespace import, in first-reference order.
       if (
         ts.isPropertyAccessExpression(n) &&
         ts.isIdentifier(n.expression) &&
@@ -236,15 +240,35 @@ function extractMain(args) {
       ) {
         nsRefs.push({ ns: n.expression.text, name: n.name.text });
       }
-      ts.forEachChild(n, walkNs);
+      ts.forEachChild(n, walkCalls);
     })(node);
-    for (const { ns, name } of nsRefs) {
+
+    const addImported = (n, soft) => {
+      const imp = imports[n];
+      if (!imp) return;
+      const s = declsOf(imp.file)[imp.orig];
+      if (s && !callees.some((c) => c.symbol === n) && add(s, soft)) {
+        callees.push({ symbol: n, file: path.relative(root, imp.file).split(path.sep).join("/"), source: s });
+      }
+    };
+    const addNs = (ns, name, soft) => {
       const symbol = `${ns}.${name}`;
       const s = declsOf(nsImports[ns])[name];
-      if (s && !callees.some((c) => c.symbol === symbol) && add(s)) {
+      if (s && !callees.some((c) => c.symbol === symbol) && add(s, soft)) {
         callees.push({ symbol, file: path.relative(root, nsImports[ns]).split(path.sep).join("/"), source: s });
       }
+    };
+
+    // Setup/context and call targets first (overflow -> truncated), then
+    // referenced names (overflow -> skipped).
+    const sorted = [...used].sort();
+    for (const n of sorted) {
+      if (local[n] && add(local[n])) ctx.push(local[n]);
+      if (calledIds.has(n)) addImported(n, false);
     }
+    for (const { ns, name } of nsRefs) if (calledNs.has(`${ns}.${name}`)) addNs(ns, name, false);
+    for (const n of sorted) if (!calledIds.has(n)) addImported(n, true);
+    for (const { ns, name } of nsRefs) if (!calledNs.has(`${ns}.${name}`)) addNs(ns, name, true);
 
     const id = assignId(`ts:${rel}:${qual}`);
     const obj = {

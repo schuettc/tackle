@@ -417,10 +417,13 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
     args = {a.arg for a in fn.args.args}
     ctx, callees, size, trunc = [], [], 0, False
 
-    def add(text):
+    def add(text, soft=False):
+        # soft: a referenced name that doesn't fit is left out without
+        # counting as truncation.
         nonlocal size, trunc
         if size + len(text) > MAX_CTX:
-            trunc = True
+            if not soft:
+                trunc = True
             return False
         size += len(text)
         return True
@@ -463,7 +466,7 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
                 hit = (r.id, resolve(imports[r.id], r.id))
         elif r.value.id in attr_mods:
             hit = (f"{r.value.id}.{r.attr}", resolve(attr_mods[r.value.id], r.attr))
-        if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1]):
+        if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1], soft=True):
             callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
 
     obj = {

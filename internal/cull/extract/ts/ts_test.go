@@ -483,3 +483,21 @@ func TestNamespaceImportMembers(t *testing.T) {
 		t.Errorf("Callees = %s, want c.helper", got)
 	}
 }
+
+func TestOversizedReferencedNameIsSkippedNotTruncated(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "ts:test/budget.test.ts:skips big reference")
+	if got := strings.Join(calleeSymbols(tc.Callees), ","); got != "SMALL" || tc.Truncated {
+		t.Errorf("callees=%s truncated=%v, want SMALL and not truncated", got, tc.Truncated)
+	}
+}
+
+func TestOversizedCallTargetStillTruncates(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "ts:test/budget.test.ts:big call target truncates")
+	if len(tc.Callees) != 0 || !tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
+	}
+}

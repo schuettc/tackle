@@ -580,8 +580,8 @@ func TestReferencedNameHonorsBudget(t *testing.T) {
 	requirePython3(t)
 	res := extractAll(t, filepath.Join(testdataDir, "refs"), 10)
 	tc := caseByID(t, res, "py:tests/test_refs.py:test_const")
-	if len(tc.Callees) != 0 || !tc.Truncated {
-		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
+	if len(tc.Callees) != 0 || tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and not truncated (referenced names are skipped silently)", calleeSymbols(tc.Callees), tc.Truncated)
 	}
 }
 
@@ -642,5 +642,23 @@ func TestTopLevelDuplicatesLastWinsBlocksFillGaps(t *testing.T) {
 		if got[k] != v {
 			t.Errorf("%s = %q, want %q", k, got[k], v)
 		}
+	}
+}
+
+func TestOversizedReferencedNameIsSkippedNotTruncated(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "py:tests/test_budget.py:test_skips_big_reference")
+	if got := strings.Join(calleeSymbols(tc.Callees), ","); got != "SMALL" || tc.Truncated {
+		t.Errorf("callees=%s truncated=%v, want SMALL and not truncated", got, tc.Truncated)
+	}
+}
+
+func TestOversizedCallTargetStillTruncates(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "py:tests/test_budget.py:test_big_call_target_truncates")
+	if len(tc.Callees) != 0 || !tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
 	}
 }
