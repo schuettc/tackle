@@ -23,6 +23,7 @@ import io
 import json
 import os
 import sys
+import textwrap
 import tokenize
 
 MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 64000)
@@ -315,15 +316,36 @@ def top_defs(path):
         tree = ast.parse(src)
     except Exception:
         return {}, None, ""
-    out = {}
-    for n in tree.body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out[n.name] = seg(src, n)
-        elif isinstance(n, ast.Assign):
-            for t in n.targets:
-                if isinstance(t, ast.Name):
-                    out[t.id] = seg(src, n)
-    return out, tree, src
+    plain = {}  # directly in the module body: last definition wins
+    nested = {}  # inside top-level if/try/with: first wins, only fills gaps
+
+    def visit(stmts, out, last):
+        for n in stmts:
+            put = (lambda k, v: out.__setitem__(k, v)) if last else out.setdefault
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                put(n.name, seg(src, n))
+            elif isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        put(t.id, seg(src, n))
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+                put(n.target.id, seg(src, n))
+            elif isinstance(n, (ast.If, ast.With, ast.AsyncWith)):
+                visit(n.body, out, False)
+                visit(n.orelse if isinstance(n, ast.If) else [], out, False)
+            elif isinstance(n, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+                visit(n.body, out, False)
+                for h in n.handlers:
+                    visit(h.body, out, False)
+                visit(n.orelse, out, False)
+                visit(n.finalbody, out, False)
+
+    visit(tree.body, nested, False)
+    # plain pass: only direct definitions (blocks recurse into `nested` again, harmlessly)
+    direct = [n for n in tree.body if not isinstance(n, (ast.If, ast.With, ast.AsyncWith, ast.Try, getattr(ast, "TryStar", ast.Try)))]
+    visit(direct, plain, True)
+    nested.update(plain)
+    return nested, tree, src
 
 
 def conftest_fixtures(test_path):
@@ -358,6 +380,15 @@ def module_file(mod):
 mod_cache = {}
 
 
+def mod_defs(mod):
+    p = module_file(mod)
+    if not p:
+        return {}
+    if p not in mod_cache:
+        mod_cache[p] = top_defs(p)[0]
+    return mod_cache[p]
+
+
 def resolve(mod, name):
     p = module_file(mod)
     if not p:
@@ -374,6 +405,92 @@ def names_in(node):
     }
 
 
+PYTEST_BUILTIN_PARAMS = {"tmp_path", "monkeypatch", "capsys", "caplog", "request", "self", "cls"}
+
+
+def _is_plain_value(src):
+    """True if src (a definition's source) is an assignment whose value
+    contains no call: data, so a method called on it is not project code."""
+    try:
+        tree = ast.parse(textwrap.dedent(src))
+    except Exception:
+        return False
+    if len(tree.body) != 1:
+        return False
+    n = tree.body[0]
+    if isinstance(n, ast.Assign) or (isinstance(n, ast.AnnAssign) and n.value is not None):
+        return not any(isinstance(c, ast.Call) for c in ast.walk(n.value))
+    return False
+
+
+cur_file_names = set()
+
+
+def pins_setting(fn, n_call_callees, callees, file_defs, imports, attr_mods):
+    """The test only reads a project setting/class and compares it to fixed
+    values: its code under test is non-empty and all of it merely referenced
+    (no call target), no call in its body resolves to project code or to a
+    same-file definition, and it takes no fixture parameters beyond pytest's
+    built-ins. When unsure: False."""
+    local = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    reads = False
+    call_funcs = {id(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    for r in ast.walk(fn):
+        if id(r) in call_funcs:
+            continue
+        nm = None
+        if isinstance(r, ast.Name) and isinstance(r.ctx, ast.Load):
+            nm = r.id
+        elif isinstance(r, ast.Attribute) and isinstance(r.ctx, ast.Load) and isinstance(r.value, ast.Name):
+            nm = r.value.id
+        if nm is None or nm in local or nm == fn.name or nm.startswith("test_"):
+            continue
+        if nm in cur_file_names and nm not in imports and nm not in attr_mods:
+            reads = True
+        elif nm in imports and resolve(imports[nm], nm):
+            reads = True
+        elif nm in attr_mods and module_file(attr_mods[nm]):
+            reads = True
+    if not reads:
+        return False
+    a = fn.args
+    for p in list(getattr(a, "posonlyargs", []) or []) + list(a.args) + list(a.kwonlyargs) + [x for x in (a.vararg, a.kwarg) if x]:
+        if p.arg not in PYTEST_BUILTIN_PARAMS:
+            return False
+    for call in [c for c in ast.walk(fn) if isinstance(c, ast.Call)]:
+        node, attrs = call.func, []
+        while True:
+            if isinstance(node, ast.Attribute):
+                attrs.append(node.attr)
+                node = node.value
+            elif isinstance(node, ast.Subscript):
+                attrs.append("[]")
+                node = node.value
+            else:
+                break
+        attrs.reverse()
+        if not isinstance(node, ast.Name):
+            continue  # a call on a call result / literal: the inner call decides
+        n = node.id
+        src = None
+        if n in file_defs:
+            src = file_defs[n]
+        elif n in imports and module_file(imports[n]):
+            hit = resolve(imports[n], n)
+            src = hit[1] if hit else ""
+        elif n in attr_mods and module_file(attr_mods[n]):
+            if len(attrs) < 2 or attrs[0] == "[]":
+                return False
+            hit = resolve(attr_mods[n], attrs[0])
+            src = hit[1] if hit else ""
+            attrs = attrs[1:]
+        else:
+            continue  # builtin, standard library, third party or a local name
+        if not attrs or not _is_plain_value(src):
+            return False
+    return True
+
+
 def assign_id(base):
     id_count[base] = id_count.get(base, 0) + 1
     n = id_count[base]
@@ -387,10 +504,13 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
     args = {a.arg for a in fn.args.args}
     ctx, callees, size, trunc = [], [], 0, False
 
-    def add(text):
+    def add(text, soft=False):
+        # soft: a referenced name that doesn't fit is left out without
+        # counting as truncation.
         nonlocal size, trunc
         if size + len(text) > MAX_CTX:
-            trunc = True
+            if not soft:
+                trunc = True
             return False
         size += len(text)
         return True
@@ -410,6 +530,32 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
             hit = (f"{f.value.id}.{f.attr}", resolve(attr_mods[f.value.id], f.attr))
         if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1]):
             callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
+    n_call_callees = len(callees)
+    # Referenced names (constants, classes, functions read but not called),
+    # after the call targets, in first-reference order.
+    call_funcs = {id(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    refs = []
+    for r in ast.walk(fn):
+        if isinstance(r, ast.Name) and isinstance(r.ctx, ast.Load):
+            refs.append(r)
+        elif (
+            isinstance(r, ast.Attribute)
+            and isinstance(r.ctx, ast.Load)
+            and isinstance(r.value, ast.Name)
+        ):
+            refs.append(r)
+    refs.sort(key=lambda r: (r.lineno, r.col_offset))
+    for r in refs:
+        if id(r) in call_funcs:
+            continue
+        hit = None
+        if isinstance(r, ast.Name):
+            if r.id in imports:
+                hit = (r.id, resolve(imports[r.id], r.id))
+        elif r.value.id in attr_mods:
+            hit = (f"{r.value.id}.{r.attr}", resolve(attr_mods[r.value.id], r.attr))
+        if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1], soft=True):
+            callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
 
     obj = {
         "id": assign_id(f"py:{rel}:{qual}"),
@@ -425,6 +571,8 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
     }
     if parent_id:
         obj["parent"] = parent_id
+    if pins_setting(fn, n_call_callees, callees, file_defs, imports, attr_mods):
+        obj["pins_setting"] = True
     print(json.dumps(obj))
 
 
@@ -449,6 +597,14 @@ for rel in relpaths:
                 if isinstance(t, ast.Name):
                     file_defs[t.id] = seg(src, n)
 
+    # Module-level names for the setting-only check only (not code context).
+    file_names = set(file_defs)
+    for n in tree.body:
+        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            file_names.add(n.target.id)
+    cur_file_names.clear()
+    cur_file_names.update(file_names)
+
     fixtures = conftest_fixtures(path)
     for n in tree.body:
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
@@ -460,7 +616,14 @@ for rel in relpaths:
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
             for a in n.names:
-                imports[a.asname or a.name] = n.module
+                bound = a.asname or a.name
+                sub = f"{n.module}.{a.name}"
+                # `from pkg import module`: a submodule file (and not a name
+                # the package's __init__ defines) acts like `import pkg.module`.
+                if a.name != "*" and module_file(sub) and a.name not in mod_defs(n.module):
+                    attr_mods[bound] = sub
+                else:
+                    imports[bound] = n.module
         elif isinstance(n, ast.Import):
             for a in n.names:
                 attr_mods[a.asname or a.name.split(".")[0]] = a.name if a.asname else a.name.split(".")[0]

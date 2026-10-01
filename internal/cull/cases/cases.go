@@ -43,6 +43,10 @@ type TestCase struct {
 	Span      Span     `json:"span"`
 	Callees   []Callee `json:"callees"`
 	Truncated bool     `json:"truncated"`
+	// PinsSetting: the test runs none of the project's code; it only reads a
+	// project setting or class and compares it to fixed values. Set by the
+	// extractors; not part of the state Jev sees.
+	PinsSetting bool `json:"pins_setting,omitempty"`
 }
 
 // HashBody identifies a test's exact source.

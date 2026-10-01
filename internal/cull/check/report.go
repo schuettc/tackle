@@ -38,6 +38,7 @@ func (r TestResult) MarshalJSON() ([]byte, error) {
 		Repo      string     `json:"repo,omitempty"`
 		Span      cases.Span `json:"span"`
 		Truncated bool       `json:"truncated"`
+		Pins      bool       `json:"pins_setting,omitempty"`
 		Verdict   string     `json:"verdict,omitempty"`
 		Rule      string     `json:"rule,omitempty"`
 		Reasons   []string   `json:"reasons,omitempty"`
@@ -46,7 +47,7 @@ func (r TestResult) MarshalJSON() ([]byte, error) {
 	}
 	return json.Marshal(out{
 		ID: r.ID, Hash: r.Hash, Lang: r.Lang, Framework: r.Framework, File: r.File,
-		Name: r.Name, Parent: r.Parent, Repo: r.Repo, Span: r.Span, Truncated: r.Truncated,
+		Name: r.Name, Parent: r.Parent, Repo: r.Repo, Span: r.Span, Truncated: r.Truncated, Pins: r.PinsSetting,
 		Verdict: r.Verdict, Rule: r.Rule, Reasons: r.Reasons, Model: r.Model, Err: r.Err,
 	})
 }
@@ -103,12 +104,15 @@ func summarize(tests []TestResult, groups []GroupResult, skipped []extract.Skipp
 	s := map[string]int{
 		"cut": 0, "review": 0, "keep": 0,
 		"consolidate": 0, "group_review": 0, "keep_separate": 0,
-		"skipped": len(skipped), "errors": 0,
+		"skipped": len(skipped), "errors": 0, "answered": 0,
 	}
 	for _, t := range tests {
 		if t.Err != "" {
 			s["errors"]++
 			continue
+		}
+		if t.Rule == "court" {
+			s["answered"]++
 		}
 		switch t.Verdict {
 		case "cut":
@@ -123,6 +127,9 @@ func summarize(tests []TestResult, groups []GroupResult, skipped []extract.Skipp
 		if g.Err != "" {
 			s["errors"]++
 			continue
+		}
+		if g.Rule == "court" {
+			s["answered"]++
 		}
 		switch g.Verdict {
 		case "consolidate":

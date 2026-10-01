@@ -435,3 +435,96 @@ func TestTsTidyEditsImportsInPlace(t *testing.T) {
 		})
 	}
 }
+
+func calleeSymbols(cs []cases.Callee) []string {
+	out := make([]string, len(cs))
+	for i, c := range cs {
+		out[i] = c.Symbol
+	}
+	return out
+}
+
+func TestReferencedConstIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:const")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "SEASONS" {
+		t.Fatalf("Callees = %v, want [SEASONS]", calleeSymbols(tc.Callees))
+	}
+	if want := "export const SEASONS = [2022, 2023, 2024];"; tc.Callees[0].Source != want {
+		t.Errorf("source = %q, want %q", tc.Callees[0].Source, want)
+	}
+}
+
+func TestReferencedClassIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:class")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Cause" {
+		t.Fatalf("Callees = %v, want [Cause]", calleeSymbols(tc.Callees))
+	}
+}
+
+func TestReferencedEnumIsCodeUnderTest(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:enum")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "Color" {
+		t.Fatalf("Callees = %v, want [Color]", calleeSymbols(tc.Callees))
+	}
+}
+
+func TestNamespaceImportMembers(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 24000)
+	tc := caseByID(t, res, "ts:test/refs.test.ts:namespace")
+	got := strings.Join(calleeSymbols(tc.Callees), ",")
+	if got != "c.helper" {
+		t.Errorf("Callees = %s, want c.helper", got)
+	}
+}
+
+func TestOversizedReferencedNameIsSkippedNotTruncated(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "ts:test/budget.test.ts:skips big reference")
+	if got := strings.Join(calleeSymbols(tc.Callees), ","); got != "SMALL" || tc.Truncated {
+		t.Errorf("callees=%s truncated=%v, want SMALL and not truncated", got, tc.Truncated)
+	}
+}
+
+func TestOversizedCallTargetStillTruncates(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "refs"), 300)
+	tc := caseByID(t, res, "ts:test/budget.test.ts:big call target truncates")
+	if len(tc.Callees) != 0 || !tc.Truncated {
+		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
+	}
+}
+
+func TestPinsSetting(t *testing.T) {
+	requireTS(t)
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 24000)
+	want := map[string]bool{
+		"const":                        true,
+		"enum":                         true,
+		"class reference":              true,
+		"namespace constant":           true,
+		"project function":             false,
+		"constructs class":             false,
+		"same-file helper":             false,
+		"namespace call":               false,
+		"fixture parameter":            false,
+		"no code under test":           false,
+		"same-file const method":       true,
+		"same-file built const method": false,
+		"imported const method":        true,
+		"literals only":                false,
+	}
+	for name, pins := range want {
+		tc := caseByID(t, res, "ts:test/pins.test.ts:"+name)
+		if tc.PinsSetting != pins {
+			t.Errorf("%s: PinsSetting = %v, want %v (callees %v)", name, tc.PinsSetting, pins, calleeSymbols(tc.Callees))
+		}
+	}
+}

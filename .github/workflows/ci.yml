@@ -32,4 +32,48 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: extractions/setup-just@v4.0.0
+      # cull's page (internal/cull/web) is TypeScript: verify-extra runs its
+      # gate and the committed-bundle freshness check.
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: internal/cull/web/package-lock.json
+      # setup-node's `cache: npm` caches the download cache, not node_modules.
+      # Keyed on the lockfile: a hit lets `_cull-web-deps` skip `npm ci`.
+      - name: Cache cull web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/cull/web/node_modules
+          key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
       - run: just verify-extra
+
+  # cull's page in a real headless chromium (`just verify-slow`): too slow for
+  # the push gate, so its own required job.
+  probe:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: extractions/setup-just@v4.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: internal/cull/web/package-lock.json
+      - name: Cache cull web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/cull/web/node_modules
+          key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
+      - name: Install web dependencies
+        working-directory: internal/cull/web
+        run: '[ -d node_modules ] || npm ci'
+      # playwright-core's own CLI (the version that launches), and the headless
+      # shell, which is what chromium.launch() actually runs.
+      - name: Install chromium
+        working-directory: internal/cull/web
+        run: node node_modules/playwright-core/cli.js install --with-deps chromium chromium-headless-shell
+      - run: just verify-slow

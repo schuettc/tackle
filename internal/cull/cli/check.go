@@ -21,6 +21,9 @@ var checkFlags = flags("check", "cull check [path] [--diff base] [--json] [--dry
 	"Judge tests and near-duplicate groups under path (default .) with Jev: whole suite, or\n"+
 		"only what --diff base changed. Writes <root>/.cull/last.json. Requires egress = true in\n"+
 		".cull.toml (or --dry-run, which prints the states that would be sent and sends nothing).\n"+
+		"Also records the run's uncertain items and applies Court's saved answers from the review\n"+
+		"database (cull serve's page); if that database can't be opened, it warns on stderr and\n"+
+		"writes last.json without them.\n"+
 		"Sends test source to "+endpoint+". The key comes from TYPESAFE_API_KEY:\n"+
 		"  creel exec TYPESAFE_API_KEY -- cull check ...",
 	func(fs *flag.FlagSet) {

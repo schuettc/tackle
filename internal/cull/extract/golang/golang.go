@@ -408,6 +408,113 @@ func (fw *fileWalk) walkContext(body ast.Node, selfName string, initialSize int)
 	return strings.Join(ctxParts, "\n\n"), callees, truncated
 }
 
+// importedDecls returns the production declarations of an in-module imported
+// package, cached.
+func (fw *fileWalk) importedDecls(pdir string) map[string]decl {
+	if fw.state.pkgCache[pdir] == nil {
+		fw.state.pkgCache[pdir] = pkgDecls(fw.state.root, pdir, false)
+	}
+	return fw.state.pkgCache[pdir]
+}
+
+func isTestEntry(name string) bool {
+	for _, p := range []string{"Test", "Benchmark", "Example", "Fuzz"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTypeDecl(d decl) bool { return strings.HasPrefix(d.src, "type ") }
+
+// pinsSetting reports whether the test only reads a production declaration
+// (a constant, variable, type, function value) and compares it to fixed
+// values: it references at least one production decl (same package or an
+// in-module import) and has no call that resolves to production code or to
+// a same-package test-file definition (type conversions are not calls to
+// code), and builds no production struct. When unsure: false.
+func (fw *fileWalk) pinsSetting(body ast.Node) bool {
+	refs, ok := 0, true
+	skip := map[*ast.Ident]bool{}
+	// codeCall: fun names a function, method or imported function that is
+	// project code or a same-package definition.
+	codeCall := func(fun ast.Expr) bool {
+		for {
+			p, isParen := fun.(*ast.ParenExpr)
+			if !isParen {
+				break
+			}
+			fun = p.X
+		}
+		switch f := fun.(type) {
+		case *ast.Ident:
+			for _, m := range []map[string]decl{fw.prodDecls, fw.testDecls} {
+				if d, found := m[f.Name]; found && !isTypeDecl(d) {
+					return true
+				}
+			}
+		case *ast.SelectorExpr:
+			if id, isID := f.X.(*ast.Ident); isID {
+				if pdir, imported := fw.imports[id.Name]; imported {
+					d, found := fw.importedDecls(pdir)[f.Sel.Name]
+					return !found || !isTypeDecl(d)
+				}
+			}
+			for _, m := range []map[string]decl{fw.prodDecls, fw.testDecls} {
+				if _, found := m["."+f.Sel.Name]; found {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if !ok {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.SelectorExpr:
+			skip[x.Sel] = true
+			if id, isID := x.X.(*ast.Ident); isID {
+				if pdir, imported := fw.imports[id.Name]; imported {
+					if _, found := fw.importedDecls(pdir)[x.Sel.Name]; found {
+						refs++
+					}
+				}
+			}
+		case *ast.Ident:
+			if skip[x] {
+				return true
+			}
+			if _, found := fw.prodDecls[x.Name]; found {
+				refs++
+			} else if _, found := fw.testDecls[x.Name]; found && !isTestEntry(x.Name) {
+				refs++
+			}
+		case *ast.CallExpr:
+			if codeCall(x.Fun) {
+				ok = false
+			}
+		case *ast.CompositeLit:
+			switch t := x.Type.(type) {
+			case *ast.Ident:
+				if _, found := fw.prodDecls[t.Name]; found {
+					ok = false
+				}
+			case *ast.SelectorExpr:
+				if id, isID := t.X.(*ast.Ident); isID {
+					if _, imported := fw.imports[id.Name]; imported {
+						ok = false
+					}
+				}
+			}
+		}
+		return ok
+	})
+	return ok && refs > 0
+}
+
 // walkTest processes one top-level Test function: either a leaf (no
 // subtests, emitted with the parity-matching goext body/context/callees)
 // or a container whose direct t.Run children are recursed into.
@@ -435,6 +542,8 @@ func (fw *fileWalk) walkTest(fn *ast.FuncDecl, res *extract.Result) {
 			Span:      cases.Span{Start: startOff, End: endOff},
 			Callees:   callees,
 			Truncated: trunc,
+
+			PinsSetting: fw.pinsSetting(fn.Body),
 		})
 		return
 	}
@@ -477,6 +586,8 @@ func (fw *fileWalk) walkSubtest(lit *ast.FuncLit, parentID, name, setup string, 
 			Span:      cases.Span{Start: startOff, End: endOff},
 			Callees:   callees,
 			Truncated: trunc,
+
+			PinsSetting: fw.pinsSetting(lit.Body),
 		})
 		return
 	}

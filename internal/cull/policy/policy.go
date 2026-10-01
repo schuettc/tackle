@@ -73,3 +73,19 @@ func Decide(r rubric.Rubric, answers map[string]jev.Answer, truncated bool) Resu
 	}
 	return res
 }
+
+// SettingReason is the reason GuardSetting adds.
+const SettingReason = "checks a setting's value"
+
+// GuardSetting sends a test that only checks a project setting's value to
+// Court: a cut verdict on a test with pins set becomes review (rule
+// pins_setting), keeping Jev's reasons. Any other verdict is unchanged. Only
+// Court knows whether such a value is a deliberate tripwire.
+func GuardSetting(res Result, pins bool) Result {
+	if !pins || res.Verdict != Cut {
+		return res
+	}
+	res.Verdict, res.Rule = Review, "pins_setting"
+	res.Reasons = append(append([]string(nil), res.Reasons...), SettingReason)
+	return res
+}
