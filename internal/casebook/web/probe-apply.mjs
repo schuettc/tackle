@@ -777,10 +777,26 @@ async function applyScenariosOn(context, t, serveHandle) {
         `the verified local step reads ✓ deleted · verified (${l1Row?.glyph} ${l1Row?.text})`,
         l1Row?.glyph === '\u2713' && l1Row?.text === 'deleted \u00b7 verified',
       );
-      const tones = await pg.$eval(`.cb-step[data-step="${l1.id}"]`, (e) => ({
-        glyph: getComputedStyle(e.querySelector('.cb-step-g')).color,
-        text: getComputedStyle(e.querySelector('.cb-step-t')).color,
-      }));
+      // Live step events redraw the table, so a row looked up and then read in
+      // separate round trips can be detached by then (its computed colour is
+      // ''). Look it up and read it in one evaluate, until a connected row reads.
+      const tones = await pg
+        .waitForFunction(
+          (id) => {
+            const e = document.querySelector(`.cb-step[data-step="${id}"]`);
+            const g = e?.querySelector('.cb-step-g');
+            const t = e?.querySelector('.cb-step-t');
+            if (!g?.isConnected || !t?.isConnected) return null;
+            return {
+              glyph: getComputedStyle(g).color,
+              text: getComputedStyle(t).color,
+            };
+          },
+          l1.id,
+          { timeout: 5000 },
+        )
+        .then((h) => h.jsonValue())
+        .catch(() => ({ glyph: '', text: '' }));
       const okC = await cssColor(pg, 'var(--kit-ok)');
       const mutedC = await cssColor(pg, 'var(--kit-muted)');
       check(
