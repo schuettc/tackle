@@ -522,9 +522,10 @@ export function boot(): void {
 
   // The bar's counts and its status: "synced 4m ago · <machine>", or
   // "offline · N queued" (danger) while decisions wait to be pushed. Asked
-  // at boot, again whenever the index moves (a decision moves it), so a
-  // decision queued offline shows without a reload, and again on coming back
-  // from down.
+  // at boot, again whenever the index moves (a decision moves it), whenever
+  // serve's background push of decisions ends ("push": it follows serve's
+  // answer to a decide, so a decision it couldn't push shows without a
+  // reload), and again on coming back from down.
   // An older answer never paints over a newer one; a newer one that fails
   // leaves the older one standing.
   let summaryAsked = 0;
@@ -572,9 +573,8 @@ export function boot(): void {
   }
   setInterval(paintStatus, 15000);
   loadSummary();
-  // A decision rebuilds the index (serve announces "index" after it), so a
-  // decision queued offline shows here too.
   onLiveEvent('index', loadSummary);
+  onLiveEvent('push', loadSummary);
 
   // ---- initial route --------------------------------------------------------
 

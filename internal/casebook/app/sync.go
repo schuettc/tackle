@@ -51,21 +51,11 @@ type SyncReport struct {
 // receive ErrSyncBusy immediately.
 func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	var rep SyncReport
-	// Acquire a machine-level exclusive lock so that concurrent triggers
-	// (launchd, pi session events, manual) cannot collide on git and github.json.
-	lockDir := tools.StateDir(config.Tool)
-	if err := tools.EnsureDir(lockDir); err != nil {
-		return rep, err
-	}
-	lf, err := os.OpenFile(filepath.Join(lockDir, "sync.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	unlock, err := LockSync()
 	if err != nil {
 		return rep, err
 	}
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = lf.Close() // already returning ErrSyncBusy; close error not actionable
-		return rep, ErrSyncBusy
-	}
-	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); _ = lf.Close() }()
+	defer unlock()
 	if !o.NoPush {
 		if err := a.remoteSync(ctx, &rep); err != nil {
 			return rep, err
@@ -152,6 +142,26 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	}
 	_, err = a.pushSync(ctx, &rep)
 	return rep, err
+}
+
+// LockSync takes this machine's sync lock (a flock on StateDir/sync.lock)
+// without waiting, so that concurrent triggers (launchd, pi session events,
+// manual, serve's background push) cannot collide on casebook-data's git and
+// github.json. ErrSyncBusy when another holder has it. Sync and Push take it.
+func LockSync() (unlock func(), err error) {
+	lockDir := tools.StateDir(config.Tool)
+	if err := tools.EnsureDir(lockDir); err != nil {
+		return nil, err
+	}
+	lf, err := os.OpenFile(filepath.Join(lockDir, "sync.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lf.Close() // already returning ErrSyncBusy; close error not actionable
+		return nil, ErrSyncBusy
+	}
+	return func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); _ = lf.Close() }, nil
 }
 
 func (a *App) remoteSync(ctx context.Context, rep *SyncReport) error {

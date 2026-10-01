@@ -78,8 +78,14 @@ func (s *Server) postSync(w http.ResponseWriter, r *http.Request) {
 
 // runSyncJob runs the sync, rebuilds the index (so its built_at, the age a
 // plan is refused by, is the sync's), and announces how it ended.
+//
+// The sync holds serve's remote lock (s.remoteMu, push.go) so it never runs
+// beside serve's background push; App.Sync then takes the machine's sync
+// lock (the order push.go documents).
 func (s *Server) runSyncJob(ctx context.Context) {
+	s.remoteMu.Lock()
 	err := s.syncNow(ctx)
+	s.remoteMu.Unlock()
 	if err == nil {
 		err = s.rebuild(ctx)
 	}

@@ -89,9 +89,20 @@ func (a *App) DecideBatch(ctx context.Context, entries []TriageEntry, o DecideOp
 	return n, errs, pushed
 }
 
-// Push sends local commits (decisions made with NoPush) to the casebook remote.
-// pushed is false, with no error, when the remote is unreachable.
-func (a *App) Push(ctx context.Context) (bool, error) { return a.push(ctx) }
+// Push sends local commits (decisions made with NoPush) to the casebook
+// remote under this machine's sync lock, so it never runs beside a sync:
+// ErrSyncBusy when a sync holds the lock (try again later), store.ErrOffline
+// when the remote can't be reached (the commits stay queued for the next push
+// or sync). serve's background push is its caller.
+func (a *App) Push(ctx context.Context) error {
+	unlock, err := LockSync()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	_, err = a.Repo.Sync(ctx)
+	return err
+}
 
 func (a *App) push(ctx context.Context) (bool, error) {
 	res, err := a.Repo.Sync(ctx)

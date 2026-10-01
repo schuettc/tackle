@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -33,6 +34,14 @@ type Repo struct {
 	// Version is the format_version read from casebook.toml when opened; Upgrade
 	// raises it to FormatVersion.
 	Version int
+
+	// mu serializes this process's local mutations of the repo: a write and
+	// its commit (Decide, WriteRule, DeleteRule, AppendRestore, Commit) and
+	// Sync's rebase. Network steps (fetch, push) run outside it, so a commit
+	// can land while a push waits on the remote, but never inside a rebase
+	// or another commit. It is held per step and never while taking another
+	// lock (serve/push.go documents the order).
+	mu sync.Mutex
 }
 
 type meta struct {
@@ -164,6 +173,13 @@ func (r *Repo) Glob(pattern string) ([]string, error) {
 
 // Commit stages everything and commits it; false when nothing changed.
 func (r *Repo) Commit(ctx context.Context, msg string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.commit(ctx, msg)
+}
+
+// commit is Commit with r.mu held.
+func (r *Repo) commit(ctx context.Context, msg string) (bool, error) {
 	if _, err := gitx.Run(ctx, r.Dir, "add", "-A"); err != nil {
 		return false, err
 	}
@@ -242,6 +258,8 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 	if err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, err := r.WriteFile(k.File(), b); err != nil {
 		return err
 	}
@@ -254,7 +272,7 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 		msg += fmt.Sprintf(" (%q)", note)
 	}
 	msg += " by " + d.DecidedBy
-	_, err = r.Commit(ctx, msg)
+	_, err = r.commit(ctx, msg)
 	return err
 }
 
@@ -385,10 +403,12 @@ func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
 	if err != nil {
 		return err
 	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, err := r.WriteFile("rules/"+ru.ID+".toml", b); err != nil {
 		return err
 	}
-	_, err = r.Commit(ctx, msg)
+	_, err = r.commit(ctx, msg)
 	return err
 }
 
@@ -399,9 +419,11 @@ func (r *Repo) DeleteRule(ctx context.Context, id, msg string) error {
 	}
 	rel := "rules/" + id + ".toml"
 	p := filepath.Join(r.Dir, filepath.FromSlash(rel))
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("delete rule %q: %w", id, err)
 	}
-	_, err := r.Commit(ctx, msg)
+	_, err := r.commit(ctx, msg)
 	return err
 }

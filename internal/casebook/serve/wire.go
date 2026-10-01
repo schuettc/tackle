@@ -14,11 +14,15 @@ import (
 
 // SummaryView is the response body of GET /api/summary.
 type SummaryView struct {
-	Machine       string         `json:"machine"`
-	User          string         `json:"user"`
-	Head          string         `json:"head"`
-	BuiltAt       time.Time      `json:"built_at"`
-	SyncedAt      time.Time      `json:"synced_at"`
+	Machine  string    `json:"machine"`
+	User     string    `json:"user"`
+	Head     string    `json:"head"`
+	BuiltAt  time.Time `json:"built_at"`
+	SyncedAt time.Time `json:"synced_at"`
+	// OfflineQueued counts local commits the casebook remote doesn't have
+	// yet (the page says "offline · N queued"). While serve's background
+	// push is in flight it is 0, unless the push before it failed: a
+	// decision on its way out isn't offline.
 	OfflineQueued int            `json:"offline_queued"`
 	Counts        map[string]int `json:"counts"`
 	Notices       []string       `json:"notices"`
@@ -46,19 +50,37 @@ type ItemDetailView struct {
 	Decisions []store.LogEntry   `json:"decisions"`
 }
 
-// DecideResult is the response body of POST /api/decide and POST /api/proposals/change.
+// DecideResult is the response body of POST /api/decide and POST
+// /api/proposals/change. serve answers once the decisions are committed
+// locally, their proposals retired and the index rebuilt; the push to the
+// casebook remote follows in the background (the "push" live event, PushEvent).
 type DecideResult struct {
 	Decided     int      `json:"decided"`
 	DecidedKeys []string `json:"decided_keys"`
 	Errors      []string `json:"errors"`
-	Pushed      bool     `json:"pushed"`
 }
 
-// AcceptResult is the response body of POST /api/proposals/accept.
+// AcceptResult is the response body of POST /api/proposals/accept. Like
+// DecideResult, it doesn't wait for the push.
 type AcceptResult struct {
 	Accepted int      `json:"accepted"`
 	Errors   []string `json:"errors"`
-	Pushed   bool     `json:"pushed"`
+}
+
+// Push states, as the "push" live event says them.
+const (
+	PushDone    = "done"    // the remote has every local commit serve pushed
+	PushOffline = "offline" // the remote couldn't be reached: the commits stay queued
+	PushFailed  = "failed"  // the push failed otherwise (Error says why): the commits stay queued
+)
+
+// PushEvent is the payload of the "push" live event: serve's background push
+// of decisions to the casebook remote ended (one event per push; a push that
+// coalesced decides made during the one before it is one more). The page
+// asks GET /api/summary again for offline_queued.
+type PushEvent struct {
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
 }
 
 // RejectResult is the response body of POST /api/proposals/reject.

@@ -38,7 +38,10 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 		if _, err := gitx.Run(ctx, r.Dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/main"); err == nil {
 			ahead, _ := gitx.Run(ctx, r.Dir, "rev-list", "--count", "HEAD..origin/main")
 			if ahead != "0" {
-				if err := r.rebase(ctx, &res); err != nil {
+				r.mu.Lock()
+				err := r.rebase(ctx, &res)
+				r.mu.Unlock()
+				if err != nil {
 					return res, err
 				}
 				res.Pulled = true

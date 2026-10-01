@@ -47,13 +47,11 @@ export interface DecideResult {
   decided: number;
   decided_keys: string[] | null;
   errors: string[] | null;
-  pushed: boolean;
 }
 
 export interface AcceptResult {
   accepted: number;
   errors: string[] | null;
-  pushed: boolean;
 }
 
 export interface RejectResult {
@@ -219,6 +217,11 @@ export interface SyncView {
 }
 
 export interface SyncEvent {
+  state: string;
+  error?: string;
+}
+
+export interface PushEvent {
   state: string;
   error?: string;
 }

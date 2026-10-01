@@ -76,6 +76,7 @@ var wireRoots = []any{
 	UndoResult{},
 	SyncView{},
 	SyncEvent{},
+	PushEvent{},
 	SessionProgressView{},
 }
 

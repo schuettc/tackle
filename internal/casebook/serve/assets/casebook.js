@@ -453,6 +453,7 @@ function boot() {
   setInterval(paintStatus, 15e3);
   loadSummary();
   onLiveEvent("index", loadSummary);
+  onLiveEvent("push", loadSummary);
   dispatchCurrent();
 }
 

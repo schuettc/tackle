@@ -2,7 +2,6 @@ package serve
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,10 +13,8 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/propose"
-	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -29,10 +26,7 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	queued := 0
-	if out, err := gitx.Run(ctx, s.App.Repo.Dir, "rev-list", "--count", "origin/main..HEAD"); err == nil {
-		queued = atoi(out)
-	}
+	queued := s.offlineQueued(ctx)
 	var synced time.Time
 	if fi, err := os.Stat(config.CachePath()); err == nil {
 		synced = fi.ModTime().UTC()
@@ -157,28 +151,28 @@ func (s *Server) decideOneKey(ctx context.Context, key, disposition string, o ap
 	return k.String(), nil
 }
 
-// finishDecides pushes once (ErrOffline is not an error) and rebuilds the
-// index once when n > 0. A rebuild error is appended to errs and not returned
-// as a failure: decisions are already durable and the watch loop rebuilds on
-// the moved HEAD.
-func (s *Server) finishDecides(ctx context.Context, n int, errs []string) (bool, []string) {
+// finishDecides, once n > 0 decisions are committed, asks for the push
+// (push.go: it runs in the background, so no decide waits on the network)
+// and rebuilds the index once. A rebuild error is appended to errs and not
+// returned as a failure: decisions are already durable and the watch loop
+// rebuilds on the moved HEAD. The push is asked for before the rebuild
+// announces "index", so the summary the page then asks for knows a push is
+// in flight.
+func (s *Server) finishDecides(ctx context.Context, n int, errs []string) []string {
 	if n == 0 {
-		return false, errs
+		return errs
 	}
-	pushed, err := s.App.Push(ctx)
-	if err != nil && !errors.Is(err, store.ErrOffline) {
-		errs = append(errs, err.Error())
-	}
+	s.schedulePush()
 	if err := s.rebuild(ctx); err != nil {
 		errs = append(errs, err.Error())
 	}
-	return pushed, errs
+	return errs
 }
 
-// decideAll records decisions (one commit each), pushes once, retires the
-// pending proposals for those keys (except keep, the one being accepted),
-// rebuilds the index and announces it.
-func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, []string, bool) {
+// decideAll records decisions (one commit each), retires the pending
+// proposals for those keys (except keep, the one being accepted), asks for
+// the push and rebuilds the index (finishDecides).
+func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, []string) {
 	if o.By == "" {
 		o.By = s.App.Cfg.User
 	}
@@ -197,8 +191,8 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 	if n > 0 {
 		s.publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
 	}
-	pushed, errs := s.finishDecides(ctx, n, errs)
-	return n, done, errs, pushed
+	errs = s.finishDecides(ctx, n, errs)
+	return n, done, errs
 }
 
 func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
@@ -263,11 +257,11 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 				errs = append(errs, err.Error())
 			}
 		}
-		reply(w, DecideResult{Decided: 0, DecidedKeys: []string{}, Errors: nonNil(errs), Pushed: false}, nil)
+		reply(w, DecideResult{Decided: 0, DecidedKeys: []string{}, Errors: nonNil(errs)}, nil)
 		return
 	}
-	n, done, errs, pushed := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
-	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, nil)
+	n, done, errs := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs)}, nil)
 }
 
 func proposalOpts(p propose.Proposal) app.DecideOptions {
@@ -310,9 +304,9 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		})
 		total++
 	}
-	pushed, errs := s.finishDecides(ctx, total, errs)
+	errs = s.finishDecides(ctx, total, errs)
 	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
-	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Pushed: pushed}, nil)
+	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs)}, nil)
 }
 
 func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
@@ -334,12 +328,12 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	}
 	o := proposalOpts(p)
 	o.Until, o.Note = in.Until, in.Note
-	n, done, errs, pushed := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
+	n, done, errs := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
 	if n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
 		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
 	}
-	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Pushed: pushed}, nil)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs)}, nil)
 }
 
 func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {

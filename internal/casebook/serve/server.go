@@ -77,8 +77,19 @@ type Server struct {
 	afterOverlapCheck func()                          // test hook: runs between the overlap check and the create/approve
 	syncing           bool                            // a sync POST /api/sync started is running
 	runSync           func(ctx context.Context) error // test seam for syncNow (nil: App.Sync)
-	life              context.Context                 // Run's context; done while shutting down
-	stop              context.CancelFunc
+	// The background push (push.go). remoteMu is serve's own serialization
+	// of remote git work on casebook-data (the push, POST /api/sync's sync);
+	// pushMu guards the pusher's state and is never held across git.
+	remoteMu    sync.Mutex
+	pushMu      sync.Mutex
+	pushRunning bool                                   // a push is in flight (or about to start)
+	pushAgain   bool                                   // a decide landed during it: push once more after it
+	pushFailed  bool                                   // the last push ended offline or failed
+	pushWG      sync.WaitGroup                         // Run waits for the pusher before closing the database
+	runPush     func(ctx context.Context) error        // test seam for App.Push
+	after       func(d time.Duration) <-chan time.Time // serve's clock for the pusher's retries (nil: time.After)
+	life        context.Context                        // Run's context; done while shutting down
+	stop        context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -728,6 +739,8 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 		o.Ready(srv.URL, wasOpen)
 	}
 	err = srv.Wait()
+	cancel()          // serve is stopping: a push in flight ends, its commits stay queued
+	s.pushWG.Wait()   // the pusher writes events: the database closes after it
 	s.streamWG.Wait() // streams end with ctx; the database closes after them
 	return err
 }

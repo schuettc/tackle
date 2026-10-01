@@ -41,6 +41,9 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	s.Wait = 2 * time.Second
+	// A background push still running when the test ends finishes before
+	// the database closes (cleanups run last-registered first).
+	t.Cleanup(s.pushWG.Wait)
 	hs := httptest.NewServer(s.Handler())
 	t.Cleanup(hs.Close)
 	return &rig{Rig: ar, s: s, url: hs.URL}
@@ -422,9 +425,10 @@ func TestDecideDirectSupersedesProposal(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("pending %+v", pending)
 	}
-	if got := strings.TrimSpace(r.gitRemoteHead(t)); !strings.HasPrefix(got, "decide pr:schuettc/hail#3 → keep") {
-		t.Fatalf("remote head %q", got)
-	}
+	// The push follows the reply in the background.
+	eventually(t, "the decision on the remote", func() bool {
+		return strings.HasPrefix(strings.TrimSpace(r.gitRemoteHead(t)), "decide pr:schuettc/hail#3 → keep")
+	})
 }
 
 func (r *rig) gitRemoteHead(t *testing.T) string {
@@ -493,7 +497,6 @@ func TestDecideDryRun(t *testing.T) {
 		Decided     int      `json:"decided"`
 		DecidedKeys []string `json:"decided_keys"`
 		Errors      []string `json:"errors"`
-		Pushed      bool     `json:"pushed"`
 	}
 	if c := r.do(t, "POST", "/api/decide", map[string]any{
 		"keys":        []string{"pr:schuettc/hail#3"},
@@ -823,14 +826,13 @@ func TestAcceptManyDecidesOncePerRequest(t *testing.T) {
 		t.Fatalf("proposal %d state %q, want accepted", p2, prop2.State)
 	}
 
-	// The remote's main has both decision commits.
-	log, err := git(t, r.Remote, "log", "-5", "--format=%s", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(log, "pr:schuettc/hail#3") || !strings.Contains(log, "issue:schuettc/hail#4") {
-		t.Fatalf("remote log missing commits: %q", log)
-	}
+	// The remote's main gets both decision commits (the push follows the
+	// reply in the background).
+	eventually(t, "both decisions on the remote", func() bool {
+		log, err := git(t, r.Remote, "log", "-5", "--format=%s", "main")
+		return err == nil && strings.Contains(log, "pr:schuettc/hail#3") && strings.Contains(log, "issue:schuettc/hail#4")
+	})
+	waitIdle(t, r)
 
 	// Exactly one "index" event was published by the request.
 	events, _, _ := r.s.Bus.Since(ctx, before, 10000)
