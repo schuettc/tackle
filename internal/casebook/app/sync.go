@@ -16,6 +16,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/observe"
 	"github.com/schuettc/tackle/internal/casebook/spool"
 	"github.com/schuettc/tackle/internal/casebook/store"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	"github.com/schuettc/tackle/internal/casebook/view"
 	tools "github.com/schuettc/tools-common"
 )
@@ -33,6 +34,7 @@ type SyncOptions struct {
 // SyncReport says what a sync did.
 type SyncReport struct {
 	Events       int      `json:"events"`
+	TempEvents   int      `json:"temp_events,omitempty"` // drained from the spool but in a temp folder: dropped
 	BadEvents    int      `json:"bad_events,omitempty"`
 	Clones       int      `json:"clones"`
 	ScanErrors   []string `json:"scan_errors,omitempty"`
@@ -66,7 +68,11 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		return rep, err
 	}
 	defer batch.Close()
-	rep.Events, rep.BadEvents = len(batch.Events), batch.Bad
+	// Events spooled in a temp folder (by a binary before the hook skipped
+	// them, or by one that still doesn't) are dropped here: the spool files
+	// go with batch.Done like the rest.
+	events := a.dropTemp(batch.Events)
+	rep.Events, rep.TempEvents, rep.BadEvents = len(events), len(batch.Events)-len(events), batch.Bad
 
 	snap, scanErrs := observe.Scan(ctx, a.Cfg.Roots, a.Cfg.Machine)
 	rep.Clones = len(snap.Clones)
@@ -115,7 +121,7 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		if snaps, err = a.snapshots(); err != nil {
 			return err
 		}
-		if err := a.journal(batch.Events, snaps); err != nil {
+		if err := a.journal(events, snaps); err != nil {
 			return err
 		}
 		return a.render(g, snaps, &rep)
@@ -202,6 +208,19 @@ func (a *App) render(g *observe.GitHub, snaps []observe.Snapshot, rep *SyncRepor
 		}
 	}
 	return nil
+}
+
+// dropTemp returns the events that did not happen in a temp folder
+// (temppath; this machine's scan roots are never temp).
+func (a *App) dropTemp(events []journal.Event) []journal.Event {
+	temp := temppath.New(a.Cfg.Roots)
+	out := make([]journal.Event, 0, len(events))
+	for _, ev := range events {
+		if !temp.Event(ev) {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
 
 // journal annotates events with this machine and their repos, and appends

@@ -100,19 +100,90 @@ func (r *Repo) lock(ctx context.Context, exclusive bool) (unlock func(), err err
 // has written so far, and nobody reads the tree halfway. write may write
 // files (WriteFile, AppendFile, os calls) but must not call another locking
 // Repo method. A nil write just commits. When write fails nothing is
-// committed. It reports whether a commit was made.
+// committed. It reports whether a commit was made. A BatchWithin that died
+// before its commit is committed first, under its own message (pending).
 func (r *Repo) Batch(ctx context.Context, msg string, write func() error) (bool, error) {
 	unlock, err := r.lock(ctx, true)
 	if err != nil {
 		return false, err
 	}
 	defer unlock()
+	if err := r.commitPending(ctx); err != nil {
+		return false, err
+	}
 	if write != nil {
 		if err := write(); err != nil {
 			return false, err
 		}
 	}
 	return r.commit(ctx, msg)
+}
+
+// ErrLocked means casebook-data's lock stayed held by another writer for
+// the whole wait BatchWithin allows.
+var ErrLocked = errors.New("casebook-data is locked by another casebook process")
+
+// BatchWithin is Batch that waits at most wait for casebook-data's lock and
+// then gives up with ErrLocked, having written nothing. Once the lock is
+// held, the write and the commit run on ctx alone.
+//
+// Its message is recorded as pending (PendingPath) until its commit is
+// made, so a write that dies halfway (a crash, a kill, a failed write) is
+// not left to be swept into someone else's commit: the next writer under
+// the lock (Batch, BatchWithin, or Sync's rebase) commits what it left with
+// this message first.
+func (r *Repo) BatchWithin(ctx context.Context, wait time.Duration, msg string, write func() error) (bool, error) {
+	lctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	unlock, err := r.lock(lctx, true)
+	if err != nil {
+		if ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
+			return false, ErrLocked
+		}
+		return false, err
+	}
+	defer unlock()
+	if err := r.commitPending(ctx); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(r.PendingPath(), []byte(msg), 0o600); err != nil {
+		return false, err
+	}
+	if write != nil {
+		if err := write(); err != nil {
+			return false, err
+		}
+	}
+	ok, err := r.commit(ctx, msg)
+	if err != nil {
+		return false, err
+	}
+	return ok, os.Remove(r.PendingPath())
+}
+
+// PendingPath holds the message of a BatchWithin whose commit isn't made
+// yet: <git dir>/casebook-pending, beside the lock, so never committed.
+func (r *Repo) PendingPath() string {
+	return filepath.Join(filepath.Dir(r.LockPath()), "casebook-pending")
+}
+
+// commitPending commits what a BatchWithin that died before its commit
+// left in the working tree, under that batch's message, and clears it.
+// casebook-data's exclusive lock is held, so nothing else is half-written.
+func (r *Repo) commitPending(ctx context.Context) error {
+	b, err := os.ReadFile(r.PendingPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if msg := strings.TrimSpace(string(b)); msg != "" {
+		if _, err := r.commit(ctx, msg); err != nil {
+			return err
+		}
+	}
+	return os.Remove(r.PendingPath())
 }
 
 // Read runs fn under casebook-data's shared lock: no write, commit or rebase

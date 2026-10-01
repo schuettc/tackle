@@ -11,6 +11,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/journal"
 	"github.com/schuettc/tackle/internal/casebook/spool"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	"github.com/schuettc/tools-common/harness"
 )
 
@@ -18,7 +19,8 @@ const maxStdinLines = 200
 
 // Main is `casebook hook <name> [args...]`, run by the shims. It never fails,
 // prints nothing, runs no git and no network, and returns within a second.
-// On a machine without a casebook config it records nothing.
+// On a machine without a casebook config it records nothing, and git activity
+// in a temp folder (temppath) is never recorded.
 func Main(args []string, stdin io.Reader) int {
 	if len(args) == 0 || os.Getenv("CASEBOOK_DISABLE") != "" || os.Getenv("CASEBOOK_INTERNAL") != "" {
 		return 0
@@ -30,7 +32,10 @@ func Main(args []string, stdin io.Reader) int {
 	go func() {
 		defer close(done)
 		defer func() { _ = recover() }()
-		Handle(args[0], args[1:], stdin, config.SpoolDir(), time.Now())
+		// An unreadable config still records (sync reports the config);
+		// it only loses the configured roots' exemption from the temp rule.
+		cfg, _ := config.Load()
+		Handle(args[0], args[1:], stdin, config.SpoolDir(), time.Now(), temppath.New(cfg.Roots))
 	}()
 	select {
 	case <-done:
@@ -39,9 +44,10 @@ func Main(args []string, stdin io.Reader) int {
 	return 0
 }
 
-// Handle turns one hook invocation into a spool line. Errors are dropped:
-// losing one journal line is better than slowing or failing git.
-func Handle(name string, args []string, stdin io.Reader, spoolDir string, now time.Time) {
+// Handle turns one hook invocation into a spool line, unless temp (when not
+// nil) says it happened in a temp folder. Errors are dropped: losing one
+// journal line is better than slowing or failing git.
+func Handle(name string, args []string, stdin io.Reader, spoolDir string, now time.Time, temp *temppath.Matcher) {
 	if name == "reference-transaction" && (len(args) == 0 || args[0] != "committed") {
 		return
 	}
@@ -69,6 +75,9 @@ func Handle(name string, args []string, stdin io.Reader, spoolDir string, now ti
 			gd = filepath.Join(ev.CWD, gd)
 		}
 		ev.GitDir = filepath.Clean(gd)
+	}
+	if temp != nil && temp.Event(ev) {
+		return
 	}
 	id := harness.FromEnv()
 	ev.ClaudeID, ev.AgentID, ev.Child = id.ClaudeID, id.AgentID, id.Child

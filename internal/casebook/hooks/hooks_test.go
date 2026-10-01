@@ -347,8 +347,8 @@ func TestHandleWritesRedactedEvent(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "cc-1")
 	dir := filepath.Join(t.TempDir(), "spool")
 	Handle("pre-push", []string{"origin", "https://x-access-token:SECRET@github.com/a/b.git"},
-		strings.NewReader("refs/heads/main aaa refs/heads/main bbb\n"), dir, time.Unix(100, 0))
-	Handle("reference-transaction", []string{"prepared"}, strings.NewReader("a b refs/heads/x\n"), dir, time.Unix(101, 0))
+		strings.NewReader("refs/heads/main aaa refs/heads/main bbb\n"), dir, time.Unix(100, 0), nil)
+	Handle("reference-transaction", []string{"prepared"}, strings.NewReader("a b refs/heads/x\n"), dir, time.Unix(101, 0), nil)
 	b, err := spool.Drain(dir)
 	if err != nil || len(b.Events) != 1 {
 		t.Fatalf("got %+v %v", b, err)
@@ -385,5 +385,124 @@ func TestMainNeverFails(t *testing.T) {
 	t.Setenv("CASEBOOK_INTERNAL", "1")
 	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
 		t.Fatal("Main returned non-zero")
+	}
+}
+
+// writeConfig initializes casebook in a fresh CASEBOOK_HOME with the given
+// scan roots and returns nothing; the spool is config.SpoolDir().
+func writeConfig(t *testing.T, roots ...string) {
+	t.Helper()
+	t.Setenv("CASEBOOK_HOME", filepath.Join(t.TempDir(), "home"))
+	_ = os.MkdirAll(filepath.Dir(config.Path()), 0o700)
+	toml := "machine = \"m\"\nroots = ["
+	for i, r := range roots {
+		if i > 0 {
+			toml += ", "
+		}
+		toml += "\"" + r + "\""
+	}
+	if err := os.WriteFile(config.Path(), []byte(toml+"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spooled(t *testing.T) int {
+	t.Helper()
+	b, err := spool.Drain(config.SpoolDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(b.Events)
+	if err := b.Done(); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestMainSkipsTempFolders(t *testing.T) {
+	testgit.Env(t)
+	pkg, _ := filepath.Abs(".") // a real (non-temp) directory: this package's source
+	realRoot, _ := filepath.EvalSymlinks(t.TempDir())
+	writeConfig(t, filepath.Join(realRoot, "GitHub"))
+	scratch := t.TempDir() // under os.TempDir(), outside the configured root
+	// As written and through the /private realpath: both are temp.
+	for _, dir := range []string{scratch, func() string { p, _ := filepath.EvalSymlinks(scratch); return p }()} {
+		t.Chdir(dir)
+		if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+			t.Fatal("Main returned non-zero")
+		}
+		if n := spooled(t); n != 0 {
+			t.Errorf("hook in temp folder %s spooled %d event(s)", dir, n)
+		}
+	}
+	// A real working directory with a temp GIT_DIR (a probe's git) is temp too.
+	t.Chdir(pkg)
+	t.Setenv("GIT_DIR", filepath.Join(scratch, "repo", ".git"))
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 0 {
+		t.Errorf("hook with a temp GIT_DIR spooled %d event(s)", n)
+	}
+}
+
+func TestMainRecordsInsideAConfiguredRootInTemp(t *testing.T) {
+	testgit.Env(t)
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	writeConfig(t, root)
+	clone := filepath.Join(root, "hail")
+	_ = os.MkdirAll(clone, 0o755)
+	t.Chdir(clone)
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 1 {
+		t.Errorf("hook inside a configured root spooled %d event(s), want 1", n)
+	}
+}
+
+// TestMainRecordsRealWorkInTempFolders: real work in a temp folder is
+// journalled. A linked worktree of a clone in a configured root (git runs
+// its hooks there without GIT_DIR for some hooks, with it for others), and
+// a scratch clone's push to GitHub, are recorded; the same scratch clone's
+// push to a local bare repo is not.
+func TestMainRecordsRealWorkInTempFolders(t *testing.T) {
+	testgit.Env(t)
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	writeConfig(t, root)
+	clone := filepath.Join(root, "hail")
+	if err := os.MkdirAll(clone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Git(t, clone, "init", "-q", "-b", "main")
+	testgit.Commit(t, clone, "a", "1")
+	scratch, _ := filepath.EvalSymlinks(t.TempDir()) // temp, outside the root
+	wt := filepath.Join(scratch, "wt")
+	testgit.Git(t, clone, "worktree", "add", "-q", "-b", "feat", wt)
+
+	t.Chdir(wt)
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 1 {
+		t.Errorf("hook in a worktree of a rooted clone, no GIT_DIR: spooled %d, want 1", n)
+	}
+	t.Setenv("GIT_DIR", testgit.Git(t, wt, "rev-parse", "--absolute-git-dir"))
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 1 {
+		t.Errorf("hook in a worktree of a rooted clone, GIT_DIR set: spooled %d, want 1", n)
+	}
+	_ = os.Unsetenv("GIT_DIR")
+
+	t.Chdir(scratch)
+	for url, want := range map[string]int{"https://github.com/schuettc/hail.git": 1, "git@github.com:schuettc/hail.git": 1, "../remote.git": 0, filepath.Join(scratch, "remote.git"): 0} {
+		if Main([]string{"pre-push", "origin", url}, strings.NewReader("")) != 0 {
+			t.Fatal("Main returned non-zero")
+		}
+		if n := spooled(t); n != want {
+			t.Errorf("pre-push from a scratch clone to %s: spooled %d, want %d", url, n, want)
+		}
 	}
 }

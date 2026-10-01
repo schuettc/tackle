@@ -202,3 +202,109 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("help show usage: %q", out)
 	}
 }
+
+func TestAdoptRefusesATempClone(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("hooks", "install")
+	scratch := filepath.Join(t.TempDir(), "copier._vcs.clone.x") // temp, outside the configured root
+	_ = os.MkdirAll(scratch, 0o755)
+	testgit.Git(t, scratch, "init", "-q", "-b", "main")
+	testgit.Commit(t, scratch, "a", "1")
+	testgit.Git(t, scratch, "config", "core.hooksPath", ".githooks")
+	code, out, errw := e.run("", "hooks", "adopt", scratch)
+	if code == 0 || !strings.Contains(out+errw, "temp folder") {
+		t.Errorf("adopt of a temp clone: exit %d\n%s%s", code, out, errw)
+	}
+	if got := testgit.Git(t, scratch, "config", "--local", "core.hooksPath"); got != ".githooks" {
+		t.Errorf("temp clone core.hooksPath = %q, want it untouched", got)
+	}
+	e.ok("hooks", "uninstall")
+}
+
+func TestRecordSkipsTempFolders(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	for _, cwd := range []string{"/tmp/scratch", "/private/var/folders/92/x/T/pytest-of-c/p0", e.clone} {
+		if code, _, _ := e.run(`{"tool_name":"Bash","cwd":"`+cwd+`","tool_input":{"command":"git push"}}`, "record", "--harness", "claude"); code != 0 {
+			t.Fatalf("record exit %d", code)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(config.SpoolDir(), "events.jsonl"))
+	if err != nil || strings.Count(string(b), "\n") != 1 || !strings.Contains(string(b), e.clone) {
+		t.Errorf("spool after record:\n%s %v", b, err)
+	}
+}
+
+func TestPruneTemp(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("sync", "--no-github")
+	a, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := `{"v":1,"ts":"2026-09-24T10:00:00Z","src":"git-hook","hook":"post-commit","cwd":"` + e.clone + `","machine":"mbp"}` + "\n"
+	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","repo":"schuettc/hail","machine":"mbp"}` + "\n"
+	rel := "journal/mbp/2026/09-24.jsonl"
+	_ = os.MkdirAll(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026"), 0o755)
+	_ = os.WriteFile(filepath.Join(a.Repo.Dir, filepath.FromSlash(rel)), []byte(real+tmp+real), 0o644)
+	if _, err := a.Repo.Commit(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errw := e.run("", "prune"); code != 2 || !strings.Contains(errw, "--temp") {
+		t.Errorf("prune without --temp: exit %d %q", code, errw)
+	}
+	out := e.ok("prune", "--temp")
+	for _, want := range []string{"dry run", rel, "remove 1", "keep 2", "/tmp/casebook-probe-*", "removed lines that carry a repo: 1", "1  schuettc/hail", "--apply"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("dry run output lacks %q:\n%s", want, out)
+		}
+	}
+	if b, _ := a.Repo.ReadFile(rel); string(b) != real+tmp+real {
+		t.Fatal("the dry run changed the journal")
+	}
+	var rep struct {
+		Removed int  `json:"removed"`
+		Applied bool `json:"applied"`
+	}
+	if err := json.Unmarshal([]byte(e.ok("prune", "--temp", "--apply", "--json")), &rep); err != nil || rep.Removed != 1 || !rep.Applied {
+		t.Fatalf("apply: %+v %v", rep, err)
+	}
+	if b, _ := a.Repo.ReadFile(rel); string(b) != real+real {
+		t.Errorf("journal after apply:\n%s", b)
+	}
+	if out := e.ok("prune", "--temp", "--apply"); !strings.Contains(out, "nothing to prune") {
+		t.Errorf("second apply:\n%s", out)
+	}
+}
+
+// TestPruneTempRefusedPush: when the casebook remote refuses the push, the
+// report is still printed (the prune is committed) and the error says the
+// next sync pushes it.
+func TestPruneTempRefusedPush(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("sync", "--no-github")
+	a, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","machine":"mbp"}` + "\n"
+	_ = os.MkdirAll(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026"), 0o755)
+	_ = os.WriteFile(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026", "09-24.jsonl"), []byte(tmp+tmp), 0o644)
+	if _, err := a.Repo.Commit(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(e.remote, "hooks", "pre-receive"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	code, out, errw := e.run("", "prune", "--temp", "--apply")
+	if code == 0 {
+		t.Fatalf("a refused push exited 0:\n%s%s", out, errw)
+	}
+	if !strings.Contains(out, "remove 2") {
+		t.Errorf("no report printed for the committed prune:\n%s", out)
+	}
+	if !strings.Contains(errw, "committed locally") || !strings.Contains(errw, "next casebook sync pushes it") {
+		t.Errorf("error lacks what happened:\n%s", errw)
+	}
+}

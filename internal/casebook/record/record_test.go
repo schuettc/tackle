@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/spool"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	"github.com/schuettc/tackle/internal/casebook/testgit"
 )
 
@@ -49,12 +50,72 @@ func TestParsePiPayloadUsesEnvIdentity(t *testing.T) {
 func TestMainSpoolsAndNeverFails(t *testing.T) {
 	testgit.Env(t)
 	dir := filepath.Join(t.TempDir(), "spool")
-	Main("claude", strings.NewReader(`{"tool_name":"Bash","cwd":"/w","tool_input":{"command":"git push"}}`), dir, time.Now())
-	Main("claude", strings.NewReader(`garbage`), dir, time.Now())
-	Main("bogus-harness", strings.NewReader(`{}`), dir, time.Now())
+	Main("claude", strings.NewReader(`{"tool_name":"Bash","cwd":"/w","tool_input":{"command":"git push"}}`), dir, time.Now(), nil)
+	Main("claude", strings.NewReader(`garbage`), dir, time.Now(), nil)
+	Main("bogus-harness", strings.NewReader(`{}`), dir, time.Now(), nil)
 	b, err := spool.Drain(dir)
 	if err != nil || len(b.Events) != 1 {
 		t.Fatalf("got %+v %v", b, err)
 	}
 	b.Close()
+}
+
+func TestMainSkipsTempFolders(t *testing.T) {
+	testgit.Env(t)
+	dir := filepath.Join(t.TempDir(), "spool")
+	temp := temppath.New([]string{"/tmp/home/GitHub"})
+	for _, p := range []string{
+		`{"tool_name":"Bash","cwd":"/tmp/scratch","tool_input":{"command":"git push"}}`,
+		`{"tool_name":"Bash","cwd":"/private/var/folders/92/x/T/tmp.AbC","tool_input":{"command":"git commit -m x"}}`,
+		`{"command":"git -C /private/tmp/clone fetch","cwd":"/Users/c"}`,
+	} {
+		h := "claude"
+		if !strings.Contains(p, "tool_name") {
+			h = "pi"
+		}
+		Main(h, strings.NewReader(p), dir, time.Now(), temp)
+	}
+	// Recorded: a real directory, and a configured root that is under /tmp.
+	Main("claude", strings.NewReader(`{"tool_name":"Bash","cwd":"/Users/c/GitHub/a","tool_input":{"command":"git push"}}`), dir, time.Now(), temp)
+	Main("pi", strings.NewReader(`{"command":"git push","cwd":"/tmp/home/GitHub/hail"}`), dir, time.Now(), temp)
+	b, err := spool.Drain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if len(b.Events) != 2 {
+		t.Fatalf("spooled %d event(s), want the 2 outside temp folders: %+v", len(b.Events), b.Events)
+	}
+}
+
+// TestMainRecordsPushesFromTempFolders: an agent's `git -C <tmp> push` to
+// GitHub is real work and is recorded, like a `gh -R`; the same push to a
+// local bare repo is temp.
+func TestMainRecordsPushesFromTempFolders(t *testing.T) {
+	testgit.Env(t)
+	dir := filepath.Join(t.TempDir(), "spool")
+	scratch, _ := filepath.EvalSymlinks(t.TempDir())
+	clone := filepath.Join(scratch, "clone")
+	testgit.Git(t, scratch, "init", "-q", clone)
+	testgit.Git(t, clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")
+	testgit.Git(t, clone, "remote", "add", "fixture", "../remote.git")
+	temp := temppath.New([]string{"/Users/c/GitHub"})
+	for _, p := range []string{
+		`{"command":"git -C ` + clone + ` push origin feat","cwd":"/Users/c"}`,
+		`{"command":"git push -u origin feat","cwd":"` + clone + `"}`,
+		`{"command":"git -C ` + clone + ` push https://github.com/schuettc/hail.git feat","cwd":"/Users/c"}`,
+		// Temp: a push to the local fixture.
+		`{"command":"git -C ` + clone + ` push fixture feat","cwd":"/Users/c"}`,
+		`{"command":"git push ../remote.git feat","cwd":"` + clone + `"}`,
+	} {
+		Main("pi", strings.NewReader(p), dir, time.Now(), temp)
+	}
+	b, err := spool.Drain(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if len(b.Events) != 3 {
+		t.Fatalf("spooled %d event(s), want the 3 pushes to GitHub: %+v", len(b.Events), b.Events)
+	}
 }

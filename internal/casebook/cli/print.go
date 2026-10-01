@@ -20,6 +20,9 @@ func printSync(out io.Writer, machine string, r app.SyncReport) {
 		state += ", pushed"
 	}
 	_, _ = fmt.Fprintf(out, "synced %s: %d event(s), %d clone(s), %s\n", machine, r.Events, r.Clones, state)
+	if r.TempEvents > 0 {
+		_, _ = fmt.Fprintf(out, "skipped %d event(s) in temp folders (never journalled)\n", r.TempEvents)
+	}
 	if r.Offline {
 		_, _ = fmt.Fprintln(out, "offline: the casebook remote is unreachable; changes are queued locally")
 	}
@@ -138,4 +141,74 @@ func eventLine(ev journal.Event) string {
 		what = append(what, s)
 	}
 	return fmt.Sprintf("%s %s [%s] %s", ev.Machine, ev.Repo, who, strings.Join(what, "; "))
+}
+
+// printPrune shows a prune: per-file counts, the top temp prefixes and the
+// derived records, then what happened (or how to apply a dry run).
+func printPrune(out io.Writer, r app.PruneReport) {
+	mode := "dry run; nothing changed"
+	if r.Applied {
+		mode = "applied"
+	}
+	_, _ = fmt.Fprintf(out, "casebook prune --temp on %s (%s)\n", r.Machine, mode)
+	if r.Removed == 0 && len(r.Clones) == 0 {
+		_, _ = fmt.Fprintf(out, "nothing to prune: %d journal file(s), %d line(s), none in temp folders\n", len(r.Files), r.Kept)
+		printPruneDecisions(out, r)
+		return
+	}
+	for _, f := range r.Files {
+		note := ""
+		if f.Delete {
+			note = " (file removed)"
+		}
+		_, _ = fmt.Fprintf(out, "  %s: remove %d, keep %d%s\n", f.Path, f.Removed, f.Kept, note)
+	}
+	_, _ = fmt.Fprintf(out, "total: remove %d of %d line(s), keep %d\n", r.Removed, r.Removed+r.Kept, r.Kept)
+	if len(r.Prefixes) > 0 {
+		_, _ = fmt.Fprintln(out, "top temp prefixes:")
+		for i, p := range r.Prefixes {
+			if i == 10 {
+				_, _ = fmt.Fprintf(out, "  … %d more prefix(es)\n", len(r.Prefixes)-10)
+				break
+			}
+			_, _ = fmt.Fprintf(out, "  %7d  %s\n", p.Lines, p.Prefix)
+		}
+	}
+	// A removed line that carries a repo may be real work misclassified:
+	// show them before anyone applies.
+	_, _ = fmt.Fprintf(out, "removed lines that carry a repo: %d\n", r.RepoLines)
+	for i, rc := range r.Repos {
+		if i == 10 {
+			_, _ = fmt.Fprintf(out, "  … %d more repo(s)\n", len(r.Repos)-10)
+			break
+		}
+		_, _ = fmt.Fprintf(out, "  %7d  %s\n", rc.Lines, rc.Repo)
+	}
+	_, _ = fmt.Fprintf(out, "derived records: machines/%s.json: %d temp clone(s)\n", r.Machine, len(r.Clones))
+	for _, c := range r.Clones {
+		_, _ = fmt.Fprintf(out, "  %s\n", c)
+	}
+	printPruneDecisions(out, r)
+	switch {
+	case !r.Applied:
+		_, _ = fmt.Fprintln(out, "run again with --apply to rewrite this machine's journal files, commit and push")
+	case r.Pushed:
+		_, _ = fmt.Fprintln(out, "committed and pushed; the old lines stay in casebook-data's history")
+	case r.PushFailed:
+		_, _ = fmt.Fprintln(out, "committed locally; the push failed, so the next sync pushes it")
+	case r.Offline:
+		_, _ = fmt.Fprintln(out, "committed; the casebook remote is unreachable, so the next sync pushes it")
+	case r.Committed:
+		_, _ = fmt.Fprintln(out, "committed (not pushed: --no-push); the old lines stay in casebook-data's history")
+	}
+}
+
+func printPruneDecisions(out io.Writer, r app.PruneReport) {
+	if len(r.WorktreeDecisions) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(out, "worktree decisions at temp paths (decisions are intent; left alone): %d\n", len(r.WorktreeDecisions))
+	for _, d := range r.WorktreeDecisions {
+		_, _ = fmt.Fprintf(out, "  %s\n", d)
+	}
 }

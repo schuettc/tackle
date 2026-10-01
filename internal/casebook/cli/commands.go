@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/observe"
 	"github.com/schuettc/tackle/internal/casebook/record"
+	"github.com/schuettc/tackle/internal/casebook/store"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -357,6 +360,9 @@ func commands(stdin io.Reader) []tools.Command {
 					if len(pos) > 1 {
 						repo = pos[1]
 					}
+					if err := refuseTemp(repo); err != nil {
+						return err
+					}
 					res, err := hooks.Adopt(ctx, o, repo)
 					if err != nil {
 						return err
@@ -395,6 +401,44 @@ func commands(stdin io.Reader) []tools.Command {
 					return tools.UsageError{Msg: "hooks needs install, uninstall, status, adopt or release"}
 				}
 				return nil
+			},
+		},
+		{
+			Name: "prune", Group: "setup", Synopsis: "prune --temp [--apply] [--no-push] [--json]",
+			Summary:  "remove journalled git activity in temp folders (dry run unless --apply)",
+			Help:     "Only this machine's journal files and machines/<machine>.json change; other lines stay byte for byte.\nHistory is not rewritten: removed lines stay recoverable from casebook-data's git log.\nAn apply that dies before its commit is committed under its own message by the next sync (or prune).\nA refused push leaves the commit in place; the next sync pushes it.",
+			NewFlags: pruneFlags,
+			Run: func(args []string, out, errw io.Writer) error {
+				fs := pruneFlags()
+				if _, err := parse(fs, args, out); err != nil {
+					return err
+				}
+				if !boolFlag(fs, "temp") {
+					return tools.UsageError{Msg: "prune needs --temp (the only kind of prune there is)"}
+				}
+				a, err := open()
+				if err != nil {
+					return err
+				}
+				rep, err := a.PruneTemp(ctx, app.PruneOptions{Apply: boolFlag(fs, "apply"), NoPush: boolFlag(fs, "no-push")})
+				switch {
+				case errors.Is(err, app.ErrSyncBusy):
+					return tools.Exitf(1, "a casebook sync is running on this machine; nothing was changed").WithHint("casebook prune --temp --apply (again, once it is done)")
+				case errors.Is(err, store.ErrLocked):
+					return tools.Exitf(1, "another casebook process holds casebook-data's lock; nothing was changed").WithHint("casebook prune --temp --apply (again, in a moment)")
+				case err != nil && !rep.Committed:
+					return err
+				}
+				// A prune whose push failed is committed: say what it did, then why
+				// the push failed.
+				if boolFlag(fs, "json") {
+					if perr := tools.PrintJSON(out, rep); perr != nil {
+						return perr
+					}
+				} else {
+					printPrune(out, rep)
+				}
+				return err
 			},
 		},
 		{
@@ -445,10 +489,11 @@ func commands(stdin io.Reader) []tools.Command {
 				if _, err := parse(fs, args, io.Discard); err != nil {
 					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
-				if _, err := config.Load(); err != nil {
+				cfg, err := config.Load()
+				if err != nil {
 					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
-				record.Main(strFlag(fs, "harness"), stdin, config.SpoolDir(), time.Now())
+				record.Main(strFlag(fs, "harness"), stdin, config.SpoolDir(), time.Now(), temppath.New(cfg.Roots))
 				return nil
 			},
 		},
@@ -519,6 +564,7 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 	if !ok {
 		return tools.Exitf(1, "no snapshot for this machine yet: run casebook sync first")
 	}
+	temp := temppath.New(a.Cfg.Roots)
 	var adopted, already, failed int
 	for _, c := range snap.Clones {
 		if c.Bare || c.LocalHooksPath == "" {
@@ -526,6 +572,9 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 		}
 		if fi, err := os.Stat(c.Path); err != nil || !fi.IsDir() {
 			continue
+		}
+		if temp.Path(c.Path) {
+			continue // a temp clone is never adopted
 		}
 		res, err := hooks.Adopt(ctx, o, c.Path)
 		if err != nil {
@@ -544,6 +593,21 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "adopted %d, already %d, failed %d\n", adopted, already, failed)
 	if failed > 0 {
 		return tools.Exitf(1, "%d repo(s) failed to adopt", failed)
+	}
+	return nil
+}
+
+// refuseTemp refuses to adopt a repo in a temp folder (temppath) outside this
+// machine's scan roots: casebook never journals one, so adopting it would
+// only rewrite its hooks for nothing.
+func refuseTemp(repo string) error {
+	cfg, _ := config.Load() // uninitialized: no scan roots to exempt
+	abs, err := filepath.Abs(repo)
+	if err != nil {
+		return err
+	}
+	if temppath.New(cfg.Roots).Path(abs) {
+		return tools.Exitf(1, "%s is in a temp folder; casebook never journals temp folders, so it is not adopted", abs)
 	}
 	return nil
 }
@@ -570,6 +634,15 @@ func briefFlags() *flag.FlagSet {
 	return flags("brief", "casebook brief [--cwd DIR] [--max N]", "", func(fs *flag.FlagSet) {
 		fs.String("cwd", "", "directory of the session (default: current)")
 		fs.String("max", "8", "most items to list")
+	})()
+}
+
+func pruneFlags() *flag.FlagSet {
+	return flags("prune", "casebook prune --temp [--apply] [--no-push] [--json]", "Without --apply, prints what would be removed and changes nothing.", func(fs *flag.FlagSet) {
+		fs.Bool("temp", false, "remove events journalled in temp folders (/tmp, /var/folders, $TMPDIR)")
+		fs.Bool("apply", false, "rewrite this machine's journal files, commit and push")
+		fs.Bool("no-push", false, "commit locally only")
+		fs.Bool("json", false, "print the report as JSON")
 	})()
 }
 
