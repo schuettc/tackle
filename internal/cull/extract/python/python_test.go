@@ -584,3 +584,44 @@ func TestReferencedNameHonorsBudget(t *testing.T) {
 		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
 	}
 }
+
+func TestFromImportedModuleAliasResolves(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_alias_load")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "ld.LOADERS" ||
+		tc.Callees[0].Source != "LOADERS: tuple = (\"a\", \"b\")\n" || tc.Callees[0].File != "src/pkg/loaders.py" {
+		t.Fatalf("alias load Callees = %+v", tc.Callees)
+	}
+	tc = caseByID(t, res, "py:tests/test_from.py:test_alias_call")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "ld.load" {
+		t.Fatalf("alias call Callees = %+v", tc.Callees)
+	}
+	tc = caseByID(t, res, "py:tests/test_from.py:test_inner")
+	if len(tc.Callees) != 1 || tc.Callees[0].Symbol != "loaders.LOADERS" {
+		t.Fatalf("inner Callees = %+v", tc.Callees)
+	}
+}
+
+func TestNamesInTopLevelBlocksAreDefinitions(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_guarded")
+	got := map[string]string{}
+	for _, c := range tc.Callees {
+		got[c.Symbol] = c.Source
+	}
+	want := map[string]string{
+		"guarded.GUARD":    "    GUARD = 1\n",
+		"guarded.FIRST":    "    FIRST = \"first\"\n",
+		"guarded.TRIED":    "    TRIED = 1\n",
+		"guarded.FINAL":    "    FINAL = 3\n",
+		"guarded.Ctx":      "    class Ctx:\n        pass\n",
+		"guarded.tried_fn": "    def tried_fn():\n        return 1\n",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}

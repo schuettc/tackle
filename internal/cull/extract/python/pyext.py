@@ -316,15 +316,28 @@ def top_defs(path):
     except Exception:
         return {}, None, ""
     out = {}
-    for n in tree.body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out[n.name] = seg(src, n)
-        elif isinstance(n, ast.Assign):
-            for t in n.targets:
-                if isinstance(t, ast.Name):
-                    out[t.id] = seg(src, n)
-        elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
-            out[n.target.id] = seg(src, n)
+
+    def visit(stmts):
+        for n in stmts:
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                out.setdefault(n.name, seg(src, n))
+            elif isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        out.setdefault(t.id, seg(src, n))
+            elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+                out.setdefault(n.target.id, seg(src, n))
+            elif isinstance(n, (ast.If, ast.With, ast.AsyncWith)):
+                visit(n.body)
+                visit(n.orelse if isinstance(n, ast.If) else [])
+            elif isinstance(n, (ast.Try, getattr(ast, "TryStar", ast.Try))):
+                visit(n.body)
+                for h in n.handlers:
+                    visit(h.body)
+                visit(n.orelse)
+                visit(n.finalbody)
+
+    visit(tree.body)
     return out, tree, src
 
 
@@ -358,6 +371,15 @@ def module_file(mod):
 
 
 mod_cache = {}
+
+
+def mod_defs(mod):
+    p = module_file(mod)
+    if not p:
+        return {}
+    if p not in mod_cache:
+        mod_cache[p] = top_defs(p)[0]
+    return mod_cache[p]
 
 
 def resolve(mod, name):
@@ -487,7 +509,14 @@ for rel in relpaths:
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
             for a in n.names:
-                imports[a.asname or a.name] = n.module
+                bound = a.asname or a.name
+                sub = f"{n.module}.{a.name}"
+                # `from pkg import module`: a submodule file (and not a name
+                # the package's __init__ defines) acts like `import pkg.module`.
+                if a.name != "*" and module_file(sub) and a.name not in mod_defs(n.module):
+                    attr_mods[bound] = sub
+                else:
+                    imports[bound] = n.module
         elif isinstance(n, ast.Import):
             for a in n.names:
                 attr_mods[a.asname or a.name.split(".")[0]] = a.name if a.asname else a.name.split(".")[0]
