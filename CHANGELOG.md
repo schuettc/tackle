@@ -27,7 +27,10 @@ All notable changes to `scratch`, `proj` and `casebook` are documented here (pro
   records it would clean); `--apply` rewrites only
   this machine's journal files, keeping every other line byte for byte, and
   drops temp clones from its snapshot, under casebook-data's lock, in one
-  commit that is then pushed. History is not rewritten.
+  commit that is then pushed. History is not rewritten. An apply that dies
+  before its commit is committed under its own message by the next sync; a
+  refused push keeps the commit, prints the report and says the next sync
+  pushes it.
 
 ## [casebook 0.2.0] - 2026-10-01
 

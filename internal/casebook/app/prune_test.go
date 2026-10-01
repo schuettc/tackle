@@ -253,3 +253,70 @@ func TestGeneralize(t *testing.T) {
 		}
 	}
 }
+
+// TestPruneTempRefusedPushSaysItCommitted: when the casebook remote refuses
+// the push, the prune's commit is made all the same; the report says so and
+// the error says the next sync pushes it.
+func TestPruneTempRefusedPushSaysItCommitted(t *testing.T) {
+	r := syncedRig(t)
+	writePruneFixture(t, r)
+	hook := filepath.Join(r.remote, "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho 'read-only today' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := r.app.PruneTemp(ctx, PruneOptions{Apply: true})
+	if !errors.Is(err, store.ErrRefused) {
+		t.Fatalf("a refused push: %v, want ErrRefused", err)
+	}
+	for _, want := range []string{"committed locally", "next casebook sync pushes it"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
+	if !rep.Committed || rep.Pushed || rep.Removed != 7 {
+		t.Errorf("report after a refused push: %+v", rep)
+	}
+	if subject := testgit.Git(t, r.app.Repo.Dir, "log", "-1", "--format=%s"); !strings.HasPrefix(subject, "prune mbp:") {
+		t.Errorf("head %q, want the prune's commit", subject)
+	}
+}
+
+// TestPruneTempRefusesAMachineNameOutsideTheJournal: the machine name names
+// a directory under journal/; one that would leave it is refused.
+func TestPruneTempRefusesAMachineNameOutsideTheJournal(t *testing.T) {
+	r := syncedRig(t)
+	for _, m := range []string{"", ".", "..", "a/..", "../x", "a/b", `a\b`, "x*", "a..b"} {
+		r.app.Cfg.Machine = m
+		if _, err := r.app.PruneTemp(ctx, PruneOptions{}); err == nil {
+			t.Errorf("machine %q: prune ran", m)
+		}
+	}
+	r.app.Cfg.Machine = "mbp"
+	if _, err := r.app.PruneTemp(ctx, PruneOptions{}); err != nil {
+		t.Errorf("machine mbp: %v", err)
+	}
+}
+
+// TestPruneTempReplanComparesContent: the plan made under casebook-data's
+// lock must be the plan the commit was named for, line for line: a journal
+// that changed with the same counts is refused, not written.
+func TestPruneTempReplanComparesContent(t *testing.T) {
+	r := syncedRig(t)
+	writePruneFixture(t, r)
+	rel := "journal/mbp/2026/09-24.jsonl"
+	afterPrunePlan = func() {
+		// Same number of lines, real and temp, but different bytes.
+		b := readRepo(t, r, rel)
+		if err := os.WriteFile(filepath.Join(r.app.Repo.Dir, rel), []byte(strings.Replace(b, "10:00:00Z", "10:00:09Z", 1)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { afterPrunePlan = nil })
+	before := head(t, r)
+	if _, err := r.app.PruneTemp(ctx, PruneOptions{Apply: true, NoPush: true}); err == nil || !strings.Contains(err.Error(), "changed while prune waited") {
+		t.Errorf("a journal changed under the lock: %v", err)
+	}
+	if head(t, r) != before {
+		t.Error("prune committed a plan it was not named for")
+	}
+}

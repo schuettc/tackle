@@ -71,6 +71,9 @@ type PruneReport struct {
 	Committed         bool     `json:"committed"`
 	Pushed            bool     `json:"pushed"`
 	Offline           bool     `json:"offline,omitempty"`
+	// PushFailed: committed, but the push failed (PruneTemp's error says
+	// why); the next sync pushes the commit.
+	PushFailed bool `json:"push_failed,omitempty"`
 }
 
 // prunePlan is a PruneReport plus the new contents of what changes.
@@ -80,6 +83,10 @@ type prunePlan struct {
 	snapshot []byte            // new machines/<machine>.json, nil when unchanged
 }
 
+// afterPrunePlan, when set (tests), runs between the plan that names the
+// commit and the plan made under casebook-data's lock.
+var afterPrunePlan func()
+
 // PruneTemp removes the git activity in temp folders that this machine
 // journalled before the hooks skipped it (temppath). Only this machine's
 // journal/<machine>/ files and its machines/<machine>.json are read for
@@ -88,7 +95,12 @@ type prunePlan struct {
 // casebook-data's lock (giving up with ErrSyncBusy or store.ErrLocked
 // without writing), rewrites each changed file atomically, re-renders the
 // views when the snapshot changed, commits once and pushes. History is
-// never rewritten, so the removed lines stay recoverable from git.
+// never rewritten, so the removed lines stay recoverable from git. An apply
+// that dies before its commit leaves its message pending (store.BatchWithin):
+// the next writer under casebook-data's lock, normally the next sync, commits
+// the partial prune under that message first. When the push fails the
+// commit stays, the report says so (PushFailed) and the error names the
+// failure.
 func (a *App) PruneTemp(ctx context.Context, o PruneOptions) (PruneReport, error) {
 	if !o.Apply {
 		p, err := a.planPrune()
@@ -113,6 +125,9 @@ func (a *App) PruneTemp(ctx context.Context, o PruneOptions) (PruneReport, error
 	if rep.Removed == 0 && first.snapshot == nil {
 		return rep, nil
 	}
+	if afterPrunePlan != nil {
+		afterPrunePlan()
+	}
 	msg := fmt.Sprintf("prune %s: %d temp-folder journal events", a.Cfg.Machine, rep.Removed)
 	if n := len(rep.Clones); n > 0 {
 		msg += fmt.Sprintf(", %d temp clone(s)", n)
@@ -122,7 +137,7 @@ func (a *App) PruneTemp(ctx context.Context, o PruneOptions) (PruneReport, error
 		if err != nil {
 			return err
 		}
-		if p.rep.Removed != first.rep.Removed || len(p.rep.Clones) != len(first.rep.Clones) {
+		if !samePlan(p, first) {
 			return errors.New("the journal changed while prune waited for the lock; run it again")
 		}
 		return a.writePrune(p)
@@ -137,7 +152,26 @@ func (a *App) PruneTemp(ctx context.Context, o PruneOptions) (PruneReport, error
 	var sr SyncReport
 	_, err = a.pushSync(ctx, &sr)
 	rep.Pushed, rep.Offline = sr.Pushed, sr.Offline
-	return rep, err
+	if err != nil {
+		rep.PushFailed = true
+		return rep, fmt.Errorf("prune committed locally; the next casebook sync pushes it: %w", err)
+	}
+	return rep, nil
+}
+
+// samePlan reports whether two plans write the same bytes: every changed
+// journal file's new content (or its deletion) and the snapshot.
+func samePlan(x, y prunePlan) bool {
+	if len(x.journals) != len(y.journals) || !bytes.Equal(x.snapshot, y.snapshot) || (x.snapshot == nil) != (y.snapshot == nil) {
+		return false
+	}
+	for rel, b := range x.journals {
+		c, ok := y.journals[rel]
+		if !ok || (b == nil) != (c == nil) || !bytes.Equal(b, c) {
+			return false
+		}
+	}
+	return true
 }
 
 // writePrune writes a plan; it runs under casebook-data's lock.
@@ -178,7 +212,7 @@ func (a *App) planPrune() (prunePlan, error) {
 	m := a.Cfg.Machine
 	p := prunePlan{rep: PruneReport{Machine: m, Files: []PruneFile{}, Prefixes: []PrefixCount{}, Repos: []RepoCount{}, Clones: []string{}, WorktreeDecisions: []string{}},
 		journals: map[string][]byte{}}
-	if m == "" || strings.ContainsAny(m, `/\*?[`) {
+	if m == "" || m == "." || strings.Contains(m, "..") || strings.ContainsAny(m, `/\*?[`) {
 		return p, fmt.Errorf("machine name %q can't name a journal directory", m)
 	}
 	temp := temppath.New(a.Cfg.Roots)

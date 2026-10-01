@@ -130,6 +130,11 @@ func (r *Repo) lockedRebase(ctx context.Context, res *SyncResult) error {
 	defer unlock()
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RebaseTimeout)
 	defer cancel()
+	// A crashed BatchWithin's writes go in their own commit, which is then
+	// rebased and pushed like any other.
+	if err := r.commitPending(rctx); err != nil {
+		return err
+	}
 	return r.rebase(rctx, res)
 }
 

@@ -406,7 +406,7 @@ func commands(stdin io.Reader) []tools.Command {
 		{
 			Name: "prune", Group: "setup", Synopsis: "prune --temp [--apply] [--no-push] [--json]",
 			Summary:  "remove journalled git activity in temp folders (dry run unless --apply)",
-			Help:     "Only this machine's journal files and machines/<machine>.json change; other lines stay byte for byte.\nHistory is not rewritten: removed lines stay recoverable from casebook-data's git log.",
+			Help:     "Only this machine's journal files and machines/<machine>.json change; other lines stay byte for byte.\nHistory is not rewritten: removed lines stay recoverable from casebook-data's git log.\nAn apply that dies before its commit is committed under its own message by the next sync (or prune).\nA refused push leaves the commit in place; the next sync pushes it.",
 			NewFlags: pruneFlags,
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := pruneFlags()
@@ -426,14 +426,19 @@ func commands(stdin io.Reader) []tools.Command {
 					return tools.Exitf(1, "a casebook sync is running on this machine; nothing was changed").WithHint("casebook prune --temp --apply (again, once it is done)")
 				case errors.Is(err, store.ErrLocked):
 					return tools.Exitf(1, "another casebook process holds casebook-data's lock; nothing was changed").WithHint("casebook prune --temp --apply (again, in a moment)")
-				case err != nil:
+				case err != nil && !rep.Committed:
 					return err
 				}
+				// A prune whose push failed is committed: say what it did, then why
+				// the push failed.
 				if boolFlag(fs, "json") {
-					return tools.PrintJSON(out, rep)
+					if perr := tools.PrintJSON(out, rep); perr != nil {
+						return perr
+					}
+				} else {
+					printPrune(out, rep)
 				}
-				printPrune(out, rep)
-				return nil
+				return err
 			},
 		},
 		{

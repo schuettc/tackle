@@ -278,3 +278,33 @@ func TestPruneTemp(t *testing.T) {
 		t.Errorf("second apply:\n%s", out)
 	}
 }
+
+// TestPruneTempRefusedPush: when the casebook remote refuses the push, the
+// report is still printed (the prune is committed) and the error says the
+// next sync pushes it.
+func TestPruneTempRefusedPush(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("sync", "--no-github")
+	a, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","machine":"mbp"}` + "\n"
+	_ = os.MkdirAll(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026"), 0o755)
+	_ = os.WriteFile(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026", "09-24.jsonl"), []byte(tmp+tmp), 0o644)
+	if _, err := a.Repo.Commit(context.Background(), "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(e.remote, "hooks", "pre-receive"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	code, out, errw := e.run("", "prune", "--temp", "--apply")
+	if code == 0 {
+		t.Fatalf("a refused push exited 0:\n%s%s", out, errw)
+	}
+	if !strings.Contains(out, "remove 2") {
+		t.Errorf("no report printed for the committed prune:\n%s", out)
+	}
+	if !strings.Contains(errw, "committed locally") || !strings.Contains(errw, "next casebook sync pushes it") {
+		t.Errorf("error lacks what happened:\n%s", errw)
+	}
+}

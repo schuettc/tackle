@@ -194,6 +194,8 @@ func printPrune(out io.Writer, r app.PruneReport) {
 		_, _ = fmt.Fprintln(out, "run again with --apply to rewrite this machine's journal files, commit and push")
 	case r.Pushed:
 		_, _ = fmt.Fprintln(out, "committed and pushed; the old lines stay in casebook-data's history")
+	case r.PushFailed:
+		_, _ = fmt.Fprintln(out, "committed locally; the push failed, so the next sync pushes it")
 	case r.Offline:
 		_, _ = fmt.Fprintln(out, "committed; the casebook remote is unreachable, so the next sync pushes it")
 	case r.Committed:
