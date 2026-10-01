@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,4 +110,20 @@ func TestInitEgressYesAppendsToExistingToml(t *testing.T) {
 	}
 }
 
-var _ = bytes.MinRead
+// The environment is per-shell; the file is what agents use. Init saves a
+// file even when TYPESAFE_API_KEY is set.
+func TestInitSavesFileEvenWithEnvKey(t *testing.T) {
+	initSeams(t, true, initFakeKey)
+	t.Setenv("TYPESAFE_API_KEY", "ts-fake-env-1111")
+	root := t.TempDir()
+	code, out, errw := run(t, "n\n", "init", root)
+	if code != 0 {
+		t.Fatalf("code %d %q", code, errw)
+	}
+	if _, err := os.Stat(key.Path()); err != nil {
+		t.Fatalf("no key file: %v", err)
+	}
+	if !strings.Contains(out, "saved to "+key.Path()) {
+		t.Errorf("out %q", out)
+	}
+}

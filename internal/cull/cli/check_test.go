@@ -3,7 +3,6 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/schuettc/tackle/internal/cull/key"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,10 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/schuettc/tackle/internal/cull/verify"
 )
 
 // checkFake answers Jev requests without a network call. boost maps a
@@ -93,10 +96,10 @@ func (f *checkFake) start(t *testing.T) {
 	t.Setenv("CULL_TYPESAFE_URL", srv.URL)
 }
 
-func checkEnv(t *testing.T, key string) {
+func checkEnv(t *testing.T, apiKey string) {
 	t.Helper()
 	t.Setenv("CULL_HOME", t.TempDir())
-	t.Setenv("TYPESAFE_API_KEY", key)
+	t.Setenv("TYPESAFE_API_KEY", apiKey)
 }
 
 // The key file is used when the environment has none.
@@ -487,5 +490,25 @@ func TestCheckGroupEgressGateBeforeKey(t *testing.T) {
 	}
 	if f.n.Load() != 0 {
 		t.Errorf("server saw %d requests", f.n.Load())
+	}
+}
+
+// With the key only in the file, test commands (apply/verify) see no
+// TYPESAFE_API_KEY at all.
+func TestKeyFileNotInTestCommandEnv(t *testing.T) {
+	checkEnv(t, "")
+	if err := key.Save("ts-fake-file-7777"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := key.Load(); err != nil {
+		t.Fatal(err)
+	}
+	cmds := []verify.Command{{Dir: ".", Argv: []string{"sh", "-c", "env"}}}
+	rs := verify.Run(t.Context(), cmds, 5*time.Second)
+	if len(rs) != 1 || !rs[0].OK {
+		t.Fatalf("%+v", rs)
+	}
+	if strings.Contains(rs[0].OutputTail, "TYPESAFE_API_KEY") || strings.Contains(rs[0].OutputTail, "ts-fake-file-7777") {
+		t.Errorf("key in test command env:\n%s", rs[0].OutputTail)
 	}
 }

@@ -77,10 +77,10 @@ func (f *fakeJev) start(t *testing.T) {
 	t.Setenv("CULL_TYPESAFE_URL", srv.URL)
 }
 
-func judgeEnv(t *testing.T, key string) {
+func judgeEnv(t *testing.T, apiKey string) {
 	t.Helper()
 	t.Setenv("CULL_HOME", t.TempDir())
-	t.Setenv("TYPESAFE_API_KEY", key)
+	t.Setenv("TYPESAFE_API_KEY", apiKey)
 }
 
 func caseLine(id, body string) string {

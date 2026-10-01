@@ -18,6 +18,7 @@ func doctorEnv(t *testing.T) string {
 
 func TestDoctorReportsEachMissingItem(t *testing.T) {
 	root := doctorEnv(t)
+	ckWriteFile(t, root, "test_a.py", "def test_a():\n    pass\n")
 	code, out, _ := run(t, "", "doctor", root)
 	if code != 1 {
 		t.Fatalf("code %d\n%s", code, out)
@@ -75,5 +76,47 @@ func TestDoctorAllOk(t *testing.T) {
 	}
 	if strings.Contains(out, "ts-fake-0000") {
 		t.Error("key printed")
+	}
+}
+
+func okHome(t *testing.T, root string) {
+	t.Helper()
+	t.Setenv("TYPESAFE_API_KEY", "ts-fake-0000")
+	ckWriteFile(t, root, ".cull.toml", "egress = true\n")
+}
+
+func TestDoctorGoOnlyNeedsNoPython(t *testing.T) {
+	root := doctorEnv(t) // PATH has no python3
+	okHome(t, root)
+	ckWriteFile(t, root, "go.mod", "module x\n")
+	ckWriteFile(t, root, "a_test.go", "package x\nimport \"testing\"\nfunc TestA(t *testing.T) {}\n")
+	code, out, _ := run(t, "", "doctor", root)
+	if code != 0 || strings.Contains(out, "python3") {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+}
+
+func TestDoctorPythonProjectNeedsPython(t *testing.T) {
+	root := doctorEnv(t)
+	okHome(t, root)
+	ckWriteFile(t, root, "test_a.py", "def test_a():\n    pass\n")
+	code, out, _ := run(t, "", "doctor", root)
+	if code != 1 || !strings.Contains(out, "python3") {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+}
+
+func TestDoctorSuiteErrorIsItsOwnLine(t *testing.T) {
+	root := doctorEnv(t)
+	okHome(t, root)
+	ckWriteFile(t, root, "go.mod", "module x\n")
+	ckWriteFile(t, root, "a_test.go", "package x\n")
+	if err := os.Mkdir(filepath.Join(root, "locked"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, "locked"), 0o755) })
+	code, out, _ := run(t, "", "doctor", root)
+	if code != 1 || !strings.Contains(out, "tests") || strings.Contains(out, "no tests found") {
+		t.Fatalf("code %d\n%s", code, out)
 	}
 }

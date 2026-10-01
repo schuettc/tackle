@@ -52,9 +52,13 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			return tools.Exitf(2, "%v", err)
 		}
 
-		if _, src, err := key.Load(); err == nil {
-			_, _ = fmt.Fprintf(out, "key: already set (%s)\n", src)
-		} else if errors.Is(err, key.ErrMissing) {
+		// The environment is per-shell; the key file is what agents use.
+		if key.Exists() {
+			if _, _, err := key.Load(); err != nil && !errors.Is(err, key.ErrMissing) {
+				return tools.Exitf(2, "%v", err)
+			}
+			_, _ = fmt.Fprintf(out, "key: already saved (%s)\n", key.Path())
+		} else {
 			v, err := promptSecret()
 			if err != nil {
 				return tools.Exitf(2, "no key saved: %v", err)
@@ -63,8 +67,6 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 				return tools.Exitf(2, "key not saved: %v", err)
 			}
 			_, _ = fmt.Fprintf(out, "key: saved to %s\n", key.Path())
-		} else {
-			return tools.Exitf(2, "%v", err)
 		}
 
 		if err := initEgress(root, bufio.NewReader(stdin), out); err != nil {

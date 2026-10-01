@@ -83,3 +83,23 @@ func TestLoadTrimsFileNewline(t *testing.T) {
 		t.Fatalf("%q %v", k, err)
 	}
 }
+
+func TestLoadValidates(t *testing.T) {
+	home(t)
+	t.Setenv("TYPESAFE_API_KEY", "bad key\x01-secret-value")
+	_, _, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "environment") || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("env: %v", err)
+	}
+	t.Setenv("TYPESAFE_API_KEY", "")
+	if err := os.MkdirAll(filepath.Dir(Path()), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte("two words-secret-value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = Load()
+	if err == nil || !strings.Contains(err.Error(), Path()) || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("file: %v", err)
+	}
+}

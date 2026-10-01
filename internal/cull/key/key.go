@@ -5,6 +5,7 @@ package key
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,9 +22,13 @@ const maxLen = 4096
 func Path() string { return filepath.Join(tools.ConfigDir("cull"), "key") }
 
 // Load returns the key and where it came from: "environment" or the file's
-// path. ErrMissing when neither has one.
+// path. ErrMissing when neither has one. A key that fails Save's rules is an
+// error naming the source, never the value.
 func Load() (k, source string, err error) {
 	if v := strings.TrimSpace(os.Getenv("TYPESAFE_API_KEY")); v != "" {
+		if err := validate(v); err != nil {
+			return "", "", fmt.Errorf("TYPESAFE_API_KEY in the environment is invalid: %w", err)
+		}
 		return v, "environment", nil
 	}
 	b, err := os.ReadFile(Path())
@@ -34,15 +39,21 @@ func Load() (k, source string, err error) {
 		return "", "", err
 	}
 	if v := strings.TrimSpace(string(b)); v != "" {
+		if err := validate(v); err != nil {
+			return "", "", fmt.Errorf("the key file %s is invalid: %w", Path(), err)
+		}
 		return v, Path(), nil
 	}
 	return "", "", ErrMissing
 }
 
-// Save validates k (non-empty, printable ASCII, at most 4096 bytes) and
-// writes it atomically to Path() with mode 0600 in a 0700 directory.
-// Errors never include k.
-func Save(k string) error {
+// Exists reports whether the key file exists (the environment is ignored).
+func Exists() bool {
+	_, err := os.Stat(Path())
+	return err == nil
+}
+
+func validate(k string) error {
 	if k == "" {
 		return errors.New("the key is empty")
 	}
@@ -53,6 +64,16 @@ func Save(k string) error {
 		if k[i] < 0x21 || k[i] > 0x7e {
 			return errors.New("the key has a space, control or non-ASCII character")
 		}
+	}
+	return nil
+}
+
+// Save validates k (non-empty, printable ASCII, at most 4096 bytes) and
+// writes it atomically to Path() with mode 0600 in a 0700 directory.
+// Errors never include k.
+func Save(k string) error {
+	if err := validate(k); err != nil {
+		return err
 	}
 	dir := filepath.Dir(Path())
 	if err := tools.EnsureDir(dir); err != nil {

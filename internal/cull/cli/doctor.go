@@ -19,7 +19,7 @@ import (
 
 var doctorFlags = flags("doctor", "cull doctor [path]",
 	"Checks what cull needs, one line per check: ok, or what to fix. Exit 0 when nothing\n"+
-		"required is missing (key, egress, python3, node and typescript for TypeScript projects,\n"+
+		"required is missing (key, egress, python3 for Python projects, node and typescript for TypeScript projects,\n"+
 		"a test command), 1 otherwise. The server and the agent registrations are reported but\n"+
 		"not required. Shows where the key comes from, never the key.", nil)
 
@@ -66,13 +66,7 @@ func runDoctor(args []string, out, errw io.Writer) error {
 	} else {
 		line("egress", true, "egress is not enabled: run cull init, or set egress = true in .cull.toml", "")
 	}
-	if _, err := exec.LookPath("python3"); err != nil {
-		line("python3", true, "python3 is not on PATH: install Python 3", "")
-	} else {
-		line("python3", true, "", "")
-	}
-
-	files, _ := discover.Suite(root, "", cfg.Exclude)
+	files, suiteErr := discover.Suite(root, "", cfg.Exclude)
 	langs := map[string]string{}
 	for _, f := range files {
 		switch strings.ToLower(filepath.Ext(f)) {
@@ -82,6 +76,17 @@ func runDoctor(args []string, out, errw io.Writer) error {
 			langs[f] = "python"
 		case ".ts", ".tsx":
 			langs[f] = "typescript"
+		}
+	}
+	isPy := false
+	for _, l := range langs {
+		isPy = isPy || l == "python"
+	}
+	if isPy {
+		if _, err := exec.LookPath("python3"); err != nil {
+			line("python3", true, "python3 is not on PATH: install Python 3", "")
+		} else {
+			line("python3", true, "", "")
 		}
 	}
 	isTS := false
@@ -101,7 +106,9 @@ func runDoctor(args []string, out, errw io.Writer) error {
 		}
 	}
 
-	if cmds, err := verify.Plan(root, cfg.TestCommand, langs); err != nil {
+	if suiteErr != nil {
+		line("tests", true, fmt.Sprintf("could not list the project's tests: %v", suiteErr), "")
+	} else if cmds, err := verify.Plan(root, cfg.TestCommand, langs); err != nil {
 		line("test command", true, fmt.Sprintf("%v: set test_command in .cull.toml", err), "")
 	} else if len(cmds) == 0 {
 		line("test command", true, "no tests found under "+root, "")
