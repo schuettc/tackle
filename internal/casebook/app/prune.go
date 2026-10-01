@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -42,6 +43,12 @@ type PrefixCount struct {
 	Lines  int    `json:"lines"`
 }
 
+// RepoCount is how many removed lines carry one repo.
+type RepoCount struct {
+	Repo  string `json:"repo"`
+	Lines int    `json:"lines"`
+}
+
 // PruneReport says what PruneTemp found, and with Apply what it did.
 type PruneReport struct {
 	Machine  string        `json:"machine"`
@@ -50,6 +57,11 @@ type PruneReport struct {
 	Removed  int           `json:"removed"`
 	Kept     int           `json:"kept"`
 	Prefixes []PrefixCount `json:"prefixes"`
+	// RepoLines is how many removed lines carry a real-looking repo
+	// (owner/name), and Repos counts them by repo, most first: a real line
+	// misclassified as temp shows here before anyone applies.
+	RepoLines int         `json:"repo_lines"`
+	Repos     []RepoCount `json:"repos"`
 	// Clones are temp clones removed from machines/<machine>.json.
 	Clones []string `json:"clones"`
 	// WorktreeDecisions are this machine's worktree decision files at temp
@@ -164,7 +176,7 @@ func (a *App) writePrune(p prunePlan) error {
 // prune removes. It writes nothing.
 func (a *App) planPrune() (prunePlan, error) {
 	m := a.Cfg.Machine
-	p := prunePlan{rep: PruneReport{Machine: m, Files: []PruneFile{}, Prefixes: []PrefixCount{}, Clones: []string{}, WorktreeDecisions: []string{}},
+	p := prunePlan{rep: PruneReport{Machine: m, Files: []PruneFile{}, Prefixes: []PrefixCount{}, Repos: []RepoCount{}, Clones: []string{}, WorktreeDecisions: []string{}},
 		journals: map[string][]byte{}}
 	if m == "" || strings.ContainsAny(m, `/\*?[`) {
 		return p, fmt.Errorf("machine name %q can't name a journal directory", m)
@@ -174,13 +186,13 @@ func (a *App) planPrune() (prunePlan, error) {
 	if err != nil {
 		return p, err
 	}
-	prefixes := map[string]int{}
+	prefixes, repos := map[string]int{}, map[string]int{}
 	for _, rel := range files {
 		b, err := a.Repo.ReadFile(rel)
 		if err != nil {
 			return p, err
 		}
-		out, removed, kept := pruneLines(b, temp, prefixes)
+		out, removed, kept := pruneLines(b, temp, prefixes, repos)
 		pf := PruneFile{Path: rel, Removed: removed, Kept: kept, Delete: removed > 0 && len(out) == 0}
 		p.rep.Files = append(p.rep.Files, pf)
 		p.rep.Removed += removed
@@ -199,6 +211,14 @@ func (a *App) planPrune() (prunePlan, error) {
 	sort.Slice(p.rep.Prefixes, func(i, j int) bool {
 		x, y := p.rep.Prefixes[i], p.rep.Prefixes[j]
 		return x.Lines > y.Lines || x.Lines == y.Lines && x.Prefix < y.Prefix
+	})
+	for repo, n := range repos {
+		p.rep.Repos = append(p.rep.Repos, RepoCount{Repo: repo, Lines: n})
+		p.rep.RepoLines += n
+	}
+	sort.Slice(p.rep.Repos, func(i, j int) bool {
+		x, y := p.rep.Repos[i], p.rep.Repos[j]
+		return x.Lines > y.Lines || x.Lines == y.Lines && x.Repo < y.Repo
 	})
 
 	snap, ok, err := a.MachineSnapshot()
@@ -237,8 +257,9 @@ func (a *App) planPrune() (prunePlan, error) {
 // pruneLines drops the lines of one journal file that are temp events and
 // returns the rest byte for byte, in order, each with its own terminator.
 // A line that isn't a journal event is kept. prefixes counts each removed
-// line's temp-folder prefix.
-func pruneLines(b []byte, temp *temppath.Matcher, prefixes map[string]int) (out []byte, removed, kept int) {
+// line's temp-folder prefix, and repos each removed line's real-looking repo
+// (eventRepo).
+func pruneLines(b []byte, temp *temppath.Matcher, prefixes, repos map[string]int) (out []byte, removed, kept int) {
 	out = make([]byte, 0, len(b))
 	for len(b) > 0 {
 		line := b
@@ -251,6 +272,9 @@ func pruneLines(b []byte, temp *temppath.Matcher, prefixes map[string]int) (out 
 			if where := temp.Where(ev); where != "" {
 				removed++
 				prefixes[tempPrefix(temp, where)]++
+				if repo := eventRepo(ev); repo != "" {
+					repos[repo]++
+				}
 				continue
 			}
 		}
@@ -258,6 +282,23 @@ func pruneLines(b []byte, temp *temppath.Matcher, prefixes map[string]int) (out 
 		out = append(out, line...)
 	}
 	return out, removed, kept
+}
+
+// ownerName is a real-looking GitHub repo, owner/name.
+var ownerName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+$`)
+
+// eventRepo is the real-looking repo an event's line carries: its own, else
+// its first action's; "" when none does.
+func eventRepo(ev journal.Event) string {
+	if ownerName.MatchString(ev.Repo) {
+		return ev.Repo
+	}
+	for _, a := range ev.Actions {
+		if ownerName.MatchString(a.Repo) {
+			return a.Repo
+		}
+	}
+	return ""
 }
 
 // tempPrefix shortens a temp path to the folder that names its source, for

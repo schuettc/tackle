@@ -174,6 +174,16 @@ func printPrune(out io.Writer, r app.PruneReport) {
 			_, _ = fmt.Fprintf(out, "  %7d  %s\n", p.Lines, p.Prefix)
 		}
 	}
+	// A removed line that carries a repo may be real work misclassified:
+	// show them before anyone applies.
+	_, _ = fmt.Fprintf(out, "removed lines that carry a repo: %d\n", r.RepoLines)
+	for i, rc := range r.Repos {
+		if i == 10 {
+			_, _ = fmt.Fprintf(out, "  … %d more repo(s)\n", len(r.Repos)-10)
+			break
+		}
+		_, _ = fmt.Fprintf(out, "  %7d  %s\n", rc.Lines, rc.Repo)
+	}
 	_, _ = fmt.Fprintf(out, "derived records: machines/%s.json: %d temp clone(s)\n", r.Machine, len(r.Clones))
 	for _, c := range r.Clones {
 		_, _ = fmt.Fprintf(out, "  %s\n", c)

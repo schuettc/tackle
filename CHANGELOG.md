@@ -15,12 +15,16 @@ All notable changes to `scratch`, `proj` and `casebook` are documented here (pro
   whole segments with symlinks resolved; a configured scan root is never
   temp. Copier and pytest checkouts, `tmp.*` clones, casebook's own probe
   homes and scratch clones made most of the journal. `casebook hooks adopt`
-  refuses a temp clone.
+  refuses a temp clone. A temp folder doing real work is still journalled:
+  a linked worktree whose git dir (or common dir) is in a configured root,
+  and a push to a remote that isn't a local path or `file://` URL (a scratch
+  clone's pre-push to GitHub, an agent's `git -C /tmp/x push`).
 
 ### Added
 - `casebook prune --temp`: removes temp-folder events journalled before the
   fix. A dry run by default (per-file and total counts, the top temp
-  prefixes, the derived records it would clean); `--apply` rewrites only
+  prefixes, how many removed lines carry a repo and which, the derived
+  records it would clean); `--apply` rewrites only
   this machine's journal files, keeping every other line byte for byte, and
   drops temp clones from its snapshot, under casebook-data's lock, in one
   commit that is then pushed. History is not rewritten.

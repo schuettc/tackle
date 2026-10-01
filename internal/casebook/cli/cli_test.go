@@ -245,7 +245,7 @@ func TestPruneTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 	real := `{"v":1,"ts":"2026-09-24T10:00:00Z","src":"git-hook","hook":"post-commit","cwd":"` + e.clone + `","machine":"mbp"}` + "\n"
-	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","machine":"mbp"}` + "\n"
+	tmp := `{"v":1,"ts":"2026-09-24T10:00:01Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/casebook-probe-123/x","repo":"schuettc/hail","machine":"mbp"}` + "\n"
 	rel := "journal/mbp/2026/09-24.jsonl"
 	_ = os.MkdirAll(filepath.Join(a.Repo.Dir, "journal", "mbp", "2026"), 0o755)
 	_ = os.WriteFile(filepath.Join(a.Repo.Dir, filepath.FromSlash(rel)), []byte(real+tmp+real), 0o644)
@@ -256,7 +256,7 @@ func TestPruneTemp(t *testing.T) {
 		t.Errorf("prune without --temp: exit %d %q", code, errw)
 	}
 	out := e.ok("prune", "--temp")
-	for _, want := range []string{"dry run", rel, "remove 1", "keep 2", "/tmp/casebook-probe-*", "--apply"} {
+	for _, want := range []string{"dry run", rel, "remove 1", "keep 2", "/tmp/casebook-probe-*", "removed lines that carry a repo: 1", "1  schuettc/hail", "--apply"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("dry run output lacks %q:\n%s", want, out)
 		}

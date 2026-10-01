@@ -58,6 +58,7 @@ type Matcher struct {
 	temp, keep []string
 	mu         sync.Mutex
 	cache      map[string]bool
+	strs       map[string]string // gitDirOf, rooted and remoteURL answers
 }
 
 // New returns a Matcher over DefaultRoots. keep are this machine's configured
@@ -65,7 +66,7 @@ type Matcher struct {
 func New(keep []string) *Matcher { return newWith(DefaultRoots(), keep) }
 
 func newWith(temp, keep []string) *Matcher {
-	return &Matcher{temp: expand(temp), keep: expand(keep), cache: map[string]bool{}}
+	return &Matcher{temp: expand(temp), keep: expand(keep), cache: map[string]bool{}, strs: map[string]string{}}
 }
 
 // under reports whether p is root or inside it, by whole path segments.
@@ -116,36 +117,262 @@ func (m *Matcher) path(p string) bool {
 	return false
 }
 
-// Event reports whether ev happened in a temp folder:
-//   - its git dir is temp (a probe's git run from a real working directory);
-//   - a git hook: its working directory is temp;
-//   - an agent's command: every action ran in a temp folder (its `-C` dir,
-//     resolved against the working directory, or the working directory). A
-//     gh action naming its repo (`-R`) without a dir is about that repo
-//     wherever it ran, so it is never temp.
+// Event reports whether ev is git activity in a temp folder, which casebook
+// does not journal. Something happened in a temp folder when its git dir is
+// temp, a hook's working directory is temp, or every one of an agent's
+// actions ran in a temp folder (its `-C` dir, resolved against the working
+// directory, or the working directory).
+//
+// A temp folder doing real work is not temp, whichever repo its line was
+// annotated with (a copier clone of schuettc/muda's template is still noise):
+//
+//  1. Its git dir, or for a linked worktree the common dir, resolves inside
+//     a configured root: a worktree of a tracked clone placed in /tmp. With
+//     no git dir recorded, a working tree that still exists is looked at
+//     (its .git file names the git dir).
+//  2. It pushes to a remote that isn't local (localRemote): a pre-push hook's
+//     remote URL, or an agent's `git push` whose remote is a URL, or a remote
+//     the clone's config names. When that clone is gone, a push action that
+//     sync annotated with a repo counts: sync takes an action's repo only
+//     from this machine's snapshot, so its dir was a worktree of a tracked
+//     clone. A gh action naming its repo (`-R`) without a dir is likewise
+//     about that repo wherever it ran.
 func (m *Matcher) Event(ev journal.Event) bool {
-	if m.Path(ev.GitDir) {
-		return true
-	}
 	if len(ev.Actions) == 0 {
-		return m.Path(ev.CWD)
+		return m.hookTemp(ev)
 	}
 	for _, a := range ev.Actions {
-		if a.Tool == "gh" && a.Repo != "" && a.Dir == "" {
-			return false
-		}
-		dir := ev.CWD
-		if a.Dir != "" {
-			dir = a.Dir
-			if !filepath.IsAbs(dir) && ev.CWD != "" {
-				dir = filepath.Join(ev.CWD, dir)
-			}
-		}
-		if !m.Path(dir) {
+		if !m.actionTemp(ev.CWD, a) {
 			return false
 		}
 	}
 	return true
+}
+
+func (m *Matcher) hookTemp(ev journal.Event) bool {
+	if !m.Path(ev.GitDir) && !m.Path(ev.CWD) {
+		return false
+	}
+	gitDir := ev.GitDir
+	if gitDir == "" {
+		gitDir = m.gitDirOf(ev.CWD)
+	}
+	if m.rooted(gitDir) {
+		return false
+	}
+	if ev.Hook == "pre-push" && len(ev.Args) > 1 && !localRemote(ev.Args[1]) {
+		return false
+	}
+	return true
+}
+
+func (m *Matcher) actionTemp(cwd string, a journal.Action) bool {
+	if a.Tool == "gh" && a.Repo != "" && a.Dir == "" {
+		return false
+	}
+	dir := actionDir(cwd, a)
+	if !m.Path(dir) {
+		return false
+	}
+	if m.rooted(m.gitDirOf(dir)) {
+		return false
+	}
+	if a.Tool == "git" && a.Verb == "push" && m.pushesAway(dir, a) {
+		return false
+	}
+	return true
+}
+
+// actionDir is where an agent's action ran: its -C dir, resolved against
+// cwd, or cwd.
+func actionDir(cwd string, a journal.Action) string {
+	if a.Dir == "" {
+		return cwd
+	}
+	if !filepath.IsAbs(a.Dir) && cwd != "" {
+		return filepath.Join(cwd, a.Dir)
+	}
+	return a.Dir
+}
+
+// pushesAway reports whether an agent's `git push` in dir went to a remote
+// that isn't local (rule 2 of Event).
+func (m *Matcher) pushesAway(dir string, a journal.Action) bool {
+	remote := ""
+	if len(a.Refs) > 0 {
+		remote = a.Refs[0]
+	}
+	if strings.ContainsAny(remote, "/:") {
+		return !localRemote(remote) // a URL or a path, not a remote's name
+	}
+	if url, ok := m.remoteURL(dir, remote); ok {
+		return !localRemote(url)
+	}
+	return a.Repo != ""
+}
+
+// localRemote reports whether a remote URL is on this machine: a file://
+// URL or a path. A URL with any other scheme, or git's scp-like
+// [user@]host:path (a colon before any slash), is not.
+func localRemote(url string) bool {
+	if i := strings.Index(url, "://"); i >= 0 {
+		return strings.EqualFold(url[:i], "file")
+	}
+	if c := strings.IndexByte(url, ':'); c > 0 && !strings.Contains(url[:c], "/") {
+		return false
+	}
+	return true
+}
+
+// memo caches a string answer under key.
+func (m *Matcher) memo(key string, f func() string) string {
+	m.mu.Lock()
+	v, ok := m.strs[key]
+	m.mu.Unlock()
+	if ok {
+		return v
+	}
+	v = f()
+	m.mu.Lock()
+	m.strs[key] = v
+	m.mu.Unlock()
+	return v
+}
+
+// gitDirOf returns the git dir of the working tree holding the temp folder
+// dir, read from the first .git found going up while still in a temp
+// folder (a directory, or a file naming the git dir as a linked worktree's
+// does); "" when there is none, as when the folder is gone.
+func (m *Matcher) gitDirOf(dir string) string {
+	if dir == "" || !filepath.IsAbs(dir) {
+		return ""
+	}
+	return m.memo("gitdir\x00"+dir, func() string {
+		for d := filepath.Clean(dir); m.Path(d); d = filepath.Dir(d) {
+			dotGit := filepath.Join(d, ".git")
+			fi, err := os.Stat(dotGit)
+			if err == nil && fi.IsDir() {
+				return dotGit
+			}
+			if err == nil {
+				b, err := os.ReadFile(dotGit)
+				if err != nil {
+					return ""
+				}
+				gd, ok := strings.CutPrefix(strings.TrimSpace(string(b)), "gitdir: ")
+				if !ok {
+					return ""
+				}
+				if !filepath.IsAbs(gd) {
+					gd = filepath.Join(d, gd)
+				}
+				return filepath.Clean(gd)
+			}
+			if d == filepath.Dir(d) {
+				break
+			}
+		}
+		return ""
+	})
+}
+
+// commonDir is a git dir's common dir: what its commondir file names (a
+// linked worktree's), or itself.
+func commonDir(gitDir string) string {
+	b, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
+	if err != nil {
+		return gitDir
+	}
+	cd := strings.TrimSpace(string(b))
+	if !filepath.IsAbs(cd) {
+		cd = filepath.Join(gitDir, cd)
+	}
+	return filepath.Clean(cd)
+}
+
+// rooted reports whether gitDir, or its common dir, resolves inside a keep
+// root (rule 1 of Event).
+func (m *Matcher) rooted(gitDir string) bool {
+	if gitDir == "" || !filepath.IsAbs(gitDir) {
+		return false
+	}
+	return m.memo("rooted\x00"+gitDir, func() string {
+		for _, p := range []string{filepath.Clean(gitDir), commonDir(filepath.Clean(gitDir))} {
+			if anyUnder(p, m.keep) {
+				return "y"
+			}
+			if real, err := filepath.EvalSymlinks(p); err == nil && anyUnder(real, m.keep) {
+				return "y"
+			}
+		}
+		return ""
+	}) != ""
+}
+
+// remoteURL reads the URL git pushes to for remote (its pushurl, else its
+// url; an empty remote is remote.pushDefault, else origin) from the config
+// of the clone holding dir. ok is false when the clone or the remote can't
+// be found.
+func (m *Matcher) remoteURL(dir, remote string) (url string, ok bool) {
+	gd := m.gitDirOf(dir)
+	if gd == "" {
+		return "", false
+	}
+	v := m.memo("remote\x00"+gd+"\x00"+remote, func() string {
+		b, err := os.ReadFile(filepath.Join(commonDir(gd), "config"))
+		if err != nil {
+			return ""
+		}
+		cfg := parseGitConfig(string(b))
+		name := remote
+		if name == "" {
+			name = cfg["remote.pushdefault"]
+		}
+		if name == "" {
+			name = "origin"
+		}
+		for _, k := range []string{"pushurl", "url"} {
+			if u := cfg["remote."+name+"."+k]; u != "" {
+				return "=" + u
+			}
+		}
+		return ""
+	})
+	return strings.TrimPrefix(v, "="), v != ""
+}
+
+// parseGitConfig reads the plain keys of a git config file as
+// section[.subsection].key → first value (section and key lower-cased).
+// It is enough for remote URLs: includes and url rewrites are not followed.
+func parseGitConfig(s string) map[string]string {
+	out := map[string]string{}
+	section := ""
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if line[0] == '[' {
+			end := strings.IndexByte(line, ']')
+			if end < 0 {
+				continue
+			}
+			head := strings.TrimSpace(line[1:end])
+			if i := strings.IndexByte(head, '"'); i >= 0 {
+				section = strings.ToLower(strings.TrimSpace(head[:i])) + "." + strings.Trim(head[i:], `"`)
+			} else {
+				section = strings.ToLower(head)
+			}
+			continue
+		}
+		k, v, _ := strings.Cut(line, "=")
+		k = section + "." + strings.ToLower(strings.TrimSpace(k))
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		if _, seen := out[k]; !seen {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Root returns the longest temp root p is under, and p as it matched
@@ -187,11 +414,7 @@ func (m *Matcher) Where(ev journal.Event) string {
 		return filepath.Clean(ev.CWD)
 	}
 	for _, a := range ev.Actions {
-		dir := a.Dir
-		if dir != "" && !filepath.IsAbs(dir) {
-			dir = filepath.Join(ev.CWD, dir)
-		}
-		if m.Path(dir) {
+		if dir := actionDir(ev.CWD, a); m.Path(dir) {
 			return filepath.Clean(dir)
 		}
 	}

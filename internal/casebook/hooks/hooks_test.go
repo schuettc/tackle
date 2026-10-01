@@ -460,3 +460,49 @@ func TestMainRecordsInsideAConfiguredRootInTemp(t *testing.T) {
 		t.Errorf("hook inside a configured root spooled %d event(s), want 1", n)
 	}
 }
+
+// TestMainRecordsRealWorkInTempFolders: real work in a temp folder is
+// journalled. A linked worktree of a clone in a configured root (git runs
+// its hooks there without GIT_DIR for some hooks, with it for others), and
+// a scratch clone's push to GitHub, are recorded; the same scratch clone's
+// push to a local bare repo is not.
+func TestMainRecordsRealWorkInTempFolders(t *testing.T) {
+	testgit.Env(t)
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	writeConfig(t, root)
+	clone := filepath.Join(root, "hail")
+	if err := os.MkdirAll(clone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	testgit.Git(t, clone, "init", "-q", "-b", "main")
+	testgit.Commit(t, clone, "a", "1")
+	scratch, _ := filepath.EvalSymlinks(t.TempDir()) // temp, outside the root
+	wt := filepath.Join(scratch, "wt")
+	testgit.Git(t, clone, "worktree", "add", "-q", "-b", "feat", wt)
+
+	t.Chdir(wt)
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 1 {
+		t.Errorf("hook in a worktree of a rooted clone, no GIT_DIR: spooled %d, want 1", n)
+	}
+	t.Setenv("GIT_DIR", testgit.Git(t, wt, "rev-parse", "--absolute-git-dir"))
+	if Main([]string{"post-commit"}, strings.NewReader("")) != 0 {
+		t.Fatal("Main returned non-zero")
+	}
+	if n := spooled(t); n != 1 {
+		t.Errorf("hook in a worktree of a rooted clone, GIT_DIR set: spooled %d, want 1", n)
+	}
+	_ = os.Unsetenv("GIT_DIR")
+
+	t.Chdir(scratch)
+	for url, want := range map[string]int{"https://github.com/schuettc/hail.git": 1, "git@github.com:schuettc/hail.git": 1, "../remote.git": 0, filepath.Join(scratch, "remote.git"): 0} {
+		if Main([]string{"pre-push", "origin", url}, strings.NewReader("")) != 0 {
+			t.Fatal("Main returned non-zero")
+		}
+		if n := spooled(t); n != want {
+			t.Errorf("pre-push from a scratch clone to %s: spooled %d, want %d", url, n, want)
+		}
+	}
+}

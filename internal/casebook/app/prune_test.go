@@ -34,11 +34,18 @@ func writePruneFixture(t *testing.T, r *rig) pruneFixture {
 	scratch := `{"v":1,"ts":"2026-09-24T10:00:04Z","src":"git-hook","hook":"post-commit","cwd":"/private/tmp/scratch-1/clone","machine":"mbp"}`
 	notTmp := `{"v":1,"ts":"2026-09-24T10:00:05Z","src":"git-hook","hook":"post-commit","cwd":"/tmpfoo/clone","machine":"mbp"}`
 	garbage := `not json at all /tmp/x`
+	// Real work in temp folders, kept: a worktree of the rooted clone placed
+	// in /tmp, and a scratch clone's push to GitHub.
+	worktree := `{"v":1,"ts":"2026-09-24T10:00:06Z","src":"git-hook","hook":"post-commit","cwd":"/tmp/hail-wt","git_dir":"` + r.clone + `/.git/worktrees/hail-wt","repo":"schuettc/hail","machine":"mbp"}`
+	ghPush := `{"v":1,"ts":"2026-09-24T10:00:07Z","src":"git-hook","hook":"pre-push","args":["origin","https://github.com/schuettc/hail.git"],"cwd":"/private/tmp/scratch-2","machine":"mbp"}`
+	// Noise annotated with a real repo, removed: a copier clone run from the
+	// muda checkout.
+	muda := `{"v":1,"ts":"2026-09-24T10:00:08Z","src":"git-hook","hook":"reference-transaction","args":["committed"],"cwd":"` + r.clone + `","git_dir":"/var/folders/92/ab/T/copier._vcs.clone.z9y8/.git","repo":"schuettc/muda","machine":"mbp"}`
 	f := pruneFixture{
-		day: real + "\n" + probe + "\n" + agent + "\n" + copier + "\n" + garbage + "\n" + scratch + "\n\n" + notTmp + "\n" + copier,
+		day: real + "\n" + probe + "\n" + agent + "\n" + worktree + "\n" + copier + "\n" + muda + "\n" + garbage + "\n" + scratch + "\n" + ghPush + "\n\n" + notTmp + "\n" + copier,
 		// Every line but the temp ones, byte for byte and in order; the last
 		// kept line keeps its own (missing) terminator only if it was last.
-		dayWant:   real + "\n" + agent + "\n" + garbage + "\n" + "\n" + notTmp + "\n",
+		dayWant:   real + "\n" + agent + "\n" + worktree + "\n" + garbage + "\n" + ghPush + "\n" + "\n" + notTmp + "\n",
 		allTemp:   copier + "\n" + scratch + "\n",
 		other:     strings.ReplaceAll(copier+"\n"+real+"\n", `"machine":"mbp"`, `"machine":"other"`),
 		otherSnap: `{"version":1,"machine":"other","roots":["/x"],"clones":[{"path":"/tmp/other-clone"}]}` + "\n",
@@ -105,24 +112,29 @@ func TestPruneTempDryRunChangesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rep.Applied || rep.Removed != 6 || rep.Kept != 5 || len(rep.Files) != 2 {
+	if rep.Applied || rep.Removed != 7 || rep.Kept != 7 || len(rep.Files) != 2 {
 		t.Fatalf("dry run report %+v", rep)
 	}
 	byPath := map[string]PruneFile{}
 	for _, pf := range rep.Files {
 		byPath[pf.Path] = pf
 	}
-	if pf := byPath["journal/mbp/2026/09-24.jsonl"]; pf.Removed != 4 || pf.Kept != 5 || pf.Delete {
+	if pf := byPath["journal/mbp/2026/09-24.jsonl"]; pf.Removed != 5 || pf.Kept != 7 || pf.Delete {
 		t.Errorf("09-24: %+v", pf)
 	}
 	if pf := byPath["journal/mbp/2026/09-23.jsonl"]; pf.Removed != 2 || pf.Kept != 0 || !pf.Delete {
 		t.Errorf("09-23: %+v", pf)
 	}
-	want := map[string]int{"/var/folders/92/ab/T/casebook-probe-*": 1, "/var/folders/92/ab/T/copier._vcs.clone.*": 3, "/tmp/scratch-*": 2}
+	want := map[string]int{"/var/folders/92/ab/T/casebook-probe-*": 1, "/var/folders/92/ab/T/copier._vcs.clone.*": 4, "/tmp/scratch-*": 2}
 	for _, p := range rep.Prefixes {
 		if want[p.Prefix] != p.Lines {
 			t.Errorf("prefix %s: %d lines, want %d (all: %+v)", p.Prefix, p.Lines, want[p.Prefix], rep.Prefixes)
 		}
+	}
+	// The removed lines that carry a repo are counted, so a misclassified
+	// real line shows before anyone applies.
+	if rep.RepoLines != 2 || len(rep.Repos) != 2 || rep.Repos[0] != (RepoCount{Repo: "schuettc/hail", Lines: 1}) || rep.Repos[1] != (RepoCount{Repo: "schuettc/muda", Lines: 1}) {
+		t.Errorf("removed lines with a repo: %d %+v", rep.RepoLines, rep.Repos)
 	}
 	if len(rep.Clones) != 1 || rep.Clones[0] != "/private/tmp/scratch-1/clone" {
 		t.Errorf("temp clones %v", rep.Clones)
@@ -139,7 +151,7 @@ func TestPruneTempApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !rep.Applied || !rep.Committed || rep.Removed != 6 || !rep.Pushed {
+	if !rep.Applied || !rep.Committed || rep.Removed != 7 || !rep.Pushed {
 		t.Fatalf("apply report %+v", rep)
 	}
 	if got := readRepo(t, r, "journal/mbp/2026/09-24.jsonl"); got != f.dayWant {
@@ -164,7 +176,7 @@ func TestPruneTempApply(t *testing.T) {
 		t.Error("MACHINES.md still lists the temp clone")
 	}
 	subject := testgit.Git(t, r.app.Repo.Dir, "log", "-1", "--format=%s")
-	if !strings.HasPrefix(subject, "prune mbp: 6 temp-folder journal events") {
+	if !strings.HasPrefix(subject, "prune mbp: 7 temp-folder journal events") {
 		t.Errorf("commit subject %q", subject)
 	}
 	if got := testgit.Git(t, r.remote, "log", "-1", "--format=%s", "main"); got != subject {

@@ -75,14 +75,27 @@ One JSON object per line. Each machine writes only its own directory. Fields:
 
 Never stored: git activity in a temp folder. An event is not journalled when
 its git dir is under a temp root, a git hook's working directory is, or every
-one of an agent command's actions ran in one (a gh action naming its repo with
-`-R` is about that repo wherever it ran). The temp roots are `os.TempDir()`,
-`$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders` and `/private/var/folders`,
-compared by whole path segments with symlinks resolved; a path inside one of
-the machine's configured scan roots is never temp. `casebook prune --temp
---apply` removes such events journalled before this rule from the machine's
-own day files (and temp clones from its snapshot) in one commit, keeping
-every other line byte for byte; history keeps the removed lines.
+one of an agent command's actions ran in one. The temp roots are
+`os.TempDir()`, `$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders` and
+`/private/var/folders`, compared by whole path segments with symlinks
+resolved; a path inside one of the machine's configured scan roots is never
+temp. A temp folder doing real work is journalled, whatever `repo` its line
+carries:
+- its git dir, or a linked worktree's common dir, resolves inside a configured
+  scan root (a worktree of a tracked clone placed in `/tmp`); with no git dir
+  recorded, a working tree that still exists is read for its `.git`;
+- it pushes to a remote that isn't local: a pre-push hook's remote URL, an
+  agent's `git push` to a URL or to a remote the clone's config names, or,
+  once that clone is gone, a push action sync annotated with a repo (sync
+  takes an action's repo only from the machine's snapshot). Local is a path or
+  a `file://` URL;
+- a gh action naming its repo with `-R` is about that repo wherever it ran.
+
+`casebook prune --temp --apply` removes such events journalled before this
+rule from the machine's own day files (and temp clones from its snapshot) in
+one commit, keeping every other line byte for byte; history keeps the removed
+lines. Its dry run counts the removed lines that carry a repo, by repo, so a
+real line misclassified as temp shows before anyone applies.
 
 Never stored: command lines, commit or tag messages, titles, bodies, field values, header values, query strings, or URL credentials.
 
