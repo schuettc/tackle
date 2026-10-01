@@ -114,6 +114,9 @@ func actProb(it store.Item) float64 {
 }
 
 func (s *Server) review(w http.ResponseWriter, r *http.Request) {
+	// Read the cursor before any review data: an event racing the reads is
+	// redelivered to the client, never skipped.
+	cursor := s.events.format(s.events.latest())
 	p, ok := s.project(w, r, r.URL.Query().Get("project"))
 	if !ok {
 		return
@@ -121,7 +124,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	proj := map[string]any{"id": p.ID, "root": p.Root}
 	run, items, err := s.st.LatestRun(r.Context(), p.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{"project": proj, "run": nil, "items": []itemJSON{}, "blind": false})
+		writeJSON(w, http.StatusOK, map[string]any{"project": proj, "run": nil, "items": []itemJSON{}, "blind": false, "cursor": cursor})
 		return
 	}
 	if err != nil {
@@ -165,6 +168,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 			"summary": run.Summary, "total": run.Total},
 		"items":    out,
 		"blind":    false,
+		"cursor":   cursor,
 		"answered": map[string]int{"total": len(answers), "sent": sent},
 	})
 }

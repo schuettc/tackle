@@ -657,3 +657,34 @@ func TestWatchQuietWhenUnchanged(t *testing.T) {
 		t.Fatalf("events %v", evs)
 	}
 }
+
+func TestReviewCursorCoversRaceWindow(t *testing.T) {
+	f := newFixture(t)
+	cur, _ := f.review()["cursor"].(string)
+	if cur == "" {
+		t.Fatal("review has no cursor")
+	}
+	f.put(f.run, "h1") // emitted after the cursor was read
+	_, evs := f.events(cur)
+	if len(evs) != 1 || evs[0].Type != "answers" {
+		t.Fatalf("poll since review cursor: %+v", evs)
+	}
+	ts := httptest.NewServer(f.h)
+	defer ts.Close()
+	c, cancel := sse(t, ts.URL, cur)
+	defer cancel()
+	if v := next(t, c); !strings.Contains(v, `"answers"`) || strings.Contains(v, "reset") {
+		t.Fatalf("sse from review cursor: %s", v)
+	}
+}
+
+func TestReviewCursorOnNoRunPath(t *testing.T) {
+	f := newFixture(t)
+	p, _ := f.st.Project(context.Background(), "/empty")
+	w := f.do("GET", fmt.Sprintf("/api/review?project=%d", p.ID), "")
+	var m map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &m)
+	if c, _ := m["cursor"].(string); c == "" || m["run"] != nil {
+		t.Fatalf("%s", w.Body)
+	}
+}
