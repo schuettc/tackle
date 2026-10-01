@@ -252,7 +252,7 @@ project to send test code to Jev, and adds `.cull/` to the project's ignore file
 - `cull apply` removes the tests judged cut, tidies imports, verifies, and rolls back if that fails.
 - `cull serve` opens the review page (starting the local server if needed).
 - `cull wait` waits until you send your answers, then prints what to do.
-- `cull doctor` checks the key, network access, python3, node, the test command and the agent setup.
+- `cull doctor` checks the key, whether the project allows sending test source to TypeSafe, python3 and node (when the project needs them), the test command, the review page server and the agent setup.
 - `cull judge` is plumbing: JSONL in, JSONL out.
 
 **The agent loop.** An agent in your project has five channel tools:

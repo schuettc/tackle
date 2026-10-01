@@ -29,7 +29,7 @@ func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
 		{Name: "cull_check", Description: "Judge the project's automated tests with Jev and record what Court must review. base: the merge base of your branch to judge only the tests you changed (omit for the whole suite). Returns the summary, the ids of the tests to cut, the ids of the groups to merge, and to_review (how many items wait for Court on the review page).",
 			InputSchema: schema(`{"type":"object","properties":{"base":{"type":"string","description":"git ref; judge only tests changed since it"},` + pathProp + `}}`)},
-		{Name: "cull_apply", Description: "Remove tests from the last cull_check. Without ids it removes every cut (Jev's and Court's), tidies the imports that leaves unused, runs the project's tests before and after, and restores everything if they fail. Never commits. Returns what was applied, what needs you, the tidy report, the verify outcome and the exit (applied, rolled back or refused) with the reason.",
+		{Name: "cull_apply", Description: "Remove tests from the last cull_check. Without ids it removes every cut (Jev's and Court's), tidies the imports that leaves unused, runs the project's tests before and after, and restores everything if they fail. Never commits. Returns what was applied, what needs you, the tidy report, the verify outcome and the exit (applied, rolled back, rollback failed or refused) with the reason.",
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"description":"remove exactly these test ids instead of every cut"},` + pathProp + `}}`)},
 		{Name: "cull_check_group", Description: "Verify your rewrite of a near-duplicate group (an id from cull_check's merge list) as one table test: the originals are gone, one new test keeps every row, Jev does not flag it, and the tests pass. Returns the four checks and their results.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"the group id"},` + pathProp + `},"required":["id"]}`)},
@@ -221,8 +221,11 @@ func (ch *Channel) apply(ctx context.Context, path string, ids []string) (string
 	if runErr != nil {
 		exit, reason = "refused", runErr.Error()
 		var ee *apply.ExitError
-		if errors.As(runErr, &ee) && ee.Code == 1 {
+		if (errors.As(runErr, &ee) && ee.Code == 1) || out.RolledBack {
 			exit = "rolled back"
+		}
+		if out.RollbackFailed {
+			exit = "rollback failed"
 		}
 	}
 	var results []verifyLine
