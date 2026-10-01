@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -696,5 +697,42 @@ func assertNoKey(t *testing.T, e *env, cs ...*client) {
 	}
 	if strings.Contains(e.logs.String(), fakeKey) {
 		t.Errorf("the key appears in the channel's log")
+	}
+}
+
+func TestClientSerializesServeStarts(t *testing.T) {
+	var mu sync.Mutex
+	var live *serve.Advert
+	var starts, active, maxActive int32
+	cl := NewClient(func() (serve.Advert, error) {
+		n := atomic.AddInt32(&active, 1)
+		if n > atomic.LoadInt32(&maxActive) {
+			atomic.StoreInt32(&maxActive, n)
+		}
+		atomic.AddInt32(&starts, 1)
+		time.Sleep(100 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		a := serve.Advert{Base: "http://127.0.0.1:1", Token: "t", PID: 1}
+		mu.Lock()
+		live = &a
+		mu.Unlock()
+		return a, nil
+	})
+	cl.Find = func() (serve.Advert, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if live == nil {
+			return serve.Advert{}, serve.ErrNotRunning
+		}
+		return *live, nil
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, _ = cl.Do(context.Background(), "GET", "/x", nil, nil) }()
+	}
+	wg.Wait()
+	if starts != 1 || maxActive != 1 {
+		t.Errorf("starts %d, max concurrent %d; want 1, 1", starts, maxActive)
 	}
 }

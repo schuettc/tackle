@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/schuettc/tackle/internal/cull/serve"
@@ -26,12 +27,29 @@ type Client struct {
 	Find func() (serve.Advert, error)
 	// Start starts serve when Find says it isn't running (nil: don't).
 	Start func() (serve.Advert, error)
+
+	// startMu serializes "find, else start" so one channel never launches two serves.
+	startMu sync.Mutex
 }
 
 // NewClient returns a client that finds serve through its advert and, when
 // start is not nil, starts it if it isn't running.
 func NewClient(start func() (serve.Advert, error)) *Client {
 	return &Client{HTTP: &http.Client{Timeout: 90 * time.Second}, Find: serve.Running, Start: start}
+}
+
+var errStart = errors.New("starting cull serve")
+
+func (c *Client) ensure() (serve.Advert, error) {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	adv, err := c.Find()
+	if err != nil && c.Start != nil {
+		if adv, err = c.Start(); err != nil {
+			return adv, fmt.Errorf("%w: %w", errStart, err)
+		}
+	}
+	return adv, err
 }
 
 // ErrNoServe means cull serve isn't running on this machine (and this client
@@ -50,11 +68,9 @@ func (e *StatusError) Error() string { return fmt.Sprintf("cull serve: %d %s", e
 // decodes a JSON answer into out (nil to ignore). It returns the status code;
 // 204 leaves out untouched.
 func (c *Client) Do(ctx context.Context, method, path string, body, out any) (int, error) {
-	adv, err := c.Find()
-	if err != nil && c.Start != nil {
-		if adv, err = c.Start(); err != nil {
-			return 0, fmt.Errorf("starting cull serve: %w", err)
-		}
+	adv, err := c.ensure()
+	if errors.Is(err, errStart) {
+		return 0, err
 	}
 	if err != nil {
 		return 0, ErrNoServe
