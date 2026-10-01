@@ -1,0 +1,35 @@
+# kempt manifest for cull — kept separate from any dotfiles manifest.
+#
+#   kempt apply   -manifest cmd/cull/kempt.toml -packages cull
+#   kempt upgrade -manifest cmd/cull/kempt.toml -packages cull
+#
+# -packages cull is required: without it kempt applies the selection saved by
+# your dotfiles `kempt init`, which does not contain "cull".
+# After the first apply: run `cull init` in each project. Launch Claude Code with
+# `claude --dangerously-load-development-channels server:cull` to hear Send.
+
+[kempt]
+spec = 1
+
+[packages.cull]
+description = "cull: judges agent-written tests with Jev, cuts the sure ones, asks you about the rest"
+only = { os = "darwin" }
+
+  # The binary, from the family download contract (verified against .sha256).
+  [[packages.cull.download]]
+  site = "tackle.tools"
+  tool = "cull"
+  bin = "cull"
+
+  # Claude Code: the cull channel (Court's answers arrive as channel events).
+  [[packages.cull.json-merge]]
+  file = "~/.claude.json"
+  merge = { mcpServers = { cull = { type = "stdio", command = "cull", args = ["channel"], env = {} } } }
+
+  # pi: the same channel through channels.tools.
+  [[packages.cull.json-merge]]
+  file = "~/.pi/agent/channels.json"
+  merge = { channelServers = { cull = { command = "cull", args = ["channel"] } } }
+
+  [[packages.cull.verify]]
+  command-exists = "cull"
