@@ -3,6 +3,12 @@
 A casebook data repository is a private git repository written only by the
 `casebook` binary. History is linear: no merge commits, no branches.
 
+On each machine, every casebook process (serve, the launchd or CLI sync, the
+CLI decide) writes its clone only under a lock on `.git/casebook.lock`
+(flock): a write and its commit, or a sync's rebase, hold it exclusive, and a
+reader that needs one whole tree (serve's rebuild) holds it shared. A commit
+never stages another process's half-written files.
+
 ## Root
 
 | Path | Content |
@@ -10,6 +16,7 @@ A casebook data repository is a private git repository written only by the
 | `casebook.toml` | `format_version = 2`. A casebook binary refuses a repo with a newer version, and upgrades an older one in place with one commit (`upgrade casebook repo to format 2`). |
 | `policy.toml` | Attention thresholds in days: `outgoing_pr_stale_days` (14), `incoming_no_reply_days` (7), `unpushed_days` (3), `repo_dormant_days` (365). Unknown keys are errors. |
 | `README.md`, `CONTRIBUTIONS.md`, `MACHINES.md` | Rendered views. On a sync conflict the upstream copy wins and the next sync re-renders. |
+| `.gitignore` | Holds `.*.tmp`: the temp files casebook writes beside a file before renaming it over (`.<name>-*.tmp`) are never committed. `casebook init` writes it; a binary opening a repo without the line appends it with one commit (`ignore casebook's temp files`), keeping any other lines. On a sync conflict the upstream copy wins and the next open adds the line again if it went. |
 
 ## Decisions: `items/`
 

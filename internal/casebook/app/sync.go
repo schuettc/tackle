@@ -102,20 +102,24 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	if _, err := a.Repo.WriteFile("machines/"+a.Cfg.Machine+".json", sb); err != nil {
-		return rep, err
-	}
-	snaps, err := a.snapshots()
-	if err != nil {
-		return rep, err
-	}
-	if err := a.journal(batch.Events, snaps); err != nil {
-		return rep, err
-	}
-	if err := a.render(g, snaps, &rep); err != nil {
-		return rep, err
-	}
-	committed, err := a.Repo.Commit(ctx, fmt.Sprintf("sync %s: %d events, %d clones", a.Cfg.Machine, rep.Events, rep.Clones))
+	// The write phase and its commit are one step under casebook-data's
+	// lock (store.Repo.Batch): a decide (serve's, or the CLI's in another
+	// process) can't commit this sync's files halfway, and serve's rebuild
+	// never reads them halfway.
+	var snaps []observe.Snapshot
+	committed, err := a.Repo.Batch(ctx, fmt.Sprintf("sync %s: %d events, %d clones", a.Cfg.Machine, rep.Events, rep.Clones), func() error {
+		if _, err := a.Repo.WriteFile("machines/"+a.Cfg.Machine+".json", sb); err != nil {
+			return err
+		}
+		var err error
+		if snaps, err = a.snapshots(); err != nil {
+			return err
+		}
+		if err := a.journal(batch.Events, snaps); err != nil {
+			return err
+		}
+		return a.render(g, snaps, &rep)
+	})
 	if err != nil {
 		// The drained events stay in the spool and are journaled again by the
 		// next sync; the uncommitted journal lines from this attempt may then
@@ -134,10 +138,9 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		return rep, err
 	}
 	// Another machine's views won a rebase conflict: render ours again.
-	if err := a.render(g, snaps, &rep); err != nil {
-		return rep, err
-	}
-	if ok, err := a.Repo.Commit(ctx, "sync "+a.Cfg.Machine+": re-render views"); err != nil || !ok {
+	if ok, err := a.Repo.Batch(ctx, "sync "+a.Cfg.Machine+": re-render views", func() error {
+		return a.render(g, snaps, &rep)
+	}); err != nil || !ok {
 		return rep, err
 	}
 	_, err = a.pushSync(ctx, &rep)

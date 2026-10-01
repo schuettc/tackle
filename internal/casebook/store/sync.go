@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/item"
@@ -38,10 +39,7 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 		if _, err := gitx.Run(ctx, r.Dir, "rev-parse", "--verify", "-q", "refs/remotes/origin/main"); err == nil {
 			ahead, _ := gitx.Run(ctx, r.Dir, "rev-list", "--count", "HEAD..origin/main")
 			if ahead != "0" {
-				r.mu.Lock()
-				err := r.rebase(ctx, &res)
-				r.mu.Unlock()
-				if err != nil {
+				if err := r.lockedRebase(ctx, &res); err != nil {
 					return res, err
 				}
 				res.Pulled = true
@@ -65,25 +63,41 @@ func (r *Repo) Sync(ctx context.Context) (SyncResult, error) {
 	return res, fmt.Errorf("push kept racing other machines; try again")
 }
 
+// lockedRebase runs the rebase under casebook-data's exclusive lock. The
+// wait for the lock ends with ctx; the rebase itself runs on a context that
+// ctx's cancel doesn't end (serve stopping mid-push), bounded by
+// RebaseTimeout, so casebook-data is never left mid-rebase. A rebase that
+// fails, or outlives the timeout, is aborted (abort has its own context).
+func (r *Repo) lockedRebase(ctx context.Context, res *SyncResult) error {
+	unlock, err := r.lock(ctx, true)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), RebaseTimeout)
+	defer cancel()
+	return r.rebase(rctx, res)
+}
+
 // rebase replays local commits onto origin/main, resolving decision and view
 // conflicts; anything else aborts the rebase and fails. A replayed commit that
 // resolution left empty (it only touched a view) is skipped.
 func (r *Repo) rebase(ctx context.Context, res *SyncResult) error {
 	_, err := gitx.Run(ctx, r.Dir, "rebase", "-q", "origin/main")
 	for i := 0; err != nil; i++ {
-		if !r.rebasing(ctx) || i > 1000 {
-			r.abort(ctx)
+		if !r.rebasing() || i > 1000 {
+			r.abort()
 			return fmt.Errorf("rebase onto the casebook remote failed: %w", err)
 		}
 		files, _ := gitx.Run(ctx, r.Dir, "diff", "--name-only", "--diff-filter=U")
 		if files == "" && i == 0 {
-			r.abort(ctx)
+			r.abort()
 			return fmt.Errorf("rebase onto the casebook remote failed: %w", err)
 		}
 		if files != "" {
 			for _, f := range strings.Split(files, "\n") {
 				if rerr := r.resolve(ctx, f, res); rerr != nil {
-					r.abort(ctx)
+					r.abort()
 					return rerr
 				}
 			}
@@ -98,6 +112,15 @@ func (r *Repo) rebase(ctx context.Context, res *SyncResult) error {
 }
 
 func (r *Repo) resolve(ctx context.Context, f string, res *SyncResult) error {
+	if f == ".gitignore" {
+		// Upstream's copy wins; the next open puts casebook's rule back
+		// if it went (EnsureIgnore).
+		if _, err := gitx.Run(ctx, r.Dir, "checkout", "--ours", "--", f); err != nil {
+			return err
+		}
+		_, err := gitx.Run(ctx, r.Dir, "add", "--", f)
+		return err
+	}
 	for _, v := range Views {
 		if f == v {
 			// During a rebase "ours" (stage 2) is the upstream side.
@@ -151,7 +174,14 @@ func Merge(a, b item.Decision) item.Decision {
 	return win
 }
 
-func (r *Repo) rebasing(ctx context.Context) bool {
+// cleanupTimeout bounds rebasing and abort, which run on their own context:
+// the rebase's may have ended (its timeout) and the rebase must still be
+// found and aborted.
+const cleanupTimeout = 30 * time.Second
+
+func (r *Repo) rebasing() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
 	for _, d := range []string{"rebase-merge", "rebase-apply"} {
 		p, err := gitx.Run(ctx, r.Dir, "rev-parse", "--git-path", d)
 		if err != nil {
@@ -167,8 +197,10 @@ func (r *Repo) rebasing(ctx context.Context) bool {
 	return false
 }
 
-func (r *Repo) abort(ctx context.Context) {
-	if r.rebasing(ctx) {
+func (r *Repo) abort() {
+	if r.rebasing() {
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		defer cancel()
 		_, _ = gitx.Run(ctx, r.Dir, "rebase", "--abort")
 	}
 }

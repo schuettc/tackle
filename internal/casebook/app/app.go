@@ -45,6 +45,11 @@ func Open(gh observe.Runner) (*App, error) {
 	if _, err := repo.Upgrade(context.Background()); err != nil {
 		return nil, fmt.Errorf("upgrading casebook repo format: %w", err)
 	}
+	// A repo from before casebook-data ignored its temp files gets the rule
+	// (one local commit, pushed like the upgrade).
+	if _, err := repo.EnsureIgnore(context.Background()); err != nil {
+		return nil, fmt.Errorf("casebook repo .gitignore: %w", err)
+	}
 	return &App{Cfg: cfg, Repo: repo, Gh: gh, Now: time.Now}, nil
 }
 

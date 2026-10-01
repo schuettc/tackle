@@ -35,13 +35,15 @@ type Repo struct {
 	// raises it to FormatVersion.
 	Version int
 
-	// mu serializes this process's local mutations of the repo: a write and
-	// its commit (Decide, WriteRule, DeleteRule, AppendRestore, Commit) and
-	// Sync's rebase. Network steps (fetch, push) run outside it, so a commit
-	// can land while a push waits on the remote, but never inside a rebase
-	// or another commit. It is held per step and never while taking another
-	// lock (serve/push.go documents the order).
-	mu sync.Mutex
+	// mu is the in-process half of casebook-data's lock (lock.go): a write
+	// and its commit (Batch: Decide, WriteRule, DeleteRule, AppendRestore,
+	// Commit, a sync's write phase) and Sync's rebase hold it exclusive,
+	// serve's rebuild (Read) shared; a flock on LockPath() is the other
+	// processes' half. Network steps (fetch, push) run outside it, so a
+	// commit can land while a push waits on the remote, but never inside a
+	// rebase or another commit. It is held per step and never while taking
+	// another lock (serve/push.go documents the order).
+	mu sync.RWMutex
 }
 
 type meta struct {
@@ -76,6 +78,7 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion),
 		"policy.toml":   pol,
 		"README.md":     []byte(readme),
+		".gitignore":    []byte(gitignore),
 	} {
 		if _, err := r.WriteFile(rel, b); err != nil {
 			return nil, err
@@ -115,10 +118,10 @@ func (r *Repo) Upgrade(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	b := fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion)
-	if _, err := r.WriteFile("casebook.toml", b); err != nil {
-		return false, err
-	}
-	if _, err := r.Commit(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion)); err != nil {
+	if _, err := r.Batch(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion), func() error {
+		_, err := r.WriteFile("casebook.toml", b)
+		return err
+	}); err != nil {
 		return false, err
 	}
 	r.Version = FormatVersion
@@ -171,14 +174,14 @@ func (r *Repo) Glob(pattern string) ([]string, error) {
 	return out, nil
 }
 
-// Commit stages everything and commits it; false when nothing changed.
+// Commit stages everything and commits it; false when nothing changed. A
+// write meant to go in the same commit belongs in Batch, so another
+// writer's commit can't take it first.
 func (r *Repo) Commit(ctx context.Context, msg string) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.commit(ctx, msg)
+	return r.Batch(ctx, msg, nil)
 }
 
-// commit is Commit with r.mu held.
+// commit is Commit with casebook-data's lock held.
 func (r *Repo) commit(ctx context.Context, msg string) (bool, error) {
 	if _, err := gitx.Run(ctx, r.Dir, "add", "-A"); err != nil {
 		return false, err
@@ -258,11 +261,6 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 	if err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, err := r.WriteFile(k.File(), b); err != nil {
-		return err
-	}
 	msg := fmt.Sprintf("decide %s \u2192 %s", k, d.Disposition)
 	if d.Note != "" {
 		note := strings.ReplaceAll(d.Note, "\n", " ")
@@ -272,7 +270,10 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 		msg += fmt.Sprintf(" (%q)", note)
 	}
 	msg += " by " + d.DecidedBy
-	_, err = r.commit(ctx, msg)
+	_, err = r.Batch(ctx, msg, func() error {
+		_, err := r.WriteFile(k.File(), b)
+		return err
+	})
 	return err
 }
 
@@ -403,12 +404,10 @@ func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
 	if err != nil {
 		return err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, err := r.WriteFile("rules/"+ru.ID+".toml", b); err != nil {
+	_, err = r.Batch(ctx, msg, func() error {
+		_, err := r.WriteFile("rules/"+ru.ID+".toml", b)
 		return err
-	}
-	_, err = r.commit(ctx, msg)
+	})
 	return err
 }
 
@@ -419,11 +418,11 @@ func (r *Repo) DeleteRule(ctx context.Context, id, msg string) error {
 	}
 	rel := "rules/" + id + ".toml"
 	p := filepath.Join(r.Dir, filepath.FromSlash(rel))
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("delete rule %q: %w", id, err)
-	}
-	_, err := r.commit(ctx, msg)
+	_, err := r.Batch(ctx, msg, func() error {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("delete rule %q: %w", id, err)
+		}
+		return nil
+	})
 	return err
 }
