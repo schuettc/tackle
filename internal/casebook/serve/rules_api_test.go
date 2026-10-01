@@ -145,6 +145,30 @@ func TestPreviewRejectsInvalidRegex(t *testing.T) {
 	}
 }
 
+// TestPreviewRejectsBadCountAndDuration: a count comparison with a value
+// that isn't a number, and a duration outside <n>h/<n>d/<n>w, are 400s that
+// name the condition, never an empty preview that reads as "0 matches".
+func TestPreviewRejectsBadCountAndDuration(t *testing.T) {
+	r := newRig(t)
+	for _, c := range []map[string]any{
+		{"field": "open-prs", "op": "gt", "value": "lots"},
+		{"field": "age", "op": "older-than", "value": "7x"},
+	} {
+		var out map[string]any
+		code := r.do(t, "POST", "/api/rules/preview", map[string]any{
+			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "repo"}, c},
+			"propose": map[string]any{"disposition": "archive"},
+		}, &out)
+		if code != 400 {
+			t.Errorf("%v: want 400, got %d (%v)", c, code, out)
+			continue
+		}
+		if msg, _ := out["error"].(string); !strings.HasPrefix(msg, "condition 2: ") {
+			t.Errorf("%v: error %q does not name condition 2", c, msg)
+		}
+	}
+}
+
 func TestVocabularyEndpointListsFields(t *testing.T) {
 	r := newRig(t)
 
@@ -165,6 +189,14 @@ func TestVocabularyEndpointListsFields(t *testing.T) {
 		if !names[want] {
 			t.Errorf("field %q missing from vocabulary", want)
 		}
+	}
+	// The note's placeholders, for the page's hint (T8 re-review c).
+	var toks []string
+	for _, tk := range vocab.NoteTokens {
+		toks = append(toks, tk.Token)
+	}
+	if got := strings.Join(toks, " "); got != "{how} {tip} {age} {repo} {title}" {
+		t.Errorf("note tokens %q", got)
 	}
 }
 
@@ -254,8 +286,8 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	if code != 400 {
 		t.Fatalf("agent activate: want 400, got %d", code)
 	}
-	if msg, _ := out["error"].(string); !strings.Contains(strings.ToLower(msg), "active") {
-		t.Fatalf("error %q does not mention active", msg)
+	if msg, _ := out["error"].(string); !strings.Contains(strings.ToLower(msg), "active") || !strings.Contains(msg, "schuettc activates rules") {
+		t.Fatalf("error %q does not mention active, or who activates", msg)
 	}
 
 	// Writing a draft works and records created_by = "pi:s1".
@@ -300,6 +332,9 @@ func TestAgentRuleDraftCannotActivate(t *testing.T) {
 	}, &out2)
 	if code != 400 {
 		t.Fatalf("editing active rule via agent: want 400, got %d", code)
+	}
+	if msg, _ := out2["error"].(string); !strings.Contains(msg, "only schuettc can edit active rules") {
+		t.Fatalf("error %q doesn't say who can", msg)
 	}
 }
 

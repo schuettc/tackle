@@ -14,15 +14,32 @@ import (
 
 // SummaryView is the response body of GET /api/summary.
 type SummaryView struct {
-	Machine       string         `json:"machine"`
-	User          string         `json:"user"`
-	Head          string         `json:"head"`
-	BuiltAt       time.Time      `json:"built_at"`
-	SyncedAt      time.Time      `json:"synced_at"`
-	OfflineQueued int            `json:"offline_queued"`
-	Counts        map[string]int `json:"counts"`
-	Notices       []string       `json:"notices"`
-	Sessions      int            `json:"sessions"`
+	Machine  string    `json:"machine"`
+	User     string    `json:"user"`
+	Head     string    `json:"head"`
+	BuiltAt  time.Time `json:"built_at"`
+	SyncedAt time.Time `json:"synced_at"`
+	// OfflineQueued counts local commits the casebook remote doesn't have
+	// yet (the page says "offline · N queued"). While serve's background
+	// push is in flight it is 0, unless the push before it failed: a
+	// decision on its way out isn't offline.
+	OfflineQueued int `json:"offline_queued"`
+	// PushError is why serve's last push failed, when it failed for a
+	// reason other than the network (a sync conflict it can't resolve, the
+	// remote refusing), in serve's words; the page says "push failed · N
+	// queued" and shows it. Cleared by the next push that succeeds, and
+	// whenever nothing is queued. Empty while pushes merely can't reach the
+	// remote ("offline · N queued").
+	PushError string         `json:"push_error,omitempty"`
+	Counts    map[string]int `json:"counts"`
+	Notices   []string       `json:"notices"`
+	Sessions  int            `json:"sessions"`
+	// SyncIntervalMS is one sync interval: a plan refuses an index built
+	// longer ago than this (built_at), so the page can say how old the
+	// observations are.
+	SyncIntervalMS int64 `json:"sync_interval_ms"`
+	// Syncing: a sync POST /api/sync started is running.
+	Syncing bool `json:"syncing"`
 }
 
 // ItemsView is the response body of GET /api/items.
@@ -40,18 +57,37 @@ type ItemDetailView struct {
 	Decisions []store.LogEntry   `json:"decisions"`
 }
 
-// DecideResult is the response body of POST /api/decide and POST /api/proposals/change.
+// DecideResult is the response body of POST /api/decide and POST
+// /api/proposals/change. serve answers once the decisions are committed
+// locally, their proposals retired and the index rebuilt; the push to the
+// casebook remote follows in the background (the "push" live event, PushEvent).
 type DecideResult struct {
-	Decided int      `json:"decided"`
-	Errors  []string `json:"errors"`
-	Pushed  bool     `json:"pushed"`
+	Decided     int      `json:"decided"`
+	DecidedKeys []string `json:"decided_keys"`
+	Errors      []string `json:"errors"`
 }
 
-// AcceptResult is the response body of POST /api/proposals/accept.
+// AcceptResult is the response body of POST /api/proposals/accept. Like
+// DecideResult, it doesn't wait for the push.
 type AcceptResult struct {
 	Accepted int      `json:"accepted"`
 	Errors   []string `json:"errors"`
-	Pushed   bool     `json:"pushed"`
+}
+
+// Push states, as the "push" live event says them.
+const (
+	PushDone    = "done"    // the remote has every local commit serve pushed
+	PushOffline = "offline" // the remote couldn't be reached: the commits stay queued
+	PushFailed  = "failed"  // the push failed otherwise (Error says why): the commits stay queued
+)
+
+// PushEvent is the payload of the "push" live event: serve's background push
+// of decisions to the casebook remote ended (one event per push; a push that
+// coalesced decides made during the one before it is one more). The page
+// asks GET /api/summary again for offline_queued.
+type PushEvent struct {
+	State string `json:"state"`
+	Error string `json:"error,omitempty"`
 }
 
 // RejectResult is the response body of POST /api/proposals/reject.
@@ -67,6 +103,12 @@ type SessionsView struct {
 // ThreadsView is the response body of GET /api/threads.
 type ThreadsView struct {
 	Threads []deliver.Thread `json:"threads"`
+}
+
+// DeliveryView is the response body of GET /api/session/delivery.
+// Delivery is null when there is no in-flight delivery for the session.
+type DeliveryView struct {
+	Delivery *deliver.Delivery `json:"delivery"`
 }
 
 // WorkedView is the progress history from a completed turn, carried on a
@@ -161,6 +203,14 @@ type RulesView struct {
 type RuleRow struct {
 	Rule   rules.Rule        `json:"rule"`
 	Record rules.TrackRecord `json:"record"`
+	// Invalid is why the rule is not valid (serve's validation message,
+	// naming the condition), or why its file can't be read; "" when valid.
+	Invalid string `json:"invalid,omitempty"`
+	// Matches is how many items the rule matches now (its exclusions left
+	// out); Excluded is how many it excludes. Matches is 0 while its
+	// conditions are invalid.
+	Matches  int `json:"matches"`
+	Excluded int `json:"excluded"`
 }
 
 // RuleDetailView is the response body of GET /api/rule, POST /api/rules/draft,
@@ -170,6 +220,12 @@ type RuleDetailView struct {
 	Rule    rules.Rule        `json:"rule"`
 	Record  rules.TrackRecord `json:"record"`
 	Matches MatchPreview      `json:"matches"`
+	// Version names this exact content of the rule (rules.Version). The page
+	// sends it back with activate and save; serve refuses (409) a stale one.
+	Version string `json:"version"`
+	// Invalid is why the rule is not valid (as RuleRow.Invalid). An invalid
+	// rule's conditions are not previewed: Matches is empty.
+	Invalid string `json:"invalid,omitempty"`
 }
 
 // MatchPreview is the paginated, grouped match list returned by
@@ -179,6 +235,9 @@ type MatchPreview struct {
 	ByReason []ReasonCount `json:"by_reason"`
 	Groups   []RepoGroup   `json:"groups"`
 	Page     []MatchRow    `json:"page"`
+	// Dispositions is what the rule may propose: those valid for every kind
+	// of item its conditions can match (rules.Dispositions).
+	Dispositions []string `json:"dispositions"`
 }
 
 // ReasonCount is one reason bucket inside a MatchPreview.
@@ -206,6 +265,32 @@ type MatchRow struct {
 // VocabularyView is the response body of GET /api/rules/vocabulary.
 type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`
+	// NoteTokens are the placeholders a rule's note may use.
+	NoteTokens []rules.NoteToken `json:"note_tokens"`
+}
+
+// DecisionVocabView is the response body of GET /api/decisions/vocabulary.
+// It is generated from the Go item package and is the single source of truth
+// for which dispositions are valid per kind and which ones require an until
+// condition.  The page deletes its hand-copied tables and reads this instead.
+type DecisionVocabView struct {
+	Kinds      []KindVocab `json:"kinds"`
+	UntilForms []UntilForm `json:"until_forms"`
+}
+
+// KindVocab describes the valid decisions for one item kind.
+type KindVocab struct {
+	Kind       string   `json:"kind"`
+	Allowed    []string `json:"allowed"`
+	NeedsUntil []string `json:"needs_until"`
+}
+
+// UntilForm is one until operator with its syntax pattern and one example
+// value, generated from item.UntilForms().
+type UntilForm struct {
+	Op      string `json:"op"`
+	Syntax  string `json:"syntax"`
+	Example string `json:"example"`
 }
 
 // JobStepResult is the response body of POST /api/agent/job-step.
@@ -241,6 +326,12 @@ type JobsView struct {
 // NeedsYouView is the response body of GET /api/needs-you.
 type NeedsYouView struct {
 	Cards []apply.NeedsYou `json:"cards"`
+}
+
+// SessionProgressView is the response body of GET /api/session/progress.
+// Progress is nil when the session has no live progress line.
+type SessionProgressView struct {
+	Progress *propose.Progress `json:"progress"`
 }
 
 // AnswerResult is the response body of POST /api/jobs/answer.

@@ -443,7 +443,14 @@ func (b *builder) unobserved() {
 func (b *builder) finish(it *Item) {
 	seen := it.Decision != nil && b.in.Seen[it.ID].Equal(it.Decision.DecidedAt) && !it.Decision.DecidedAt.IsZero()
 	it.Status = item.Compute(it.Key, it.Decision, it.Observed, b.f, b.in.Now, seen)
-	it.signals.Undecided = it.Decision == nil
+	// Undecided is true when the item has no decision at all, OR when a
+	// wait/watch decision has lapsed (its until condition is now met) — meaning
+	// the item has returned to attention and Court needs to decide again.
+	// A non-lapsed wait (StatusWaiting) is NOT undecided: Court has decided to
+	// wait, and that decision is still active.
+	it.signals.Undecided = it.Decision == nil ||
+		((it.Decision.Disposition == item.Wait || it.Decision.Disposition == item.Watch) &&
+			it.Status != item.StatusWaiting)
 	ignored := it.Decision != nil && it.Decision.Disposition == item.Ignore
 	if it.Observed.Known && it.Observed.Exists {
 		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)

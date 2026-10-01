@@ -16,6 +16,7 @@ docs/superpowers/
 
 # proj binary
 /proj
+bin/casebook
 
 # cull binary
 /cull

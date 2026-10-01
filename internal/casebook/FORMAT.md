@@ -3,6 +3,12 @@
 A casebook data repository is a private git repository written only by the
 `casebook` binary. History is linear: no merge commits, no branches.
 
+On each machine, every casebook process (serve, the launchd or CLI sync, the
+CLI decide) writes its clone only under a lock on `.git/casebook.lock`
+(flock): a write and its commit, or a sync's rebase, hold it exclusive, and a
+reader that needs one whole tree (serve's rebuild) holds it shared. A commit
+never stages another process's half-written files.
+
 ## Root
 
 | Path | Content |
@@ -10,6 +16,7 @@ A casebook data repository is a private git repository written only by the
 | `casebook.toml` | `format_version = 2`. A casebook binary refuses a repo with a newer version, and upgrades an older one in place with one commit (`upgrade casebook repo to format 2`). |
 | `policy.toml` | Attention thresholds in days: `outgoing_pr_stale_days` (14), `incoming_no_reply_days` (7), `unpushed_days` (3), `repo_dormant_days` (365). Unknown keys are errors. |
 | `README.md`, `CONTRIBUTIONS.md`, `MACHINES.md` | Rendered views. On a sync conflict the upstream copy wins and the next sync re-renders. |
+| `.gitignore` | Holds `.*.tmp`: the temp files casebook writes beside a file before renaming it over (`.<name>-*.tmp`) are never committed. `casebook init` writes it; a binary opening a repo without the line appends it with one commit (`ignore casebook's temp files`), keeping any other lines. On a sync conflict the upstream copy wins and the next open adds the line again if it went. |
 
 ## Decisions: `items/`
 
@@ -115,13 +122,15 @@ by = "court"
 at = 2026-09-27T10:05:00Z
 ```
 
+`[propose]` must be a decision valid for every kind of item the rule can match, as its `kind` conditions say (with none, every kind: only `keep`, `wait` and `ignore`): a `disposition` that kind allows (§Decisions), and an `until` that parses (`wait` and `watch` need one). A rule that breaks this is not valid: it can't be activated, and an active one is skipped with a notice.
+
 `status` is `draft` (no effect) or `active` (proposes matches after every sync). `edited_at` is updated on every edit of `[[match]]` or `[propose]`; §4.2 uses it to decide whether to re-propose items that were previously rejected.
 
 Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `rule <id> deactivated by <who>`.
 
 ### Field vocabulary
 
-The `field` in each `[[match]]` condition must be one of the following. Operators: `is`, `is-not`, `in`, `not-in` (all text/enum/bool/count fields); `older-than`, `newer-than` (duration fields); `matches` (regex, `title` only). Duration values use `<n>h`, `<n>d` or `<n>w`.
+The `field` in each `[[match]]` condition must be one of the following. Operators, by field type: text and enum fields take `is`, `is-not`, `in`, `not-in` (and `title` also `matches`, a regex); bool fields `is`, `is-not`; count fields `is`, `is-not`, `gt`, `gte`, `lt`, `lte`; duration fields `older-than`, `newer-than`. `GET /api/rules/vocabulary` lists each field's operators. Duration values use `<n>h`, `<n>d` or `<n>w`; bool values are `true` or `false`; count values are whole numbers, 0 or more. Anything else is a validation error.
 
 | Field | Type | Allowed values / notes |
 |---|---|---|
@@ -146,8 +155,8 @@ The `field` in each `[[match]]` condition must be one of the following. Operator
 | `worktree` | enum | `dirty` \| `clean` \| `none` |
 | `archived` | bool | repo is archived on GitHub |
 | `fork` | bool | repo is a fork |
-| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` |
-| `open-issues` | count | number of open issues |
+| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` with a whole number, 0 or more |
+| `open-issues` | count | number of open issues; same operators and values as `open-prs` |
 | `has-decision` | bool | item has a recorded decision |
 | `policy-hit` | text | policy rule name, e.g. `outgoing-stale` |
 

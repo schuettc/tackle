@@ -30,14 +30,14 @@ func TestBuildJobBodyTellsAgentToWaitForBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	body, err := buildJobBody(job)
+	body, err := buildJobBody(job, "schuettc")
 	if err != nil {
 		t.Fatalf("buildJobBody: %v", err)
 	}
 	for _, want := range []string{
-		"Do not run any step until Court confirms the batch.",
+		"Do not run any step until schuettc confirms the batch.",
 		"The confirmation arrives as a message in this thread.",
-		"If Court skips the batch, run nothing.",
+		"If schuettc skips the batch, run nothing.",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("job body missing %q; got:\n%s", want, body)
@@ -366,4 +366,28 @@ func TestAnswerPausedResumeIsLaneAware(t *testing.T) {
 		}
 	})
 
+}
+
+// TestAgentTextNamesTheConfiguredUser: what serve says to an agent names the
+// configured user, or "the user" when none is configured; never a
+// hard-coded name.
+func TestAgentTextNamesTheConfiguredUser(t *testing.T) {
+	r := newRig(t)
+	job, err := r.s.Apply.Create(ctx, agentTestPlan(), "mbp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for user, want := range map[string]string{"lena": "Do not run any step until lena confirms the batch.", "": "Do not run any step until the user confirms the batch."} {
+		r.App.Cfg.User = user
+		body, err := buildJobBody(job, r.s.userName())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(body, want) || strings.Contains(body, "Court") {
+			t.Errorf("user %q: job body\n%s\nwant %q", user, body, want)
+		}
+		if got := r.s.userSubject(); user == "" && got != "The user" || user != "" && got != user {
+			t.Errorf("user %q: subject %q", user, got)
+		}
+	}
 }

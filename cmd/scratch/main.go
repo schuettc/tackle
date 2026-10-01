@@ -14,7 +14,7 @@ import (
 func run(cwd string, args []string, stdout io.Writer) int {
 	path, err := notes.Path(cwd)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 
@@ -117,7 +117,7 @@ func cmdAppend(cwd string) func([]string, io.Writer, io.Writer) error {
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	os.Exit(run(cwd, os.Args[1:], os.Stdout))

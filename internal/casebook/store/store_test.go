@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,5 +242,31 @@ func TestRuleIDsCannotEscapeRulesDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(r.Dir, "casebook.toml")); err != nil {
 		t.Fatalf("casebook.toml touched: %v", err)
+	}
+}
+
+// TestConcurrentDecidesCommitOneEach: decisions committed at once (serve's
+// requests, beside its background push) each get their own commit, with
+// nothing lost to git's index lock.
+func TestConcurrentDecidesCommitOneEach(t *testing.T) {
+	r, _ := newStore(t)
+	const n = 8
+	errs := make(chan error, n)
+	at := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			errs <- r.Decide(ctx, item.IssueKey("a/b", 100+i), dec(item.Keep, "court", at))
+		}(i)
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+	log := testgit.Git(t, r.Dir, "log", "--format=%s")
+	for i := 0; i < n; i++ {
+		if c := strings.Count(log, fmt.Sprintf("decide issue:a/b#%d ", 100+i)); c != 1 {
+			t.Errorf("issue #%d: %d commits, want 1\n%s", 100+i, c, log)
+		}
 	}
 }

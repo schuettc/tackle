@@ -30,6 +30,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/propose"
 	"github.com/schuettc/tackle/internal/casebook/rules"
 	"github.com/schuettc/tools-common/localweb"
+	"github.com/schuettc/tools-common/localweb/page"
 )
 
 //go:embed assets
@@ -46,6 +47,9 @@ type Server struct {
 	Index  *Index
 	Now    func() time.Time
 	Runner apply.Runner // for the casebook lane (nil: no-op runner)
+	// Log receives serve's non-fatal error lines (nil: os.Stderr); tests
+	// capture it.
+	Log io.Writer
 
 	// Wait is the long-poll timeout cap and WatchEvery the HEAD poll; tests
 	// shorten them.
@@ -57,16 +61,37 @@ type Server struct {
 	waiters   map[string]chan struct{} // session → wake
 	streamMu  sync.Mutex               // guards streams counter + setPageOpen decision (one critical section)
 
-	laneMu           sync.Mutex        // guards laneRun
-	laneRun          map[int64]bool    // job id → a casebook lane is running for it
-	onLaneStart      func(jobID int64) // test hook: called once per lane that actually starts
-	onBeforeLaneExit func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
-	activity         atomic.Int64      // unix ms of the last API request
-	streams          atomic.Int32      // open page event streams (connected tabs)
-	streamWG         sync.WaitGroup    // Run waits for streams to end before closing the database
-	rebuilds         atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
-	life             context.Context   // Run's context; done while shutting down
-	stop             context.CancelFunc
+	laneMu            sync.Mutex        // guards laneRun
+	laneRun           map[int64]bool    // job id → a casebook lane is running for it
+	onLaneStart       func(jobID int64) // test hook: called once per lane that actually starts
+	onBeforeLaneExit  func(jobID int64) // test hook: called just before the lane goroutine clears laneRun
+	activity          atomic.Int64      // unix ms of the last API request
+	streams           atomic.Int32      // open page event streams (connected tabs)
+	streamWG          sync.WaitGroup    // Run waits for streams to end before closing the database
+	rebuilds          atomic.Int32      // count of rebuild calls; exposed for tests to verify no loops
+	ruleCountRuns     atomic.Int32      // rules counted (MatchAll runs) for the rules list; for tests
+	ruleCountMu       sync.Mutex
+	ruleCounts        map[string]ruleCount            // rule id → its match count for one content + index
+	syncMu            sync.Mutex                      // guards syncing
+	planMu            sync.Mutex                      // one plan or approve at a time: the overlap check and its write are one step
+	afterOverlapCheck func()                          // test hook: runs between the overlap check and the create/approve
+	syncing           bool                            // a sync POST /api/sync started is running
+	runSync           func(ctx context.Context) error // test seam for syncNow (nil: App.Sync)
+	// The background push (push.go). remoteMu is serve's own serialization
+	// of remote git work on casebook-data (the push, POST /api/sync's sync);
+	// pushMu guards the pusher's state and is never held across git.
+	remoteMu    sync.Mutex
+	pushMu      sync.Mutex
+	pushRunning bool                                   // a push is in flight (or about to start)
+	pushAgain   bool                                   // a decide landed during it: push once more after it
+	pushFailed  bool                                   // the last push ended offline or failed
+	pushError   string                                 // why the last push failed, when not offline (cleared by a push that succeeds, or nothing queued)
+	pushStopped bool                                   // serve is stopping: schedulePush starts nothing
+	pushWG      sync.WaitGroup                         // Run waits for the pusher before closing the database
+	runPush     func(ctx context.Context) error        // test seam for App.Push
+	after       func(d time.Duration) <-chan time.Time // serve's clock for the pusher's retries (nil: time.After)
+	life        context.Context                        // Run's context; done while shutting down
+	stop        context.CancelFunc
 	// openPage opens the page in Court's browser at a route fragment ("" for
 	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
 	// when serve can't open a browser.
@@ -152,8 +177,25 @@ func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 // New wires a server over an opened app and database. It marks deliveries a
 // previous serve left in flight as interrupted and builds the index.
 func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
-	s := &Server{App: a, DB: d, Queue: deliver.New(d), Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
-		Now: time.Now, Wait: 60 * time.Second, WatchEvery: 5 * time.Second, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
+	q := deliver.New(d)
+	if sa := os.Getenv("CASEBOOK_STUCK_AFTER"); sa != "" {
+		if d, err := time.ParseDuration(sa); err == nil && d > 0 {
+			q.StuckAfter = d
+		}
+	}
+	if la := os.Getenv("CASEBOOK_LEFT_AFTER"); la != "" {
+		if d, err := time.ParseDuration(la); err == nil && d > 0 {
+			q.LeftAfter = d
+		}
+	}
+	watchEvery := 5 * time.Second
+	if we := os.Getenv("CASEBOOK_WATCH_EVERY"); we != "" {
+		if d, err := time.ParseDuration(we); err == nil && d > 0 {
+			watchEvery = d
+		}
+	}
+	s := &Server{App: a, DB: d, Queue: q, Props: propose.New(d), Apply: apply.NewStore(d), Bus: bus.New(d), Index: &Index{},
+		Now: time.Now, Wait: 60 * time.Second, WatchEvery: watchEvery, waiters: map[string]chan struct{}{}, laneRun: map[int64]bool{}}
 	// Record the serve lifetime context now so lanes started during New (a
 	// restart resume) are cancelled when serve stops. Run passes the same
 	// cancelable context and re-records it alongside s.stop.
@@ -163,11 +205,12 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 		Gh:     a.Gh,
 		RunGit: gitx.Run,
 		Now:    s.Now,
+		Notify: s.publish,
 	}
 	if n, err := s.Queue.Interrupt(ctx); err != nil {
 		return nil, err
 	} else if n > 0 {
-		_, _ = s.Bus.Publish(ctx, "interrupted", map[string]int{"deliveries": n})
+		s.publish(ctx, "interrupted", map[string]int{"deliveries": n})
 	}
 	if err := s.rebuild(ctx); err != nil {
 		return nil, err
@@ -191,6 +234,20 @@ func (s *Server) laneCtx() context.Context {
 	return context.Background()
 }
 
+// publish fires a bus event and, if the INSERT fails, logs the kind and error
+// to stderr. Bus.Publish fails only when the events INSERT fails, after the
+// change it announces is already committed — so we log and continue rather
+// than failing the enclosing request.
+func (s *Server) publish(ctx context.Context, kind string, payload any) {
+	if _, err := s.Bus.Publish(ctx, kind, payload); err != nil {
+		w := s.Log
+		if w == nil {
+			w = os.Stderr
+		}
+		_, _ = fmt.Fprintf(w, "casebook serve: publish %s: %v\n", kind, err)
+	}
+}
+
 // settleJob calls Store.Settle for jobID and, when the state changes,
 // publishes a "job" event on the bus so watchers see the terminal state.
 // Errors are logged to stderr (non-fatal: the step state is already persisted).
@@ -201,7 +258,7 @@ func (s *Server) settleJob(ctx context.Context, jobID int64) {
 		return
 	}
 	if changed {
-		_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
+		s.publish(ctx, "job", map[string]any{"id": jobID, "state": newState})
 	}
 }
 
@@ -316,7 +373,9 @@ func (s *Server) repoHead(ctx context.Context) string {
 // §4.2 updated: rules run in serve, not in casebook sync).
 //
 // rebuild is serialized by rebuildMu so that rule evaluation never runs twice
-// at once. Rule-error notices are set atomically with the rebuilt result under
+// at once. It reads casebook-data under the store's shared lock (Repo.Read),
+// so every caller (a decide, a rule write, a sync, the watch loop) sees one
+// whole tree. Rule-error notices are set atomically with the rebuilt result under
 // one Index lock (via Index.set), so a concurrent reader never sees a new Head
 // without the accompanying notices.
 func (s *Server) rebuild(ctx context.Context) error {
@@ -326,17 +385,33 @@ func (s *Server) rebuild(ctx context.Context) error {
 
 	s.rebuilds.Add(1)
 
-	// Build the engine result first (outside any Index lock).
+	// Build the engine result first (outside any Index lock), from one whole
+	// tree: the head, the build and the rules are read under casebook-data's
+	// shared lock, so no rebase (serve's push, another process's sync) or
+	// write+commit is halfway meanwhile. Mid-rebase the tree is the remote's
+	// commits without the local ones: a decision just made would read as
+	// undecided, and an active rule would propose it.
 	now := s.Now()
-	head := s.repoHead(ctx)
-	res, err := s.build(ctx)
-	if err != nil {
+	var (
+		head     string
+		res      engine.Result
+		allRules []rules.Rule
+		ruleErrs []error
+	)
+	if err := s.App.Repo.Read(ctx, func() error {
+		head = s.repoHead(ctx)
+		var err error
+		if res, err = s.build(ctx); err != nil {
+			return err
+		}
+		allRules, ruleErrs = s.App.Repo.Rules()
+		return nil
+	}); err != nil {
 		return err
 	}
 
-	// Load rules and evaluate active ones. Rule-load and validation errors are
-	// collected as notices; they never abort the rebuild.
-	allRules, ruleErrs := s.App.Repo.Rules()
+	// Rule-load and validation errors are collected as notices; they never
+	// abort the rebuild.
 	var notices []string
 	for _, re := range ruleErrs {
 		notices = append(notices, "rule: "+re.Error())
@@ -376,14 +451,58 @@ func (s *Server) rebuild(ctx context.Context) error {
 	s.Index.set(res, head, now)
 
 	pending, _ := s.Props.Pending(ctx)
-	if _, err := s.Bus.Publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()}); err != nil {
-		return err
-	}
+	// The index is set: announcing it can no longer fail the rebuild (a
+	// caller would report an error for a change that happened).
+	s.publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()})
 	if proposed > 0 {
-		_, err := s.Bus.Publish(ctx, "rules", map[string]int{"proposed": proposed})
-		return err
+		s.publish(ctx, "rules", map[string]int{"proposed": proposed})
 	}
 	return nil
+}
+
+// checkLeftCrossings detects sessions that have just crossed the left-threshold
+// in either direction and publishes one "sessions" event per crossing.
+// knownLeft is caller-owned state (a map from session ID to its last-known
+// left flag); it is mutated in place. Returns true when an event was emitted.
+// Called on each watch tick so no second polling system is needed.
+func (s *Server) checkLeftCrossings(ctx context.Context, knownLeft map[string]bool) bool {
+	sessions, err := s.Queue.Sessions(ctx)
+	if err != nil {
+		return false
+	}
+	currentLeft := make(map[string]bool, len(sessions))
+	for _, sess := range sessions {
+		currentLeft[sess.ID] = sess.Left
+	}
+	changed := false
+	for id, wasLeft := range knownLeft {
+		if _, exists := currentLeft[id]; !exists || currentLeft[id] != wasLeft {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		for id, isLeft := range currentLeft {
+			if _, seen := knownLeft[id]; !seen {
+				// New session — only matters if it's already left.
+				if isLeft {
+					changed = true
+					break
+				}
+			}
+		}
+	}
+	// Rebuild knownLeft to match current state.
+	for k := range knownLeft {
+		delete(knownLeft, k)
+	}
+	for k, v := range currentLeft {
+		knownLeft[k] = v
+	}
+	if changed {
+		s.publish(ctx, "sessions", map[string]any{})
+	}
+	return changed
 }
 
 // watch rebuilds whenever the casebook repo's HEAD moves (a sync or a CLI
@@ -392,6 +511,7 @@ func (s *Server) watch(ctx context.Context) {
 	t := time.NewTicker(s.WatchEvery)
 	defer t.Stop()
 	lastTrim := time.Now()
+	knownLeft := map[string]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -402,6 +522,7 @@ func (s *Server) watch(ctx context.Context) {
 					fmt.Fprintf(os.Stderr, "casebook serve: rebuild: %v\n", err)
 				}
 			}
+			s.checkLeftCrossings(ctx, knownLeft)
 			if time.Since(lastTrim) > 24*time.Hour {
 				_ = s.Bus.Trim(ctx, 7*24*time.Hour)
 				if err := s.Props.TrimProgressLog(ctx); err != nil {
@@ -447,11 +568,13 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/summary", s.getSummary)
 	m.HandleFunc("GET /api/items", s.getItems)
 	m.HandleFunc("GET /api/item", s.getItem)
+	m.HandleFunc("GET /api/decisions/vocabulary", s.getDecisionsVocabulary)
 	m.HandleFunc("POST /api/decide", s.postDecide)
 	m.HandleFunc("POST /api/proposals/accept", s.postAccept)
 	m.HandleFunc("POST /api/proposals/change", s.postChange)
 	m.HandleFunc("POST /api/proposals/reject", s.postReject)
 	m.HandleFunc("GET /api/sessions", s.getSessions)
+	m.HandleFunc("POST /api/sessions/move", s.postMoveSession)
 	m.HandleFunc("GET /api/threads", s.getThreads)
 	m.HandleFunc("POST /api/threads", s.postThread)
 	m.HandleFunc("POST /api/threads/move", s.postMoveThread)
@@ -462,9 +585,12 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/drafts/remove", s.postRemoveDraft)
 	m.HandleFunc("POST /api/batches/reorder", s.postReorder)
 	m.HandleFunc("POST /api/batches/send", s.postSendBatch)
+	m.HandleFunc("GET /api/session/progress", s.getSessionProgress)
+	m.HandleFunc("GET /api/session/delivery", s.getSessionDelivery)
 	m.HandleFunc("POST /api/deliveries/release", s.postRelease)
 	m.HandleFunc("POST /api/deliveries/move", s.postMoveDelivery)
 	m.HandleFunc("POST /api/stop", s.postStop)
+	m.HandleFunc("POST /api/sync", s.postSync)
 	// agent (casebook channel)
 	m.HandleFunc("POST /api/agent/presence", s.agentPresence)
 	m.HandleFunc("GET /api/agent/wait", s.agentWait)
@@ -481,6 +607,7 @@ func (s *Server) Handler() http.Handler {
 	// apply
 	m.HandleFunc("POST /api/apply/plan", s.postApplyPlan)
 	m.HandleFunc("POST /api/apply/approve", s.postApplyApprove)
+	m.HandleFunc("POST /api/apply/cancel", s.postApplyCancel)
 	m.HandleFunc("GET /api/jobs", s.getJobs)
 	m.HandleFunc("GET /api/job", s.getJob)
 	m.HandleFunc("GET /api/needs-you", s.getNeedsYou)
@@ -600,7 +727,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	if assetsFS == nil {
 		assetsFS, _ = fs.Sub(assets, "assets")
 	}
-	srv, err := localweb.Start(ctx, localweb.Config{Tool: config.Tool, Assets: assetsFS, API: s.Handler(), Port: o.Port})
+	srv, err := localweb.Start(ctx, localweb.Config{Tool: config.Tool, Assets: page.With(assetsFS), API: s.Handler(), Port: o.Port})
 	if err != nil {
 		return err
 	}
@@ -632,6 +759,9 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 		o.Ready(srv.URL, wasOpen)
 	}
 	err = srv.Wait()
+	cancel()          // serve is stopping: a push in flight ends, its commits stay queued
+	s.stopPushes()    // and none starts now (a handler still running may ask)
+	s.pushWG.Wait()   // the pusher writes events: the database closes after it
 	s.streamWG.Wait() // streams end with ctx; the database closes after them
 	return err
 }

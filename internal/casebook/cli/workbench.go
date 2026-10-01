@@ -33,6 +33,15 @@ var (
 	newSettledClient = channel.NewClient
 )
 
+func init() {
+	// CASEBOOK_NO_BROWSER: set by tests and the probe harness to prevent any
+	// code path from opening a real browser tab. Replaces the openBrowser seam
+	// with a silent no-op so no test or probe run can reach the OS.
+	if os.Getenv("CASEBOOK_NO_BROWSER") != "" {
+		openBrowser = func(_ string) error { return nil }
+	}
+}
+
 // defaultStartDetached starts serve in the background from this binary.
 func defaultStartDetached(port int) (serve.Advert, error) { return serve.Start(executable(), port) }
 

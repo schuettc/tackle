@@ -29,21 +29,20 @@ const restoreHeader = "key\taction\tbefore\trestore-command\n"
 // run after AppendRestore reports a successful commit.
 func (r *Repo) AppendRestore(ctx context.Context, date string, rec RestoreRecord) (bool, error) {
 	rel := "restores/" + date + ".tsv"
-	var buf []byte
-	if _, err := os.Stat(r.abs(rel)); errors.Is(err, fs.ErrNotExist) {
-		buf = append(buf, restoreHeader...)
-	} else if err != nil {
-		return false, err
-	}
-	line := strings.Join([]string{
-		rec.Key,
-		rec.Action,
-		rec.Before,
-		rec.RestoreCommand,
-	}, "\t") + "\n"
-	buf = append(buf, line...)
-	if err := r.AppendFile(rel, buf); err != nil {
-		return false, err
-	}
-	return r.Commit(ctx, fmt.Sprintf("restore record for %s (%s)", rec.Key, rec.Action))
+	return r.Batch(ctx, fmt.Sprintf("restore record for %s (%s)", rec.Key, rec.Action), func() error {
+		var buf []byte
+		if _, err := os.Stat(r.abs(rel)); errors.Is(err, fs.ErrNotExist) {
+			buf = append(buf, restoreHeader...)
+		} else if err != nil {
+			return err
+		}
+		line := strings.Join([]string{
+			rec.Key,
+			rec.Action,
+			rec.Before,
+			rec.RestoreCommand,
+		}, "\t") + "\n"
+		buf = append(buf, line...)
+		return r.AppendFile(rel, buf)
+	})
 }

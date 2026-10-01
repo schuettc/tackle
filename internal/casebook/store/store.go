@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -33,6 +34,16 @@ type Repo struct {
 	// Version is the format_version read from casebook.toml when opened; Upgrade
 	// raises it to FormatVersion.
 	Version int
+
+	// mu is the in-process half of casebook-data's lock (lock.go): a write
+	// and its commit (Batch: Decide, WriteRule, DeleteRule, AppendRestore,
+	// Commit, a sync's write phase) and Sync's rebase hold it exclusive,
+	// serve's rebuild (Read) shared; a flock on LockPath() is the other
+	// processes' half. Network steps (fetch, push) run outside it, so a
+	// commit can land while a push waits on the remote, but never inside a
+	// rebase or another commit. It is held per step and never while taking
+	// another lock (serve/push.go documents the order).
+	mu sync.RWMutex
 }
 
 type meta struct {
@@ -67,6 +78,7 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion),
 		"policy.toml":   pol,
 		"README.md":     []byte(readme),
+		".gitignore":    []byte(gitignore),
 	} {
 		if _, err := r.WriteFile(rel, b); err != nil {
 			return nil, err
@@ -106,10 +118,10 @@ func (r *Repo) Upgrade(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 	b := fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion)
-	if _, err := r.WriteFile("casebook.toml", b); err != nil {
-		return false, err
-	}
-	if _, err := r.Commit(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion)); err != nil {
+	if _, err := r.Batch(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion), func() error {
+		_, err := r.WriteFile("casebook.toml", b)
+		return err
+	}); err != nil {
 		return false, err
 	}
 	r.Version = FormatVersion
@@ -162,8 +174,15 @@ func (r *Repo) Glob(pattern string) ([]string, error) {
 	return out, nil
 }
 
-// Commit stages everything and commits it; false when nothing changed.
+// Commit stages everything and commits it; false when nothing changed. A
+// write meant to go in the same commit belongs in Batch, so another
+// writer's commit can't take it first.
 func (r *Repo) Commit(ctx context.Context, msg string) (bool, error) {
+	return r.Batch(ctx, msg, nil)
+}
+
+// commit is Commit with casebook-data's lock held.
+func (r *Repo) commit(ctx context.Context, msg string) (bool, error) {
 	if _, err := gitx.Run(ctx, r.Dir, "add", "-A"); err != nil {
 		return false, err
 	}
@@ -242,9 +261,6 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 	if err != nil {
 		return err
 	}
-	if _, err := r.WriteFile(k.File(), b); err != nil {
-		return err
-	}
 	msg := fmt.Sprintf("decide %s \u2192 %s", k, d.Disposition)
 	if d.Note != "" {
 		note := strings.ReplaceAll(d.Note, "\n", " ")
@@ -254,7 +270,10 @@ func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
 		msg += fmt.Sprintf(" (%q)", note)
 	}
 	msg += " by " + d.DecidedBy
-	_, err = r.Commit(ctx, msg)
+	_, err = r.Batch(ctx, msg, func() error {
+		_, err := r.WriteFile(k.File(), b)
+		return err
+	})
 	return err
 }
 
@@ -316,6 +335,16 @@ func (r *Repo) Validate() []error {
 
 // Rules reads every rules/*.toml file. Parse errors are collected in errs and
 // those files are skipped.
+// RuleFileError is a rules/<id>.toml that can't be read as a rule. It keeps
+// the id, so the rule is still listed (as invalid) rather than dropped.
+type RuleFileError struct {
+	ID  string
+	Err error
+}
+
+func (e *RuleFileError) Error() string { return "rules/" + e.ID + ".toml: " + e.Err.Error() }
+func (e *RuleFileError) Unwrap() error { return e.Err }
+
 func (r *Repo) Rules() ([]rules.Rule, []error) {
 	paths, err := r.Glob("rules/*.toml")
 	if err != nil {
@@ -331,7 +360,8 @@ func (r *Repo) Rules() ([]rules.Rule, []error) {
 		}
 		ru, err := rules.Decode(b)
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", rel, err))
+			id := strings.TrimSuffix(strings.TrimPrefix(rel, "rules/"), ".toml")
+			errs = append(errs, &RuleFileError{ID: id, Err: err})
 			continue
 		}
 		out = append(out, ru)
@@ -353,25 +383,31 @@ func (r *Repo) ReadRule(id string) (*rules.Rule, error) {
 	}
 	ru, err := rules.Decode(b)
 	if err != nil {
-		return nil, fmt.Errorf("rules/%s.toml: %w", id, err)
+		return nil, &RuleFileError{ID: id, Err: err}
 	}
 	return &ru, nil
 }
 
 // WriteRule writes ru as rules/<id>.toml and commits with msg. It does not
-// push; call Sync to propagate the change.
+// push; call Sync to propagate the change. An active rule must be valid; a
+// draft only well-formed (so an invalid rule can be deactivated, and a new
+// one saved before it is complete).
 func (r *Repo) WriteRule(ctx context.Context, ru rules.Rule, msg string) error {
-	if err := ru.Validate(); err != nil {
+	check := ru.ValidateStructure
+	if ru.Status == rules.StatusActive {
+		check = ru.Validate
+	}
+	if err := check(); err != nil {
 		return err
 	}
 	b, err := rules.Encode(ru)
 	if err != nil {
 		return err
 	}
-	if _, err := r.WriteFile("rules/"+ru.ID+".toml", b); err != nil {
+	_, err = r.Batch(ctx, msg, func() error {
+		_, err := r.WriteFile("rules/"+ru.ID+".toml", b)
 		return err
-	}
-	_, err = r.Commit(ctx, msg)
+	})
 	return err
 }
 
@@ -382,9 +418,11 @@ func (r *Repo) DeleteRule(ctx context.Context, id, msg string) error {
 	}
 	rel := "rules/" + id + ".toml"
 	p := filepath.Join(r.Dir, filepath.FromSlash(rel))
-	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("delete rule %q: %w", id, err)
-	}
-	_, err := r.Commit(ctx, msg)
+	_, err := r.Batch(ctx, msg, func() error {
+		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("delete rule %q: %w", id, err)
+		}
+		return nil
+	})
 	return err
 }

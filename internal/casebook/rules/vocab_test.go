@@ -89,3 +89,34 @@ func TestEnumFieldValidatesValue(t *testing.T) {
 		t.Error("expected error for unknown landed value 'yes'")
 	}
 }
+
+// TestCountAndBoolFieldsValidateValue: spec §4.1 — unknown values are
+// validation errors. A count comparison needs a non-negative whole number
+// and a bool field "true" or "false"; before, both were accepted and the
+// rule then failed (or silently matched nothing) at evaluation.
+func TestCountAndBoolFieldsValidateValue(t *testing.T) {
+	bad := []Condition{
+		{Field: "open-prs", Op: "gt", Value: "many"},
+		{Field: "open-prs", Op: "gte", Value: "-1"},
+		{Field: "open-issues", Op: "lt", Value: "2.5"},
+		{Field: "open-issues", Op: "is", Value: ""},
+		{Field: "bot", Op: "is", Value: "yes"},
+		{Field: "archived", Op: "is-not", Value: ""},
+	}
+	for _, c := range bad {
+		if err := ValidateCondition(c); err == nil {
+			t.Errorf("%s %s %q: want a validation error", c.Field, c.Op, c.Value)
+		}
+	}
+	good := []Condition{
+		{Field: "open-prs", Op: "gt", Value: "0"},
+		{Field: "open-issues", Op: "lte", Value: " 12 "},
+		{Field: "bot", Op: "is", Value: "true"},
+		{Field: "fork", Op: "is-not", Value: "false"},
+	}
+	for _, c := range good {
+		if err := ValidateCondition(c); err != nil {
+			t.Errorf("%s %s %q: unexpected error %v", c.Field, c.Op, c.Value, err)
+		}
+	}
+}

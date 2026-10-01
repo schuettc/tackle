@@ -388,7 +388,7 @@ func TestStuckReleaseMoveInterrupt(t *testing.T) {
 	th := thread(t, q, "s1")
 	m := post(t, q, th, "hello", false)
 	d, _ := q.Next(ctx, "s1")
-	c.add(StuckAfter + time.Second)
+	c.add(DefaultStuckAfter + time.Second)
 	if got, _ := q.Delivery(ctx, d.ID); !got.Stuck {
 		t.Fatal("not stuck")
 	}
@@ -446,7 +446,7 @@ func TestSettledRefreshesTouchedAtWhenShown(t *testing.T) {
 	sentAt := d.TouchedAt
 
 	// Advance clock past StuckAfter; the delivery would be Stuck.
-	c.add(StuckAfter + 5*time.Minute)
+	c.add(DefaultStuckAfter + 5*time.Minute)
 	// Confirm it looks stuck at this point.
 	if got, _ := q.Delivery(ctx, d.ID); !got.Stuck {
 		t.Fatal("delivery should be Stuck before being shown")
@@ -495,7 +495,7 @@ func TestRenderGolden(t *testing.T) {
 	_, _, _ = q.Reply(ctx, "s1", []int64{first.ID}, Answered, "done")
 	d, _ := q.Next(ctx, "s1")
 	prev, _ := q.Previous(ctx, "s1", d.ID)
-	got := Render(*d, prev.Messages[0].Body, "Court accepted 31 of your 40 proposals and changed 9 to keep.", time.UTC)
+	got := Render(*d, prev.Messages[0].Body, "schuettc accepted 31 of your 40 proposals and changed 9 to keep.", "schuettc", time.UTC)
 	golden := filepath.Join("testdata", "delivery.golden")
 	if *update {
 		_ = os.WriteFile(golden, []byte(got), 0o644)
@@ -523,11 +523,258 @@ func TestRenderSingleMessageSettleIt(t *testing.T) {
 	if len(d.Messages) != 1 {
 		t.Fatalf("want 1 message, got %d", len(d.Messages))
 	}
-	got := Render(*d, "", "", time.UTC)
+	got := Render(*d, "", "", "schuettc", time.UTC)
 	if !strings.Contains(got, "Settle it with casebook_reply") {
 		t.Errorf("single-message render should say \"Settle it\"; got:\n%s", got)
 	}
 	if strings.Contains(got, "Settle each") {
 		t.Errorf("single-message render must not say \"Settle each\"; got:\n%s", got)
+	}
+}
+
+// TestLeftThresholdClock verifies that Sessions() marks a session left when
+// its last_seen is older than LeftAfter, using a controllable clock.
+func TestLeftThresholdClock(t *testing.T) {
+	q, c := newQueue(t) // s1 attached at c.t
+
+	// Immediately: s1 should NOT be left (0s since last_seen < 60s default).
+	q.LeftAfter = 100 * time.Millisecond
+	ss, err := q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if s.ID == "s1" && s.Left {
+			t.Error("s1 should not be left immediately after attach")
+		}
+	}
+
+	// Advance clock past the threshold.
+	c.add(200 * time.Millisecond)
+
+	ss, err = q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, s := range ss {
+		if s.ID == "s1" {
+			found = true
+			if !s.Left {
+				t.Error("s1 should be left after threshold passed")
+			}
+		}
+	}
+	if !found {
+		t.Error("s1 not in sessions")
+	}
+
+	// Re-touch (simulate a heartbeat).
+	if err := q.Touch(ctx, Session{ID: "s1", Harness: "pi", Label: "l", CWD: "/w", PID: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	// After re-touch, s1 should not be left (last_seen = now = c.t).
+	ss, err = q.Sessions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range ss {
+		if s.ID == "s1" && s.Left {
+			t.Error("s1 should not be left after re-heartbeat")
+		}
+	}
+}
+
+// TestMoveSessionDeliver verifies that MoveSession moves all threads so queued
+// messages become deliverable to the target session.
+func TestMoveSessionDeliver(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+
+	// Post two queued messages on s1.
+	post(t, q, th, "first", false)
+	post(t, q, th, "second", false)
+
+	// Register s2.
+	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Move s1's threads to s2.
+	n, _, err := q.MoveSession(ctx, "s1", "s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("moved %d threads, want 1", n)
+	}
+
+	// s1 should have 0 queued; s2 should have 2.
+	ss, _ := q.Sessions(ctx)
+	for _, s := range ss {
+		switch s.ID {
+		case "s1":
+			if s.Queued != 0 {
+				t.Errorf("s1 queued after move: %d want 0", s.Queued)
+			}
+		case "s2":
+			if s.Queued != 2 {
+				t.Errorf("s2 queued after move: %d want 2", s.Queued)
+			}
+		}
+	}
+
+	// s2 can pick them up.
+	d, err := q.Next(ctx, "s2")
+	if err != nil || d == nil {
+		t.Fatalf("Next s2: %v %v", d, err)
+	}
+	if len(d.Messages) != 2 {
+		t.Errorf("s2 delivery: got %d messages, want 2", len(d.Messages))
+	}
+}
+
+// TestMoveSessionWithInflight verifies that MoveSession rescues an in-flight
+// delivery on the source session: the old delivery is marked moved, its
+// unsettled messages are requeued, and the target session's Next() delivers
+// ALL of them (in-flight + any subsequently queued) with nothing left inflight
+// on the source and no duplicates.
+func TestMoveSessionWithInflight(t *testing.T) {
+	q, c := newQueue(t)
+	th := thread(t, q, "s1")
+
+	// Post two messages that will become inflight.
+	post(t, q, th, "first in delivery", false)
+	c.add(time.Second)
+	post(t, q, th, "second in delivery", false)
+	c.add(time.Second)
+
+	// Register s2.
+	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent picks up the delivery on s1.
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next s1: %v %v", d, err)
+	}
+	if len(d.Messages) != 2 {
+		t.Fatalf("want 2 inflight messages, got %d", len(d.Messages))
+	}
+	deliveryID := d.ID
+
+	// Post one more queued message (arrives after the delivery started).
+	c.add(time.Second)
+	post(t, q, th, "queued after delivery", false)
+	c.add(time.Second)
+
+	c.add(time.Minute)
+	// Move s1's session to s2 — this must rescue the in-flight delivery.
+	threads, movedID, err := q.MoveSession(ctx, "s1", "s2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if threads != 1 {
+		t.Errorf("moved %d threads, want 1", threads)
+	}
+	if movedID != deliveryID {
+		t.Errorf("movedDeliveryID = %d, want %d (the inflight delivery)", movedID, deliveryID)
+	}
+
+	// Old delivery must be marked moved.
+	old, err := q.Delivery(ctx, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.State != Moved {
+		t.Errorf("old delivery state = %q, want %q", old.State, Moved)
+	}
+
+	// Nothing left inflight on s1.
+	inf, err := q.Inflight(ctx, "s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inf != nil {
+		t.Errorf("s1 still has inflight delivery after MoveSession (id=%d)", inf.ID)
+	}
+
+	// s2 can deliver all 3 messages and there are no duplicates.
+	d2, err := q.Next(ctx, "s2")
+	if err != nil || d2 == nil {
+		t.Fatalf("Next s2: %v %v", d2, err)
+	}
+	if len(d2.Messages) != 3 {
+		t.Errorf("s2 delivery: got %d messages, want 3 (2 from delivery + 1 queued)", len(d2.Messages))
+	}
+	seen := map[int64]bool{}
+	for _, m := range d2.Messages {
+		if seen[m.ID] {
+			t.Errorf("duplicate message id %d in s2 delivery", m.ID)
+		}
+		seen[m.ID] = true
+	}
+	// The rescued messages were sent first, so they stay first.
+	var got []string
+	for _, m := range d2.Messages {
+		got = append(got, m.Body)
+	}
+	want := []string{"first in delivery", "second in delivery", "queued after delivery"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("s2 delivery order = %q, want %q", got, want)
+	}
+}
+
+// TestMoveDeliveryKeepsOrder: messages rescued from a stuck delivery were sent
+// before anything queued since, so the target receives them first.
+func TestMoveDeliveryKeepsOrder(t *testing.T) {
+	q, c := newQueue(t)
+	if err := q.Touch(ctx, Session{ID: "s2", Harness: "pi", Label: "s2", CWD: "/w2", PID: 2}); err != nil {
+		t.Fatal(err)
+	}
+	th := thread(t, q, "s1")
+	post(t, q, th, "sent first", false)
+	c.add(time.Second)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next s1: %v %v", d, err)
+	}
+	c.add(time.Second)
+	post(t, q, th, "sent later", false)
+	c.add(time.Minute)
+	if err := q.MoveDelivery(ctx, d.ID, "s2"); err != nil {
+		t.Fatal(err)
+	}
+	d2, err := q.Next(ctx, "s2")
+	if err != nil || d2 == nil {
+		t.Fatalf("Next s2: %v %v", d2, err)
+	}
+	var got []string
+	for _, m := range d2.Messages {
+		got = append(got, m.Body)
+	}
+	if want := "sent first|sent later"; strings.Join(got, "|") != want {
+		t.Fatalf("s2 delivery order = %q, want %s", got, want)
+	}
+}
+
+// TestRenderNamesTheConfiguredUser: a delivery says whose messages they are
+// by the configured user, or "the user" when there is none; never a
+// hard-coded name.
+func TestRenderNamesTheConfiguredUser(t *testing.T) {
+	q, _ := newQueue(t)
+	th := thread(t, q, "s1")
+	post(t, q, th, "please do the thing", false)
+	d, err := q.Next(ctx, "s1")
+	if err != nil || d == nil {
+		t.Fatalf("Next: %v, %v", d, err)
+	}
+	for from, want := range map[string]string{"lena": "casebook: 1 message from lena.", "": "casebook: 1 message from the user."} {
+		got := Render(*d, "", "", from, time.UTC)
+		if !strings.HasPrefix(got, want) || strings.Contains(got, "Court") {
+			t.Errorf("from %q: got\n%s\nwant it to start %q", from, got, want)
+		}
 	}
 }

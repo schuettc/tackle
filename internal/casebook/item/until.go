@@ -29,6 +29,27 @@ var refKinds = map[string][]Kind{
 	"released": {KindRepo},
 }
 
+// UntilForm describes one until operator: the symbolic syntax and one concrete
+// example value. This list is the single source of truth; the page API uses it
+// to build the decision vocabulary rather than maintaining its own copy.
+type UntilForm struct {
+	Op      string
+	Syntax  string
+	Example string
+}
+
+// UntilForms returns all supported until operators in declaration order,
+// derived from the switch cases in ParseUntil and the refKinds map above.
+func UntilForms() []UntilForm {
+	return []UntilForm{
+		{Op: "date", Syntax: "date(YYYY-MM-DD)", Example: "date(2026-12-01)"},
+		{Op: "merged", Syntax: "merged(<pr>)", Example: "merged(pr:owner/repo#1)"},
+		{Op: "closed", Syntax: "closed(<pr|issue>)", Example: "closed(issue:owner/repo#1)"},
+		{Op: "inactive", Syntax: "inactive(<duration>)", Example: "inactive(90d)"},
+		{Op: "released", Syntax: "released(<repo>)", Example: "released(repo:owner/repo)"},
+	}
+}
+
 // ParseUntil parses date(YYYY-MM-DD), merged(<pr key>), closed(<pr|issue key>),
 // inactive(<n>h|<n>d|<n>w) or released(<repo key>).
 func ParseUntil(s string) (Cond, error) {

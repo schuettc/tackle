@@ -41,6 +41,9 @@ func newRig(t *testing.T) *rig {
 		t.Fatal(err)
 	}
 	s.Wait = 2 * time.Second
+	// A background push still running when the test ends finishes before
+	// the database closes (cleanups run last-registered first).
+	t.Cleanup(s.pushWG.Wait)
 	hs := httptest.NewServer(s.Handler())
 	t.Cleanup(hs.Close)
 	return &rig{Rig: ar, s: s, url: hs.URL}
@@ -115,7 +118,7 @@ func TestTurnAwareDeliveryOverHTTP(t *testing.T) {
 	if c := r.do(t, "GET", "/api/agent/wait?session=s1", nil, &w1); c != 200 || len(w1.Delivery.Messages) != 1 || w1.Delivery.Messages[0].ID != m1.ID {
 		t.Fatalf("first wait %d %+v", c, w1)
 	}
-	if !strings.Contains(w1.Text, "casebook: 1 message from Court") || !strings.Contains(w1.Text, "propose decisions for the chime PRs") {
+	if !strings.Contains(w1.Text, "casebook: 1 message from schuettc") || !strings.Contains(w1.Text, "propose decisions for the chime PRs") {
 		t.Fatalf("text %q", w1.Text)
 	}
 	m2 := r.send(t, th, "and skip #12", false)
@@ -348,8 +351,65 @@ func TestProposeAcceptWritesDecision(t *testing.T) {
 		Since string `json:"since"`
 	}
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &v)
-	if !strings.Contains(v.Since, "Court accepted 1 of your 1 settled proposals") {
+	if !strings.Contains(v.Since, "schuettc accepted 1 of your 1 settled proposals") {
 		t.Fatalf("since %q", v.Since)
+	}
+}
+
+// TestAgentProposeRefusesDecidedItem verifies that agentPropose refuses a
+// proposal for a key that is not in the engine's attention set (e.g. an item
+// that has already been decided).
+func TestAgentProposeRefusesDecidedItem(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// Decide pr:schuettc/hail#3 so it leaves attention.
+	var dec map[string]any
+	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"pr:schuettc/hail#3"}, "disposition": "keep"}, &dec); c != 200 || dec["decided"].(float64) != 1 {
+		t.Fatalf("decide %d %v", c, dec)
+	}
+
+	// The item is now decided (status: to-apply → then done after apply; here
+	// 'keep' is instantly satisfied so status is 'done'). Try to propose on it.
+	var res struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "close",
+	}, &res); c != 200 {
+		t.Fatalf("propose status %d", c)
+	}
+	if res.Proposed != 0 {
+		t.Fatalf("expected 0 proposed for decided item, got %d", res.Proposed)
+	}
+	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0], "not in attention") {
+		t.Fatalf("expected 'not in attention' error, got %v", res.Errors)
+	}
+}
+
+// TestAgentProposeAcceptsAttentionItem verifies that agentPropose accepts a
+// proposal for an item that is in the engine's attention set.
+func TestAgentProposeAcceptsAttentionItem(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// issue:schuettc/hail#4 is undecided and in attention.
+	var res struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"issue:schuettc/hail#4"},
+		"disposition": "close",
+	}, &res); c != 200 {
+		t.Fatalf("propose status %d", c)
+	}
+	if res.Proposed != 1 {
+		t.Fatalf("expected 1 proposed for attention item, got %d; errors: %v", res.Proposed, res.Errors)
 	}
 }
 
@@ -365,9 +425,10 @@ func TestDecideDirectSupersedesProposal(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("pending %+v", pending)
 	}
-	if got := strings.TrimSpace(r.gitRemoteHead(t)); !strings.HasPrefix(got, "decide pr:schuettc/hail#3 → keep") {
-		t.Fatalf("remote head %q", got)
-	}
+	// The push follows the reply in the background.
+	eventually(t, "the decision on the remote", func() bool {
+		return strings.HasPrefix(strings.TrimSpace(r.gitRemoteHead(t)), "decide pr:schuettc/hail#3 → keep")
+	})
 }
 
 func (r *rig) gitRemoteHead(t *testing.T) string {
@@ -376,6 +437,165 @@ func (r *rig) gitRemoteHead(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// TestDecisionVocabulary checks that GET /api/decisions/vocabulary returns
+// item.Allowed for every kind and the expected until forms.
+func TestDecisionVocabulary(t *testing.T) {
+	r := newRig(t)
+	var vocab struct {
+		Kinds []struct {
+			Kind       string   `json:"kind"`
+			Allowed    []string `json:"allowed"`
+			NeedsUntil []string `json:"needs_until"`
+		} `json:"kinds"`
+		UntilForms []struct {
+			Op      string `json:"op"`
+			Syntax  string `json:"syntax"`
+			Example string `json:"example"`
+		} `json:"until_forms"`
+	}
+	if c := r.do(t, "GET", "/api/decisions/vocabulary", nil, &vocab); c != 200 {
+		t.Fatalf("vocabulary %d", c)
+	}
+	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
+	if len(vocab.Kinds) != len(kinds) {
+		t.Fatalf("kinds %d, want %d", len(vocab.Kinds), len(kinds))
+	}
+	for i, k := range kinds {
+		got := vocab.Kinds[i]
+		if got.Kind != string(k) {
+			t.Errorf("kinds[%d].Kind = %q, want %q", i, got.Kind, k)
+		}
+		want := item.Allowed(k)
+		if len(got.Allowed) != len(want) {
+			t.Errorf("kinds[%d].Allowed = %v, want %v", i, got.Allowed, want)
+			continue
+		}
+		for j, d := range want {
+			if got.Allowed[j] != string(d) {
+				t.Errorf("kinds[%d].Allowed[%d] = %q, want %q", i, j, got.Allowed[j], d)
+			}
+		}
+	}
+	// Five until forms: date, merged, closed, inactive, released.
+	if len(vocab.UntilForms) != 5 {
+		t.Fatalf("until_forms %d, want 5", len(vocab.UntilForms))
+	}
+	for _, f := range vocab.UntilForms {
+		if f.Op == "" || f.Syntax == "" || f.Example == "" {
+			t.Errorf("until_form missing fields: %+v", f)
+		}
+	}
+}
+
+// TestDecideDryRun verifies that dry_run=true validates but writes no decision.
+func TestDecideDryRun(t *testing.T) {
+	r := newRig(t)
+	// dry run with an invalid until: must return errors, write nothing.
+	var res struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "wait",
+		"until":       "not-valid-until",
+		"dry_run":     true,
+	}, &res); c != 200 {
+		t.Fatalf("dry run %d", c)
+	}
+	if res.Decided != 0 {
+		t.Fatalf("dry run wrote %d decisions, want 0", res.Decided)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("expected errors for invalid until, got none")
+	}
+	// No decision file written.
+	d, _ := r.App.Repo.ReadDecision(item.PRKey("schuettc/hail", 3))
+	if d != nil {
+		t.Fatalf("dry run wrote a decision file: %+v", d)
+	}
+
+	// dry run with valid disposition+until: must return no errors.
+	var ok struct {
+		Decided int      `json:"decided"`
+		Errors  []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys":        []string{"pr:schuettc/hail#3"},
+		"disposition": "wait",
+		"until":       "date(2026-12-01)",
+		"dry_run":     true,
+	}, &ok); c != 200 {
+		t.Fatalf("valid dry run %d", c)
+	}
+	if ok.Decided != 0 {
+		t.Fatalf("valid dry run wrote %d decisions, want 0", ok.Decided)
+	}
+	if len(ok.Errors) != 0 {
+		t.Fatalf("valid dry run got errors: %v", ok.Errors)
+	}
+	// Confirm no decision was written.
+	d2, _ := r.App.Repo.ReadDecision(item.PRKey("schuettc/hail", 3))
+	if d2 != nil {
+		t.Fatalf("valid dry run wrote a decision file: %+v", d2)
+	}
+}
+
+// TestDecideReturnsDecidedKeys verifies that DecideResult carries decided_keys
+// holding every normalized key that was actually committed.
+// Fail-before evidence: before adding DecidedKeys to the struct, the response
+// body had no decided_keys field.
+func TestDecideReturnsDecidedKeys(t *testing.T) {
+	r := newRig(t)
+
+	// Succeed for all keys
+	var res struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide",
+		map[string]any{"keys": []string{"pr:schuettc/hail#3"}, "disposition": "keep"},
+		&res); c != 200 {
+		t.Fatalf("decide %d", c)
+	}
+	if res.Decided != 1 {
+		t.Fatalf("decided %d, want 1", res.Decided)
+	}
+	if len(res.DecidedKeys) != 1 || res.DecidedKeys[0] != "pr:schuettc/hail#3" {
+		t.Fatalf("decided_keys %v, want [pr:schuettc/hail#3]", res.DecidedKeys)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("unexpected errors %v", res.Errors)
+	}
+
+	// Partial failure: merge is valid for pr: but not issue:.
+	var partial struct {
+		Decided     int      `json:"decided"`
+		DecidedKeys []string `json:"decided_keys"`
+		Errors      []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/decide",
+		map[string]any{
+			"keys":        []string{"pr:schuettc/hail#3", "issue:schuettc/hail#4"},
+			"disposition": "merge",
+		},
+		&partial); c != 200 {
+		t.Fatalf("partial decide %d", c)
+	}
+	// pr: should succeed with merge; issue: should fail (merge not allowed for issue).
+	if partial.Decided != 1 {
+		t.Fatalf("partial decided %d, want 1", partial.Decided)
+	}
+	if len(partial.DecidedKeys) != 1 || partial.DecidedKeys[0] != "pr:schuettc/hail#3" {
+		t.Fatalf("partial decided_keys %v, want [pr:schuettc/hail#3]", partial.DecidedKeys)
+	}
+	if len(partial.Errors) == 0 {
+		t.Fatalf("expected errors for issue:, got none")
+	}
 }
 
 func TestRejectsUnknownFieldsAndUnknownSessions(t *testing.T) {
@@ -480,9 +700,11 @@ func TestSinceListsOverruledWithReasons(t *testing.T) {
 	var res struct {
 		Proposals []struct{ ID int64 } `json:"proposals"`
 	}
-	keys := []string{"pr:schuettc/hail#3", "issue:schuettc/hail#4"}
-	for i := 100; i < 112; i++ {
-		keys = append(keys, "pr:schuettc/hail#"+strconv.Itoa(i))
+	// Use real items from the fixture (issues #4	at	#16 and pr #3 = 14 items).
+	// Ghost/unknown keys are no longer accepted (fix round 2 issue 3).
+	keys := []string{"pr:schuettc/hail#3"}
+	for i := 4; i <= 16; i++ {
+		keys = append(keys, "issue:schuettc/hail#"+strconv.Itoa(i))
 	}
 	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": keys, "disposition": "close"}, &res)
 	if len(res.Proposals) != 14 {
@@ -500,23 +722,24 @@ func TestSinceListsOverruledWithReasons(t *testing.T) {
 		PageOpen bool           `json:"page_open"`
 	}
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &st)
-	if !strings.HasPrefix(st.Since, "Court accepted 0 of your 14 settled proposals, changed 1, rejected 13.") {
+	if !strings.HasPrefix(st.Since, "schuettc accepted 0 of your 14 settled proposals, changed 1, rejected 13.") {
 		t.Fatalf("since %q", st.Since)
 	}
 	if n := strings.Count(st.Since, "\n- "); n != 11 { // 10 listed + "and N more"
 		t.Fatalf("%d lines in %q", n, st.Since)
 	}
-	if !strings.Contains(st.Since, "you proposed close; Court rejected it: still in use") || !strings.Contains(st.Since, "- and 4 more") {
+	if !strings.Contains(st.Since, "you proposed close; schuettc rejected it: still in use") || !strings.Contains(st.Since, "- and 4 more") {
 		t.Fatalf("since %q", st.Since)
 	}
 	if st.Counts == nil || st.PageOpen {
 		t.Fatalf("status %+v (page requests alone don't make the page open; a stream does)", st)
 	}
 	// The change is listed when it's among the newest ten.
-	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"pr:schuettc/hail#3"}, "disposition": "close"}, &res)
+	// Use issue:schuettc/hail#5 (still undecided and in attention) for the second proposal.
+	r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"issue:schuettc/hail#5"}, "disposition": "close"}, &res)
 	r.do(t, "POST", "/api/proposals/change", map[string]any{"id": res.Proposals[0].ID, "disposition": "wait", "until": "date(2026-12-01)", "note": "after the demo"}, nil)
 	r.do(t, "GET", "/api/agent/status?session=s1", nil, &st)
-	if !strings.Contains(st.Since, "pr:schuettc/hail#3: you proposed close; Court changed it: decided wait until date(2026-12-01): after the demo") {
+	if !strings.Contains(st.Since, "issue:schuettc/hail#5: you proposed close; schuettc changed it: decided wait until date(2026-12-01): after the demo") {
 		t.Fatalf("since %q", st.Since)
 	}
 }
@@ -603,14 +826,13 @@ func TestAcceptManyDecidesOncePerRequest(t *testing.T) {
 		t.Fatalf("proposal %d state %q, want accepted", p2, prop2.State)
 	}
 
-	// The remote's main has both decision commits.
-	log, err := git(t, r.Remote, "log", "-5", "--format=%s", "main")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(log, "pr:schuettc/hail#3") || !strings.Contains(log, "issue:schuettc/hail#4") {
-		t.Fatalf("remote log missing commits: %q", log)
-	}
+	// The remote's main gets both decision commits (the push follows the
+	// reply in the background).
+	eventually(t, "both decisions on the remote", func() bool {
+		log, err := git(t, r.Remote, "log", "-5", "--format=%s", "main")
+		return err == nil && strings.Contains(log, "pr:schuettc/hail#3") && strings.Contains(log, "issue:schuettc/hail#4")
+	})
+	waitIdle(t, r)
 
 	// Exactly one "index" event was published by the request.
 	events, _, _ := r.s.Bus.Since(ctx, before, 10000)
@@ -917,5 +1139,107 @@ func TestSettledConcurrentWorkedOnce(t *testing.T) {
 	}
 	if worked != 1 {
 		t.Errorf("expected exactly 1 worked message; got %d", worked)
+	}
+}
+
+// ---- fix round 2: issue 3 — agentPropose refuses unknown keys ---------------
+
+// TestAgentProposeRefusesUnknownKey verifies that agentPropose returns an error
+// for a key that is not in the casebook index ("no item <key> in casebook").
+// Unknown keys are a mistake: agents receive keys from casebook's own tools.
+func TestAgentProposeRefusesUnknownKey(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	var res struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"issue:schuettc/hail#999"},
+		"disposition": "close",
+	}, &res); c != 200 {
+		t.Fatalf("propose: status %d", c)
+	}
+	if res.Proposed != 0 {
+		t.Fatalf("expected 0 proposed for unknown key, got %d", res.Proposed)
+	}
+	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0], "no item issue:schuettc/hail#999 in casebook") {
+		t.Fatalf("expected 'no item ... in casebook' error, got %v", res.Errors)
+	}
+}
+
+// ---- fix round 2: issue 4 — lapsed waits return to attention ---------------
+
+// TestLapsedWaitReturnedToAttention verifies that an item decided "wait until
+// <past>" returns to the "waiting on you" view (incoming-no-reply policy hit)
+// and that agentPropose accepts a proposal on it.
+func TestLapsedWaitReturnedToAttention(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+
+	// issue:schuettc/hail#5 is an open incoming issue by carol (2026-08-03),
+	// with no reply from the user. Decide it with a wait until a past date so
+	// it lapses immediately. The engine's "now" is 2026-09-27 (from apptest).
+	var dec map[string]any
+	if c := r.do(t, "POST", "/api/decide", map[string]any{
+		"keys":        []string{"issue:schuettc/hail#5"},
+		"disposition": "wait",
+		"until":       "date(2026-01-01)",
+	}, &dec); c != 200 {
+		t.Fatalf("decide: %d %v", c, dec)
+	}
+
+	// After the synchronous index rebuild, issue#5's until condition is met
+	// (2026-01-01 < 2026-09-27), so its status is StatusDue. With the lapsed-
+	// wait Undecided fix, signals.Undecided is true and incoming-no-reply fires.
+	// The item must appear in the "waiting on you" view.
+	var items struct {
+		Items []struct {
+			Key  string `json:"key"`
+			Hits []struct {
+				Rule string `json:"rule"`
+			} `json:"hits"`
+		} `json:"items"`
+		Total int `json:"total"`
+	}
+	if c := r.do(t, "GET", "/api/items?view=waiting", nil, &items); c != 200 {
+		t.Fatalf("items: %d", c)
+	}
+	var foundItem bool
+	var hasHit bool
+	for _, it := range items.Items {
+		if it.Key == "issue:schuettc/hail#5" {
+			foundItem = true
+			for _, h := range it.Hits {
+				if h.Rule == "incoming-no-reply" {
+					hasHit = true
+				}
+			}
+		}
+	}
+	if !foundItem {
+		t.Errorf("lapsed-wait issue#5 not in 'waiting on you' view (total=%d)", items.Total)
+	}
+	if foundItem && !hasHit {
+		t.Errorf("lapsed-wait issue#5 missing incoming-no-reply policy hit")
+	}
+
+	// agentPropose must accept a proposal on the lapsed-wait item (it is in
+	// attention as StatusDue).
+	var propRes struct {
+		Proposed int      `json:"proposed"`
+		Errors   []string `json:"errors"`
+	}
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{
+		"session":     "s1",
+		"keys":        []string{"issue:schuettc/hail#5"},
+		"disposition": "close",
+	}, &propRes); c != 200 {
+		t.Fatalf("propose: %d", c)
+	}
+	if propRes.Proposed != 1 {
+		t.Fatalf("expected 1 proposed for lapsed-wait item, got %d; errors: %v", propRes.Proposed, propRes.Errors)
 	}
 }

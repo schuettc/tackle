@@ -1,10 +1,13 @@
 package app
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/store"
 	"github.com/schuettc/tackle/internal/casebook/testgit"
 )
 
@@ -85,5 +88,41 @@ func TestDecideRecordsProposal(t *testing.T) {
 	got, _ := r.app.Repo.ReadDecision(item.RepoKey("schuettc/hail"))
 	if got == nil || got.ProposedBy != "pi:s-1" || got.Rule != "active-repos" {
 		t.Fatalf("stored %+v", got)
+	}
+}
+
+// TestPushHoldsTheSyncLock: Push never runs beside a sync: while another
+// holder has the machine's sync lock it pushes nothing and says ErrSyncBusy;
+// once the lock is free it pushes. An unreachable remote is store.ErrOffline.
+func TestPushHoldsTheSyncLock(t *testing.T) {
+	r := newRig(t)
+	if _, _, err := r.app.Decide(ctx, "repo:schuettc/hail", "keep", DecideOptions{NoPush: true}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := LockSync()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.app.Push(ctx); !errors.Is(err, ErrSyncBusy) {
+		t.Fatalf("push under a held sync lock: %v, want ErrSyncBusy", err)
+	}
+	if got := testgit.Git(t, r.remote, "log", "-1", "--format=%s", "main"); strings.Contains(got, "decide repo:schuettc/hail") {
+		t.Fatal("pushed while the sync lock was held")
+	}
+	unlock()
+	if err := r.app.Push(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := testgit.Git(t, r.remote, "log", "-1", "--format=%s", "main"); !strings.HasPrefix(got, "decide repo:schuettc/hail → keep") {
+		t.Fatalf("remote head %q", got)
+	}
+	if err := os.Rename(r.remote, r.remote+".away"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := r.app.Decide(ctx, "pr:schuettc/hail#3", "keep", DecideOptions{NoPush: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.app.Push(ctx); !errors.Is(err, store.ErrOffline) {
+		t.Fatalf("push to a missing remote: %v, want store.ErrOffline", err)
 	}
 }

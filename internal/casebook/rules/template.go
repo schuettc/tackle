@@ -2,11 +2,31 @@ package rules
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/engine"
 )
+
+// NoteToken is one placeholder a rule's note may use, and what it stands for.
+type NoteToken struct {
+	Token   string `json:"token"`
+	Meaning string `json:"meaning"`
+}
+
+// noteTokens are the placeholders Render expands, in the order the page
+// lists them.
+var noteTokens = []NoteToken{
+	{Token: "{how}", Meaning: "how it landed"},
+	{Token: "{tip}", Meaning: "its tip commit"},
+	{Token: "{age}", Meaning: "its age"},
+	{Token: "{repo}", Meaning: "its repo"},
+	{Token: "{title}", Meaning: "its title"},
+}
+
+// NoteTokens lists the placeholders a rule's note may use (Render's).
+func NoteTokens() []NoteToken { return slices.Clone(noteTokens) }
 
 // Render expands template placeholders in note using the item's field set f
 // and the match m. Supported placeholders:

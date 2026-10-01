@@ -23,9 +23,12 @@ export interface SummaryView {
   built_at: string;
   synced_at: string;
   offline_queued: number;
+  push_error?: string;
   counts: Record<string, number> | null;
   notices: string[] | null;
   sessions: number;
+  sync_interval_ms: number;
+  syncing: boolean;
 }
 
 export interface ItemsView {
@@ -43,14 +46,13 @@ export interface ItemDetailView {
 
 export interface DecideResult {
   decided: number;
+  decided_keys: string[] | null;
   errors: string[] | null;
-  pushed: boolean;
 }
 
 export interface AcceptResult {
   accepted: number;
   errors: string[] | null;
-  pushed: boolean;
 }
 
 export interface RejectResult {
@@ -59,6 +61,10 @@ export interface RejectResult {
 
 export interface SessionsView {
   sessions: Session[] | null;
+}
+
+export interface DeliveryView {
+  delivery: Delivery | null;
 }
 
 export interface ThreadsView {
@@ -118,12 +124,17 @@ export interface RulesView {
 export interface RuleRow {
   rule: Rule;
   record: TrackRecord;
+  invalid?: string;
+  matches: number;
+  excluded: number;
 }
 
 export interface RuleDetailView {
   rule: Rule;
   record: TrackRecord;
   matches: MatchPreview;
+  version: string;
+  invalid?: string;
 }
 
 export interface MatchPreview {
@@ -131,6 +142,7 @@ export interface MatchPreview {
   by_reason: ReasonCount[] | null;
   groups: RepoGroup[] | null;
   page: MatchRow[] | null;
+  dispositions: string[] | null;
 }
 
 export interface ReasonCount {
@@ -154,6 +166,12 @@ export interface MatchRow {
 
 export interface VocabularyView {
   fields: Field[] | null;
+  note_tokens: NoteToken[] | null;
+}
+
+export interface DecisionVocabView {
+  kinds: KindVocab[] | null;
+  until_forms: UntilForm[] | null;
 }
 
 export interface JobStepResult {
@@ -192,6 +210,25 @@ export interface AnswerResult {
 export interface UndoResult {
   step_id: number;
   sent: boolean;
+}
+
+export interface SyncView {
+  running: boolean;
+  started: boolean;
+}
+
+export interface SyncEvent {
+  state: string;
+  error?: string;
+}
+
+export interface PushEvent {
+  state: string;
+  error?: string;
+}
+
+export interface SessionProgressView {
+  progress: Progress | null;
 }
 
 export interface ItemView {
@@ -277,6 +314,20 @@ export interface Session {
   last_seen: string;
   looked_at?: string;
   busy: boolean;
+  queued: number;
+  left?: boolean;
+}
+
+export interface Delivery {
+  id: number;
+  session_id: string;
+  state: string;
+  sent_at: string;
+  touched_at: string;
+  finished_at?: string;
+  shown_at?: string;
+  stuck: boolean;
+  messages: Message[] | null;
 }
 
 export interface Thread {
@@ -319,18 +370,6 @@ export interface Message {
   settled_at?: string;
 }
 
-export interface Delivery {
-  id: number;
-  session_id: string;
-  state: string;
-  sent_at: string;
-  touched_at: string;
-  finished_at?: string;
-  shown_at?: string;
-  stuck: boolean;
-  messages: Message[] | null;
-}
-
 export interface SkippedMessage {
   id: number;
   state: string;
@@ -360,6 +399,23 @@ export interface Field {
   type: number;
   ops: string[] | null;
   values: string[] | null;
+}
+
+export interface NoteToken {
+  token: string;
+  meaning: string;
+}
+
+export interface KindVocab {
+  kind: string;
+  allowed: string[] | null;
+  needs_until: string[] | null;
+}
+
+export interface UntilForm {
+  op: string;
+  syntax: string;
+  example: string;
 }
 
 export interface NeedsYou {
@@ -400,6 +456,15 @@ export interface Job {
   steps: JobStep[] | null;
 }
 
+export interface Progress {
+  session_id: string;
+  text: string;
+  n?: number;
+  total?: number;
+  started_at: string;
+  updated_at: string;
+}
+
 export interface Decision {
   disposition: string;
   note?: string;
@@ -438,6 +503,7 @@ export interface Attached {
   open?: string;
   rule?: string;
   job?: string;
+  section?: string;
 }
 
 export interface WorkedView {
@@ -490,6 +556,7 @@ export interface JobStep {
   detail?: string;
   verified_at?: string;
   undone_at?: string;
+  undoable?: boolean;
 }
 
 export interface Conflict {

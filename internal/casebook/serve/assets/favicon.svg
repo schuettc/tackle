@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- casebook favicon — static small mark (medium strokes, tuned for 16–32 px; Court chose weight B 2026-09-30). -->
+  <!-- ink tile -->
+  <rect width="64" height="64" rx="14" fill="#14161d"/>
+  <!-- open book outline (spine-forward view); signal rust -->
+  <path d="M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z" fill="none" stroke="#d98f66" stroke-width="3.8" stroke-linejoin="round"/>
+  <!-- spine -->
+  <path d="M32 18V52" stroke="#d98f66" stroke-width="3.2"/>
+  <!-- one neutral rule on the left page -->
+  <path d="M15 29H25" stroke="#9aa0ab" stroke-width="3.4" stroke-linecap="round"/>
+  <!-- tick on the right page; signal rust, fully drawn (resting frame) -->
+  <path d="M37 33L42 38L50 26" fill="none" stroke="#d98f66" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

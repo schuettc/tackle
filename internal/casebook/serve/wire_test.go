@@ -46,6 +46,7 @@ var wireRoots = []any{
 	AcceptResult{},
 	RejectResult{},
 	SessionsView{},
+	DeliveryView{},
 	ThreadsView{},
 	MessagesView{},
 	SendBatchResult{},
@@ -64,6 +65,7 @@ var wireRoots = []any{
 	RepoGroup{},
 	MatchRow{},
 	VocabularyView{},
+	DecisionVocabView{},
 	JobStepResult{},
 	JobAskResult{},
 	PlanView{},
@@ -72,6 +74,10 @@ var wireRoots = []any{
 	NeedsYouView{},
 	AnswerResult{},
 	UndoResult{},
+	SyncView{},
+	SyncEvent{},
+	PushEvent{},
+	SessionProgressView{},
 }
 
 const wirePath = "../web/wire.d.ts"

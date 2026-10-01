@@ -2,7 +2,6 @@ package serve
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,10 +13,8 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/config"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/gitx"
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/propose"
-	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -29,31 +26,32 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	queued := 0
-	if out, err := gitx.Run(ctx, s.App.Repo.Dir, "rev-list", "--count", "origin/main..HEAD"); err == nil {
-		queued = atoi(out)
-	}
+	queued, pushErr := s.pushState(ctx)
 	var synced time.Time
 	if fi, err := os.Stat(config.CachePath()); err == nil {
 		synced = fi.ModTime().UTC()
 	}
 	sessions, _ := s.Queue.Sessions(ctx)
 	reply(w, SummaryView{
-		Machine:       s.App.Cfg.Machine,
-		User:          s.App.Cfg.User,
-		Head:          s.Index.Head(),
-		BuiltAt:       s.Index.BuiltAt(),
-		SyncedAt:      synced,
-		OfflineQueued: queued,
-		Counts:        s.Index.Counts(pending),
-		Notices:       s.Index.Notices(),
-		Sessions:      len(sessions),
+		Machine:        s.App.Cfg.Machine,
+		User:           s.App.Cfg.User,
+		Head:           s.Index.Head(),
+		BuiltAt:        s.Index.BuiltAt(),
+		SyncedAt:       synced,
+		OfflineQueued:  queued,
+		PushError:      pushErr,
+		Counts:         s.Index.Counts(pending),
+		Notices:        s.Index.Notices(),
+		Sessions:       len(sessions),
+		SyncIntervalMS: s.syncIntervalFor().Milliseconds(),
+		Syncing:        s.Syncing(),
 	}, nil)
 }
 
 func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	pending, err := s.Props.Pending(r.Context())
+	ctx := r.Context()
+	pending, err := s.Props.Pending(ctx)
 	if err != nil {
 		reply(w, nil, err)
 		return
@@ -62,7 +60,35 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	if view == "" {
 		view = ViewAll
 	}
-	items, total := s.Index.List(Query{View: view, Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"), Offset: atoi(q.Get("offset")), Limit: atoi(q.Get("limit"))}, pending)
+	query := Query{
+		View:     view,
+		Kind:     q.Get("kind"),
+		Repo:     q.Get("repo"),
+		Text:     q.Get("q"),
+		Relation: q.Get("relation"),
+		Bot:      q.Get("bot"),
+		Age:      q.Get("age"),
+		Rule:     q.Get("rule"),
+		Now:      s.Now(),
+		Offset:   atoi(q.Get("offset")),
+		Limit:    atoi(q.Get("limit")),
+	}
+	// Precompute rule match set if requested.
+	if query.Rule != "" {
+		ru, err := s.App.Repo.ReadRule(query.Rule)
+		if err == nil && ru != nil {
+			ms, _ := ru.MatchAll(s.Index.Result(), s.Now())
+			set := make(map[string]bool, len(ms))
+			for _, m := range ms {
+				set[m.Key] = true
+			}
+			query.MatchSet = set
+		} else {
+			// Rule not found or error: match nothing.
+			query.MatchSet = map[string]bool{}
+		}
+	}
+	items, total := s.Index.List(query, pending)
 	if items == nil {
 		items = []ItemView{}
 	}
@@ -126,28 +152,28 @@ func (s *Server) decideOneKey(ctx context.Context, key, disposition string, o ap
 	return k.String(), nil
 }
 
-// finishDecides pushes once (ErrOffline is not an error) and rebuilds the
-// index once when n > 0. A rebuild error is appended to errs and not returned
-// as a failure: decisions are already durable and the watch loop rebuilds on
-// the moved HEAD.
-func (s *Server) finishDecides(ctx context.Context, n int, errs []string) (bool, []string) {
+// finishDecides, once n > 0 decisions are committed, asks for the push
+// (push.go: it runs in the background, so no decide waits on the network)
+// and rebuilds the index once. A rebuild error is appended to errs and not
+// returned as a failure: decisions are already durable and the watch loop
+// rebuilds on the moved HEAD. The push is asked for before the rebuild
+// announces "index", so the summary the page then asks for knows a push is
+// in flight.
+func (s *Server) finishDecides(ctx context.Context, n int, errs []string) []string {
 	if n == 0 {
-		return false, errs
+		return errs
 	}
-	pushed, err := s.App.Push(ctx)
-	if err != nil && !errors.Is(err, store.ErrOffline) {
-		errs = append(errs, err.Error())
-	}
+	s.schedulePush()
 	if err := s.rebuild(ctx); err != nil {
 		errs = append(errs, err.Error())
 	}
-	return pushed, errs
+	return errs
 }
 
-// decideAll records decisions (one commit each), pushes once, retires the
-// pending proposals for those keys (except keep, the one being accepted),
-// rebuilds the index and announces it.
-func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, bool) {
+// decideAll records decisions (one commit each), retires the pending
+// proposals for those keys (except keep, the one being accepted), asks for
+// the push and rebuilds the index (finishDecides).
+func (s *Server) decideAll(ctx context.Context, keys []string, disposition string, o app.DecideOptions, keep int64) (int, []string, []string) {
 	if o.By == "" {
 		o.By = s.App.Cfg.User
 	}
@@ -164,10 +190,37 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 		n++
 	}
 	if n > 0 {
-		_, _ = s.Bus.Publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
+		s.publish(ctx, "decided", map[string]any{"keys": done, "disposition": disposition, "by": o.By, "proposed_by": o.ProposedBy})
 	}
-	pushed, errs := s.finishDecides(ctx, n, errs)
-	return n, errs, pushed
+	errs = s.finishDecides(ctx, n, errs)
+	return n, done, errs
+}
+
+func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
+	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
+	vocab := DecisionVocabView{
+		Kinds:      make([]KindVocab, len(kinds)),
+		UntilForms: nil,
+	}
+	for i, k := range kinds {
+		allowed := item.Allowed(k)
+		strs := make([]string, len(allowed))
+		var needsUntil []string
+		for j, d := range allowed {
+			strs[j] = string(d)
+			if d == item.Wait || d == item.Watch {
+				needsUntil = append(needsUntil, string(d))
+			}
+		}
+		if needsUntil == nil {
+			needsUntil = []string{}
+		}
+		vocab.Kinds[i] = KindVocab{Kind: string(k), Allowed: strs, NeedsUntil: needsUntil}
+	}
+	for _, f := range item.UntilForms() {
+		vocab.UntilForms = append(vocab.UntilForms, UntilForm{Op: f.Op, Syntax: f.Syntax, Example: f.Example})
+	}
+	reply(w, vocab, nil)
 }
 
 func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
@@ -176,6 +229,7 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 		Disposition string   `json:"disposition"`
 		Until       string   `json:"until"`
 		Note        string   `json:"note"`
+		DryRun      bool     `json:"dry_run"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -185,8 +239,30 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("no keys"))
 		return
 	}
-	n, errs, pushed := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
-	reply(w, DecideResult{Decided: n, Errors: nonNil(errs), Pushed: pushed}, nil)
+	if in.DryRun {
+		// Validate without writing any decision.
+		d := item.Decision{
+			Disposition: item.Disposition(in.Disposition),
+			Until:       in.Until,
+			DecidedBy:   s.App.Cfg.User,
+			DecidedAt:   s.Now(),
+		}
+		var errs []string
+		for _, key := range in.Keys {
+			k, err := item.ParseKey(key)
+			if err != nil {
+				errs = append(errs, err.Error())
+				continue
+			}
+			if err := d.Validate(k.Kind); err != nil {
+				errs = append(errs, err.Error())
+			}
+		}
+		reply(w, DecideResult{Decided: 0, DecidedKeys: []string{}, Errors: nonNil(errs)}, nil)
+		return
+	}
+	n, done, errs := s.decideAll(r.Context(), in.Keys, in.Disposition, app.DecideOptions{Until: in.Until, Note: in.Note}, 0)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs)}, nil)
 }
 
 func proposalOpts(p propose.Proposal) app.DecideOptions {
@@ -221,7 +297,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		_ = s.Props.Settle(ctx, id, propose.Accepted, "")
-		_, _ = s.Bus.Publish(ctx, "decided", map[string]any{
+		s.publish(ctx, "decided", map[string]any{
 			"keys":        []string{normed},
 			"disposition": p.Disposition,
 			"by":          by,
@@ -229,9 +305,9 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		})
 		total++
 	}
-	pushed, errs := s.finishDecides(ctx, total, errs)
-	_, _ = s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
-	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Pushed: pushed}, nil)
+	errs = s.finishDecides(ctx, total, errs)
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
+	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs)}, nil)
 }
 
 func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
@@ -253,12 +329,12 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	}
 	o := proposalOpts(p)
 	o.Until, o.Note = in.Until, in.Note
-	n, errs, pushed := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
+	n, done, errs := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
 	if n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
-		_, _ = s.Bus.Publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
+		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
 	}
-	reply(w, DecideResult{Decided: n, Errors: nonNil(errs), Pushed: pushed}, nil)
+	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs)}, nil)
 }
 
 func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
@@ -277,13 +353,89 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 			n++
 		}
 	}
-	_, _ = s.Bus.Publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
 	reply(w, RejectResult{Rejected: n}, nil)
 }
 
 func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	ss, err := s.Queue.Sessions(r.Context())
 	reply(w, SessionsView{Sessions: nonNil(ss)}, err)
+}
+
+// postMoveSession atomically moves all threads (and their queued messages) from
+// a left session to a target session. Used by the dock's "move to..." action on
+// a left session (spec §2.1). No delivery is needed; the messages remain queued
+// and become deliverable to the target session on its next turn.
+func (s *Server) postMoveSession(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Session string `json:"session"`
+		Target  string `json:"target"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if in.Session == "" || in.Target == "" {
+		reply(w, nil, bad("session and target required"))
+		return
+	}
+	ctx := r.Context()
+	n, movedID, err := s.Queue.MoveSession(ctx, in.Session, in.Target)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if n > 0 {
+		// Publish a sessions event so the page dock refreshes.
+		s.publish(ctx, "sessions", map[string]string{"moved_from": in.Session, "moved_to": in.Target})
+		// Wake the target session's long-poll so it picks up the new threads.
+		s.wake(in.Target)
+	}
+	if movedID > 0 {
+		// An in-flight delivery was rescued: publish a delivery event so the
+		// source session's dock removes its stuck buttons (same as MoveDelivery).
+		s.publish(ctx, "delivery", map[string]any{"id": movedID, "state": deliver.Moved, "session": in.Target, "from": in.Session})
+		s.wake(in.Session)
+	}
+	reply(w, map[string]int{"moved": n}, nil)
+}
+
+// getSessionProgress returns the current progress line for a session,
+// or a SessionProgressView with null progress when there is none.
+func (s *Server) getSessionProgress(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	sid := r.URL.Query().Get("session")
+	if sid == "" {
+		reply(w, nil, bad("session required"))
+		return
+	}
+	p, ok, err := s.Props.Progress(ctx, sid)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if !ok {
+		reply(w, SessionProgressView{Progress: nil}, nil)
+		return
+	}
+	reply(w, SessionProgressView{Progress: &p}, nil)
+}
+
+// getSessionDelivery returns the current in-flight delivery for a session,
+// or a DeliveryView with a null delivery when there is none.
+func (s *Server) getSessionDelivery(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	sid := r.URL.Query().Get("session")
+	if sid == "" {
+		reply(w, nil, bad("session required"))
+		return
+	}
+	d, err := s.Queue.Inflight(ctx, sid)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	reply(w, DeliveryView{Delivery: d}, nil)
 }
 
 func (s *Server) getThreads(w http.ResponseWriter, r *http.Request) {
@@ -309,7 +461,7 @@ func (s *Server) postThread(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Queue.NewThread(r.Context(), in.Session, in.Name)
 	if err == nil {
-		_, _ = s.Bus.Publish(r.Context(), "thread", t)
+		s.publish(r.Context(), "thread", t)
 	}
 	reply(w, t, err)
 }
@@ -325,7 +477,7 @@ func (s *Server) postMoveThread(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.MoveThread(r.Context(), in.Thread, in.Session)
 	if err == nil {
-		_, _ = s.Bus.Publish(r.Context(), "thread", map[string]any{"id": in.Thread, "session_id": in.Session})
+		s.publish(r.Context(), "thread", map[string]any{"id": in.Thread, "session_id": in.Session})
 		s.wake(in.Session)
 	}
 	reply(w, nil, err)
@@ -371,7 +523,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "message", m)
+	s.publish(ctx, "message", m)
 	if !in.Batch {
 		s.wake(t.SessionID)
 	}
@@ -407,7 +559,7 @@ func (s *Server) postResend(w http.ResponseWriter, r *http.Request) {
 	for _, sess := range s.sessionsOf(r.Context(), in.IDs) {
 		s.wake(sess)
 	}
-	_, _ = s.Bus.Publish(r.Context(), "messages", map[string]any{"ids": in.IDs, "state": deliver.Queued})
+	s.publish(r.Context(), "messages", map[string]any{"ids": in.IDs, "state": deliver.Queued})
 	reply(w, ResendResult{Resent: n}, err)
 }
 
@@ -422,7 +574,7 @@ func (s *Server) postEditDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.EditDraft(r.Context(), in.ID, in.Body)
 	if err == nil {
-		_, _ = s.Bus.Publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
+		s.publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
 	}
 	reply(w, nil, err)
 }
@@ -437,7 +589,7 @@ func (s *Server) postRemoveDraft(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.RemoveDraft(r.Context(), in.ID)
 	if err == nil {
-		_, _ = s.Bus.Publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
+		s.publish(r.Context(), "drafts", map[string]int64{"id": in.ID})
 	}
 	reply(w, nil, err)
 }
@@ -455,7 +607,7 @@ func (s *Server) postReorder(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		err = bad("%v", err)
 	} else {
-		_, _ = s.Bus.Publish(r.Context(), "drafts", map[string]int64{"batch": in.Batch})
+		s.publish(r.Context(), "drafts", map[string]int64{"batch": in.Batch})
 	}
 	reply(w, nil, err)
 }
@@ -482,7 +634,7 @@ func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 	if t, err := s.Queue.Thread(ctx, thread); err == nil {
 		s.wake(t.SessionID)
 	}
-	_, _ = s.Bus.Publish(ctx, "batch", map[string]any{"batch": in.Batch, "sent": n})
+	s.publish(ctx, "batch", map[string]any{"batch": in.Batch, "sent": n})
 	reply(w, SendBatchResult{Sent: n}, nil)
 }
 
@@ -500,7 +652,7 @@ func (s *Server) postRelease(w http.ResponseWriter, r *http.Request) {
 		err = s.Queue.Release(ctx, in.ID)
 	}
 	if err == nil {
-		_, _ = s.Bus.Publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Released})
+		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Released})
 		s.wake(d.SessionID)
 	}
 	reply(w, nil, err)
@@ -524,7 +676,9 @@ func (s *Server) postMoveDelivery(w http.ResponseWriter, r *http.Request) {
 		err = s.Queue.MoveDelivery(ctx, in.ID, in.Session)
 	}
 	if err == nil {
-		_, _ = s.Bus.Publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session})
+		// Include the source session ("from") so the dock knows to refresh even
+		// when watching the source, not the target.
+		s.publish(ctx, "delivery", map[string]any{"id": in.ID, "state": deliver.Moved, "session": in.Session, "from": d.SessionID})
 		s.wake(d.SessionID) // parity with postRelease: wake the old session
 		s.wake(in.Session)
 	}

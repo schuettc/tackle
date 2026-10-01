@@ -20,6 +20,7 @@ type Index struct {
 	byKey   map[string]engine.Item
 	builtAt time.Time
 	head    string
+	gen     uint64 // bumped on every set: which build a cached count belongs to
 }
 
 func (x *Index) set(r engine.Result, head string, at time.Time) {
@@ -29,6 +30,7 @@ func (x *Index) set(r engine.Result, head string, at time.Time) {
 	}
 	x.mu.Lock()
 	x.res, x.byKey, x.head, x.builtAt = r, m, head, at
+	x.gen++
 	x.mu.Unlock()
 }
 
@@ -47,6 +49,21 @@ func (x *Index) Item(key string) (engine.Item, bool) {
 	return it, ok
 }
 
+// InAttention reports whether key is currently in the engine's attention set.
+// Items whose earlier decision has expired and returned to attention (e.g.
+// a wait that lapsed) are included. This uses the engine's own Attention()
+// criteria: status new, due, drift, or conflict, or any policy hit.
+func (x *Index) InAttention(key string) bool {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	for _, it := range x.res.Attention() {
+		if it.ID == key {
+			return true
+		}
+	}
+	return false
+}
+
 // Views of the attention list (casebook workbench spec §3.2).
 const (
 	ViewWaiting  = "waiting"  // policy: incoming, no reply from you
@@ -54,16 +71,26 @@ const (
 	ViewDue      = "due"      // due, drift, conflict
 	ViewProposed = "proposed" // a proposal is pending
 	ViewAll      = "all"      // all attention
+	// ViewToApply is the To apply section's list: decided items waiting to be
+	// applied (spec §5.1). They aren't attention items; this view reads every
+	// item.
+	ViewToApply = "to-apply"
 )
 
 // Query filters a view.
 type Query struct {
-	View   string
-	Kind   string
-	Repo   string // owner/name or owner
-	Text   string // substring of key or title
-	Offset int
-	Limit  int
+	View     string
+	Kind     string
+	Repo     string          // owner/name or owner
+	Text     string          // substring of key or title
+	Relation string          // incoming / outgoing / self (own)
+	Bot      string          // "bot" or "human"
+	Age      string          // casebook duration (<n>h, <n>d, <n>w); matches items older than the duration
+	Rule     string          // rule id whose matched keys are in MatchSet
+	MatchSet map[string]bool // precomputed by getItems when Rule != ""
+	Now      time.Time       // clock for the age filter; zero falls back to time.Now()
+	Offset   int
+	Limit    int
 }
 
 // ItemView is an item as the page and the agent see it.
@@ -88,6 +115,8 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	case ViewProposed:
 		_, ok := pending[it.ID]
 		return ok
+	case ViewToApply:
+		return it.Status == item.StatusToApply && it.Decision != nil
 	}
 	return true
 }
@@ -105,6 +134,53 @@ func matches(q Query, it engine.Item) bool {
 			return false
 		}
 	}
+	if q.Relation != "" {
+		// The engine stores relation as "incoming", "outgoing", "own", and
+		// relation aliases (e.g. "fork-of:X"). Map "self" → "own" for the
+		// query convenience the brief names.
+		want := q.Relation
+		if want == "self" {
+			want = "own"
+		}
+		if it.Relation != want {
+			return false
+		}
+	}
+	if q.Bot != "" {
+		switch q.Bot {
+		case "bot":
+			if !it.AuthorIsBot {
+				return false
+			}
+		case "human":
+			if it.AuthorIsBot {
+				return false
+			}
+		}
+	}
+	if q.Age != "" {
+		d, err := item.ParseDuration(strings.TrimSpace(q.Age))
+		if err != nil || d <= 0 {
+			// Unparseable age: exclude all items (strict: bad filter, no results).
+			return false
+		}
+		if it.CreatedAt.IsZero() {
+			return false
+		}
+		now := q.Now
+		if now.IsZero() {
+			now = time.Now()
+		}
+		threshold := now.Add(-d)
+		if !it.CreatedAt.Before(threshold) {
+			return false
+		}
+	}
+	if q.MatchSet != nil {
+		if !q.MatchSet[it.ID] {
+			return false
+		}
+	}
 	return true
 }
 
@@ -113,6 +189,9 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	src := x.res.Attention()
+	if q.View == ViewToApply {
+		src = x.res.Items
+	}
 	var out []ItemView
 	for _, it := range src {
 		if !inView(q.View, it, pending) || !matches(q, it) {
@@ -149,6 +228,11 @@ func (x *Index) Counts(pending map[string]propose.Proposal) map[string]int {
 			}
 		}
 	}
+	for _, it := range x.res.Items {
+		if inView(ViewToApply, it, pending) {
+			c[ViewToApply]++
+		}
+	}
 	return c
 }
 
@@ -165,6 +249,13 @@ func (x *Index) Result() engine.Result {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	return x.res
+}
+
+// Gen is the index's build number: it changes whenever the index does.
+func (x *Index) Gen() uint64 {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return x.gen
 }
 
 // BuiltAt is when the index was last built.

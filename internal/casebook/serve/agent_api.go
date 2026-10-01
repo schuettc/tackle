@@ -15,6 +15,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/propose"
 )
 
 // source names a session as a proposer or author: "<harness>:<id>".
@@ -49,9 +50,30 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.Queue.Touch(r.Context(), deliver.Session{ID: in.ID, Harness: in.Harness, Label: in.Label, CWD: in.CWD, PID: in.PID})
 	if err == nil {
-		_, _ = s.Bus.Publish(r.Context(), "sessions", map[string]string{"id": in.ID})
+		s.publish(r.Context(), "sessions", map[string]string{"id": in.ID})
 	}
 	reply(w, nil, err)
+}
+
+// userName names the person casebook works for in what serve says to an
+// agent: the configured user (the login decisions are recorded "by"), or
+// "the user" when none is configured.
+func (s *Server) userName() string {
+	if s.App != nil {
+		if u := strings.TrimSpace(s.App.Cfg.User); u != "" {
+			return u
+		}
+	}
+	return "the user"
+}
+
+// userSubject is userName at the start of a sentence: a login keeps its
+// case, "the user" becomes "The user".
+func (s *Server) userSubject() string {
+	if u := s.userName(); u != "the user" {
+		return u
+	}
+	return "The user"
 }
 
 // overruledShown caps the proposals listed one by one in a since-summary.
@@ -65,7 +87,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 	var parts []string
 	if t, err := s.Props.Tally(ctx, source(sess), since); err == nil {
 		if n := t.Accepted + t.Changed + t.Rejected; n > 0 {
-			p := fmt.Sprintf("Court accepted %d of your %d settled proposals", t.Accepted, n)
+			p := fmt.Sprintf("%s accepted %d of your %d settled proposals", s.userSubject(), t.Accepted, n)
 			if t.Changed > 0 {
 				p += fmt.Sprintf(", changed %d", t.Changed)
 			}
@@ -79,7 +101,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 	_ = s.DB.QueryRowContext(ctx, `SELECT count(*) FROM events WHERE kind = 'decided' AND created_at >= ?
 		AND json_extract(payload, '$.proposed_by') = ''`, since.UnixMilli()).Scan(&direct)
 	if direct > 0 {
-		parts = append(parts, fmt.Sprintf("Court made %d decision batch(es) directly", direct))
+		parts = append(parts, fmt.Sprintf("%s made %d decision batch(es) directly", s.userSubject(), direct))
 	}
 	if len(parts) == 0 {
 		return ""
@@ -91,7 +113,7 @@ func (s *Server) summary(ctx context.Context, sess deliver.Session) string {
 		if reason == "" {
 			reason = "no reason given"
 		}
-		out += fmt.Sprintf("\n- %s: you proposed %s; Court %s it: %s", p.Key, p.Disposition, p.State, reason)
+		out += fmt.Sprintf("\n- %s: you proposed %s; %s %s it: %s", p.Key, p.Disposition, s.userName(), p.State, reason)
 	}
 	if total > len(over) {
 		out += fmt.Sprintf("\n- and %d more (casebook_show an item for the rest)", total-len(over))
@@ -128,12 +150,12 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 				!prev.FinishedAt.IsZero() && d.Messages[0].QueuedAt.Before(prev.FinishedAt) {
 				working = prev.Messages[0].Body
 			}
-			text := deliver.Render(*d, working, summary, time.Local)
+			text := deliver.Render(*d, working, summary, s.App.Cfg.User, time.Local)
 			// The messages are already marked 'delivered' in the DB (see
 			// deliver.Queue.Next). Handing d to the HTTP response is the
 			// moment the agent receives them; the delivery stays in-flight
 			// until the agent settles or Court intervenes.
-			_, _ = s.Bus.Publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
+			s.publish(ctx, "delivery", map[string]any{"id": d.ID, "session": sess.ID, "state": deliver.InFlight, "messages": len(d.Messages)})
 			reply(w, WaitView{Delivery: d, Text: text}, nil)
 			return
 		}
@@ -150,10 +172,11 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Session string  `json:"session"`
-		IDs     []int64 `json:"ids"`
-		State   string  `json:"state"`
-		Text    string  `json:"text"`
+		Session  string           `json:"session"`
+		IDs      []int64          `json:"ids"`
+		State    string           `json:"state"`
+		Text     string           `json:"text"`
+		Attached deliver.Attached `json:"attached"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -164,7 +187,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text)
+	touched, skipped, err := s.Queue.Reply(ctx, in.Session, in.IDs, in.State, in.Text, in.Attached)
 	if err != nil {
 		if errors.Is(err, deliver.ErrNotFound) {
 			reply(w, nil, httpError{code: http.StatusNotFound, msg: err.Error()})
@@ -173,7 +196,7 @@ func (s *Server) agentReply(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "messages", map[string]any{"ids": touched, "state": in.State, "session": in.Session, "reply": in.Text != ""})
+	s.publish(ctx, "messages", map[string]any{"ids": touched, "state": in.State, "session": in.Session, "reply": in.Text != ""})
 	s.wake(in.Session)
 	settled := touched
 	if settled == nil {
@@ -203,17 +226,49 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	ps, errs := s.Props.Propose(ctx, source(sess), in.Keys, in.Disposition, in.Until, in.Note)
+
+	// Proposals are only valid for items that exist in the casebook index and
+	// are currently in attention (awaiting Court's decision). Agents receive
+	// keys from casebook's own tools (casebook_show, casebook_status), so an
+	// unknown key is a programming error
+	// — the proposal would sit orphaned, invisible to Court.
+	//
+	// A wait/watch decision whose until has lapsed returns the item to
+	// attention (StatusDue); such items are accepted by InAttention().
+	var attentionKeys []string
 	var msgs []string
-	for _, e := range errs {
-		msgs = append(msgs, e.Error())
+	for _, raw := range in.Keys {
+		k, err := item.ParseKey(raw)
+		if err != nil {
+			msgs = append(msgs, err.Error())
+			continue
+		}
+		it, known := s.Index.Item(k.String())
+		if !known {
+			msgs = append(msgs, fmt.Sprintf("no item %s in casebook", k))
+			continue
+		}
+		if !s.Index.InAttention(k.String()) {
+			msgs = append(msgs, fmt.Sprintf("%s is not in attention: current status is %s", k, it.Status))
+			continue
+		}
+		attentionKeys = append(attentionKeys, raw)
+	}
+
+	var ps []propose.Proposal
+	if len(attentionKeys) > 0 {
+		var propErrs []error
+		ps, propErrs = s.Props.Propose(ctx, source(sess), attentionKeys, in.Disposition, in.Until, in.Note)
+		for _, e := range propErrs {
+			msgs = append(msgs, e.Error())
+		}
 	}
 	if len(ps) > 0 {
 		var ids []int64
 		for _, p := range ps {
 			ids = append(ids, p.ID)
 		}
-		_, _ = s.Bus.Publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
+		s.publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
 	}
 	reply(w, ProposeResult{Proposed: len(ps), Proposals: nonNil(ps), Errors: nonNil(msgs)}, nil)
 }
@@ -239,7 +294,7 @@ func (s *Server) agentEvidence(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "evidence", e)
+	s.publish(ctx, "evidence", e)
 	reply(w, e, nil)
 }
 
@@ -261,7 +316,7 @@ func (s *Server) agentProgress(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := s.Props.SetProgress(ctx, in.Session, in.Text, in.N, in.Total)
 	if err == nil {
-		_, _ = s.Bus.Publish(ctx, "progress", p)
+		s.publish(ctx, "progress", p)
 	}
 	// SetProgress now surfaces progress_log insert errors; reply returns them
 	// to the agent's progress tool so the caller sees the failure.
@@ -372,7 +427,7 @@ func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {
 	if result.Delivery != nil {
 		ev["delivery"] = *result.Delivery
 	}
-	_, _ = s.Bus.Publish(ctx, "settled", ev)
+	s.publish(ctx, "settled", ev)
 	s.wake(in.Session)
 	// Prune the waiter: the turn is over. The next agentWait creates a fresh
 	// channel, so the map stays bounded to sessions that are actively waiting.
@@ -426,12 +481,8 @@ func (s *Server) postWorkedMessage(ctx context.Context, sessionID string, thID i
 		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage PostWorked: %v\n", err)
 		return
 	}
-	if _, err := s.Bus.Publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID}); err != nil {
-		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish messages: %v\n", err)
-	}
-	if _, err := s.Bus.Publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID}); err != nil {
-		fmt.Fprintf(os.Stderr, "casebook serve: postWorkedMessage Publish thread: %v\n", err)
-	}
+	s.publish(ctx, "messages", map[string]any{"ids": []int64{msg.ID}, "thread": thID, "session": sessionID})
+	s.publish(ctx, "thread", map[string]any{"id": thID, "session": sessionID})
 }
 
 // jobForSession validates that the job exists and is owned by the given
@@ -522,14 +573,14 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepRunning})
+		s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepRunning})
 
 	case "reported":
 		if err := s.Apply.SetStepState(ctx, step.ID, apply.StepReported, ""); err != nil {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepReported})
+		s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepReported})
 		// Verify the outcome with a fresh gh read.
 		obs := apply.ObserveGh(ctx, step, s.App.Gh)
 		verState := apply.Verify(step, obs)
@@ -539,7 +590,7 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 				detail = apply.DetailDrift
 			}
 			if err := s.Apply.SetStepState(ctx, step.ID, verState, detail); err == nil {
-				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
+				s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": verState})
 			}
 		}
 		// Check whether the job has reached a terminal state after this report.
@@ -552,8 +603,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepPaused})
-		_, _ = s.Bus.Publish(ctx, "needs_you", ny)
+		s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepPaused})
+		s.publish(ctx, "needs_you", ny)
 
 	case "failed":
 		// Fix 2: atomic step state + card.
@@ -562,8 +613,8 @@ func (s *Server) agentJobStep(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, bad("%v", err))
 			return
 		}
-		_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
-		_, _ = s.Bus.Publish(ctx, "needs_you", ny)
+		s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": in.Job, "state": apply.StepFailed})
+		s.publish(ctx, "needs_you", ny)
 		// A failed step with an open card does not immediately end the job, but
 		// trigger Settle so it can detect completion if all other steps are done.
 		s.settleJob(ctx, job.ID)
@@ -614,7 +665,7 @@ func (s *Server) agentJobAsk(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "needs_you", ny)
+	s.publish(ctx, "needs_you", ny)
 	reply(w, JobAskResult{NeedsYou: ny}, nil)
 }
 
@@ -630,7 +681,7 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 		return fmt.Errorf("dispatchAgentJob: create thread: %w", err)
 	}
 
-	body, err := buildJobBody(job)
+	body, err := buildJobBody(job, s.userName())
 	if err != nil {
 		return fmt.Errorf("dispatchAgentJob: %w", err)
 	}
@@ -646,7 +697,7 @@ func (s *Server) dispatchAgentJob(ctx context.Context, job apply.Job, session st
 // It lists every agent-lane step with its command and precondition, calls out
 // steps that post public text (requiring casebook_job_ask before posting), and
 // describes the protocol for working the job with casebook_job_step.
-func buildJobBody(job apply.Job) (string, error) {
+func buildJobBody(job apply.Job, user string) (string, error) {
 	var b strings.Builder
 
 	// Count agent-lane steps.
@@ -664,9 +715,9 @@ func buildJobBody(job apply.Job) (string, error) {
 	// The batch is not confirmed until Court says so. The agent must not touch
 	// the world until then, and must do nothing at all if Court skips it.
 	b.WriteString("\nWAIT FOR THE BATCH:\n")
-	b.WriteString("Do not run any step until Court confirms the batch.\n")
+	fmt.Fprintf(&b, "Do not run any step until %s confirms the batch.\n", user)
 	b.WriteString("The confirmation arrives as a message in this thread.\n")
-	b.WriteString("If Court skips the batch, run nothing.\n")
+	fmt.Fprintf(&b, "If %s skips the batch, run nothing.\n", user)
 
 	// List agent-lane steps.
 	if len(agentSteps) > 0 {
@@ -683,7 +734,7 @@ func buildJobBody(job apply.Job) (string, error) {
 			fmt.Fprintf(&b, "  precondition: %s\n", desc)
 		}
 		if st.Posts {
-			b.WriteString("  ⚠ posts public text: draft text first with casebook_job_ask; wait for Court's approval before running\n")
+			fmt.Fprintf(&b, "  ⚠ posts public text: draft text first with casebook_job_ask; wait for %s's approval before running\n", user)
 		}
 	}
 
@@ -691,7 +742,7 @@ func buildJobBody(job apply.Job) (string, error) {
 	b.WriteString("\nPROTOCOL for each step:\n")
 	fmt.Fprintf(&b, "  1. casebook_job_step(job=%d, step=<step_id>, state=\"started\")\n", job.ID)
 	b.WriteString("  2. [if posts=true] casebook_job_ask(job=<id>, step=<step_id>, text=\"<your draft>\")\n")
-	b.WriteString("     Wait for Court's answer (a message in this thread with the approved text).\n")
+	fmt.Fprintf(&b, "     Wait for %s's answer (a message in this thread with the approved text).\n", user)
 	b.WriteString("     Run the command with exactly that text.\n")
 	fmt.Fprintf(&b, "  3. casebook_job_step(job=%d, step=<step_id>, state=\"reported\") on success\n", job.ID)
 	fmt.Fprintf(&b, "  4. casebook_job_step(job=%d, step=<step_id>, state=\"paused\", detail=\"reason\") if precondition fails\n", job.ID)

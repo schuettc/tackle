@@ -144,7 +144,7 @@ func lockFile(dir, name string, how int, wait time.Duration) (func(), error) {
 	for {
 		err := syscall.Flock(int(f.Fd()), how|syscall.LOCK_NB)
 		if err == nil {
-			return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil //nolint:errcheck,gosec // best-effort unlock/close on the lock file
+			return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
 		}
 		if time.Now().After(deadline) {
 			_ = f.Close()

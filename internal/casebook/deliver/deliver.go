@@ -40,12 +40,13 @@ const (
 
 // Delivery states.
 const (
-	InFlight   = "inflight"
-	Done       = "done"
-	Released   = "released"
-	Moved      = "moved"
-	Stopped    = "interrupted"
-	StuckAfter = 10 * time.Minute
+	InFlight          = "inflight"
+	Done              = "done"
+	Released          = "released"
+	Moved             = "moved"
+	Stopped           = "interrupted"
+	DefaultStuckAfter = 10 * time.Minute
+	DefaultLeftAfter  = 60 * time.Second
 )
 
 // ErrNotFound means an id doesn't exist (or isn't the caller's).
@@ -61,7 +62,9 @@ type Session struct {
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
 	LookedAt  time.Time `json:"looked_at,omitzero"`
-	Busy      bool      `json:"busy"` // a delivery is in flight
+	Busy      bool      `json:"busy"`           // a delivery is in flight
+	Queued    int       `json:"queued"`         // count of queued (unsent) messages
+	Left      bool      `json:"left,omitempty"` // last_seen > LeftAfter (server-computed)
 }
 
 // Thread is a conversation with one session.
@@ -79,11 +82,15 @@ type Attached struct {
 	Open string   `json:"open,omitempty"` // the open item
 	Rule string   `json:"rule,omitempty"`
 	Job  string   `json:"job,omitempty"`
+	// Section is the page section Court asked from when nothing in it is
+	// open ("rules": asking the agent to draft one). It reads "section rules",
+	// like "rule <id>" and "job <n>".
+	Section string `json:"section,omitempty"`
 }
 
 // Empty reports whether nothing is attached.
 func (a Attached) Empty() bool {
-	return len(a.Keys) == 0 && a.Open == "" && a.Rule == "" && a.Job == ""
+	return len(a.Keys) == 0 && a.Open == "" && a.Rule == "" && a.Job == "" && a.Section == ""
 }
 
 // WorkedView is the progress history carried by a 'worked' message. It holds
@@ -140,6 +147,28 @@ type Delivery struct {
 type Queue struct {
 	DB  *db.DB
 	Now func() time.Time
+	// StuckAfter overrides the default 10-minute stuck threshold. Zero means use
+	// DefaultStuckAfter. Set to a shorter duration in tests.
+	StuckAfter time.Duration
+	// LeftAfter overrides the default 60-second left threshold. Zero means use
+	// DefaultLeftAfter. Set to a shorter duration in tests.
+	LeftAfter time.Duration
+}
+
+// stuckAfter returns the effective stuck threshold for this queue.
+func (q *Queue) stuckAfter() time.Duration {
+	if q.StuckAfter > 0 {
+		return q.StuckAfter
+	}
+	return DefaultStuckAfter
+}
+
+// leftAfter returns the effective left threshold for this queue.
+func (q *Queue) leftAfter() time.Duration {
+	if q.LeftAfter > 0 {
+		return q.LeftAfter
+	}
+	return DefaultLeftAfter
 }
 
 // New returns a queue over d.
@@ -169,24 +198,76 @@ func (q *Queue) Touch(ctx context.Context, s Session) error {
 }
 
 // Sessions lists every known session, most recently seen first.
+// Left is computed server-side: a session is left when its last_seen is older
+// than the configured LeftAfter threshold (default 60 s, spec §2.1).
 func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 	rows, err := q.DB.QueryContext(ctx, `SELECT s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at,
-		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight') FROM sessions s ORDER BY s.last_seen DESC`)
+		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight'),
+		COALESCE((SELECT count(*) FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.session_id = s.id AND m.state = 'queued'), 0)
+		FROM sessions s ORDER BY s.last_seen DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
+	leftThreshold := q.leftAfter()
+	now := q.Now()
 	var out []Session
 	for rows.Next() {
 		var s Session
 		var fs, ls, la int64
-		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy); err != nil {
+		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy, &s.Queued); err != nil {
 			return nil, err
 		}
 		s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
+		s.Left = now.Sub(s.LastSeen) > leftThreshold
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// MoveSession atomically moves all threads (and their queued messages) from
+// session `from` to session `to`. Returns the number of threads moved and,
+// if an in-flight delivery on `from` was rescued, its ID (0 if none).
+//
+// When an in-flight delivery exists on `from`, MoveSession marks it 'moved'
+// and requeues its unsettled messages — the same approach MoveDelivery uses —
+// so the target session receives them in order on its next turn.
+func (q *Queue) MoveSession(ctx context.Context, from, to string) (threads int, movedDeliveryID int64, err error) {
+	now := ms(q.Now())
+	err = q.DB.Tx(ctx, func(tx *sql.Tx) error {
+		// Rescue any in-flight delivery on `from`.
+		var did int64
+		qErr := tx.QueryRowContext(ctx, "SELECT id FROM deliveries WHERE session_id = ? AND state = 'inflight'", from).Scan(&did)
+		if qErr != nil && !errors.Is(qErr, sql.ErrNoRows) {
+			return qErr
+		}
+		if did != 0 {
+			// Mark the delivery moved (same as MoveDelivery).
+			if _, err := tx.ExecContext(ctx, "UPDATE deliveries SET state = 'moved', finished_at = ? WHERE id = ?", now, did); err != nil {
+				return err
+			}
+			// Requeue its unsettled court messages so they reach the target.
+			// queued_at is kept: the rescued messages were sent first, so they
+			// stay first in the target's delivery.
+			if _, err := tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, settled_at = 0
+				WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, did); err != nil {
+				return err
+			}
+			movedDeliveryID = did
+		}
+		// Move all threads from `from` to `to`.
+		res, err := tx.ExecContext(ctx, "UPDATE threads SET session_id = ? WHERE session_id = ?", to, from)
+		if err != nil {
+			return err
+		}
+		n, _ := res.RowsAffected()
+		threads = int(n)
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return threads, movedDeliveryID, nil
 }
 
 // NewThread starts a thread with a session.
@@ -452,7 +533,7 @@ func (q *Queue) Delivery(ctx context.Context, id int64) (Delivery, error) {
 		return d, err
 	}
 	d.SentAt, d.TouchedAt, d.FinishedAt, d.ShownAt = tm(sent), tm(touched), tm(fin), tm(shown)
-	d.Stuck = d.State == InFlight && q.Now().Sub(d.TouchedAt) > StuckAfter
+	d.Stuck = d.State == InFlight && q.Now().Sub(d.TouchedAt) > q.stuckAfter()
 	d.Messages, err = q.messages(ctx, "delivery_id = ? AND author = 'court' ORDER BY queued_at, COALESCE(batch_id, 0), batch_pos, id", id)
 	return d, err
 }
@@ -526,7 +607,14 @@ type SkippedMessage struct {
 //
 // Late replies (to unanswered or interrupted messages from this session) are
 // accepted when state is a final state (answered, declined, failed).
-func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string) ([]int64, []SkippedMessage, error) {
+// Reply settles messages and optionally posts an agent reply text. The optional
+// replyAttached argument (at most one) sets attached items on the reply message;
+// callers that omit it get the existing behaviour (no attached).
+func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, text string, replyAttached ...Attached) ([]int64, []SkippedMessage, error) {
+	var att Attached
+	if len(replyAttached) > 0 {
+		att = replyAttached[0]
+	}
 	switch state {
 	case Received, Working, Answered, Declined, Failed:
 	default:
@@ -585,8 +673,13 @@ func (q *Queue) Reply(ctx context.Context, session string, ids []int64, state, t
 			}
 		}
 		if text != "" && thread != 0 {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, reply_to, state, created_at) VALUES (?, ?, ?, ?, 'reply', ?)`,
-				thread, session, text, ids[0], now); err != nil {
+			attJSON := ""
+			if !att.Empty() {
+				b, _ := json.Marshal(att)
+				attJSON = string(b)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, attached, reply_to, state, created_at) VALUES (?, ?, ?, ?, ?, 'reply', ?)`,
+				thread, session, text, attJSON, ids[0], now); err != nil {
 				return err
 			}
 		}
@@ -716,8 +809,9 @@ func (q *Queue) MoveDelivery(ctx context.Context, id int64, session string) erro
 		if _, err := tx.ExecContext(ctx, `UPDATE threads SET session_id = ? WHERE id IN (SELECT thread_id FROM messages WHERE delivery_id = ?)`, session, id); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, queued_at = ?, settled_at = 0
-			WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, now, id)
+		// queued_at is kept, so moved messages keep their place in line.
+		_, err = tx.ExecContext(ctx, `UPDATE messages SET state = 'queued', delivery_id = NULL, settled_at = 0
+			WHERE delivery_id = ? AND author = 'court' AND state NOT IN ('answered', 'declined', 'failed')`, id)
 		return err
 	})
 }

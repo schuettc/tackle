@@ -148,7 +148,7 @@ func TestSyncBusy(t *testing.T) {
 	}
 	b.Close()
 	// Release and confirm sync now succeeds.
-	syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	_ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
 	_ = lf.Close()
 	// Re-append the event (Drain consumed it).
 	if err := spool.Append(config.SpoolDir(), ev); err != nil {
@@ -174,5 +174,42 @@ func TestSyncGitHubFailureKeepsCache(t *testing.T) {
 	res, _, _ := r.app.Build(ctx)
 	if _, ok := res.Find("pr:schuettc/hail#3"); !ok {
 		t.Error("failed refresh dropped a known PR")
+	}
+}
+
+// TestSyncWritesUnderTheStoreLock: a sync writes casebook-data (machines,
+// journal, views) only under the store's lock, held to its commit. A reader
+// in another process (a serve rebuild) holding it shared keeps the sync's
+// writes out until it lets go, so nobody reads, or commits, half of them.
+func TestSyncWritesUnderTheStoreLock(t *testing.T) {
+	r := newRig(t)
+	if err := os.Remove(filepath.Join(r.app.Repo.Dir, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	lf, err := os.OpenFile(r.app.Repo.LockPath(), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lf.Close() }()
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := r.app.Sync(ctx, SyncOptions{NoPush: true, NoGitHub: true}); done <- err }()
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(r.app.Repo.Dir, "README.md")); err == nil {
+		t.Error("the sync rendered README.md while a reader held casebook-data's lock")
+	}
+	_ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the sync never finished once the lock was free")
+	}
+	if _, err := os.Stat(filepath.Join(r.app.Repo.Dir, "README.md")); err != nil {
+		t.Fatalf("README.md not rendered: %v", err)
 	}
 }

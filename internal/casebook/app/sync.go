@@ -51,21 +51,11 @@ type SyncReport struct {
 // receive ErrSyncBusy immediately.
 func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	var rep SyncReport
-	// Acquire a machine-level exclusive lock so that concurrent triggers
-	// (launchd, pi session events, manual) cannot collide on git and github.json.
-	lockDir := tools.StateDir(config.Tool)
-	if err := tools.EnsureDir(lockDir); err != nil {
-		return rep, err
-	}
-	lf, err := os.OpenFile(filepath.Join(lockDir, "sync.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	unlock, err := LockSync()
 	if err != nil {
 		return rep, err
 	}
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		_ = lf.Close()
-		return rep, ErrSyncBusy
-	}
-	defer func() { syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); lf.Close() }() //nolint:errcheck,gosec // best-effort unlock/close on the lock file
+	defer unlock()
 	if !o.NoPush {
 		if err := a.remoteSync(ctx, &rep); err != nil {
 			return rep, err
@@ -112,20 +102,24 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 	if err != nil {
 		return rep, err
 	}
-	if _, err := a.Repo.WriteFile("machines/"+a.Cfg.Machine+".json", sb); err != nil {
-		return rep, err
-	}
-	snaps, err := a.snapshots()
-	if err != nil {
-		return rep, err
-	}
-	if err := a.journal(batch.Events, snaps); err != nil {
-		return rep, err
-	}
-	if err := a.render(g, snaps, &rep); err != nil {
-		return rep, err
-	}
-	committed, err := a.Repo.Commit(ctx, fmt.Sprintf("sync %s: %d events, %d clones", a.Cfg.Machine, rep.Events, rep.Clones))
+	// The write phase and its commit are one step under casebook-data's
+	// lock (store.Repo.Batch): a decide (serve's, or the CLI's in another
+	// process) can't commit this sync's files halfway, and serve's rebuild
+	// never reads them halfway.
+	var snaps []observe.Snapshot
+	committed, err := a.Repo.Batch(ctx, fmt.Sprintf("sync %s: %d events, %d clones", a.Cfg.Machine, rep.Events, rep.Clones), func() error {
+		if _, err := a.Repo.WriteFile("machines/"+a.Cfg.Machine+".json", sb); err != nil {
+			return err
+		}
+		var err error
+		if snaps, err = a.snapshots(); err != nil {
+			return err
+		}
+		if err := a.journal(batch.Events, snaps); err != nil {
+			return err
+		}
+		return a.render(g, snaps, &rep)
+	})
 	if err != nil {
 		// The drained events stay in the spool and are journaled again by the
 		// next sync; the uncommitted journal lines from this attempt may then
@@ -144,14 +138,33 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		return rep, err
 	}
 	// Another machine's views won a rebase conflict: render ours again.
-	if err := a.render(g, snaps, &rep); err != nil {
-		return rep, err
-	}
-	if ok, err := a.Repo.Commit(ctx, "sync "+a.Cfg.Machine+": re-render views"); err != nil || !ok {
+	if ok, err := a.Repo.Batch(ctx, "sync "+a.Cfg.Machine+": re-render views", func() error {
+		return a.render(g, snaps, &rep)
+	}); err != nil || !ok {
 		return rep, err
 	}
 	_, err = a.pushSync(ctx, &rep)
 	return rep, err
+}
+
+// LockSync takes this machine's sync lock (a flock on StateDir/sync.lock)
+// without waiting, so that concurrent triggers (launchd, pi session events,
+// manual, serve's background push) cannot collide on casebook-data's git and
+// github.json. ErrSyncBusy when another holder has it. Sync and Push take it.
+func LockSync() (unlock func(), err error) {
+	lockDir := tools.StateDir(config.Tool)
+	if err := tools.EnsureDir(lockDir); err != nil {
+		return nil, err
+	}
+	lf, err := os.OpenFile(filepath.Join(lockDir, "sync.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = lf.Close() // already returning ErrSyncBusy; close error not actionable
+		return nil, ErrSyncBusy
+	}
+	return func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN); _ = lf.Close() }, nil
 }
 
 func (a *App) remoteSync(ctx context.Context, rep *SyncReport) error {

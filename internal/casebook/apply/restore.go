@@ -2,6 +2,7 @@ package apply
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/schuettc/tackle/internal/casebook/store"
 )
@@ -56,4 +57,38 @@ func RestoreFor(step JobStep, chk Checked) (store.RestoreRecord, bool) {
 		}, true
 	}
 	return store.RestoreRecord{}, false
+}
+
+// AutoUndoable reports whether a restore command is one of the automatic,
+// deterministic kinds that can be undone without human judgment (§5.5):
+//   - branch recreate: "git -C <dir> branch <b> <tip>"
+//   - remote branch recreate: "git -C <dir> push <remote> <tip>:refs/heads/<b>"
+//   - worktree restore: "git -C <dir> worktree add <path> <ref>"
+//   - gh repo unarchive
+//   - gh pr reopen
+//   - gh issue reopen
+//
+// A posted comment is never undoable. An empty restore is never undoable.
+func AutoUndoable(restore string) bool {
+	if restore == "" {
+		return false
+	}
+	if strings.HasPrefix(restore, "git -C ") {
+		// branch recreate:   "git -C <dir> branch <b> <tip>"
+		// remote recreate:   "git -C <dir> push <remote> <tip>:refs/heads/<b>"
+		// worktree restore:  "git -C <dir> worktree add <path> <ref>"
+		return strings.Contains(restore, " branch ") ||
+			strings.Contains(restore, " push ") ||
+			strings.Contains(restore, " worktree ")
+	}
+	for _, prefix := range []string{
+		"gh repo unarchive ",
+		"gh pr reopen ",
+		"gh issue reopen ",
+	} {
+		if strings.HasPrefix(restore, prefix) {
+			return true
+		}
+	}
+	return false
 }

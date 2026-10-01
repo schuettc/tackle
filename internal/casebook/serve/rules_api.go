@@ -1,6 +1,9 @@
 package serve
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -8,17 +11,29 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/propose"
 	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/schuettc/tackle/internal/casebook/store"
 )
 
 // getRules handles GET /api/rules.
 // Returns all rules with their track records.
 func (s *Server) getRules(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	all, _ := s.App.Repo.Rules()
+	all, errs := s.App.Repo.Rules()
 	rows := make([]RuleRow, 0, len(all))
 	for _, ru := range all {
 		rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-		rows = append(rows, RuleRow{Rule: ru, Record: rec})
+		rows = append(rows, RuleRow{
+			Rule: ru, Record: rec, Invalid: invalidReason(ru),
+			Matches: s.ruleMatches(ru), Excluded: len(ru.Exclude),
+		})
+	}
+	// A file that can't be read as a rule is listed too, as invalid: Court
+	// sees it and can replace it from the page.
+	for _, err := range errs {
+		var fe *store.RuleFileError
+		if errors.As(err, &fe) {
+			rows = append(rows, RuleRow{Rule: unreadableRule(fe.ID), Invalid: fe.Error()})
+		}
 	}
 	reply(w, RulesView{Rules: rows}, nil)
 }
@@ -32,6 +47,11 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ru, err := s.App.Repo.ReadRule(id)
+	var fe *store.RuleFileError
+	if errors.As(err, &fe) {
+		reply(w, RuleDetailView{Rule: unreadableRule(id), Matches: emptyPreview(nil), Invalid: fe.Error()}, nil)
+		return
+	}
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return
@@ -40,9 +60,68 @@ func (s *Server) getRule(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: "rule " + id + " not found"})
 		return
 	}
-	rec, _ := rules.RuleRecord(ctx, s.Props, id)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
+}
+
+// ruleCount is one rule's match count, for one content of the rule
+// (its version and exclusions) against one build of the index.
+type ruleCount struct {
+	sig string
+	gen uint64
+	n   int
+}
+
+// ruleMatches counts ru's matches now. The count is kept until the rule or
+// the index changes, so listing the rules doesn't re-run every rule.
+func (s *Server) ruleMatches(ru rules.Rule) int {
+	if rules.ValidateConditions(ru.Match) != nil {
+		return 0
+	}
+	sig := rules.Version(ru)
+	for _, x := range ru.Exclude {
+		sig += "\x00" + x.Key
+	}
+	gen := s.Index.Gen()
+	s.ruleCountMu.Lock()
+	c, ok := s.ruleCounts[ru.ID]
+	s.ruleCountMu.Unlock()
+	if ok && c.sig == sig && c.gen == gen {
+		return c.n
+	}
+	s.ruleCountRuns.Add(1)
+	ms, err := ru.MatchAll(s.Index.Result(), s.Now())
+	n := len(ms)
+	if err != nil {
+		n = 0
+	}
+	s.ruleCountMu.Lock()
+	if s.ruleCounts == nil {
+		s.ruleCounts = map[string]ruleCount{}
+	}
+	s.ruleCounts[ru.ID] = ruleCount{sig: sig, gen: gen, n: n}
+	s.ruleCountMu.Unlock()
+	return n
+}
+
+// unreadableRule stands in for a rules/<id>.toml that can't be read: a draft
+// with nothing in it, which a save from the page replaces.
+func unreadableRule(id string) rules.Rule {
+	return rules.Rule{ID: id, Name: id, Status: rules.StatusDraft, Match: []rules.Condition{}}
+}
+
+// invalidReason is serve's validation message for ru, "" when it is valid.
+func invalidReason(ru rules.Rule) string {
+	if err := ru.Validate(); err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
+// emptyPreview is the preview of a rule that isn't previewed: no matches,
+// and what it may propose.
+func emptyPreview(match []rules.Condition) MatchPreview {
+	return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{},
+		Dispositions: rules.Dispositions(match)}
 }
 
 // postRulesDraft handles POST /api/rules/draft.
@@ -66,18 +145,36 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		by = "court"
 	}
 
-	// Validate conditions and proposal before touching disk.
-	for i, c := range in.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	// Conditions serve refuses are refused before touching disk; the
+	// proposal may be unfinished (a new rule), and the rule then shows as
+	// not valid until it is.
+	if err := rules.ValidateConditions(in.Match); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
 	}
 
 	now := s.Now()
 	existing, err := s.App.Repo.ReadRule(in.ID)
-	if err != nil {
+	var fe *store.RuleFileError
+	replacing := errors.As(err, &fe) // a file that isn't a rule: the save replaces it
+	if replacing && r.URL.Query().Get("create") == "1" {
+		reply(w, nil, conflict("rule %q already exists (its file can't be read)", in.ID))
+		return
+	}
+	if err != nil && !replacing {
 		reply(w, nil, bad("%v", err))
+		return
+	}
+	// ?create=1 makes a new draft and never overwrites one; ?version= saves
+	// over exactly the copy the page read (a page never overwrites edits it
+	// didn't show).
+	q := r.URL.Query()
+	if q.Get("create") == "1" && existing != nil {
+		reply(w, nil, conflict("rule %q already exists", in.ID))
+		return
+	}
+	if v := q.Get("version"); v != "" && existing != nil && v != rules.Version(*existing) {
+		reply(w, nil, conflict("rule %s changed since you read it; nothing was saved", in.ID))
 		return
 	}
 
@@ -89,29 +186,36 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 		in.CreatedAt = now
 		in.EditedAt = now
 		msg = "rule " + in.ID + " created by " + by
+		if replacing {
+			msg = "rule " + in.ID + " rewritten by " + by + " (its file could not be read)"
+		}
 	} else {
-		// Edit existing draft.
-		if existing.Status == rules.StatusActive {
+		// Edit existing draft. An active rule is edited only when it is
+		// invalid (rebuild skips it): saving the fix makes it a draft, for
+		// Court to activate again.
+		if existing.Status == rules.StatusActive && existing.Validate() == nil {
 			reply(w, nil, bad("cannot edit an active rule via draft endpoint; deactivate it first"))
 			return
 		}
 		in.Status = rules.StatusDraft
 		in.CreatedBy = existing.CreatedBy
 		in.CreatedAt = existing.CreatedAt
-		in.EditedAt = now
+		in.EditedAt = editedAt(*existing, in, now)
 		msg = "rule " + in.ID + " edited by " + by
 	}
 
+	if unchanged(existing, in) {
+		reply(w, s.ruleDetail(ctx, in), nil)
+		return
+	}
 	if err := s.App.Repo.WriteRule(ctx, in, msg); err != nil {
 		reply(w, nil, bad("%v", err))
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, in.ID)
-	preview := buildPreview(in, s.Index.Result(), now, 0, 200)
-	reply(w, RuleDetailView{Rule: in, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, in), nil)
 }
 
 // postRulesPreview handles POST /api/rules/preview.
@@ -127,11 +231,9 @@ func (s *Server) postRulesPreview(w http.ResponseWriter, r *http.Request) {
 
 	// Validate each condition. This produces a clear 400 for invalid regex,
 	// unknown field, and invalid value before we ever run MatchAll.
-	for i, c := range in.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	if err := rules.ValidateConditions(in.Match); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
 	}
 
 	q := r.URL.Query()
@@ -186,9 +288,7 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 	for _, ex := range ru.Exclude {
 		if ex.Key == in.Key {
 			// Already excluded; no-op.
-			rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-			preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-			reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+			reply(w, s.ruleDetail(ctx, *ru), nil)
 			return
 		}
 	}
@@ -206,11 +306,9 @@ func (s *Server) postRulesExclude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "excluded", "key": in.Key})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "excluded", "key": in.Key})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesInclude handles POST /api/rules/include.
@@ -260,9 +358,7 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 	}
 	if !removed {
 		// No exclusion to remove; no-op.
-		rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-		preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-		reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+		reply(w, s.ruleDetail(ctx, *ru), nil)
 		return
 	}
 	ru.Exclude = kept
@@ -274,11 +370,9 @@ func (s *Server) postRulesInclude(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "included", "key": in.Key})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "included", "key": in.Key})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesProposeOnce handles POST /api/rules/propose-once.
@@ -302,13 +396,17 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := ru.Validate(); err != nil {
+		reply(w, nil, bad("rule %s is not valid: %v", ru.ID, err))
+		return
+	}
 	proposals, n, err := rules.ProposeOnce(ctx, *ru, s.Index.Result(), s.Now(), s.Props)
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return
 	}
 	if n > 0 {
-		_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
+		s.publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
 	}
 	if proposals == nil {
 		proposals = []propose.Proposal{}
@@ -321,6 +419,9 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID string `json:"id"`
+		// Version is the copy the page shows (RuleDetailView.Version); when
+		// given, serve activates only that copy.
+		Version string `json:"version"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -337,11 +438,20 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if in.Version != "" && in.Version != rules.Version(*ru) {
+		reply(w, nil, conflict("rule %s changed since you read it; nothing was activated", ru.ID))
+		return
+	}
+
 	by := s.App.Cfg.User
 	if by == "" {
 		by = "court"
 	}
 
+	if err := ru.Validate(); err != nil {
+		reply(w, nil, bad("rule %s is not valid: %v", ru.ID, err))
+		return
+	}
 	ru.Status = rules.StatusActive
 	msg := "rule " + ru.ID + " → active by " + by
 	if err := s.App.Repo.WriteRule(ctx, *ru, msg); err != nil {
@@ -355,11 +465,9 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "activated", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "activated", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // postRulesDeactivate handles POST /api/rules/deactivate.
@@ -395,16 +503,14 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "deactivated", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": ru.ID, "action": "deactivated", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
-	preview := buildPreview(*ru, s.Index.Result(), s.Now(), 0, 200)
-	reply(w, RuleDetailView{Rule: *ru, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, *ru), nil)
 }
 
 // getRulesVocabulary handles GET /api/rules/vocabulary.
 func (s *Server) getRulesVocabulary(w http.ResponseWriter, r *http.Request) {
-	reply(w, VocabularyView{Fields: rules.Vocabulary()}, nil)
+	reply(w, VocabularyView{Fields: rules.Vocabulary(), NoteTokens: rules.NoteTokens()}, nil)
 }
 
 // agentRuleDraft handles POST /api/agent/rule-draft.
@@ -435,17 +541,18 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 
 	// Refuse status="active" with a clear error.
 	if in.Rule.Status == rules.StatusActive {
-		reply(w, nil, bad("casebook_rule_draft cannot set status to active; Court activates rules on the page"))
+		reply(w, nil, bad("casebook_rule_draft cannot set status to active; %s activates rules on the page", s.userName()))
 		return
 	}
 	in.Rule.Status = rules.StatusDraft
 
-	// Validate conditions.
-	for i, c := range in.Rule.Match {
-		if err := rules.ValidateCondition(c); err != nil {
-			reply(w, nil, bad("condition %d: %v", i, err))
-			return
-		}
+	// An agent submits a complete draft: one serve holds invalid is refused
+	// with the reason, and nothing is written. The agent corrects it; it is
+	// never told a draft it can't have was saved (Court's own new rule may
+	// be saved unfinished; the agent's may not).
+	if err := in.Rule.Validate(); err != nil {
+		reply(w, nil, bad("draft rule %q not written, not valid: %v", in.Rule.ID, err))
+		return
 	}
 
 	by := source(sess)
@@ -467,7 +574,7 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Refuse to edit an active rule.
 		if existing.Status == rules.StatusActive {
-			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only Court can edit active rules"))
+			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only %s can edit active rules", s.userName()))
 			return
 		}
 		// Fix 3: an agent may only edit drafts it created itself.
@@ -477,20 +584,68 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Rule.CreatedBy = existing.CreatedBy
 		in.Rule.CreatedAt = existing.CreatedAt
-		in.Rule.EditedAt = now
+		in.Rule.EditedAt = editedAt(*existing, in.Rule, now)
 		msg = "rule " + in.Rule.ID + " edited by " + by
 	}
 
+	if unchanged(existing, in.Rule) {
+		reply(w, s.ruleDetail(ctx, in.Rule), nil)
+		return
+	}
 	if err := s.App.Repo.WriteRule(ctx, in.Rule, msg); err != nil {
 		reply(w, nil, bad("%v", err))
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
 
-	rec, _ := rules.RuleRecord(ctx, s.Props, in.Rule.ID)
-	preview := buildPreview(in.Rule, s.Index.Result(), now, 0, 200)
-	reply(w, RuleDetailView{Rule: in.Rule, Record: rec, Matches: preview}, nil)
+	reply(w, s.ruleDetail(ctx, in.Rule), nil)
+}
+
+// conflict is a 409: the request was made against a copy that is no longer
+// serve's.
+func conflict(format string, a ...any) error {
+	return httpError{code: http.StatusConflict, msg: fmt.Sprintf(format, a...), errCode: "conflict"}
+}
+
+// ruleDetail is what every rule route answers with: the rule, its track
+// record, its first page of matches now and its version.
+func (s *Server) ruleDetail(ctx context.Context, ru rules.Rule) RuleDetailView {
+	rec, _ := rules.RuleRecord(ctx, s.Props, ru.ID)
+	// Conditions serve refuses are never previewed: a bad value would read
+	// as "0 matches" (or match as something it doesn't say).
+	matches := emptyPreview(ru.Match)
+	if rules.ValidateConditions(ru.Match) == nil {
+		matches = buildPreview(ru, s.Index.Result(), s.Now(), 0, 200)
+	}
+	return RuleDetailView{
+		Rule:    ru,
+		Record:  rec,
+		Matches: matches,
+		Version: rules.Version(ru),
+		Invalid: invalidReason(ru),
+	}
+}
+
+// editedAt is a saved draft's edited_at: now when its conditions or its
+// proposal changed, else the existing one (spec §4.1). A re-save or a rename
+// must not re-open the items Court rejected for the rule (§4.2).
+func editedAt(existing, next rules.Rule, now time.Time) time.Time {
+	if rules.SameMeaning(existing, next) {
+		return existing.EditedAt
+	}
+	return now
+}
+
+// unchanged reports whether saving next would write existing's file again,
+// byte for byte: nothing to write, commit or announce.
+func unchanged(existing *rules.Rule, next rules.Rule) bool {
+	if existing == nil {
+		return false
+	}
+	a, errA := rules.Encode(*existing)
+	b, errB := rules.Encode(next)
+	return errA == nil && errB == nil && string(a) == string(b)
 }
 
 // buildPreview runs MatchAll on r against res and returns a paginated,
@@ -504,7 +659,7 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 		// MatchAll errors are returned as 400 by callers that validate first;
 		// here we return an empty preview so callers that embed the preview
 		// still get a valid response.
-		return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{}}
+		return emptyPreview(r.Match)
 	}
 
 	// Count by reason.
@@ -598,9 +753,10 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 	}
 
 	return MatchPreview{
-		Total:    total,
-		ByReason: reasons,
-		Groups:   groups,
-		Page:     rows,
+		Total:        total,
+		ByReason:     reasons,
+		Groups:       groups,
+		Page:         rows,
+		Dispositions: rules.Dispositions(r.Match),
 	}
 }

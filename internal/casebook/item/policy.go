@@ -88,7 +88,7 @@ func (p Policy) Evaluate(s Signals, ignored bool, now time.Time) []Hit {
 		if s.Kind == KindPR && s.Direction == "outgoing" && days(s.UpdatedAt) > p.OutgoingPRStaleDays {
 			hits = append(hits, Hit{Rule: "outgoing-stale", Detail: fmt.Sprintf("no activity for %dd (> %dd)", days(s.UpdatedAt), p.OutgoingPRStaleDays)})
 		}
-		if s.Direction == "incoming" && s.LastReplyByMe.Before(s.LastActivity) && days(s.LastActivity) > p.IncomingNoReplyDays {
+		if s.Direction == "incoming" && s.Undecided && s.LastReplyByMe.Before(s.LastActivity) && days(s.LastActivity) > p.IncomingNoReplyDays {
 			hits = append(hits, Hit{Rule: "incoming-no-reply", Detail: fmt.Sprintf("waiting on you for %dd (> %dd)", days(s.LastActivity), p.IncomingNoReplyDays)})
 		}
 	case KindRepo:

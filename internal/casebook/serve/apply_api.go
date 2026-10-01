@@ -85,7 +85,8 @@ func (s *Server) buildEnv() apply.Env {
 
 // postApplyPlan is POST /api/apply/plan.
 // Input: {"keys":["..."],"all":true}
-// Returns PlanView or 409 when the index observation is stale.
+// Returns PlanView, 409 when the index observation is stale, or 422 when
+// there is nothing to plan (no job is made).
 func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Keys []string `json:"keys"`
@@ -97,6 +98,16 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// The overlap check and the create are one step: two requests can't both
+	// find an item free and both plan it.
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+	held, err := s.heldKeys(ctx, 0, false)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+
 	// Collect to-apply items from the live index.
 	res := s.Index.Result()
 	builtAt := s.Index.BuiltAt()
@@ -105,15 +116,28 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 
 	// Filter items: all to-apply or only the requested keys.
 	var items []engine.Item
+	heldOut := 0
 	if in.All {
+		// An item already in a job that hasn't finished (a plan not yet
+		// approved or discarded, or a job approved, running or paused) is
+		// left out: an item is in at most one unfinished job.
 		for _, it := range res.Items {
-			if it.Status == item.StatusToApply && it.Decision != nil {
-				items = append(items, it)
+			if it.Status != item.StatusToApply || it.Decision == nil {
+				continue
 			}
+			if held[it.ID] != nil {
+				heldOut++
+				continue
+			}
+			items = append(items, it)
 		}
 	} else {
 		keySet := make(map[string]bool, len(in.Keys))
 		for _, k := range in.Keys {
+			if j := held[k]; j != nil {
+				reply(w, nil, httpError{code: http.StatusConflict, msg: heldMsg(k, *j)})
+				return
+			}
 			keySet[k] = true
 		}
 		for _, it := range res.Items {
@@ -147,7 +171,27 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Nothing to plan makes no plan: an empty job would sit in the list (a
+	// second tab's "plan all" just after the first one planned everything).
+	// A stale observation is refused first (above): after a sync there may
+	// be something to plan.
+	if len(plan.Steps) == 0 {
+		msg := "nothing to plan: no decided item is waiting to be applied"
+		switch {
+		case len(items) > 0:
+			msg = "nothing to plan: the decided items have no steps to apply"
+		case heldOut > 0:
+			msg = "nothing to plan: every decided item is already in a plan or a job"
+		}
+		reply(w, nil, httpError{code: http.StatusUnprocessableEntity, msg: msg})
+		return
+	}
+
 	plan.Head = s.Index.Head()
+
+	if s.afterOverlapCheck != nil {
+		s.afterOverlapCheck()
+	}
 
 	// Persist as a planned job.
 	job, err := s.Apply.Create(ctx, plan, s.App.Cfg.Machine)
@@ -156,9 +200,52 @@ func (s *Server) postApplyPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobPlanned})
+	s.publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobPlanned})
 
 	reply(w, PlanView{Plan: plan, Groups: plan.Groups(), Job: job}, nil)
+}
+
+// heldKeys maps each item key with a step in an unfinished job (planned,
+// approved, running or paused) to that job, leaving out job except. With
+// startedOnly it counts only jobs Court has approved (approved, running or
+// paused): approving a plan checks against those, so of two plans that
+// overlap the first approved wins. Done, failed and cancelled jobs hold
+// nothing.
+func (s *Server) heldKeys(ctx context.Context, except int64, startedOnly bool) (map[string]*apply.Job, error) {
+	jobs, err := s.Apply.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]*apply.Job{}
+	for i := range jobs {
+		j := &jobs[i]
+		if j.ID == except {
+			continue
+		}
+		switch j.State {
+		case apply.JobApproved, apply.JobRunning, apply.JobPaused:
+		case apply.JobPlanned:
+			if startedOnly {
+				continue
+			}
+		default:
+			continue
+		}
+		for _, st := range j.Steps {
+			if out[st.Key] == nil {
+				out[st.Key] = j
+			}
+		}
+	}
+	return out, nil
+}
+
+// heldMsg is serve's refusal for an item already in job j.
+func heldMsg(key string, j apply.Job) string {
+	if j.State == apply.JobPlanned {
+		return fmt.Sprintf("%s is already in plan #%d, which hasn't been approved or discarded; an item is in one unfinished job at a time", key, j.ID)
+	}
+	return fmt.Sprintf("%s is already in job #%d (%s), which hasn't finished; an item is in one unfinished job at a time", key, j.ID, j.State)
 }
 
 // postApplyApprove is POST /api/apply/approve.
@@ -176,12 +263,42 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Validate session if provided.
+	// Validate session if provided: it must be known, and present. The plan's
+	// outward steps (archive, close, anything that posts) go to the session
+	// Court names, so one that has left can't take them. (A plan with
+	// agent-lane steps and no session at all is the store's refusal.)
 	if in.Session != "" {
 		if _, err := s.session(ctx, in.Session); err != nil {
 			reply(w, nil, err)
 			return
 		}
+		if !s.present(ctx, in.Session) {
+			reply(w, nil, httpError{code: http.StatusConflict,
+				msg: fmt.Sprintf("session %q has left; approving outward steps needs a session that is here", in.Session)})
+			return
+		}
+	}
+
+	// Two plans can overlap before either is approved. The first approved
+	// holds its items; approving another whose items it holds is refused.
+	// The check and the approve are one step (planMu).
+	s.planMu.Lock()
+	defer s.planMu.Unlock()
+	if plan, err := s.Apply.Get(ctx, in.PlanID); err == nil && plan.State == apply.JobPlanned {
+		held, err := s.heldKeys(ctx, in.PlanID, true)
+		if err != nil {
+			reply(w, nil, err)
+			return
+		}
+		for _, st := range plan.Steps {
+			if j := held[st.Key]; j != nil {
+				reply(w, nil, httpError{code: http.StatusConflict, msg: heldMsg(st.Key, *j)})
+				return
+			}
+		}
+	}
+	if s.afterOverlapCheck != nil {
+		s.afterOverlapCheck()
 	}
 
 	// Step 1: Approve the job.
@@ -196,7 +313,7 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobApproved})
+	s.publish(ctx, "job", map[string]any{"id": job.ID, "state": apply.JobApproved})
 
 	// Step 2: Count agent-lane steps and open batch card BEFORE dispatching.
 	var agentCount int
@@ -213,7 +330,7 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 			reply(w, nil, err)
 			return
 		}
-		_, _ = s.Bus.Publish(ctx, "needs_you", batchCard)
+		s.publish(ctx, "needs_you", batchCard)
 	}
 
 	// Step 3: Dispatch the agent job ONCE (idempotent via dispatched_at).
@@ -238,6 +355,55 @@ func (s *Server) postApplyApprove(w http.ResponseWriter, r *http.Request) {
 	// Return the job with its open needs-you cards.
 	cards, _ := s.Apply.NeedsYouFor(ctx, job.ID)
 	reply(w, JobView{Job: job, NeedsYou: cards}, nil)
+}
+
+// postApplyCancel is POST /api/apply/cancel {plan_id}: discard a plan Court
+// hasn't approved (planned → cancelled; Store.Cancel refuses anything else,
+// 409). An approved job is paused, not discarded.
+func (s *Server) postApplyCancel(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		PlanID int64 `json:"plan_id"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	ctx := r.Context()
+	if _, err := s.Apply.Get(ctx, in.PlanID); err != nil {
+		reply(w, nil, httpError{code: http.StatusNotFound, msg: err.Error()})
+		return
+	}
+	if err := s.Apply.Cancel(ctx, in.PlanID); err != nil {
+		var inv *apply.ErrInvalidTransition
+		if errors.As(err, &inv) {
+			reply(w, nil, httpError{code: http.StatusConflict, msg: fmt.Sprintf("job %d is %s, not a plan; only a plan can be discarded", in.PlanID, inv.From)})
+		} else {
+			reply(w, nil, err)
+		}
+		return
+	}
+	s.publish(ctx, "job", map[string]any{"id": in.PlanID, "state": apply.JobCancelled})
+	job, err := s.Apply.Get(ctx, in.PlanID)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	reply(w, JobView{Job: job, NeedsYou: []apply.NeedsYou{}}, nil)
+}
+
+// present reports whether a session is here now (seen within the left
+// threshold), by the same rule GET /api/sessions marks one left.
+func (s *Server) present(ctx context.Context, id string) bool {
+	sessions, err := s.Queue.Sessions(ctx)
+	if err != nil {
+		return false
+	}
+	for _, sess := range sessions {
+		if sess.ID == id {
+			return !sess.Left
+		}
+	}
+	return false
 }
 
 // getJobs is GET /api/jobs.
@@ -317,7 +483,7 @@ func (s *Server) postJobsPause(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": true})
+	s.publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": true})
 	cards, _ := s.Apply.NeedsYouFor(ctx, in.ID)
 	var open []apply.NeedsYou
 	for _, c := range cards {
@@ -356,7 +522,7 @@ func (s *Server) postJobsResume(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
-	_, _ = s.Bus.Publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": false})
+	s.publish(ctx, "job", map[string]any{"id": job.ID, "state": job.State, "paused": false})
 
 	// Relaunch the casebook lane only if the job was actually paused and no lane
 	// is running (the single-flight guard enforces the latter). A resume on a
@@ -375,39 +541,8 @@ func (s *Server) postJobsResume(w http.ResponseWriter, r *http.Request) {
 	reply(w, JobView{Job: job, NeedsYou: open}, nil)
 }
 
-// autoUndoable reports whether a restore command is one of the automatic,
-// deterministic kinds that can be undone without human judgment (§5.5):
-//   - branch recreate: "git -C <dir> branch <b> <tip>"
-//   - remote branch recreate: "git -C <dir> push <remote> <tip>:refs/heads/<b>"
-//   - worktree restore: "git -C <dir> worktree add <path> <ref>"
-//   - gh repo unarchive
-//   - gh pr reopen
-//   - gh issue reopen
-//
-// A posted comment is never undoable. An empty restore is never undoable.
-func autoUndoable(restore string) bool {
-	if restore == "" {
-		return false
-	}
-	if strings.HasPrefix(restore, "git -C ") {
-		// branch recreate:   "git -C <dir> branch <b> <tip>"
-		// remote recreate:   "git -C <dir> push <remote> <tip>:refs/heads/<b>"
-		// worktree restore:  "git -C <dir> worktree add <path> <ref>"
-		return strings.Contains(restore, " branch ") ||
-			strings.Contains(restore, " push ") ||
-			strings.Contains(restore, " worktree ")
-	}
-	for _, prefix := range []string{
-		"gh repo unarchive ",
-		"gh pr reopen ",
-		"gh issue reopen ",
-	} {
-		if strings.HasPrefix(restore, prefix) {
-			return true
-		}
-	}
-	return false
-}
+// autoUndoable is apply.AutoUndoable: the rule the step's Undoable says.
+func autoUndoable(restore string) bool { return apply.AutoUndoable(restore) }
 
 // postJobsUndo is POST /api/jobs/undo.
 // Input: {"step":N}
@@ -517,7 +652,7 @@ func (s *Server) postJobsUndo(w http.ResponseWriter, r *http.Request) {
 		sent = false
 	}
 
-	_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": step.ID, "job_id": step.JobID, "undone": true, "sent": sent})
+	s.publish(ctx, "step", map[string]any{"id": step.ID, "job_id": step.JobID, "undone": true, "sent": sent})
 	reply(w, UndoResult{StepID: step.ID, Sent: sent}, nil)
 }
 
@@ -625,7 +760,7 @@ func (s *Server) postJobsAnswer(w http.ResponseWriter, r *http.Request) {
 	// This handles skip-batch (agent steps skipped), skip (step skipped or failed
 	// step's card closed), and any other action that may drain remaining work.
 	s.settleJob(ctx, card.JobID)
-	_, _ = s.Bus.Publish(ctx, "needs_you", card)
+	s.publish(ctx, "needs_you", card)
 	reply(w, AnswerResult{NeedsYou: card}, nil)
 }
 
@@ -651,7 +786,7 @@ func (s *Server) answerBatch(ctx context.Context, card apply.NeedsYou, job apply
 		for _, st := range job.Steps {
 			if st.Lane == apply.LaneAgent && st.State == apply.StepPending {
 				_ = s.Apply.SetStepState(ctx, st.ID, apply.StepSkipped, "batch skipped")
-				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": st.ID, "job_id": job.ID, "state": apply.StepSkipped})
+				s.publish(ctx, "step", map[string]any{"id": st.ID, "job_id": job.ID, "state": apply.StepSkipped})
 			}
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip-batch")
@@ -669,15 +804,15 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 			if err := s.Apply.SetStepText(ctx, card.StepID, text); err != nil {
 				return card, fmt.Errorf("SetStepText: %w", err)
 			}
-			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "text_set": true})
+			s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "text_set": true})
 		}
 		// Send a message to the job's session telling the agent to post exactly
 		// that text and close. Court confirms; casebook never runs gh itself.
 		if job.Session != "" {
 			body := fmt.Sprintf(
-				"Court approved text for job %d step %d [%s].\n"+
+				"%s approved text for job %d step %d [%s].\n"+
 					"Post this exact text and close:\n\n%s",
-				job.ID, card.StepID, step.Key, text)
+				s.userSubject(), job.ID, card.StepID, step.Key, text)
 			thread, err := s.findOrCreateJobThread(ctx, job)
 			if err != nil {
 				return card, fmt.Errorf("find job thread: %w", err)
@@ -692,9 +827,9 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 		// Tell the agent to close without a comment.
 		if job.Session != "" {
 			body := fmt.Sprintf(
-				"Court approved close-without-comment for job %d step %d [%s].\n"+
+				"%s approved close-without-comment for job %d step %d [%s].\n"+
 					"Close it without posting any comment.",
-				job.ID, card.StepID, step.Key)
+				s.userSubject(), job.ID, card.StepID, step.Key)
 			thread, err := s.findOrCreateJobThread(ctx, job)
 			if err != nil {
 				return card, fmt.Errorf("find job thread: %w", err)
@@ -721,10 +856,10 @@ func (s *Server) answerText(ctx context.Context, card apply.NeedsYou, job apply.
 	case "skip":
 		// Mark the step skipped and return the card as answered.
 		if card.StepID != 0 {
-			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
+			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by "+s.userName()); err != nil {
 				return card, fmt.Errorf("SetStepState skipped: %w", err)
 			}
-			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
+			s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip")
 	default:
@@ -744,11 +879,11 @@ func (s *Server) answerFailed(ctx context.Context, card apply.NeedsYou, job appl
 			}
 		}
 		body := fmt.Sprintf(
-			"casebook-lane step %d [%s] failed and Court handed it to you.\n"+
+			"casebook-lane step %d [%s] failed and %s handed it to you.\n"+
 				"Reason: %s\n\n"+
 				"Command that failed: %s\n"+
 				"Please handle this step and report back with casebook_job_step.",
-			step.ID, step.Key, card.Question, step.Command)
+			step.ID, step.Key, s.userName(), card.Question, step.Command)
 		thread, err := s.findOrCreateJobThread(ctx, job)
 		if err != nil {
 			return card, fmt.Errorf("find job thread for hand-to-agent: %w", err)
@@ -779,13 +914,13 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 				if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepPending, ""); err != nil {
 					return card, fmt.Errorf("requeue paused step: %w", err)
 				}
-				_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepPending})
+				s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepPending})
 				s.startCasebookLane(job)
 			} else if job.Session != "" {
 				body := fmt.Sprintf(
-					"Court resumed job %d step %d [%s].\n"+
+					"%s resumed job %d step %d [%s].\n"+
 						"Resume that step: run it now, following the usual protocol.",
-					job.ID, step.ID, step.Key)
+					s.userSubject(), job.ID, step.ID, step.Key)
 				thread, err := s.findOrCreateJobThread(ctx, job)
 				if err != nil {
 					return card, fmt.Errorf("find job thread for resume: %w", err)
@@ -799,10 +934,10 @@ func (s *Server) answerPaused(ctx context.Context, card apply.NeedsYou, job appl
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "resume")
 	case "skip":
 		if card.StepID != 0 {
-			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by Court"); err != nil {
+			if err := s.Apply.SetStepState(ctx, card.StepID, apply.StepSkipped, "skipped by "+s.userName()); err != nil {
 				return card, fmt.Errorf("skip paused step: %w", err)
 			}
-			_, _ = s.Bus.Publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
+			s.publish(ctx, "step", map[string]any{"id": card.StepID, "job_id": job.ID, "state": apply.StepSkipped})
 		}
 		return s.Apply.AnswerNeedsYou(ctx, card.ID, "skip")
 	default:
