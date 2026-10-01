@@ -42,7 +42,7 @@ func Stop(ctx context.Context) error {
 	return fmt.Errorf("cull serve (pid %d) did not stop", adv.PID)
 }
 
-// Start runs exe as `cull serve --foreground` in its own process group,
+// Start runs exe as `cull serve --foreground --no-open` in its own process group,
 // logging to StateDir/serve.log, and waits for its advert.
 func Start(exe string, port int) (Advert, error) {
 	if exe == "" {
@@ -57,7 +57,7 @@ func Start(exe string, port int) (Advert, error) {
 		return Advert{}, err
 	}
 	defer func() { _ = logf.Close() }()
-	args := []string{"serve", "--foreground"}
+	args := []string{"serve", "--foreground", "--no-open"}
 	if port > 0 {
 		args = append(args, "--port", strconv.Itoa(port))
 	}

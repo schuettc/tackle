@@ -19,6 +19,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: applyFlags, Run: runApply,
 		},
 		{
+			Name: "serve", Group: "check", Synopsis: "[path] [--no-open] [--port N] [--stop]",
+			Summary:  "open the review page (starts the local server if needed)",
+			NewFlags: serveFlags, Run: runServe,
+		},
+		{
 			Name: "judge", Group: "judge", Synopsis: "[file|-]",
 			Summary:  "judge tests or duplicate groups with Jev (plumbing; JSONL in, JSONL out)",
 			NewFlags: judgeFlags, Run: runJudge(stdin),
