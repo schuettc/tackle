@@ -7,6 +7,7 @@ import (
 
 	"github.com/schuettc/tackle/internal/casebook/journal"
 	"github.com/schuettc/tackle/internal/casebook/spool"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	"github.com/schuettc/tools-common/harness"
 )
 
@@ -53,13 +54,14 @@ func Parse(harnessName string, b []byte, now time.Time) (journal.Event, bool) {
 }
 
 // Main is `casebook record --harness <name>`: read one payload from stdin and
-// spool it. It never fails and never prints.
-func Main(harnessName string, stdin io.Reader, spoolDir string, now time.Time) {
+// spool it, unless temp (when not nil) says it ran in a temp folder. It never
+// fails and never prints.
+func Main(harnessName string, stdin io.Reader, spoolDir string, now time.Time, temp *temppath.Matcher) {
 	b, err := io.ReadAll(io.LimitReader(stdin, 1<<20))
 	if err != nil {
 		return
 	}
-	if ev, ok := Parse(harnessName, b, now); ok {
+	if ev, ok := Parse(harnessName, b, now); ok && (temp == nil || !temp.Event(ev)) {
 		_ = spool.Append(spoolDir, ev)
 	}
 }

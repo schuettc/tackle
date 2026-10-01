@@ -202,3 +202,36 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("help show usage: %q", out)
 	}
 }
+
+func TestAdoptRefusesATempClone(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("hooks", "install")
+	scratch := filepath.Join(t.TempDir(), "copier._vcs.clone.x") // temp, outside the configured root
+	_ = os.MkdirAll(scratch, 0o755)
+	testgit.Git(t, scratch, "init", "-q", "-b", "main")
+	testgit.Commit(t, scratch, "a", "1")
+	testgit.Git(t, scratch, "config", "core.hooksPath", ".githooks")
+	code, out, errw := e.run("", "hooks", "adopt", scratch)
+	if code == 0 || !strings.Contains(out+errw, "temp folder") {
+		t.Errorf("adopt of a temp clone: exit %d\n%s%s", code, out, errw)
+	}
+	if got := testgit.Git(t, scratch, "config", "--local", "core.hooksPath"); got != ".githooks" {
+		t.Errorf("temp clone core.hooksPath = %q, want it untouched", got)
+	}
+	e.ok("hooks", "uninstall")
+}
+
+func TestRecordSkipsTempFolders(t *testing.T) {
+	e := setup(t)
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	for _, cwd := range []string{"/tmp/scratch", "/private/var/folders/92/x/T/pytest-of-c/p0", e.clone} {
+		if code, _, _ := e.run(`{"tool_name":"Bash","cwd":"`+cwd+`","tool_input":{"command":"git push"}}`, "record", "--harness", "claude"); code != 0 {
+			t.Fatalf("record exit %d", code)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(config.SpoolDir(), "events.jsonl"))
+	if err != nil || strings.Count(string(b), "\n") != 1 || !strings.Contains(string(b), e.clone) {
+		t.Errorf("spool after record:\n%s %v", b, err)
+	}
+}

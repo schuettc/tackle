@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/observe"
 	"github.com/schuettc/tackle/internal/casebook/record"
+	"github.com/schuettc/tackle/internal/casebook/temppath"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -357,6 +359,9 @@ func commands(stdin io.Reader) []tools.Command {
 					if len(pos) > 1 {
 						repo = pos[1]
 					}
+					if err := refuseTemp(repo); err != nil {
+						return err
+					}
 					res, err := hooks.Adopt(ctx, o, repo)
 					if err != nil {
 						return err
@@ -445,10 +450,11 @@ func commands(stdin io.Reader) []tools.Command {
 				if _, err := parse(fs, args, io.Discard); err != nil {
 					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
-				if _, err := config.Load(); err != nil {
+				cfg, err := config.Load()
+				if err != nil {
 					return nil //nolint:nilerr // this command is silent/never-fails by design
 				}
-				record.Main(strFlag(fs, "harness"), stdin, config.SpoolDir(), time.Now())
+				record.Main(strFlag(fs, "harness"), stdin, config.SpoolDir(), time.Now(), temppath.New(cfg.Roots))
 				return nil
 			},
 		},
@@ -519,6 +525,7 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 	if !ok {
 		return tools.Exitf(1, "no snapshot for this machine yet: run casebook sync first")
 	}
+	temp := temppath.New(a.Cfg.Roots)
 	var adopted, already, failed int
 	for _, c := range snap.Clones {
 		if c.Bare || c.LocalHooksPath == "" {
@@ -526,6 +533,9 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 		}
 		if fi, err := os.Stat(c.Path); err != nil || !fi.IsDir() {
 			continue
+		}
+		if temp.Path(c.Path) {
+			continue // a temp clone is never adopted
 		}
 		res, err := hooks.Adopt(ctx, o, c.Path)
 		if err != nil {
@@ -544,6 +554,24 @@ func hooksAdoptAll(o hooks.Options, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "adopted %d, already %d, failed %d\n", adopted, already, failed)
 	if failed > 0 {
 		return tools.Exitf(1, "%d repo(s) failed to adopt", failed)
+	}
+	return nil
+}
+
+// refuseTemp refuses to adopt a repo in a temp folder (temppath) outside this
+// machine's scan roots: casebook never journals one, so adopting it would
+// only rewrite its hooks for nothing.
+func refuseTemp(repo string) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(repo)
+	if err != nil {
+		return err
+	}
+	if temppath.New(cfg.Roots).Path(abs) {
+		return tools.Exitf(1, "%s is in a temp folder; casebook never journals temp folders, so it is not adopted", abs)
 	}
 	return nil
 }

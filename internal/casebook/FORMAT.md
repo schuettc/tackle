@@ -73,6 +73,14 @@ One JSON object per line. Each machine writes only its own directory. Fields:
 - `actions` (`tool`, `verb`, `dir`, `repo`, `number`, `refs`, `flags`)
 - `exit_code`, `repo`, `machine`
 
+Never stored: git activity in a temp folder. An event is not journalled when
+its git dir is under a temp root, a git hook's working directory is, or every
+one of an agent command's actions ran in one (a gh action naming its repo with
+`-R` is about that repo wherever it ran). The temp roots are `os.TempDir()`,
+`$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders` and `/private/var/folders`,
+compared by whole path segments with symlinks resolved; a path inside one of
+the machine's configured scan roots is never temp.
+
 Never stored: command lines, commit or tag messages, titles, bodies, field values, header values, query strings, or URL credentials.
 
 ## Snapshots: `machines/<machine>.json`

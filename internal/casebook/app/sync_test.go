@@ -213,3 +213,34 @@ func TestSyncWritesUnderTheStoreLock(t *testing.T) {
 		t.Fatalf("README.md not rendered: %v", err)
 	}
 }
+
+func TestSyncDropsSpooledTempFolderEvents(t *testing.T) {
+	r := newRig(t)
+	scratch, _ := filepath.EvalSymlinks(t.TempDir()) // temp, outside the configured root
+	for _, e := range []journal.Event{
+		{V: 1, TS: r.now, Src: "git-hook", Hook: "post-checkout", CWD: filepath.Join(scratch, "copier._vcs.clone.x")},
+		{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: "/tmp/scratch"},
+		{V: 1, TS: r.now, Src: "git-hook", Hook: "reference-transaction", CWD: r.clone, GitDir: filepath.Join(scratch, "casebook-probe-1", "repo", ".git")},
+		{V: 1, TS: r.now, Src: "git-hook", Hook: "post-commit", CWD: r.clone},
+	} {
+		if err := spool.Append(config.SpoolDir(), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rep, err := r.app.Sync(ctx, SyncOptions{NoGitHub: true, NoPush: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Events != 1 || rep.TempEvents != 3 {
+		t.Errorf("report events %d temp %d, want 1 and 3", rep.Events, rep.TempEvents)
+	}
+	j, err := r.app.Repo.ReadFile("journal/mbp/2026/09-24.jsonl")
+	if err != nil || strings.Count(string(j), "\n") != 1 || strings.Contains(string(j), scratch) || strings.Contains(string(j), "/tmp/") {
+		t.Fatalf("journal %s %v", j, err)
+	}
+	b, _ := spool.Drain(config.SpoolDir())
+	defer b.Close()
+	if len(b.Events) != 0 {
+		t.Errorf("temp events left in the spool: %d", len(b.Events))
+	}
+}

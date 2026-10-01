@@ -20,6 +20,9 @@ func printSync(out io.Writer, machine string, r app.SyncReport) {
 		state += ", pushed"
 	}
 	_, _ = fmt.Fprintf(out, "synced %s: %d event(s), %d clone(s), %s\n", machine, r.Events, r.Clones, state)
+	if r.TempEvents > 0 {
+		_, _ = fmt.Fprintf(out, "skipped %d event(s) in temp folders (never journalled)\n", r.TempEvents)
+	}
 	if r.Offline {
 		_, _ = fmt.Fprintln(out, "offline: the casebook remote is unreachable; changes are queued locally")
 	}
