@@ -73,6 +73,9 @@ func Dispatch(args []string, out, errw io.Writer) int {
 		return cmdAutojoinProject()
 	case "__snapshot":
 		return cmdSnapshot(args[1:])
+	case "__save-layout":
+		_ = proj.SaveLayoutSettled() // silent for the same reason as __snapshot
+		return 0
 	// list/current/new/sidebar now flow through Dispatch (which parses their
 	// flags, calls Run, and maps UsageError/ExitError to the right exit code)
 	// instead of the bare-project fallback below — a name match here MUST

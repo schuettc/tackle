@@ -85,10 +85,45 @@ func TestInstallHooksIdempotent(t *testing.T) {
 	if !strings.Contains(out, "session-created[0] run-shell true") {
 		t.Fatalf("operator hook at [0] lost:\n%s", out)
 	}
-	for _, ev := range hookEvents {
+	for _, ev := range append(append([]string{}, hookEvents...), layoutEvents...) {
 		if !strings.Contains(out, ev+"[80] ") {
 			t.Fatalf("missing %s[80]:\n%s", ev, out)
 		}
+	}
+	if n := strings.Count(out, "client-attached[80]"); n != 1 {
+		t.Fatalf("client-attached[80] appears %d times:\n%s", n, out)
+	}
+}
+
+func TestLayoutHookCommand(t *testing.T) {
+	want := `run-shell -b "'/a b/proj' __save-layout"`
+	if got := LayoutHookCommand("/a b/proj"); got != want {
+		t.Fatalf("LayoutHookCommand = %s\nwant                %s", got, want)
+	}
+}
+
+func TestSaveLayoutSettledLatestWins(t *testing.T) {
+	recordHome(t)
+	orig := layoutSettle
+	layoutSettle = 300 * time.Millisecond
+	t.Cleanup(func() { layoutSettle = orig })
+	calls := fakeOsascript(t, "", nil)
+
+	// Two attaches close together: only the later one reads Ghostty.
+	done := make(chan error, 2)
+	go func() { done <- SaveLayoutSettled() }()
+	time.Sleep(100 * time.Millisecond)
+	go func() { done <- SaveLayoutSettled() }()
+	for i := 0; i < 2; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("Ghostty read %d times, want 1", len(*calls))
+	}
+	if rec, _ := LoadRecord(); rec.Layout.SavedAt.IsZero() {
+		t.Fatal("settled save wrote no layout")
 	}
 }
 
