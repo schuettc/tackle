@@ -5045,6 +5045,7 @@ function renderRule(ctx, detail, hooks) {
   let grouped = false;
   let seq = 0;
   let timer = null;
+  let opened = PAGE2;
   let queue = Promise.resolve();
   const inTurn = (task) => {
     const run = queue.then(task);
@@ -5505,11 +5506,12 @@ ${dispositions.join(" ")}`;
       timer = null;
     }
     const mine = ++seq;
+    opened = depth;
     try {
       const b = body();
       const p = await ctx.api.post("/rules/preview", b);
       let rows = p.page ?? [];
-      while (rows.length < Math.min(depth, p.total)) {
+      while (rows.length < Math.min(Math.max(depth, opened), p.total)) {
         const next = await ctx.api.post(
           `/rules/preview?offset=${rows.length}&limit=${PAGE2}`,
           b
@@ -5529,11 +5531,12 @@ ${dispositions.join(" ")}`;
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void previewNow(keepDepth ? Math.max(PAGE2, shown.length) : PAGE2);
+      void previewNow(keepDepth ? Math.max(PAGE2, opened, shown.length) : PAGE2);
     }, PREVIEW_DEBOUNCE_MS);
   }
   async function loadMore() {
     const q = `?offset=${shown.length}&limit=${PAGE2}`;
+    opened = Math.max(opened, shown.length + PAGE2);
     const mine = seq;
     try {
       const p = await ctx.api.post(`/rules/preview${q}`, body());
@@ -5549,7 +5552,7 @@ ${dispositions.join(" ")}`;
     exclude = d.rule.exclude ?? [];
     base = { ...base, exclude };
     if (dirty() || invalid) {
-      void previewNow(Math.max(PAGE2, shown.length));
+      void previewNow(Math.max(PAGE2, opened, shown.length));
     } else {
       seq++;
       setPreview(d.matches);

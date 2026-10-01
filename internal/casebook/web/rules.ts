@@ -162,6 +162,11 @@ export function renderRule(
   let grouped = false;
   let seq = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // How many rows Court has asked to see: "show more" raises it, an edit
+  // starts again at a page. A preview in flight reads it as it pages, so a
+  // re-preview landing while "show more" loads still brings what he asked
+  // for (loadMore's own answer is then dropped as older).
+  let opened = PAGE;
   // One request at a time (Activate, Deactivate, propose once), in the order
   // Court asked. serve announces a change before it replies, so the page can
   // show the next primary while a request is still in flight; a click on it
@@ -700,11 +705,12 @@ export function renderRule(
       timer = null;
     }
     const mine = ++seq;
+    opened = depth;
     try {
       const b = body();
       const p = await ctx.api.post<MatchPreview>('/rules/preview', b);
       let rows = p.page ?? [];
-      while (rows.length < Math.min(depth, p.total)) {
+      while (rows.length < Math.min(Math.max(depth, opened), p.total)) {
         const next = await ctx.api.post<MatchPreview>(
           `/rules/preview?offset=${rows.length}&limit=${PAGE}`,
           b,
@@ -727,12 +733,13 @@ export function renderRule(
     if (timer !== null) clearTimeout(timer);
     timer = setTimeout(() => {
       timer = null;
-      void previewNow(keepDepth ? Math.max(PAGE, shown.length) : PAGE);
+      void previewNow(keepDepth ? Math.max(PAGE, opened, shown.length) : PAGE);
     }, PREVIEW_DEBOUNCE_MS);
   }
 
   async function loadMore(): Promise<void> {
     const q = `?offset=${shown.length}&limit=${PAGE}`;
+    opened = Math.max(opened, shown.length + PAGE);
     const mine = seq;
     try {
       const p = await ctx.api.post<MatchPreview>(`/rules/preview${q}`, body());
@@ -754,7 +761,7 @@ export function renderRule(
     exclude = d.rule.exclude ?? [];
     base = { ...base, exclude };
     if (dirty() || invalid) {
-      void previewNow(Math.max(PAGE, shown.length));
+      void previewNow(Math.max(PAGE, opened, shown.length));
     } else {
       seq++; // a preview in flight is older than this
       setPreview(d.matches);

@@ -2859,16 +2859,49 @@ async function rulesScenariosOn(context, serveHandle) {
           8000,
         ),
       );
-      await pg.click('.cb-mr-more .cb-link');
-      check(
-        '"show 3 more" loads the rest, and the more row goes',
-        await until(
-          pg,
-          () =>
-            document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-              .length === 203 && !document.querySelector('.cb-mr-more'),
-        ),
+      // A live re-preview (a decision elsewhere: events replayed on
+      // connect, or new ones) can land while "show more" loads. Here it
+      // does, every time: the page-2 answer is held until the re-preview
+      // (debounced, page one) has answered. Court's "show more" still
+      // brings the rest.
+      let releaseMore;
+      const moreGate = new Promise((r) => (releaseMore = r));
+      let moreAsked = 0;
+      const holdMore = async (r) => {
+        if (moreAsked++ === 0) await moreGate;
+        await r.continue();
+      };
+      await pg.route(/\/api\/rules\/preview\?offset=/, holdMore);
+      const rePreview = pg.waitForResponse(
+        (r) =>
+          r.url().includes('/api/rules/preview') &&
+          !r.url().includes('offset='),
+        { timeout: 10000 },
       );
+      await pg.click('.cb-mr-more .cb-link');
+      await eventually(async () => moreAsked === 1);
+      await agent.api('POST', '/api/decide', {
+        keys: [R8_BR('r8-many', 'feat/n003')],
+        disposition: 'keep',
+      });
+      const rePreviewed = await rePreview.then(
+        () => true,
+        () => false,
+      );
+      releaseMore();
+      check(
+        `"show 3 more" loads the rest, and the more row goes, with a re-preview landing while it loads (re-preview ${rePreviewed})`,
+        rePreviewed &&
+          (await until(
+            pg,
+            () =>
+              document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
+                .length === 203 && !document.querySelector('.cb-mr-more'),
+            undefined,
+            8000,
+          )),
+      );
+      await pg.unroute(/\/api\/rules\/preview\?offset=/, holdMore);
       const keys = await r8Read.ticked(pg);
       check(
         'the 203 rows are 203 different branches',
