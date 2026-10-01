@@ -560,7 +560,7 @@ async function main() {
     await send.innerText(),
   );
   await send.click();
-  const msg = `Sent ${n} answers. The agent is told in a later release; cull check uses them now.`;
+  const msg = `Sent ${n} answers. The next agent that opens cull in this project gets them.`;
   check(
     'Send reports exactly what it did',
     await until(
@@ -579,6 +579,59 @@ async function main() {
     await until(
       async () => (await page.locator('.kit-primary:visible').count()) === 0,
     ),
+  );
+
+  // Send again with an owner present: the status names the session.
+  await api('/api/agent/presence', {
+    method: 'POST',
+    body: JSON.stringify({
+      session: 'probe-1',
+      harness: 'pi',
+      label: 'pi: probe',
+      root: serve.root,
+    }),
+  });
+  await api('/api/agent/review', {
+    method: 'POST',
+    body: JSON.stringify({ session: 'probe-1', root: serve.root }),
+  });
+  const rvw = await review();
+  const fresh = rvw.items.find((i) => i.kind === 'test' && !i.answer);
+  await api('/api/answers', {
+    method: 'PUT',
+    body: JSON.stringify({
+      project: pid,
+      run: rvw.run.id,
+      answers: [
+        {
+          id: fresh.id,
+          hash: fresh.hash,
+          kind: 'test',
+          value: 'keep',
+          note: '',
+          via: 'item',
+          blind: false,
+        },
+      ],
+    }),
+  });
+  check(
+    'the bar offers Send for the new answer',
+    await until(
+      async () =>
+        norm(await page.locator('.kit-primary:visible').innerText()) ===
+        'Send 1 answer',
+    ),
+  );
+  await page.locator('.kit-primary:visible').click();
+  check(
+    'Send names the session it went to',
+    await until(
+      async () =>
+        norm(await page.locator('.kit-status').innerText()) ===
+        'Sent 1 answer to pi: probe.',
+    ),
+    await page.locator('.kit-status').innerText(),
   );
 
   // ---- 8. stale answer

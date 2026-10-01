@@ -21,6 +21,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/answers", s.putAnswers)
 	mux.HandleFunc("DELETE /api/answers", s.deleteAnswer)
 	mux.HandleFunc("POST /api/send", s.send)
+	mux.HandleFunc("POST /api/agent/presence", s.agentPresence)
+	mux.HandleFunc("POST /api/agent/review", s.agentReview)
+	mux.HandleFunc("GET /api/agent/wait", s.agentWait)
+	mux.HandleFunc("GET /api/agent/status", s.agentStatus)
 	mux.HandleFunc("GET /api/events", s.stream)
 	mux.HandleFunc("GET /api/poll", s.poll)
 	mux.HandleFunc("POST /api/stop", s.postStop)
@@ -300,13 +304,27 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	n, err := s.st.MarkSent(r.Context(), p.ID)
+	owner, err := s.st.ProjectByID(r.Context(), p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sd, err := s.st.Send(r.Context(), p.ID, owner.OwnerSession)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	n := sd.Counts.Total()
+	to := ""
 	if n > 0 {
 		s.events.emit("answers", map[string]int64{"project": p.ID})
+		s.wakeAll()
+		if _, ok := s.ownerPresent(owner); ok {
+			to = owner.OwnerLabel
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"sent": n})
+	writeJSON(w, http.StatusOK, struct {
+		Sent int    `json:"sent"`
+		To   string `json:"to"`
+	}{n, to})
 }

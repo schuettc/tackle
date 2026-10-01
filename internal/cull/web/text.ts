@@ -24,3 +24,12 @@ export function assertLines(lang: string, body: string): string[] {
       return [];
   }
 }
+
+/** The bar's status after Send: where the answers went (to), if anywhere. */
+export function sentText(n: number, to?: string): string {
+  if (n === 0) return 'Nothing to send.';
+  const what = `${n} ${n === 1 ? 'answer' : 'answers'}`;
+  return to
+    ? `Sent ${what} to ${to}.`
+    : `Sent ${what}. The next agent that opens cull in this project gets them.`;
+}
