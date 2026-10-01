@@ -1,6 +1,6 @@
 import pkg.consts
 import pytest
-from pkg.consts import BUILT, SETTING, TABLE, Cause, Mode, helper
+from pkg.consts import BIG, BUILT, SETTING, TABLE, Cause, Mode, helper
 
 
 def local_helper():
@@ -62,3 +62,29 @@ def test_fixture_parameter(thing):
 
 def test_no_code_under_test():
     assert 1 + 1 == 2
+
+
+LOCAL_SETTING = frozenset()
+
+
+def test_setting_in_test_file():
+    assert LOCAL_SETTING == frozenset()
+
+
+def test_big_setting_over_budget():
+    assert len(BIG) == 40
+
+
+def test_module_attribute_read():
+    assert hasattr(pkg, "consts")
+
+
+def test_literals_only():
+    assert len([1, 2]) == 2
+
+
+ANNOTATED: frozenset = frozenset()
+
+
+def test_annotated_setting_in_test_file():
+    assert ANNOTATED == frozenset()

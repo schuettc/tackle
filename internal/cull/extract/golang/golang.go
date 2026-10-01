@@ -417,6 +417,15 @@ func (fw *fileWalk) importedDecls(pdir string) map[string]decl {
 	return fw.state.pkgCache[pdir]
 }
 
+func isTestEntry(name string) bool {
+	for _, p := range []string{"Test", "Benchmark", "Example", "Fuzz"} {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func isTypeDecl(d decl) bool { return strings.HasPrefix(d.src, "type ") }
 
 // pinsSetting reports whether the test only reads a production declaration
@@ -479,6 +488,8 @@ func (fw *fileWalk) pinsSetting(body ast.Node) bool {
 				return true
 			}
 			if _, found := fw.prodDecls[x.Name]; found {
+				refs++
+			} else if _, found := fw.testDecls[x.Name]; found && !isTestEntry(x.Name) {
 				refs++
 			}
 		case *ast.CallExpr:

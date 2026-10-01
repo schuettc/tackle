@@ -506,16 +506,20 @@ func TestPinsSetting(t *testing.T) {
 	requireTS(t)
 	res := extractAll(t, filepath.Join(testdataDir, "pins"), 24000)
 	want := map[string]bool{
-		"const":              true,
-		"enum":               true,
-		"class reference":    true,
-		"namespace constant": true,
-		"project function":   false,
-		"constructs class":   false,
-		"same-file helper":   false,
-		"namespace call":     false,
-		"fixture parameter":  false,
-		"no code under test": false,
+		"const":                        true,
+		"enum":                         true,
+		"class reference":              true,
+		"namespace constant":           true,
+		"project function":             false,
+		"constructs class":             false,
+		"same-file helper":             false,
+		"namespace call":               false,
+		"fixture parameter":            false,
+		"no code under test":           false,
+		"same-file const method":       true,
+		"same-file built const method": false,
+		"imported const method":        true,
+		"literals only":                false,
 	}
 	for name, pins := range want {
 		tc := caseByID(t, res, "ts:test/pins.test.ts:"+name)

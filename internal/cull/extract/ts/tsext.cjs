@@ -275,31 +275,67 @@ function extractMain(args) {
     // values: code under test is non-empty and all merely referenced, no call
     // or `new` roots in an imported or same-file definition, and the test
     // callback takes no destructured fixtures. When unsure: false.
-    function pinsSetting(testNode, nCall, cs) {
-      if (nCall !== 0 || cs.length === 0) return false;
+    function plainConst(text) {
+      if (!text) return false;
+      const f = ts.createSourceFile("x.ts", text, ts.ScriptTarget.Latest, true);
+      if (f.statements.length !== 1 || !ts.isVariableStatement(f.statements[0])) return false;
+      let ok = true;
+      (function walk(n) {
+        if (!ok) return;
+        if (ts.isCallExpression(n)) ok = false;
+        else if (ts.isNewExpression(n) && !(ts.isIdentifier(n.expression) && /^(Set|Map|Array)$/.test(n.expression.text))) ok = false;
+        ts.forEachChild(n, walk);
+      })(f.statements[0]);
+      return ok;
+    }
+    function pinsSetting(testNode) {
       const cb = testNode.arguments[testNode.arguments.length - 1];
       if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
         for (const p of cb.parameters) if (!ts.isIdentifier(p.name)) return false;
       }
       let ok = true;
+      let reads = false;
       (function walk(n) {
         if (!ok) return;
+        if (ts.isIdentifier(n)) {
+          const par = n.parent;
+          const isName =
+            par &&
+            ((ts.isPropertyAccessExpression(par) && par.name === n) ||
+              (ts.isPropertyAssignment(par) && par.name === n) ||
+              (ts.isParameter(par) && par.name === n));
+          if (!isName && (local[n.text] || (imports[n.text] && declsOf(imports[n.text].file)[imports[n.text].orig]) || nsImports[n.text])) reads = true;
+        }
         if (ts.isNewExpression(n) || ts.isCallExpression(n)) {
           let e = n.expression;
+          const chain = [];
           while (
             ts.isPropertyAccessExpression(e) ||
             ts.isElementAccessExpression(e) ||
             ts.isNonNullExpression(e) ||
             ts.isParenthesizedExpression(e)
           ) {
+            if (ts.isPropertyAccessExpression(e)) chain.unshift(e.name.text);
+            else if (ts.isElementAccessExpression(e)) chain.unshift("[]");
             e = e.expression;
           }
-          if (ts.isIdentifier(e) && (imports[e.text] || nsImports[e.text] || local[e.text])) ok = false;
+          if (ts.isIdentifier(e) && (imports[e.text] || nsImports[e.text] || local[e.text])) {
+            // A method call on a constant whose initializer has no call is
+            // data, not project code.
+            let text = null;
+            let methodPath = chain;
+            if (imports[e.text]) text = declsOf(imports[e.text].file)[imports[e.text].orig];
+            else if (nsImports[e.text]) {
+              if (chain.length && chain[0] !== "[]") text = declsOf(nsImports[e.text])[chain[0]];
+              methodPath = chain.slice(1);
+            } else text = local[e.text];
+            if (!(ts.isCallExpression(n) && methodPath.length >= 1 && plainConst(text))) ok = false;
+          }
           if (ts.isNewExpression(n) && !ts.isIdentifier(e)) ok = false;
         }
         ts.forEachChild(n, walk);
       })(testNode);
-      return ok;
+      return ok && reads;
     }
 
     const id = assignId(`ts:${rel}:${qual}`);
@@ -316,7 +352,7 @@ function extractMain(args) {
       span: { start, end },
     };
     if (parentId) obj.parent = parentId;
-    if (pinsSetting(node, nCallCallees, callees)) obj.pins_setting = true;
+    if (pinsSetting(node)) obj.pins_setting = true;
     console.log(JSON.stringify(obj));
   }
 

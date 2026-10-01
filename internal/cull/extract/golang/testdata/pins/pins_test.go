@@ -60,3 +60,17 @@ func TestSubtests(t *testing.T) {
 		}
 	})
 }
+
+var localSetting = []string{"a"}
+
+func TestSameFileSetting(t *testing.T) {
+	if len(localSetting) != 1 {
+		t.Fatal("local")
+	}
+}
+
+func TestLiteralsOnly(t *testing.T) {
+	if len("ab") != 2 {
+		t.Fatal("len")
+	}
+}

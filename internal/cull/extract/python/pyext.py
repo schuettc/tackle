@@ -423,13 +423,35 @@ def _is_plain_value(src):
     return False
 
 
+cur_file_names = set()
+
+
 def pins_setting(fn, n_call_callees, callees, file_defs, imports, attr_mods):
     """The test only reads a project setting/class and compares it to fixed
     values: its code under test is non-empty and all of it merely referenced
     (no call target), no call in its body resolves to project code or to a
     same-file definition, and it takes no fixture parameters beyond pytest's
     built-ins. When unsure: False."""
-    if n_call_callees != 0 or not callees:
+    local = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    reads = False
+    call_funcs = {id(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    for r in ast.walk(fn):
+        if id(r) in call_funcs:
+            continue
+        nm = None
+        if isinstance(r, ast.Name) and isinstance(r.ctx, ast.Load):
+            nm = r.id
+        elif isinstance(r, ast.Attribute) and isinstance(r.ctx, ast.Load) and isinstance(r.value, ast.Name):
+            nm = r.value.id
+        if nm is None or nm in local or nm == fn.name or nm.startswith("test_"):
+            continue
+        if nm in cur_file_names and nm not in imports and nm not in attr_mods:
+            reads = True
+        elif nm in imports and resolve(imports[nm], nm):
+            reads = True
+        elif nm in attr_mods and module_file(attr_mods[nm]):
+            reads = True
+    if not reads:
         return False
     a = fn.args
     for p in list(getattr(a, "posonlyargs", []) or []) + list(a.args) + list(a.kwonlyargs) + [x for x in (a.vararg, a.kwarg) if x]:
@@ -574,6 +596,14 @@ for rel in relpaths:
             for t in n.targets:
                 if isinstance(t, ast.Name):
                     file_defs[t.id] = seg(src, n)
+
+    # Module-level names for the setting-only check only (not code context).
+    file_names = set(file_defs)
+    for n in tree.body:
+        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            file_names.add(n.target.id)
+    cur_file_names.clear()
+    cur_file_names.update(file_names)
 
     fixtures = conftest_fixtures(path)
     for n in tree.body:

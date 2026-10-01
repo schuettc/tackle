@@ -671,7 +671,12 @@ func TestPinsSetting(t *testing.T) {
 		"test_hasattr":                        true,
 		"test_enum":                           true,
 		"test_method_on_constant":             true,
-		"test_module_attribute":               false,
+		"test_module_attribute":               true,
+		"test_setting_in_test_file":           true,
+		"test_big_setting_over_budget":        true,
+		"test_module_attribute_read":          true,
+		"test_literals_only":                  false,
+		"test_annotated_setting_in_test_file": true,
 		"test_builtin_fixture":                true,
 		"test_calls_project_function":         false,
 		"test_constructs_project_class":       false,
@@ -686,5 +691,17 @@ func TestPinsSetting(t *testing.T) {
 		if tc.PinsSetting != pins {
 			t.Errorf("%s: PinsSetting = %v, want %v (callees %v)", name, tc.PinsSetting, pins, calleeSymbols(tc.Callees))
 		}
+	}
+}
+
+func TestPinsSettingOverBudget(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 300)
+	tc := caseByID(t, res, "py:tests/test_pins.py:test_big_setting_over_budget")
+	if len(tc.Callees) != 0 {
+		t.Fatalf("setting fit the budget (%v); the test needs a smaller budget", calleeSymbols(tc.Callees))
+	}
+	if !tc.PinsSetting {
+		t.Errorf("PinsSetting = false for a setting dropped by the byte budget")
 	}
 }

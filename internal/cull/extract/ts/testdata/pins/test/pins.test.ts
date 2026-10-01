@@ -44,3 +44,22 @@ test("fixture parameter", async ({ page }) => {
 test("no code under test", () => {
   expect(1 + 1).toBe(2);
 });
+
+const LOCAL_LIST = ["a", "b"];
+const BUILT_LIST = Object.keys({ a: 1 });
+
+test("same-file const method", () => {
+  expect(LOCAL_LIST.includes("a")).toBe(true);
+});
+
+test("same-file built const method", () => {
+  expect(BUILT_LIST.includes("a")).toBe(true);
+});
+
+test("imported const method", () => {
+  expect(SEASONS.includes(2022)).toBe(true);
+});
+
+test("literals only", () => {
+  expect([1, 2].length).toBe(2);
+});

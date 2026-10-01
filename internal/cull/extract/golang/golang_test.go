@@ -367,6 +367,8 @@ func TestPinsSetting(t *testing.T) {
 		"TestConstructs":      false,
 		"TestSameFileHelper":  false,
 		"TestNoCodeUnderTest": false,
+		"TestSameFileSetting": true,
+		"TestLiteralsOnly":    false,
 		"TestSubtests/pins":   true,
 		"TestSubtests/calls":  false,
 	}
