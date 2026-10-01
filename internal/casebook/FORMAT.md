@@ -83,7 +83,10 @@ temp. A temp folder doing real work is journalled, whatever `repo` its line
 carries:
 - its git dir, or a linked worktree's common dir, resolves inside a configured
   scan root (a worktree of a tracked clone placed in `/tmp`); with no git dir
-  recorded, a working tree that still exists is read for its `.git`;
+  recorded, a working tree that still exists is read for its `.git`. A `git
+  worktree add`'s post-checkout (old head all zeros, branch flag 1) recorded
+  without a git dir counts once sync gave it a `repo`, which sync can only
+  take from a worktree of a tracked clone; no other hook line's `repo` does;
 - it pushes to a remote that isn't local: a pre-push hook's remote URL, an
   agent's `git push` to a URL or to a remote the clone's config names, or,
   once that clone is gone, a push action sync annotated with a repo (sync

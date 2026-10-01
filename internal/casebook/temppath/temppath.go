@@ -137,6 +137,12 @@ func (m *Matcher) path(p string) bool {
 //     from this machine's snapshot, so its dir was a worktree of a tracked
 //     clone. A gh action naming its repo (`-R`) without a dir is likewise
 //     about that repo wherever it ran.
+//
+// The one hook line whose repo counts is a `git worktree add`'s
+// post-checkout recorded without a git dir in a temp folder (worktreeAdd):
+// sync resolved that repo from a worktree of a tracked clone (rule 1, after
+// the worktree is gone). A copier or scratch clone's checkout carries no
+// such repo, and no other hook's repo makes it real.
 func (m *Matcher) Event(ev journal.Event) bool {
 	if len(ev.Actions) == 0 {
 		return m.hookTemp(ev)
@@ -163,7 +169,21 @@ func (m *Matcher) hookTemp(ev journal.Event) bool {
 	if ev.Hook == "pre-push" && len(ev.Args) > 1 && !localRemote(ev.Args[1]) {
 		return false
 	}
+	if ev.GitDir == "" && ev.Repo != "" && worktreeAdd(ev) {
+		// Rule 1 for a worktree that is gone: with no git dir and a temp
+		// working directory, sync could only take the line's repo from a
+		// worktree of a clone in this machine's snapshot. Only this hook
+		// counts; any other line's repo says nothing (see Event).
+		return false
+	}
 	return true
+}
+
+// worktreeAdd reports whether ev is the post-checkout `git worktree add`
+// runs in the new worktree: the old head all zeros, a branch checkout.
+func worktreeAdd(ev journal.Event) bool {
+	return ev.Hook == "post-checkout" && len(ev.Args) == 3 && ev.Args[0] != "" &&
+		strings.Trim(ev.Args[0], "0") == "" && ev.Args[2] == "1"
 }
 
 func (m *Matcher) actionTemp(cwd string, a journal.Action) bool {

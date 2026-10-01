@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/casebook/journal"
@@ -240,6 +241,36 @@ func TestEventReadsTheWorkingTree(t *testing.T) {
 		"agent pushes the same clone to github":        {push(local, "gh", "main"), false},
 		"agent's push url is local":                    {push(pushurl, "origin"), true},
 		"hook in a scratch clone":                      {journal.Event{Src: "git-hook", Hook: "post-commit", CWD: gh}, true},
+	} {
+		if got := m.Event(tc.ev); got != tc.want {
+			t.Errorf("%s: Event = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestEventKeepsAWorktreeAddOfATrackedClone: `git worktree add /tmp/x` runs
+// post-checkout in the new worktree (old head all zeros, branch flag 1)
+// without GIT_DIR. Once the worktree is gone, the only evidence it belonged
+// to a tracked clone is the repo sync resolved for it from this machine's
+// snapshot: that keeps it. No other hook line is made real by its repo.
+func TestEventKeepsAWorktreeAddOfATrackedClone(t *testing.T) {
+	m := newWith([]string{"/tmp", "/private/tmp", "/var/folders", "/private/var/folders"}, []string{"/Users/c/GitHub"})
+	zero := "0000000000000000000000000000000000000000"
+	add := func(cwd, gitDir, repo string, args ...string) journal.Event {
+		return journal.Event{Src: "git-hook", Hook: "post-checkout", Args: args, CWD: cwd, GitDir: gitDir, Repo: repo}
+	}
+	for name, tc := range map[string]struct {
+		ev   journal.Event
+		want bool
+	}{
+		"worktree add of a tracked clone":       {add("/private/tmp/muda-plan", "", "schuettc/tools-ops", zero, "5e02487e3f31e546b95d60022f9f57e1939ff331", "1"), false},
+		"worktree add, sha256 repo":             {add("/tmp/wt", "", "schuettc/hail", strings.Repeat("0", 64), strings.Repeat("a", 64), "1"), false},
+		"same shape, no repo (a scratch clone)": {add("/tmp/scratch", "", "", zero, "5e02487e3f31e546b95d60022f9f57e1939ff331", "1"), true},
+		"copier clone's checkout, temp git dir": {add("/Users/c/GitHub/muda", "/private/var/folders/92/ab/T/copier._vcs.clone.k3j2/.git", "schuettc/muda", zero, "5e02487e3f31e546b95d60022f9f57e1939ff331", "1"), true},
+		"a later checkout in the worktree":      {add("/tmp/wt", "", "schuettc/hail", "5e02487e3f31e546b95d60022f9f57e1939ff331", "9dafd0301faad79cf6a1974d92af424189476b5d", "1"), true},
+		"a file checkout (flag 0)":              {add("/tmp/wt", "", "schuettc/hail", zero, "5e02487e3f31e546b95d60022f9f57e1939ff331", "0"), true},
+		"a post-commit with a repo":             {journal.Event{Src: "git-hook", Hook: "post-commit", CWD: "/tmp/wt", Repo: "schuettc/hail"}, true},
+		"a reference-transaction with a repo":   {journal.Event{Src: "git-hook", Hook: "reference-transaction", Args: []string{"committed"}, CWD: "/tmp/wt", Repo: "schuettc/hail"}, true},
 	} {
 		if got := m.Event(tc.ev); got != tc.want {
 			t.Errorf("%s: Event = %v, want %v", name, got, tc.want)
