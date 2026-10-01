@@ -548,18 +548,18 @@ func scanSend(r scanner) (Send, error) {
 
 // ClaimSend delivers to session the oldest undelivered send of the project
 // that it may take, marking it delivered in the same statement, so concurrent
-// claimers never both get one. owner says the project's review owner is
-// present: then only sends owned by session (or by nobody) may be taken;
-// otherwise any session may take any. ok is false when nothing qualifies.
-func (s *Store) ClaimSend(ctx context.Context, projectID int64, session string, owner bool) (Send, bool, error) {
+// claimers never both get one. It does not look at the send's owner: serve
+// decides who may call (the project's current owner when present, else any
+// present session of the project). ok is false when nothing is undelivered.
+func (s *Store) ClaimSend(ctx context.Context, projectID int64, session string) (Send, bool, error) {
 	var sd Send
 	found := true
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		var err error
 		sd, err = scanSend(tx.QueryRowContext(ctx, `UPDATE sends SET delivered_to = ?, delivered_at = ?
 			WHERE id = (SELECT id FROM sends WHERE project_id = ? AND delivered_to IS NULL
-			            AND (? = 0 OR owner = ? OR owner = '') ORDER BY id LIMIT 1)
-			AND delivered_to IS NULL RETURNING `+sendCols, session, time.Now().UnixMilli(), projectID, boolInt(owner), session))
+			            ORDER BY id LIMIT 1)
+			AND delivered_to IS NULL RETURNING `+sendCols, session, time.Now().UnixMilli(), projectID))
 		if errors.Is(err, sql.ErrNoRows) {
 			found = false
 			return nil
@@ -570,13 +570,6 @@ func (s *Store) ClaimSend(ctx context.Context, projectID int64, session string, 
 		return Send{}, false, err
 	}
 	return sd, found, nil
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
 
 // Undelivered lists the project's sends not yet delivered, oldest first.

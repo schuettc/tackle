@@ -220,7 +220,7 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 		}
 		owner, present := s.ownerPresent(cur)
 		if !present || owner == id {
-			sd, ok, err := s.st.ClaimSend(r.Context(), p.ID, id, present)
+			sd, ok, err := s.st.ClaimSend(r.Context(), p.ID, id)
 			if err != nil {
 				if r.Context().Err() != nil {
 					return

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/schuettc/tools-common/sqlitedb"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -414,31 +415,28 @@ func TestClaimSendRules(t *testing.T) {
 		return sd
 	}
 	sd := send(0, "A")
-	// Owner present: only A may take it.
-	if _, ok, err := s.ClaimSend(ctx, p.ID, "B", true); err != nil || ok {
-		t.Fatalf("B took A's send: %v %v", ok, err)
-	}
-	got, ok, err := s.ClaimSend(ctx, p.ID, "A", true)
-	if err != nil || !ok || got.ID != sd.ID || got.DeliveredTo != "A" || got.DeliveredAt.IsZero() {
+	// The store does not filter on the send's owner: serve decides who calls.
+	// A send made for A is claimable by B (the owner has since moved).
+	got, ok, err := s.ClaimSend(ctx, p.ID, "B")
+	if err != nil || !ok || got.ID != sd.ID || got.DeliveredTo != "B" || got.DeliveredAt.IsZero() {
 		t.Fatalf("%+v %v %v", got, ok, err)
 	}
-	if _, ok, _ := s.ClaimSend(ctx, p.ID, "A", true); ok {
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "A"); ok {
 		t.Fatal("delivered twice")
 	}
-	// Owner gone: any session takes it.
 	sd2 := send(1, "A")
-	got, ok, _ = s.ClaimSend(ctx, p.ID, "B", false)
-	if !ok || got.ID != sd2.ID || got.DeliveredTo != "B" {
+	got, ok, _ = s.ClaimSend(ctx, p.ID, "A")
+	if !ok || got.ID != sd2.ID || got.DeliveredTo != "A" {
 		t.Fatalf("%+v %v", got, ok)
 	}
 	// Another project's sends are never taken.
 	q, _ := s.Project(ctx, "/y")
-	if _, ok, _ := s.ClaimSend(ctx, q.ID, "B", false); ok {
+	if _, ok, _ := s.ClaimSend(ctx, q.ID, "B"); ok {
 		t.Fatal("claimed in another project")
 	}
 	// Oldest first.
 	a := send(2, "")
-	if _, ok, _ := s.ClaimSend(ctx, p.ID, "C", false); !ok {
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "C"); !ok {
 		t.Fatalf("ownerless send %d not claimed", a.ID)
 	}
 }
@@ -457,7 +455,7 @@ func TestClaimSendOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, ok, err := s.ClaimSend(ctx, p.ID, fmt.Sprintf("s%d", i), false); err != nil {
+			if _, ok, err := s.ClaimSend(ctx, p.ID, fmt.Sprintf("s%d", i)); err != nil {
 				t.Error(err)
 			} else if ok {
 				wins.Add(1)
@@ -495,7 +493,63 @@ func TestOwnerAndSendsSurviveReopen(t *testing.T) {
 	if q.OwnerSession != "sess" || q.OwnerLabel != "pi: x" {
 		t.Fatalf("%+v", q)
 	}
-	if _, ok, _ := s.ClaimSend(ctx, p.ID, "sess", true); !ok {
+	if _, ok, _ := s.ClaimSend(ctx, p.ID, "sess"); !ok {
 		t.Fatal("send lost across reopen")
+	}
+}
+
+func TestUpgradeFromV1(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cull.db")
+	d, err := sqlitedb.Open(ctx, path, sqlitedb.Options{Migrations: Migrations[:1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := d.Version(ctx); v != 1 {
+		t.Fatalf("version %d", v)
+	}
+	err = d.Tx(ctx, func(tx *sql.Tx) error {
+		for _, q := range []string{
+			`INSERT INTO projects(id, root) VALUES (1, '/old')`,
+			`INSERT INTO runs(id, project_id, at, total) VALUES (1, 1, 1000, 1)`,
+			`INSERT INTO answers(project_id, item_id, hash, kind, value, note, via, run_id, answered_at)
+			 VALUES (1, 't1', 'h1', 'test', 'cut', 'old note', 'item', 1, 1000)`,
+		} {
+			if _, err := tx.ExecContext(ctx, q); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	if v, _ := s.db.Version(ctx); v != SchemaVersion {
+		t.Fatalf("version %d after upgrade", v)
+	}
+	p, err := s.Project(ctx, "/old")
+	if err != nil || p.ID != 1 {
+		t.Fatalf("%+v %v", p, err)
+	}
+	as, err := s.Answers(ctx, p.ID)
+	if err != nil || len(as) != 1 || as[Key{"t1", "h1"}].Value != "cut" || as[Key{"t1", "h1"}].Note != "old note" {
+		t.Fatalf("%+v %v", as, err)
+	}
+	if err := s.SetOwner(ctx, p.ID, "sess", "pi: old"); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, p.ID, "sess")
+	if err != nil || sd.Counts.Cut != 1 {
+		t.Fatalf("%+v %v", sd, err)
+	}
+	got, ok, err := s.ClaimSend(ctx, p.ID, "sess")
+	if err != nil || !ok || got.ID != sd.ID {
+		t.Fatalf("%+v %v %v", got, ok, err)
 	}
 }

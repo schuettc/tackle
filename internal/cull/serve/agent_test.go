@@ -298,3 +298,22 @@ func TestSendTextFormat(t *testing.T) {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestSendGoesToTheCurrentOwnerAfterOwnershipMoves(t *testing.T) {
+	a := newAgentFx(t)
+	root := t.TempDir()
+	a.presence("A", "pi: a", root)
+	a.presence("B", "pi: b", root)
+	a.review2("A", root)
+	p := a.answered(root, "")
+	if r := a.sendNow(p); r["to"] != "pi: a" {
+		t.Fatalf("%v", r)
+	}
+	a.review2("B", root) // ownership moves before delivery
+	if w := a.wait("A", root, 3); w.Code != 204 {
+		t.Fatalf("old owner got %d %s", w.Code, w.Body)
+	}
+	if w := a.wait("B", root, 3); w.Code != 200 {
+		t.Fatalf("current owner got %d", w.Code)
+	}
+}
