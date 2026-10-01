@@ -23,9 +23,11 @@ var assets embed.FS
 type Server struct {
 	st *store.Store
 
-	events   eventLog
-	activity atomic.Int64 // unix ms of the last API request or stream heartbeat
-	streamWG sync.WaitGroup
+	events       eventLog
+	activity     atomic.Int64 // unix ms of the last API request
+	streamWG     sync.WaitGroup
+	streams      atomic.Int32 // open event streams
+	writeTimeout time.Duration
 
 	mu   sync.Mutex
 	life context.Context // Run's context; nil outside Run

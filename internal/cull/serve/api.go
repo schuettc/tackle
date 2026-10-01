@@ -202,6 +202,10 @@ func (s *Server) putAnswers(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project and run are required")
 		return
 	}
+	if len(b.Answers) == 0 {
+		writeErr(w, http.StatusBadRequest, "no answers")
+		return
+	}
 	valid := map[string]map[string]bool{
 		"test":  {"cut": true, "keep": true},
 		"group": {"merge": true, "separate": true},
@@ -224,7 +228,10 @@ func (s *Server) putAnswers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	run, items, err := s.st.LatestRun(r.Context(), p.ID)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && run.ID != b.Run) {
+	// b.Run is required (it says which run the client was looking at) but
+	// answers are checked against the latest run: an item that is unchanged
+	// there (same id and hash) is still a valid answer from an older tab.
+	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusConflict, "stale")
 		return
 	}
@@ -246,7 +253,7 @@ func (s *Server) putAnswers(w http.ResponseWriter, r *http.Request) {
 		as = append(as, store.Answer{ItemID: a.ID, Hash: a.Hash, Kind: a.Kind, Value: a.Value, Note: a.Note, Via: a.Via,
 			Blind: a.Blind, Jev: it.Jev, Model: it.Model, QuestionsHash: run.QuestionsHash})
 	}
-	err = s.st.SaveAnswers(r.Context(), p.ID, b.Run, as)
+	err = s.st.SaveAnswers(r.Context(), p.ID, run.ID, as)
 	if errors.Is(err, store.ErrStale) {
 		writeErr(w, http.StatusConflict, "stale")
 		return

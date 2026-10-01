@@ -2,10 +2,13 @@ package serve
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,13 +23,22 @@ type event struct {
 
 // eventLog is an in-memory log with increasing integer cursors.
 type eventLog struct {
+	boot   string
 	mu     sync.Mutex
 	evs    []event
 	next   int64
 	notify chan struct{} // closed and replaced on every emit
 }
 
-func (l *eventLog) init() { l.notify = make(chan struct{}) }
+func (l *eventLog) init() {
+	l.notify = make(chan struct{})
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	l.boot = hex.EncodeToString(b[:])
+}
+
+// format renders the wire cursor for event n: "<boot>-<n>".
+func (l *eventLog) format(n int64) string { return l.boot + "-" + strconv.FormatInt(n, 10) }
 
 func (l *eventLog) emit(typ string, data any) {
 	b, err := json.Marshal(data)
@@ -64,11 +76,25 @@ func (l *eventLog) latest() int64 {
 	return l.next
 }
 
-// sinceCursor parses a cursor; ok is false for empty, malformed, or a cursor
-// this log never issued.
-func (l *eventLog) sinceCursor(v string) (int64, bool) {
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil || n < 0 || n > l.latest() {
+// resume parses a client cursor. ok is false (the client must reload) when
+// it is malformed, from another boot, ahead of the log, or older than the
+// oldest retained event.
+func (l *eventLog) resume(v string) (int64, bool) {
+	boot, num, found := strings.Cut(v, "-")
+	if !found || boot != l.boot {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	oldest := l.next + 1 // first event the client would need next
+	if len(l.evs) > 0 {
+		oldest = l.evs[0].Cursor
+	}
+	if n > l.next || n < oldest-1 {
 		return 0, false
 	}
 	return n, true
@@ -80,17 +106,24 @@ type wireEvent struct {
 }
 
 func (s *Server) poll(w http.ResponseWriter, r *http.Request) {
-	since, ok := s.events.sinceCursor(r.URL.Query().Get("since"))
+	v := r.URL.Query().Get("since")
+	since, ok := int64(0), true // no cursor: everything retained
+	if v != "" {
+		since, ok = s.events.resume(v)
+	}
 	if !ok {
-		since = 0 // unknown: everything retained; the client reloads
+		writeJSON(w, http.StatusOK, map[string]any{"cursor": s.events.format(s.events.latest()), "reset": true, "events": []wireEvent{}})
+		return
 	}
 	evs, cur, _ := s.events.after(since)
 	out := make([]wireEvent, 0, len(evs))
 	for _, e := range evs {
 		out = append(out, wireEvent{e.Type, e.Data})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"cursor": strconv.FormatInt(cur, 10), "events": out})
+	writeJSON(w, http.StatusOK, map[string]any{"cursor": s.events.format(cur), "events": out})
 }
+
+const defaultWriteTimeout = 10 * time.Second
 
 func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
@@ -100,6 +133,8 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	}
 	s.streamWG.Add(1)
 	defer s.streamWG.Done()
+	s.streams.Add(1)
+	defer s.streams.Add(-1)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	s.mu.Lock()
@@ -108,35 +143,63 @@ func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
 	if life != nil {
 		defer context.AfterFunc(life, cancel)()
 	}
-	cursor, ok := s.events.sinceCursor(r.Header.Get("Last-Event-ID"))
-	if !ok {
-		cursor = s.events.latest()
+	rc := http.NewResponseController(w)
+	timeout := s.writeTimeout
+	if timeout <= 0 {
+		timeout = defaultWriteTimeout
+	}
+	// write sends one frame under a fresh write deadline, so a client that
+	// stopped reading ends its stream instead of pinning it.
+	write := func(format string, args ...any) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(timeout))
+		if _, err := fmt.Fprintf(w, format, args...); err != nil {
+			return false
+		}
+		fl.Flush()
+		return true
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, ": ok\n\n")
-	fl.Flush()
+	var cursor int64
+	lastID := r.Header.Get("Last-Event-ID")
+	if lastID == "" {
+		cursor = s.events.latest()
+	} else {
+		cursor, ok = s.events.resume(lastID)
+		if !ok {
+			cursor = s.events.latest()
+			if !write(": ok\n\nid: %s\ndata: {\"type\":\"reset\",\"data\":{}}\n\n", s.events.format(cursor)) {
+				return
+			}
+			lastID = "reset"
+		}
+	}
+	if lastID != "reset" && !write(": ok\n\n") {
+		return
+	}
 	beat := time.NewTicker(15 * time.Second)
 	defer beat.Stop()
 	for {
 		evs, _, wait := s.events.after(cursor)
 		for _, e := range evs {
 			b, _ := json.Marshal(wireEvent{e.Type, e.Data})
-			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, b); err != nil {
+			if !write("id: %s\ndata: %s\n\n", s.events.format(e.Cursor), b) {
 				return
 			}
 			cursor = e.Cursor
 		}
-		fl.Flush()
 		select {
 		case <-ctx.Done():
 			return
 		case <-wait:
 		case <-beat.C:
-			s.activity.Store(time.Now().UnixMilli())
-			_, _ = fmt.Fprint(w, ": hb\n\n")
+			// The heartbeat is not activity: an open but idle tab must not
+			// keep the server alive.
+			if !write(": hb\n\n") {
+				return
+			}
 		}
 	}
 }

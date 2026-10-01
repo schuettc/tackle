@@ -312,11 +312,12 @@ func TestLatestRunIDs(t *testing.T) {
 	}
 	a, _ := s.Project(ctx, "/a")
 	b, _ := s.Project(ctx, "/b")
-	c, _ := s.Project(ctx, "/c") // no run
-	r1, _ := s.RecordRun(ctx, Run{ProjectID: a.ID}, nil)
+	c, _ := s.Project(ctx, "/c")                                           // no run
+	if _, err := s.RecordRun(ctx, Run{ProjectID: a.ID}, nil); err != nil { // superseded by r3
+		t.Fatal(err)
+	}
 	r2, _ := s.RecordRun(ctx, Run{ProjectID: b.ID}, nil)
 	r3, _ := s.RecordRun(ctx, Run{ProjectID: a.ID}, nil)
-	_ = r1
 	got, err = s.LatestRunIDs(ctx)
 	if err != nil {
 		t.Fatal(err)

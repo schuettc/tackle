@@ -127,6 +127,58 @@ func TestIdleExit(t *testing.T) {
 	}
 }
 
+func TestRemoveAdvertLeavesOtherPID(t *testing.T) {
+	t.Setenv("CULL_HOME", t.TempDir())
+	if err := writeAdvert(Advert{PID: 4242, Token: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	removeAdvert(os.Getpid())
+	if a, err := readAdvert(); err != nil || a.PID != 4242 {
+		t.Fatalf("advert gone or changed: %+v %v", a, err)
+	}
+	removeAdvert(4242)
+	if _, err := os.Stat(AdvertPath()); !os.IsNotExist(err) {
+		t.Fatalf("own advert kept: %v", err)
+	}
+}
+
+func TestStopRequiresToken(t *testing.T) {
+	r := startRun(t, Options{})
+	adv, _ := Running()
+	resp, err := http.Post(adv.Base+"/api/stop", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 401 {
+		t.Fatalf("stop without token: %d", resp.StatusCode)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := Running(); err != nil {
+		t.Fatalf("server stopped: %v", err)
+	}
+	select {
+	case err := <-r.done:
+		t.Fatalf("run exited: %v", err)
+	default:
+	}
+	_ = Stop(context.Background())
+	wait(t, r)
+}
+
+func TestIdleExitWithIdleStreamOpen(t *testing.T) {
+	r := startRun(t, Options{Idle: 300 * time.Millisecond})
+	adv, _ := Running()
+	req, _ := http.NewRequest("GET", adv.Base+"/api/events", nil)
+	req.Header.Set(localweb.TokenHeader, adv.Token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	wait(t, r) // an open but idle tab doesn't keep the server alive
+}
+
 func TestAPIRequiresToken(t *testing.T) {
 	r := startRun(t, Options{})
 	adv, _ := Running()
