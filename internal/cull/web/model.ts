@@ -38,6 +38,13 @@ const FLAG_ORDER = [
   'mock_only',
   'not_missed',
 ];
+/** cull's own reason for sending a test to Court: it only checks a setting. */
+export const PINS_SETTING: Concern = {
+  flag: 'pins_setting',
+  value: 1,
+  short: "checks a setting's value",
+  long: 'it only reads a project setting or class and compares it to fixed values',
+};
 export const CONCERN_THRESHOLD = 0.35;
 
 const TEST_LEANS = ['cut', 'keep', 'review'] as const;
@@ -65,6 +72,7 @@ export function actP(item: Item): number {
 }
 
 export function concern(item: TestItem): Concern | null {
+  if (item.rule === 'pins_setting') return PINS_SETTING;
   const jev = item.jev as unknown as Record<string, Noul>;
   let best: string | null = null;
   let bestV = CONCERN_THRESHOLD;
@@ -113,6 +121,9 @@ export function recommendation(item: Item): string {
         ? `Jev leans keep (cut ${p})`
         : `Jev can't decide (cut ${p})`;
   const c = concern(item);
+  if (c === PINS_SETTING) {
+    return `${lead}. cull sends it to you because it only checks a setting's value; only you know whether that value is deliberate. Protects behavior rated ${rvLevel(item.jev.regression_value.score)}.`;
+  }
   const why = c
     ? `Jev's main concern: ${c.long} (${c.value.toFixed(2)}).`
     : 'No single concern stood out; Jev is split on whether it earns its place.';

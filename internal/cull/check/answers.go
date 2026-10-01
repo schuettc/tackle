@@ -23,7 +23,7 @@ func GroupHash(memberHashes []string) string {
 
 // eligible reports whether a result is one check would send to review.
 func eligible(verdict, rule string) bool {
-	return verdict == "review" && (rule == "review_band" || rule == "truncated")
+	return verdict == "review" && (rule == "review_band" || rule == "truncated" || rule == "pins_setting")
 }
 
 // applyAnswers settles eligible review results with Court's stored answers
@@ -143,11 +143,11 @@ func mustJSON(v any) json.RawMessage {
 }
 
 func recorded(rule string) bool {
-	return rule == "review_band" || rule == "truncated" || rule == "court"
+	return rule == "review_band" || rule == "truncated" || rule == "pins_setting" || rule == "court"
 }
 
 // recordItems builds the run's items: every result (no error) whose rule is
-// review_band, truncated or court, with the exact state judged and Jev's
+// review_band, truncated, pins_setting or court, with the exact state judged and Jev's
 // answers.
 func recordItems(kept []cases.TestCase, tj []judge.Judged, tests []TestResult, gStates []any, gj []judge.Judged, gout []GroupResult) []store.Item {
 	var items []store.Item

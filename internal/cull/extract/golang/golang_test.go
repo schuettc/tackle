@@ -356,3 +356,24 @@ func TestNoGoModSkipped(t *testing.T) {
 		}
 	}
 }
+
+func TestPinsSetting(t *testing.T) {
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 24000)
+	want := map[string]bool{
+		"TestConst":           true,
+		"TestEnum":            true,
+		"TestTypeOnly":        true,
+		"TestCallsProject":    false,
+		"TestConstructs":      false,
+		"TestSameFileHelper":  false,
+		"TestNoCodeUnderTest": false,
+		"TestSubtests/pins":   true,
+		"TestSubtests/calls":  false,
+	}
+	for name, pins := range want {
+		tc := caseByID(t, res, "go:pins_test.go:"+name)
+		if tc.PinsSetting != pins {
+			t.Errorf("%s: PinsSetting = %v, want %v", name, tc.PinsSetting, pins)
+		}
+	}
+}

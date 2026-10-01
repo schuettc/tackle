@@ -1,6 +1,6 @@
 // bulk.ts — buckets, groupings and what a bulk action may touch.
 
-import { actP, concern, lean, NO_CONCERN } from './model.ts';
+import { actP, concern, lean, NO_CONCERN, PINS_SETTING } from './model.ts';
 
 export type Answers = ReadonlyMap<string, unknown>;
 
@@ -29,6 +29,7 @@ export function buckets(
 }
 
 export const CONCERN_ORDER = [
+  PINS_SETTING.short,
   'restates the code',
   'pins a detail',
   'might not be missed',

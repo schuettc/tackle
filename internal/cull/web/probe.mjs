@@ -134,8 +134,8 @@ async function main() {
   const page = await open(pageUrl());
   const chips = (await chipText(page)).map(norm);
   check(
-    'tests chips: leans cut 20, leans keep 12, undecided 8',
-    ['leans cut 20', 'leans keep 12', 'undecided 8'].every((c) =>
+    'tests chips: leans cut 21, leans keep 12, undecided 8',
+    ['leans cut 21', 'leans keep 12', 'undecided 8'].every((c) =>
       chips.includes(c),
     ),
     chips.join(' | '),
@@ -146,10 +146,10 @@ async function main() {
     chips.join(' | '),
   );
   check(
-    'the accept card offers cut all 20',
+    'the accept card offers cut all 21',
     (await page.locator('.kit-card').first().innerText())
       .toLowerCase()
-      .includes('cut all 20'),
+      .includes('cut all 21'),
   );
   const status = norm(await page.locator('.kit-status').innerText());
   check(
@@ -164,7 +164,7 @@ async function main() {
     .join('|');
   check(
     'the sections show open counts',
-    ctls.startsWith('tests 40|groups 8'),
+    ctls.startsWith('tests 41|groups 8'),
     ctls,
   );
   check(
@@ -232,6 +232,33 @@ async function main() {
       ),
     JSON.stringify(rows),
   );
+
+  // ---- the pins_setting item: first row, its own words, its own sentence
+  console.log('pins_setting');
+  {
+    const pin = tests.find((i) => i.rule === 'pins_setting');
+    check(
+      'the first by-concern row is "checks a setting\'s value"',
+      rows[0]?.[0].startsWith("checks a setting's value") &&
+        rows[0][0].includes(
+          'it only reads a project setting or class and compares it to fixed values',
+        ) &&
+        rows[0][1] === '1',
+      JSON.stringify(rows[0]),
+    );
+    await page.goto(pageUrl({}, `#/p/${pid}/${encodeURIComponent(pin.id)}`));
+    await page.waitForSelector('.kit-doc h1');
+    const text = norm(await page.locator('main.kit-read').innerText());
+    check(
+      'its recommendation names the reason',
+      text.includes(
+        "Jev leans cut (0.51). cull sends it to you because it only checks a setting's value; only you know whether that value is deliberate. Protects behavior rated cosmetic.",
+      ),
+      text.slice(0, 400),
+    );
+    await page.goto(pageUrl());
+    await page.waitForSelector('table.ov');
+  }
 
   // ---- a long unbroken name wraps inside the reading column
   console.log('long names');

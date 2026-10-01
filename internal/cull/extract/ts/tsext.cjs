@@ -267,8 +267,40 @@ function extractMain(args) {
       if (calledIds.has(n)) addImported(n, false);
     }
     for (const { ns, name } of nsRefs) if (calledNs.has(`${ns}.${name}`)) addNs(ns, name, false);
+    const nCallCallees = callees.length;
     for (const n of sorted) if (!calledIds.has(n)) addImported(n, true);
     for (const { ns, name } of nsRefs) if (!calledNs.has(`${ns}.${name}`)) addNs(ns, name, true);
+
+    // The test only reads a project setting/class and compares it to fixed
+    // values: code under test is non-empty and all merely referenced, no call
+    // or `new` roots in an imported or same-file definition, and the test
+    // callback takes no destructured fixtures. When unsure: false.
+    function pinsSetting(testNode, nCall, cs) {
+      if (nCall !== 0 || cs.length === 0) return false;
+      const cb = testNode.arguments[testNode.arguments.length - 1];
+      if (cb && (ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
+        for (const p of cb.parameters) if (!ts.isIdentifier(p.name)) return false;
+      }
+      let ok = true;
+      (function walk(n) {
+        if (!ok) return;
+        if (ts.isNewExpression(n) || ts.isCallExpression(n)) {
+          let e = n.expression;
+          while (
+            ts.isPropertyAccessExpression(e) ||
+            ts.isElementAccessExpression(e) ||
+            ts.isNonNullExpression(e) ||
+            ts.isParenthesizedExpression(e)
+          ) {
+            e = e.expression;
+          }
+          if (ts.isIdentifier(e) && (imports[e.text] || nsImports[e.text] || local[e.text])) ok = false;
+          if (ts.isNewExpression(n) && !ts.isIdentifier(e)) ok = false;
+        }
+        ts.forEachChild(n, walk);
+      })(testNode);
+      return ok;
+    }
 
     const id = assignId(`ts:${rel}:${qual}`);
     const obj = {
@@ -284,6 +316,7 @@ function extractMain(args) {
       span: { start, end },
     };
     if (parentId) obj.parent = parentId;
+    if (pinsSetting(node, nCallCallees, callees)) obj.pins_setting = true;
     console.log(JSON.stringify(obj));
   }
 

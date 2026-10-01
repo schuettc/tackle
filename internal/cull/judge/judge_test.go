@@ -264,3 +264,12 @@ func TestGroupID(t *testing.T) {
 		t.Error("different member sets share an id")
 	}
 }
+
+func TestPinsSettingIsNotInState(t *testing.T) {
+	tc := cases.TestCase{Name: "t", Body: "b", Lang: "python", Framework: "pytest", Context: "c"}
+	pinned := tc
+	pinned.PinsSetting = true
+	if StateHash(StateFor(tc)) != StateHash(StateFor(pinned)) {
+		t.Fatal("PinsSetting changed Jev's state")
+	}
+}

@@ -62,6 +62,7 @@ type judgeItem struct {
 	id        string
 	state     any
 	truncated bool
+	pins      bool
 }
 
 func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
@@ -125,11 +126,13 @@ func runJudge(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		conc, _ := strconv.Atoi(str(fs, "concurrency"))
 		states := make([]any, len(items))
 		truncated := make([]bool, len(items))
+		pins := make([]bool, len(items))
 		for i, it := range items {
 			states[i] = it.state
 			truncated[i] = it.truncated
+			pins[i] = it.pins
 		}
-		js, results, err := check.JudgeAndDecide(ctx, jev.NewClient(key), states, truncated, r, judge.Options{
+		js, results, err := check.JudgeAndDecide(ctx, jev.NewClient(key), states, truncated, pins, r, judge.Options{
 			Model: str(fs, "model"), Concurrency: conc, Refresh: boolFlag(fs, "refresh"),
 			Cache: &judge.Cache{Dir: filepath.Join(tools.CacheDir("cull"), "answers")},
 		})
@@ -185,7 +188,7 @@ func readItems(r io.Reader, kind string, capBytes int) ([]judgeItem, error) {
 			if strings.TrimSpace(tc.Body) == "" {
 				return nil, fmt.Errorf("line %d: test %q has no body (a group line? pass --kind group)", n, tc.ID)
 			}
-			items = append(items, judgeItem{id: tc.ID, state: judge.StateFor(tc), truncated: tc.Truncated})
+			items = append(items, judgeItem{id: tc.ID, state: judge.StateFor(tc), truncated: tc.Truncated, pins: tc.PinsSetting})
 		case rubric.KindGroup:
 			var g cases.Group
 			if err := json.Unmarshal(b, &g); err != nil {

@@ -331,3 +331,38 @@ func TestRecordRunFailureWarnsAndWritesLastJSON(t *testing.T) {
 		t.Fatalf("last.json lacks applied answer: %s", b)
 	}
 }
+
+const pinSrc = "package pkg\n\nfunc TestPin(t *testing.T) {\n\tif Setting != 3 {\n\t\tt.Fatal(\"x\")\n\t}\n}\n"
+
+func TestPinsSettingCutGoesToCourt(t *testing.T) {
+	root := fixture(t, pinSrc)
+	writeFile(t, root, "pkg/calc.go", "package pkg\n\nconst Setting = 3\n")
+	s := openStore(t)
+	f := &fakeEval{cut: map[string]bool{"TestPin": true}}
+	first := runCheck(t, root, f, s)
+	tr := first.Tests[0]
+	if !tr.PinsSetting || tr.Verdict != "review" || tr.Rule != "pins_setting" || first.Summary["cut"] != 0 || first.Summary["review"] != 1 {
+		t.Fatalf("%+v %v", tr, first.Summary)
+	}
+	if len(tr.Reasons) < 2 || tr.Reasons[len(tr.Reasons)-1] != "checks a setting's value" || !strings.HasPrefix(tr.Reasons[0], "cut=") {
+		t.Fatalf("reasons %v", tr.Reasons)
+	}
+	// Recorded in the run like review_band.
+	p, _ := s.Project(bg, first.Root)
+	_, items, err := s.LatestRun(bg, p.ID)
+	if err != nil || len(items) != 1 || items[0].Rule != "pins_setting" || items[0].Verdict != "review" {
+		t.Fatalf("items %+v %v", items, err)
+	}
+	// last.json carries pins_setting.
+	b, _ := json.Marshal(tr)
+	if !strings.Contains(string(b), `"pins_setting":true`) {
+		t.Fatalf("json %s", b)
+	}
+	// Court's saved answer settles it.
+	answerLatest(t, s, first.Root, tr.ID, "test", "cut", "deliberate? no")
+	second := runCheck(t, root, f, s)
+	tr = second.Tests[0]
+	if tr.Verdict != "cut" || tr.Rule != "court" || second.Summary["answered"] != 1 {
+		t.Fatalf("%+v %v", tr, second.Summary)
+	}
+}

@@ -101,3 +101,26 @@ func TestParseVerdict(t *testing.T) {
 		t.Error(`ParseVerdict("kep") accepted`)
 	}
 }
+
+func TestGuardSetting(t *testing.T) {
+	cut := Result{Verdict: Cut, Rule: "act", Reasons: []string{"cut=0.90"}}
+	got := GuardSetting(cut, true)
+	if got.Verdict != Review || got.Rule != "pins_setting" || len(got.Reasons) != 2 || got.Reasons[0] != "cut=0.90" || got.Reasons[1] != "checks a setting's value" {
+		t.Fatalf("cut+pins = %+v", got)
+	}
+	if len(cut.Reasons) != 1 {
+		t.Fatal("input reasons modified")
+	}
+	for _, r := range []Result{
+		{Verdict: Keep, Rule: "below_review", Reasons: []string{"cut=0.10"}},
+		{Verdict: Review, Rule: "review_band", Reasons: []string{"cut=0.50"}},
+		{Verdict: Review, Rule: "truncated", Reasons: []string{"cut=0.95"}},
+	} {
+		if g := GuardSetting(r, true); g.Verdict != r.Verdict || g.Rule != r.Rule || len(g.Reasons) != 1 {
+			t.Errorf("pins %+v changed to %+v", r, g)
+		}
+	}
+	if g := GuardSetting(cut, false); g.Verdict != Cut || g.Rule != "act" || len(g.Reasons) != 1 {
+		t.Errorf("cut without pins = %+v", g)
+	}
+}

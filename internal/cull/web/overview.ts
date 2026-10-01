@@ -4,6 +4,7 @@
 import { buttons, card, facts, h } from '/_kit/kit.js';
 import type { Ctx } from './app.ts';
 import { byConcern, bySize, bulkTargets } from './bulk.ts';
+import { PINS_SETTING } from './model.ts';
 
 export interface BucketWords {
   id: string;
@@ -62,6 +63,7 @@ export const BLIND_BUCKET = (section: string): BucketWords => ({
 });
 
 const REASON_WHY: Record<string, string> = {
+  [PINS_SETTING.short]: PINS_SETTING.long,
   'restates the code':
     'asserts values it set up, or re-computes the answer the way the code does',
   'pins a detail': 'exact wording, formatting or internal structure',

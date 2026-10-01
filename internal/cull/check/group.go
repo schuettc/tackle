@@ -216,11 +216,13 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 
 	testStates := make([]any, len(newCases))
 	testTruncated := make([]bool, len(newCases))
+	testPins := make([]bool, len(newCases))
 	for i, tc := range newCases {
+		testPins[i] = tc.PinsSetting
 		testStates[i] = judge.StateFor(tc)
 		testTruncated[i] = tc.Truncated
 	}
-	testJudged, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testRubric, jopt)
+	testJudged, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testPins, testRubric, jopt)
 	if err != nil {
 		return gc, err
 	}
@@ -233,7 +235,7 @@ func CheckGroup(ctx context.Context, ev judge.Evaluator, root, groupID string, o
 		groupStates[i] = s
 		groupTruncated[i] = s.Truncated
 	}
-	groupJudged, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, groupRubric, jopt)
+	groupJudged, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, nil, groupRubric, jopt)
 	if err != nil {
 		return gc, err
 	}

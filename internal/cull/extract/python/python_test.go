@@ -662,3 +662,29 @@ func TestOversizedCallTargetStillTruncates(t *testing.T) {
 		t.Errorf("callees=%v truncated=%v, want none and truncated", calleeSymbols(tc.Callees), tc.Truncated)
 	}
 }
+
+func TestPinsSetting(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "pins"), 24000)
+	want := map[string]bool{
+		"test_const":                          true,
+		"test_hasattr":                        true,
+		"test_enum":                           true,
+		"test_method_on_constant":             true,
+		"test_module_attribute":               false,
+		"test_builtin_fixture":                true,
+		"test_calls_project_function":         false,
+		"test_constructs_project_class":       false,
+		"test_calls_through_module":           false,
+		"test_method_on_constructed_constant": false,
+		"test_same_file_helper":               false,
+		"test_fixture_parameter":              false,
+		"test_no_code_under_test":             false,
+	}
+	for name, pins := range want {
+		tc := caseByID(t, res, "py:tests/test_pins.py:"+name)
+		if tc.PinsSetting != pins {
+			t.Errorf("%s: PinsSetting = %v, want %v (callees %v)", name, tc.PinsSetting, pins, calleeSymbols(tc.Callees))
+		}
+	}
+}

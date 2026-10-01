@@ -180,11 +180,13 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 
 	testStates := make([]any, len(keptCases))
 	testTruncated := make([]bool, len(keptCases))
+	testPins := make([]bool, len(keptCases))
 	for i, tc := range keptCases {
+		testPins[i] = tc.PinsSetting
 		testStates[i] = judge.StateFor(tc)
 		testTruncated[i] = tc.Truncated
 	}
-	testJudged, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testRubric, jopt)
+	testJudged, testResults, err := JudgeAndDecide(ctx, ev, testStates, testTruncated, testPins, testRubric, jopt)
 	if err != nil {
 		return Report{}, err
 	}
@@ -196,7 +198,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		groupStates[i] = s
 		groupTruncated[i] = s.Truncated
 	}
-	groupJudged, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, groupRubric, jopt)
+	groupJudged, groupResults, err := JudgeAndDecide(ctx, ev, groupStates, groupTruncated, nil, groupRubric, jopt)
 	if err != nil {
 		return Report{}, err
 	}
@@ -252,9 +254,11 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 
 // JudgeAndDecide judges states in parallel with ev under r and opt, then
 // applies policy.Decide to every state that came back without an error.
+// pins (nil for none) marks tests that only check a setting's value; a cut
+// on one becomes review (policy.GuardSetting).
 // cli/judge.go and check.Run both call this, so `cull judge` and `cull
 // check` judge through one code path.
-func JudgeAndDecide(ctx context.Context, ev judge.Evaluator, states []any, truncated []bool, r rubric.Rubric, opt judge.Options) ([]judge.Judged, []policy.Result, error) {
+func JudgeAndDecide(ctx context.Context, ev judge.Evaluator, states []any, truncated, pins []bool, r rubric.Rubric, opt judge.Options) ([]judge.Judged, []policy.Result, error) {
 	opt.Rubric = r
 	js, err := judge.JudgeAll(ctx, ev, states, opt)
 	if err != nil {
@@ -264,6 +268,9 @@ func JudgeAndDecide(ctx context.Context, ev judge.Evaluator, states []any, trunc
 	for i, j := range js {
 		if j.Err == "" {
 			results[i] = policy.Decide(r, j.Answers, truncated[i])
+			if pins != nil {
+				results[i] = policy.GuardSetting(results[i], pins[i])
+			}
 		}
 	}
 	return js, results, nil

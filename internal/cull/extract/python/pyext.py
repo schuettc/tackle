@@ -23,6 +23,7 @@ import io
 import json
 import os
 import sys
+import textwrap
 import tokenize
 
 MAX_CTX = int(os.environ.get("CULL_MAX_CONTEXT_BYTES") or 64000)
@@ -404,6 +405,70 @@ def names_in(node):
     }
 
 
+PYTEST_BUILTIN_PARAMS = {"tmp_path", "monkeypatch", "capsys", "caplog", "request", "self", "cls"}
+
+
+def _is_plain_value(src):
+    """True if src (a definition's source) is an assignment whose value
+    contains no call: data, so a method called on it is not project code."""
+    try:
+        tree = ast.parse(textwrap.dedent(src))
+    except Exception:
+        return False
+    if len(tree.body) != 1:
+        return False
+    n = tree.body[0]
+    if isinstance(n, ast.Assign) or (isinstance(n, ast.AnnAssign) and n.value is not None):
+        return not any(isinstance(c, ast.Call) for c in ast.walk(n.value))
+    return False
+
+
+def pins_setting(fn, n_call_callees, callees, file_defs, imports, attr_mods):
+    """The test only reads a project setting/class and compares it to fixed
+    values: its code under test is non-empty and all of it merely referenced
+    (no call target), no call in its body resolves to project code or to a
+    same-file definition, and it takes no fixture parameters beyond pytest's
+    built-ins. When unsure: False."""
+    if n_call_callees != 0 or not callees:
+        return False
+    a = fn.args
+    for p in list(getattr(a, "posonlyargs", []) or []) + list(a.args) + list(a.kwonlyargs) + [x for x in (a.vararg, a.kwarg) if x]:
+        if p.arg not in PYTEST_BUILTIN_PARAMS:
+            return False
+    for call in [c for c in ast.walk(fn) if isinstance(c, ast.Call)]:
+        node, attrs = call.func, []
+        while True:
+            if isinstance(node, ast.Attribute):
+                attrs.append(node.attr)
+                node = node.value
+            elif isinstance(node, ast.Subscript):
+                attrs.append("[]")
+                node = node.value
+            else:
+                break
+        attrs.reverse()
+        if not isinstance(node, ast.Name):
+            continue  # a call on a call result / literal: the inner call decides
+        n = node.id
+        src = None
+        if n in file_defs:
+            src = file_defs[n]
+        elif n in imports and module_file(imports[n]):
+            hit = resolve(imports[n], n)
+            src = hit[1] if hit else ""
+        elif n in attr_mods and module_file(attr_mods[n]):
+            if len(attrs) < 2 or attrs[0] == "[]":
+                return False
+            hit = resolve(attr_mods[n], attrs[0])
+            src = hit[1] if hit else ""
+            attrs = attrs[1:]
+        else:
+            continue  # builtin, standard library, third party or a local name
+        if not attrs or not _is_plain_value(src):
+            return False
+    return True
+
+
 def assign_id(base):
     id_count[base] = id_count.get(base, 0) + 1
     n = id_count[base]
@@ -443,6 +508,7 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
             hit = (f"{f.value.id}.{f.attr}", resolve(attr_mods[f.value.id], f.attr))
         if hit and hit[1] and hit[0] not in {c["symbol"] for c in callees} and add(hit[1][1]):
             callees.append({"symbol": hit[0], "file": hit[1][0], "source": hit[1][1]})
+    n_call_callees = len(callees)
     # Referenced names (constants, classes, functions read but not called),
     # after the call targets, in first-reference order.
     call_funcs = {id(c.func) for c in ast.walk(fn) if isinstance(c, ast.Call)}
@@ -483,6 +549,8 @@ def emit(rel, qual, name, parent_id, fn, data, starts, src, file_defs, fixtures,
     }
     if parent_id:
         obj["parent"] = parent_id
+    if pins_setting(fn, n_call_callees, callees, file_defs, imports, attr_mods):
+        obj["pins_setting"] = True
     print(json.dumps(obj))
 
 

@@ -61,6 +61,12 @@ var FLAG_ORDER = [
   "mock_only",
   "not_missed"
 ];
+var PINS_SETTING = {
+  flag: "pins_setting",
+  value: 1,
+  short: "checks a setting's value",
+  long: "it only reads a project setting or class and compares it to fixed values"
+};
 var CONCERN_THRESHOLD = 0.35;
 var TEST_LEANS = ["cut", "keep", "review"];
 var GROUP_LEANS = ["consolidate", "keep_separate", "review"];
@@ -76,6 +82,7 @@ function actP(item) {
   return item.kind === "group" ? probs.consolidate : probs.cut;
 }
 function concern(item) {
+  if (item.rule === "pins_setting") return PINS_SETTING;
   const jev = item.jev;
   let best = null;
   let bestV = CONCERN_THRESHOLD;
@@ -110,6 +117,9 @@ function recommendation(item) {
   const l = lean(item);
   const lead = l === "cut" ? `Jev leans cut (${p})` : l === "keep" ? `Jev leans keep (cut ${p})` : `Jev can't decide (cut ${p})`;
   const c = concern(item);
+  if (c === PINS_SETTING) {
+    return `${lead}. cull sends it to you because it only checks a setting's value; only you know whether that value is deliberate. Protects behavior rated ${rvLevel(item.jev.regression_value.score)}.`;
+  }
   const why = c ? `Jev's main concern: ${c.long} (${c.value.toFixed(2)}).` : "No single concern stood out; Jev is split on whether it earns its place.";
   return `${lead}. ${why} Protects behavior rated ${rvLevel(item.jev.regression_value.score)}.`;
 }
@@ -131,6 +141,7 @@ function buckets(items, answers) {
   return out;
 }
 var CONCERN_ORDER = [
+  PINS_SETTING.short,
   "restates the code",
   "pins a detail",
   "might not be missed",
@@ -534,6 +545,7 @@ var BLIND_BUCKET = (section) => ({
   lead: `Read each ${section === "tests" ? "test" : "group"} and answer ${section === "tests" ? "keep or cut" : "separate or merge"}. Jev’s opinion is hidden.`
 });
 var REASON_WHY = {
+  [PINS_SETTING.short]: PINS_SETTING.long,
   "restates the code": "asserts values it set up, or re-computes the answer the way the code does",
   "pins a detail": "exact wording, formatting or internal structure",
   "might not be missed": "little protection would be lost",
