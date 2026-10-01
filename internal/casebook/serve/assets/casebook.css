@@ -1327,9 +1327,7 @@ textarea.cb-needs-edit:focus {
 }
 .kit-app > .cb-push-error .cb-down-text {
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 .kit-app > .cb-down .kit-btn {
   background: var(--kit-bg);

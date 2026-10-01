@@ -1645,10 +1645,10 @@ async function slowPushScenario(shared, t) {
 // pushFailedScenario: serve's push fails for a reason other than the
 // network (here a rebase conflict in a file casebook doesn't resolve, set up
 // on a local bare remote by serve.mjs's conflictRemote). The status says
-// "push failed · N queued" in danger, and a one-line strip under the bar
-// says why in serve's words. Plain queued commits (nothing has failed yet)
-// read "offline · N queued" with no strip, and a push that succeeds takes
-// the strip away.
+// "push failed · N queued" in danger, and a strip under the bar says why in
+// serve's words, wrapping so the whole reason (and its path) shows. Plain
+// queued commits (nothing has failed yet) read "offline · N queued" with no
+// strip, and a push that succeeds takes the strip away.
 async function pushFailedScenario(shared, t) {
   const { check, until, eventually } = t;
   console.log('\nscenario: a push that fails says so, and why');
@@ -1708,7 +1708,14 @@ async function pushFailedScenario(shared, t) {
                 title: strip.title,
                 top: r.top,
                 height: r.height,
-                oneLine: text.getBoundingClientRect().height <= lh * 1.5,
+                // The whole text shows: nothing scrolls or clips sideways in
+                // the strip or its text, and the text box sits inside it.
+                fits:
+                  strip.scrollWidth <= strip.clientWidth &&
+                  text.scrollWidth <= text.clientWidth &&
+                  text.getBoundingClientRect().right <= r.right + 0.5 &&
+                  text.getBoundingClientRect().bottom <= r.bottom + 0.5,
+                lines: Math.round(text.getBoundingClientRect().height / lh),
                 barBottom: bar.bottom,
                 listTop: list?.top ?? -1,
                 look: `${cs.color} ${cs.backgroundColor} ${cs.borderBottomStyle} ${cs.borderBottomColor} ${cs.font}`,
@@ -1761,12 +1768,13 @@ async function pushFailedScenario(shared, t) {
               l1.statusColor === danger,
           );
           check(
-            `a one-line alert strip under the bar says why, in serve's words: "${l1.text}"`,
+            `an alert strip under the bar says why, in serve's words, all of it visible (fits ${l1.fits}, ${l1.lines} lines; list starts under it): "${l1.text}"`,
             !l1.hidden &&
               l1.role === 'alert' &&
               l1.text === `push failed \u00b7 ${sum.push_error}` &&
               l1.title === sum.push_error &&
-              l1.oneLine &&
+              l1.fits &&
+              l1.text.endsWith(sum.push_error) &&
               Math.abs(l1.top - l1.barBottom) < 0.5 &&
               Math.abs(l1.listTop - (l1.top + l1.height)) < 0.5,
           );

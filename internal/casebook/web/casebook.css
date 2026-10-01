@@ -1660,17 +1660,16 @@ textarea.cb-needs-edit:focus {
 }
 /*
  * Push failed (serve's last push failed for a reason other than the
- * network): the same strip, in the third row, one line; the whole reason is
- * its title.
+ * network): the same strip, in the third row. It wraps (anywhere, so a long
+ * path breaks too) and the row grows, so the whole reason shows and can be
+ * copied; the title holds it as well.
  */
 .kit-app > .cb-down.cb-push-error {
   grid-row: 3;
 }
 .kit-app > .cb-push-error .cb-down-text {
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 /*
  * The retry is neutral (it destroys nothing): the page's ground and a muted
