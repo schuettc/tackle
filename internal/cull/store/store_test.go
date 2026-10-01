@@ -129,7 +129,7 @@ func TestSaveAnswersUpsert(t *testing.T) {
 	s, _ := open(t)
 	p, _ := s.Project(ctx, "/x")
 	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(2))
-	a := Answer{ItemID: "t0", Hash: "h0", Kind: "test", Value: "cut", Note: "n1", Via: "item", Blind: true, Jev: json.RawMessage(`{"k":1}`), Model: "m", QuestionsHash: "q"}
+	a := Answer{ItemID: "t0", Hash: "h0", Kind: "test", Value: "cut", Note: "n1", Via: "group", Blind: true, Jev: json.RawMessage(`{"k":1}`), Model: "m", QuestionsHash: "q"}
 	if err := s.SaveAnswers(ctx, p.ID, run, []Answer{a}); err != nil {
 		t.Fatal(err)
 	}
@@ -324,5 +324,37 @@ func TestLatestRunIDs(t *testing.T) {
 	}
 	if len(got) != 2 || got[a.ID] != r3 || got[b.ID] != r2 {
 		t.Fatalf("got %v (c=%d)", got, c.ID)
+	}
+}
+
+func TestSaveAnswersGroupNeverReplacesItem(t *testing.T) {
+	s, _ := open(t)
+	p, _ := s.Project(ctx, "/x")
+	run, _ := s.RecordRun(ctx, Run{ProjectID: p.ID}, items(2))
+	k := Key{"t0", "h0"}
+	save := func(via, val string) error {
+		return s.SaveAnswers(ctx, p.ID, run, []Answer{{ItemID: "t0", Hash: "h0", Kind: "test", Value: val, Via: via}})
+	}
+	value := func() string { m, _ := s.Answers(ctx, p.ID); return m[k].Value }
+	steps := []struct{ via, val, want string }{
+		{"item", "cut", "cut"},
+		{"group", "keep", "cut"}, // group over item: unchanged
+		{"item", "keep", "keep"},
+	}
+	for _, st := range steps {
+		if err := save(st.via, st.val); err != nil || value() != st.want {
+			t.Fatalf("%v: %v %q", st, err, value())
+		}
+	}
+	_ = s.DeleteAnswer(ctx, p.ID, k)
+	for _, st := range []struct{ via, val, want string }{{"group", "cut", "cut"}, {"group", "keep", "keep"}, {"item", "cut", "cut"}} {
+		if err := save(st.via, st.val); err != nil || value() != st.want {
+			t.Fatalf("%v: %v %q", st, err, value())
+		}
+	}
+	// group on a stale item is still stale
+	err := s.SaveAnswers(ctx, p.ID, run, []Answer{{ItemID: "zz", Hash: "h", Kind: "test", Value: "cut", Via: "group"}})
+	if !errors.Is(err, ErrStale) {
+		t.Fatalf("%v", err)
 	}
 }

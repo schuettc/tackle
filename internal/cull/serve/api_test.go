@@ -721,3 +721,18 @@ func TestSSEResumeFromSinceQuery(t *testing.T) {
 		t.Fatalf("malformed since: %s", v)
 	}
 }
+
+func TestPutGroupDoesNotReplaceItemAnswer(t *testing.T) {
+	f := newFixture(t)
+	if w := f.put(f.run, "h1"); w.Code != 204 {
+		t.Fatal(w.Code)
+	}
+	body := fmt.Sprintf(`{"project":%d,"run":%d,"answers":[{"id":"t1","hash":"h1","kind":"test","value":"keep","via":"group"}]}`, f.proj.ID, f.run)
+	if w := f.do("PUT", "/api/answers", body); w.Code != 204 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	got, _ := f.st.Answers(context.Background(), f.proj.ID)
+	if a := got[store.Key{ItemID: "t1", Hash: "h1"}]; a.Value != "cut" || a.Via != "item" {
+		t.Fatalf("%+v", a)
+	}
+}

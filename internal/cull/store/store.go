@@ -326,7 +326,8 @@ func validAnswer(a Answer) error {
 // SaveAnswers upserts answers against run runID. Every (ItemID, Hash) must be
 // an item of that run (of that project), else ErrStale and nothing is stored.
 // An upsert replaces the earlier answer, clears its sent mark and keeps the
-// first AnsweredAt.
+// first AnsweredAt. A "group" answer never replaces an existing "item" answer
+// (that one is left as is, without error).
 func (s *Store) SaveAnswers(ctx context.Context, projectID, runID int64, as []Answer) error {
 	for _, a := range as {
 		if err := validAnswer(a); err != nil {
@@ -349,7 +350,8 @@ func (s *Store) SaveAnswers(ctx context.Context, projectID, runID int64, as []An
 				ON CONFLICT(project_id, item_id, hash) DO UPDATE SET
 				  kind = excluded.kind, value = excluded.value, note = excluded.note, via = excluded.via,
 				  blind = excluded.blind, run_id = excluded.run_id, jev = excluded.jev, model = excluded.model,
-				  questions_hash = excluded.questions_hash, sent_at = 0`,
+				  questions_hash = excluded.questions_hash, sent_at = 0
+				WHERE excluded.via = 'item' OR answers.via = 'group'`,
 				a.Kind, a.Value, a.Note, a.Via, blind, rawText(a.Jev), a.Model, a.QuestionsHash, now,
 				runID, projectID, a.ItemID, a.Hash)
 			if err != nil {
@@ -358,6 +360,19 @@ func (s *Store) SaveAnswers(ctx context.Context, projectID, runID int64, as []An
 			if n, err := res.RowsAffected(); err != nil {
 				return err
 			} else if n == 0 {
+				if a.Via == "group" {
+					// Skipped (a single answer stands) or stale: only a missing item is stale.
+					var one int
+					err := tx.QueryRowContext(ctx, `SELECT 1 FROM items i JOIN runs r ON r.id = i.run_id
+						WHERE i.run_id = ? AND r.project_id = ? AND i.item_id = ? AND i.hash = ?`,
+						runID, projectID, a.ItemID, a.Hash).Scan(&one)
+					if err == nil {
+						continue
+					}
+					if !errors.Is(err, sql.ErrNoRows) {
+						return err
+					}
+				}
 				return fmt.Errorf("%w: %s", ErrStale, a.ItemID)
 			}
 		}
