@@ -23,3 +23,10 @@ def test_guarded():
     assert guarded.FINAL
     assert guarded.Ctx
     assert guarded.tried_fn()
+
+
+def test_dups():
+    from pkg import dups
+
+    assert dups.twice()
+    assert dups.both()

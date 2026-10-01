@@ -315,30 +315,36 @@ def top_defs(path):
         tree = ast.parse(src)
     except Exception:
         return {}, None, ""
-    out = {}
+    plain = {}  # directly in the module body: last definition wins
+    nested = {}  # inside top-level if/try/with: first wins, only fills gaps
 
-    def visit(stmts):
+    def visit(stmts, out, last):
         for n in stmts:
+            put = (lambda k, v: out.__setitem__(k, v)) if last else out.setdefault
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                out.setdefault(n.name, seg(src, n))
+                put(n.name, seg(src, n))
             elif isinstance(n, ast.Assign):
                 for t in n.targets:
                     if isinstance(t, ast.Name):
-                        out.setdefault(t.id, seg(src, n))
+                        put(t.id, seg(src, n))
             elif isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
-                out.setdefault(n.target.id, seg(src, n))
+                put(n.target.id, seg(src, n))
             elif isinstance(n, (ast.If, ast.With, ast.AsyncWith)):
-                visit(n.body)
-                visit(n.orelse if isinstance(n, ast.If) else [])
+                visit(n.body, out, False)
+                visit(n.orelse if isinstance(n, ast.If) else [], out, False)
             elif isinstance(n, (ast.Try, getattr(ast, "TryStar", ast.Try))):
-                visit(n.body)
+                visit(n.body, out, False)
                 for h in n.handlers:
-                    visit(h.body)
-                visit(n.orelse)
-                visit(n.finalbody)
+                    visit(h.body, out, False)
+                visit(n.orelse, out, False)
+                visit(n.finalbody, out, False)
 
-    visit(tree.body)
-    return out, tree, src
+    visit(tree.body, nested, False)
+    # plain pass: only direct definitions (blocks recurse into `nested` again, harmlessly)
+    direct = [n for n in tree.body if not isinstance(n, (ast.If, ast.With, ast.AsyncWith, ast.Try, getattr(ast, "TryStar", ast.Try)))]
+    visit(direct, plain, True)
+    nested.update(plain)
+    return nested, tree, src
 
 
 def conftest_fixtures(test_path):

@@ -625,3 +625,22 @@ func TestNamesInTopLevelBlocksAreDefinitions(t *testing.T) {
 		}
 	}
 }
+
+func TestTopLevelDuplicatesLastWinsBlocksFillGaps(t *testing.T) {
+	requirePython3(t)
+	res := extractAll(t, filepath.Join(testdataDir, "fromimport"), 24000)
+	tc := caseByID(t, res, "py:tests/test_from.py:test_dups")
+	got := map[string]string{}
+	for _, c := range tc.Callees {
+		got[c.Symbol] = c.Source
+	}
+	want := map[string]string{
+		"dups.twice": "def twice():\n    return 2\n",
+		"dups.both":  "def both():\n    return \"top\"\n",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s = %q, want %q", k, got[k], v)
+		}
+	}
+}
