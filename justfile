@@ -40,11 +40,50 @@ hooks:
 
 # ---- tackle -----------------------------------------------------------------
 # Files the gate needs that are not committed (built before the gate, locally
-# and in CI). tackle has none.
+# and in CI). tackle has none: cull's page bundle is committed and embedded.
 prepare:
 
-# Slow checks (a browser, a container) that CI runs as their own jobs. tackle has none.
-verify-slow:
+# Slow checks (a browser, a container) that CI runs as their own jobs: the
+# cull page's browser probe (CI job `probe`).
+verify-slow: cull-probe
 
-# Tool-specific checks beyond the gate (CI runs this too). tackle has none.
-verify-extra:
+# Tool-specific checks beyond the gate (CI runs this too): cull's page
+# TypeScript gate and the committed bundle matching web/.
+verify-extra: cull-web cull-bundle-fresh
+
+# cull's page (internal/cull/web) is TypeScript built by esbuild into
+# internal/cull/serve/assets, which is COMMITTED and embedded, so node is
+# dev-time only. Its node_modules can hold Go source (an npm package ships
+# some); the family gate already skips anything under node_modules.
+cull_web := "internal/cull/web"
+
+# Install the page's dependencies once (CI caches node_modules keyed on the
+# lockfile, so a hit skips `npm ci`); the postinstall copies the page kit's
+# types out of the tools-common module go.mod pins (kit.d.ts is generated).
+_cull-web-deps:
+    cd {{ cull_web }} && { [ -d node_modules ] || npm ci; } && npm run --silent kit-types
+
+# The page's TypeScript gate: unit tests, tsc against wire.d.ts, eslint,
+# prettier. Pass-throughs: the commands live in web/package.json.
+cull-web: _cull-web-deps
+    cd {{ cull_web }} && npm test
+    cd {{ cull_web }} && npm run --silent typecheck
+    cd {{ cull_web }} && npm run --silent lint
+    cd {{ cull_web }} && npm run --silent fmt:check
+
+# Rebuild the committed bundle (build:js + build:css only).
+cull-assets: _cull-web-deps
+    cd {{ cull_web }} && npm run --silent build:js && npm run --silent build:css
+
+# The committed bundle matches web/: nothing else notices a stale one.
+cull-bundle-fresh: cull-assets
+    git diff --exit-code -- internal/cull/serve/assets/cull.js internal/cull/serve/assets/cull.css \
+      || { echo "the committed cull bundle does not match web/: run 'just cull-assets' and commit the result"; exit 1; }
+
+# The page in a real headless chromium against a seeded cull serve (--no-open;
+# web/serve-fixture.mjs builds the cull binary and the seeder itself).
+# KIT_BROWSER=required: a probe that finds no chromium fails rather than
+# skipping. Install one with
+# `cd internal/cull/web && node node_modules/playwright-core/cli.js install chromium chromium-headless-shell`.
+cull-probe: _cull-web-deps
+    cd {{ cull_web }} && KIT_BROWSER=required npm run --silent probe

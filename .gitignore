@@ -22,3 +22,6 @@ docs/superpowers/
 
 # Python cache
 __pycache__/
+
+# built binaries
+/bin/
