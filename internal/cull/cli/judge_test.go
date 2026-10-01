@@ -180,7 +180,7 @@ func TestJudgeMissingKey(t *testing.T) {
 	judgeEnv(t, "")
 	(&fakeJev{}).start(t)
 	code, _, errw := run(t, threeCases(), "judge", "--egress")
-	if code != 2 || !strings.Contains(errw, "creel exec TYPESAFE_API_KEY") {
+	if code != 2 || !strings.Contains(errw, "cull init") {
 		t.Fatalf("exit %d, errw %q", code, errw)
 	}
 }
@@ -245,7 +245,7 @@ func TestJudgeUnauthorized(t *testing.T) {
 	judgeEnv(t, "k")
 	(&fakeJev{status: 401}).start(t)
 	code, _, errw := run(t, threeCases(), "judge", "--egress")
-	if code != 2 || !strings.Contains(errw, "creel exec") {
+	if code != 2 || !strings.Contains(errw, "cull init") {
 		t.Fatalf("exit %d, errw %q", code, errw)
 	}
 }

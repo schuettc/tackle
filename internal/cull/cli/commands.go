@@ -24,6 +24,16 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: serveFlags, Run: runServe,
 		},
 		{
+			Name: "init", Group: "setup", Synopsis: "[path]",
+			Summary:  "store your TypeSafe key, allow egress for the project, ignore .cull/ (terminal only)",
+			NewFlags: initFlags, Run: runInit(stdin),
+		},
+		{
+			Name: "doctor", Group: "setup", Synopsis: "[path]",
+			Summary:  "check what cull needs: key, egress, python3, node, test command, serve, agent setup",
+			NewFlags: doctorFlags, Run: runDoctor,
+		},
+		{
 			Name: "judge", Group: "judge", Synopsis: "[file|-]",
 			Summary:  "judge tests or duplicate groups with Jev (plumbing; JSONL in, JSONL out)",
 			NewFlags: judgeFlags, Run: runJudge(stdin),

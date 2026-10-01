@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/schuettc/tackle/internal/cull/key"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +99,24 @@ func checkEnv(t *testing.T, key string) {
 	t.Setenv("TYPESAFE_API_KEY", key)
 }
 
+// The key file is used when the environment has none.
+func TestCheckUsesKeyFile(t *testing.T) {
+	checkEnv(t, "")
+	f := &checkFake{}
+	f.start(t)
+	root := oneTestRepo(t)
+	if err := key.Save("ts-fake-file-7777"); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errw := run(t, "", "check", root)
+	if code == 2 && strings.Contains(errw, "cull init") {
+		t.Fatalf("file key ignored: %q", errw)
+	}
+	if f.n.Load() == 0 {
+		t.Errorf("server saw no requests (code %d, errw %q)", code, errw)
+	}
+}
+
 func ckWriteFile(t *testing.T, dir, relpath, content string) {
 	t.Helper()
 	p := filepath.Join(dir, relpath)
@@ -175,7 +194,7 @@ func TestCheckMissingKey(t *testing.T) {
 	root := oneTestRepo(t)
 
 	code, _, errw := run(t, "", "check", root)
-	if code != 2 || !strings.Contains(errw, "creel exec TYPESAFE_API_KEY") {
+	if code != 2 || !strings.Contains(errw, "cull init") {
 		t.Fatalf("code %d, errw %q", code, errw)
 	}
 }
@@ -186,7 +205,7 @@ func TestCheckUnauthorized(t *testing.T) {
 	root := oneTestRepo(t)
 
 	code, _, errw := run(t, "", "check", root)
-	if code != 2 || !strings.Contains(errw, "creel exec") {
+	if code != 2 || !strings.Contains(errw, "cull init") {
 		t.Fatalf("code %d, errw %q", code, errw)
 	}
 }
