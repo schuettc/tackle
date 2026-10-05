@@ -553,9 +553,15 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
     parts.push(h('p', { class: 'kit-muted sift-loading' }, 'loading…'));
   else parts.push(diffView(base, after, certainLines(rows)));
 
+  // Once edited, the page shows the edit, so accept keeps it; going back
+  // to the recommendation is its own step (u), which shows it again first.
   const a = f.decision?.action;
   const bs: Button[] = [
-    { label: '1 accept', fill: a === 'accept', run: () => ctx.accept(f) },
+    {
+      label: edited ? '1 accept your edit' : '1 accept',
+      fill: a === 'accept',
+      run: () => ctx.accept(f),
+    },
     { label: '2 edit', fill: a === 'edit', run: () => ctx.startEdit(f) },
     {
       label: '3 reject',
@@ -564,7 +570,11 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
       run: () => ctx.reject(f),
     },
   ];
-  if (f.decision) bs.push({ label: 'clear (u)', run: () => ctx.clear(f) });
+  if (f.decision)
+    bs.push({
+      label: edited ? 'revert to the recommendation (u)' : 'clear (u)',
+      run: () => ctx.clear(f),
+    });
   const decide = buttons(bs);
   decide.classList.add('sift-decide');
   parts.push(decide);

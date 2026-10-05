@@ -162,6 +162,39 @@ func TestReviewShape(t *testing.T) {
 	}
 }
 
+// A backlog round with one item the agent has answered and one it hasn't
+// is still being recommended: the page gets the progress, and a decision
+// is refused, until the last verdict is in.
+func TestABacklogRoundWaitsForItsRecommendations(t *testing.T) {
+	f := newFixture(t)
+	id, err := f.st.RecordRound(context.Background(), store.Round{Kind: "backlog"}, []row.Row{
+		{ID: "b1", Check: "intake", Summary: "s", Verdict: "close:done", Source: row.Source{Entry: "1"}},
+		{ID: "b2", Check: "intake", Summary: "s", Source: row.Source{Entry: "2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.round = id
+	var m struct {
+		Progress store.Progress `json:"progress"`
+	}
+	if err := json.Unmarshal(f.do("GET", "/api/review", "").Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Progress.State != store.Recommending || m.Progress.Files != 2 || m.Progress.Recommended != 1 {
+		t.Fatalf("progress %+v", m.Progress)
+	}
+	if w := f.decide("b1", "accept", ""); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "1 of 2") {
+		t.Fatalf("decide while recommending: %d %s", w.Code, w.Body)
+	}
+	if _, err := f.st.AddRows(context.Background(), id, []row.Row{{ID: "b2", Verdict: "ask", Text: "which repo?"}}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.decide("b1", "accept", ""); w.Code != http.StatusNoContent {
+		t.Fatalf("decide when ready: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestReviewWithNoRound(t *testing.T) {
 	t.Setenv("SIFT_HOME", t.TempDir())
 	s, _ := store.Open(context.Background(), filepath.Join(t.TempDir(), "sift.db"))

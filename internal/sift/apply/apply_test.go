@@ -83,8 +83,8 @@ func (g *rig) audit(fs ...rec.File) {
 }
 
 func (g *rig) rec(f rec.File, content string, links ...rec.File) rec.Rec {
-	r := rec.Rec{File: f.Key, Base: f.Base, Content: content, Summary: "Rewritten as guidance.",
-		Findings: []rec.Account{{Row: "n-" + f.Key, Did: "fixed", How: "guidance"}}}
+	r := rec.Rec{File: f.Key, Base: f.Base, Content: content, Summary: "Drops the stale status.",
+		Findings: []rec.Account{{Row: "n-" + f.Key, Did: "fixed", How: "removed"}}}
 	for _, l := range links {
 		r.Links = append(r.Links, l.Key)
 	}
@@ -190,6 +190,25 @@ func TestApplyWritesTheApprovedFiles(t *testing.T) {
 	}
 }
 
+// The page shows an edited file's edit, so accepting it then approves the
+// edit: edit, come back, accept, Send, and apply writes the edited content.
+func TestAcceptAfterAnEditWritesTheEdit(t *testing.T) {
+	g := newRig(t)
+	c := g.in(g.repo, "CLAUDE.md")
+	g.audit(c)
+	g.propose(g.rec(c, "# App\n\n## Git\n\n- Push to a branch and open a pull request.\n"))
+	mine := "# App\n\n## Git\n\n- Push to a branch; main takes merges only.\n"
+	g.decide(c, rec.Decision{Action: "edit", Content: mine})
+	g.decide(c, rec.Decision{Action: "accept"})
+	r := one(t, g.run(Options{}))
+	if r.State != "branch" || len(r.Applied) != 1 {
+		t.Fatalf("%+v", r)
+	}
+	if got := g.show(g.repo, r.Branch, "CLAUDE.md"); got != mine {
+		t.Fatalf("wrote:\n%s\nwant the edit:\n%s", got, mine)
+	}
+}
+
 // A decision counts once it is sent: before Send apply writes nothing and
 // says how many wait.
 func TestApplyTakesOnlySentDecisions(t *testing.T) {
@@ -278,17 +297,17 @@ func TestApplyHoldsLinkedFilesTogether(t *testing.T) {
 // a dry run saves nothing.
 func TestApplyLeavesAFileOutsideARepo(t *testing.T) {
 	g := newRig(t)
-	gl, c := g.disk(g.global), g.in(g.repo, "CLAUDE.md")
-	g.audit(gl, c)
-	g.propose(g.rec(gl, "# Global\n\n- Run CI on every change.\n", c), g.rec(c, claude+"- Run CI on every change.\n", gl))
+	gl := g.disk(g.global)
+	g.audit(gl)
+	g.propose(g.rec(gl, "# Global\n\n- Run CI on every change.\n"))
 	g.decide(gl, rec.Decision{Action: "accept"})
 	dry := g.run(Options{DryRun: true})
 	if len(dry.Left) != 1 || dry.Left[0].Approved != "" {
 		t.Fatalf("dry run %+v", dry.Left)
 	}
 	res := g.run(Options{})
-	if len(res.Left) != 1 || res.Left[0].Key != gl.Key || !strings.Contains(res.Left[0].Why, "not in a git repo") {
-		t.Fatalf("left %+v", res.Left)
+	if len(res.Left) != 1 || res.Left[0].Key != gl.Key || !strings.Contains(res.Left[0].Why, "not in a git repo") || len(res.Repos) != 0 {
+		t.Fatalf("%+v", res)
 	}
 	b, err := os.ReadFile(res.Left[0].Approved)
 	if err != nil || string(b) != "# Global\n\n- Run CI on every change.\n" {
@@ -297,8 +316,61 @@ func TestApplyLeavesAFileOutsideARepo(t *testing.T) {
 	if b, _ := os.ReadFile(g.global); string(b) != "# Global\n\n- In app, never skip CI.\n" {
 		t.Errorf("the global file was written: %q", b)
 	}
-	if r := one(t, res); r.State != "branch" || g.show(g.repo, r.Branch, "CLAUDE.md") != claude+"- Run CI on every change.\n" {
-		t.Fatalf("%+v", r)
+}
+
+// moveToGlobal is a move from app's CLAUDE.md to the global file, both
+// sides accepted and sent.
+func moveToGlobal(g *rig) (gl, c rec.File) {
+	gl, c = g.disk(g.global), g.in(g.repo, "CLAUDE.md")
+	g.audit(gl, c)
+	g.propose(g.rec(gl, "# Global\n\n- In app, never skip CI.\n- Never force-push.\n", c), g.rec(c, "# App\n\n## Git\n\n- Never push to main.\n", gl))
+	g.decide(gl, rec.Decision{Action: "accept"})
+	return gl, c
+}
+
+// A file outside any repo can't be written, so a move linked to it is held
+// whole: the repo side gets no branch, and the global side's approved
+// content is still saved for the user.
+func TestApplyHoldsAMoveToAFileOutsideARepo(t *testing.T) {
+	g := newRig(t)
+	gl, c := moveToGlobal(g)
+	res := g.run(Options{})
+	r := one(t, res)
+	if r.State != "nothing" || r.Branch != "" || len(r.Applied) != 0 || len(r.Skipped) != 1 || r.Skipped[0].Key != c.Key ||
+		!strings.Contains(r.Skipped[0].Why, "linked") || !strings.Contains(r.Skipped[0].Why, "not in a git repo") {
+		t.Fatalf("the repo side: %+v", r)
+	}
+	if out := st.Git(t, g.repo, "branch", "--list", "sift/*"); out != "" {
+		t.Fatalf("the repo side was written without its other side: %s", out)
+	}
+	if len(res.Left) != 1 || res.Left[0].Key != gl.Key {
+		t.Fatalf("left %+v", res.Left)
+	}
+	if b, err := os.ReadFile(res.Left[0].Approved); err != nil || string(b) != "# Global\n\n- In app, never skip CI.\n- Never force-push.\n" {
+		t.Fatalf("approved copy %q %v", b, err)
+	}
+}
+
+// When the approved copy can't be saved, apply says so and still holds the
+// move whole.
+func TestApplyHoldsAMoveWhenTheApprovedCopyCannotBeSaved(t *testing.T) {
+	g := newRig(t)
+	home := t.TempDir()
+	t.Setenv("SIFT_HOME", home)
+	st.Write(t, home, "state", "a file where sift's state directory goes\n")
+	gl, c := moveToGlobal(g)
+	res := g.run(Options{})
+	if len(res.Left) != 1 || res.Left[0].Key != gl.Key || res.Left[0].Approved != "" || !strings.Contains(res.Left[0].Why, "saving it failed") {
+		t.Fatalf("left %+v", res.Left)
+	}
+	if r := one(t, res); r.State != "nothing" || len(r.Skipped) != 1 || r.Skipped[0].Key != c.Key {
+		t.Fatalf("the repo side: %+v", r)
+	}
+	if out := st.Git(t, g.repo, "branch", "--list", "sift/*"); out != "" {
+		t.Fatalf("the repo side was written: %s", out)
+	}
+	if b, _ := os.ReadFile(g.global); string(b) != "# Global\n\n- In app, never skip CI.\n" {
+		t.Errorf("the global file was written: %q", b)
 	}
 }
 
@@ -385,7 +457,7 @@ func TestApplyOpensAPullRequest(t *testing.T) {
 		!contains(calls[0], "--base", "main") || !contains(calls[0], "--head", r.Branch) {
 		t.Fatalf("gh %v", calls)
 	}
-	for _, want := range []string{"CLAUDE.md", "Rewritten as guidance.", "fixed: guidance", "obvious"} {
+	for _, want := range []string{"CLAUDE.md", "Drops the stale status.", "fixed: removed", "obvious"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body lacks %q:\n%s", want, body)
 		}

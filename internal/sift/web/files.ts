@@ -235,9 +235,10 @@ export function printsFor(
 }
 
 /** A decision on key as the store takes it, applied to the page's files:
- * accept or reject sets every linked file (an accept keeps another file's
- * edit or accept); an edit is key's, and accepts the others not decided
- * that way; null clears them all. The note is key's alone. */
+ * accept or reject sets every linked file (an accept keeps any edit, key's
+ * own included, and another file's accept); an edit is key's, and accepts
+ * the others not decided that way; null clears them all. The note is key's
+ * alone. */
 export function decideLocal(
   files: FileView[],
   key: string,
@@ -250,6 +251,8 @@ export function decideLocal(
     if (!m) continue;
     const cur = m.decision;
     if (d === null) m.decision = null;
+    else if (k === key && d.action === 'accept' && cur?.action === 'edit')
+      m.decision = { ...cur, note: d.note ?? '', sent: false };
     else if (k === key) m.decision = { ...d, sent: false };
     else if (d.action === 'reject')
       m.decision = { action: 'reject', note: cur?.note ?? '', sent: false };
@@ -258,9 +261,9 @@ export function decideLocal(
     else m.decision = { action: 'accept', note: cur?.note ?? '', sent: false };
   }
   // The edit's own size shows in the list.
-  if (d?.action === 'edit' && d.content !== undefined)
-    f.after = d.content.length;
-  else if (f.rec && d?.action !== 'edit') f.after = f.rec.content.length;
+  if (f.decision?.action === 'edit' && f.decision.content !== undefined)
+    f.after = f.decision.content.length;
+  else if (f.rec) f.after = f.rec.content.length;
 }
 
 /** Decided of the files with a recommendation. */

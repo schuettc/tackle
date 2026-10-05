@@ -89,7 +89,8 @@ type FileItem struct {
 type Progress struct {
 	State State `json:"state"`
 	// Files counts the files that need a recommendation (those with
-	// findings), Recommended those that have one.
+	// findings), Recommended those that have one. In a round decided per
+	// item they count the items and those with the agent's verdict.
 	Files       int `json:"files"`
 	Recommended int `json:"recommended"`
 }
@@ -204,12 +205,13 @@ func stateIn(ctx context.Context, tx *sql.Tx, roundID int64) (Progress, error) {
 		return p, err
 	}
 	if PerItem(kind) {
-		var open int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rows WHERE round_id = ? AND coalesce(json_extract(body, '$.verdict'), '') = ''`, roundID).Scan(&open); err != nil {
+		// An ask is a verdict too: the agent's answer is the question.
+		if err := tx.QueryRowContext(ctx, `SELECT count(*), coalesce(sum(coalesce(json_extract(body, '$.verdict'), '') != ''), 0)
+			FROM rows WHERE round_id = ?`, roundID).Scan(&p.Files, &p.Recommended); err != nil {
 			return p, err
 		}
 		p.State = Ready
-		if open > 0 {
+		if p.Recommended < p.Files {
 			p.State = Recommending
 		}
 	} else {
@@ -267,7 +269,8 @@ type ProposeResult struct {
 // recommendations already stored. A file or link may be named by its key
 // or its path. A file's earlier recommendation is replaced, and the
 // decisions on its group (before and after) are dropped, sent or not: they
-// answered another recommendation.
+// answered another recommendation. A file apply has written, or one in its
+// group, is refused: its approval is on the branch.
 func (s *Store) Propose(ctx context.Context, roundID int64, batch []rec.Rec) (ProposeResult, error) {
 	var res ProposeResult
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -335,6 +338,23 @@ func (s *Store) Propose(ctx context.Context, roundID int64, batch []rec.Rec) (Pr
 				drop[k] = true
 			}
 		}
+		// A file apply has written keeps the approval it went out with, and
+		// so does its group: reconcile checks the branch against it.
+		done, err := appliedIn(ctx, tx, roundID)
+		if err != nil {
+			return err
+		}
+		for _, r := range in {
+			for _, k := range append(rec.Group(stored, r.File), rec.Group(after, r.File)...) {
+				if done[k] {
+					what := files[k].Source.File
+					if k != r.File {
+						what += ", linked to " + files[r.File].Source.File + ","
+					}
+					return fmt.Errorf("already applied: %s is on its branch; change it there", what)
+				}
+			}
+		}
 		for k := range drop {
 			d, err := tx.ExecContext(ctx, `DELETE FROM file_decisions WHERE round_id = ? AND key = ?`, roundID, k)
 			if err != nil {
@@ -369,6 +389,31 @@ func (s *Store) Propose(ctx context.Context, roundID int64, batch []rec.Rec) (Pr
 	return res, nil
 }
 
+// appliedIn is the files apply has written in the round: the keys of its
+// successful records (pr or branch).
+func appliedIn(ctx context.Context, tx *sql.Tx, roundID int64) (map[string]bool, error) {
+	q, err := tx.QueryContext(ctx, `SELECT rows FROM applies WHERE round_id = ? AND state IN ('pr', 'branch')`, roundID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = q.Close() }()
+	out := map[string]bool{}
+	for q.Next() {
+		var ids string
+		if err := q.Scan(&ids); err != nil {
+			return nil, err
+		}
+		var keys []string
+		if err := json.Unmarshal([]byte(ids), &keys); err != nil {
+			return nil, err
+		}
+		for _, k := range keys {
+			out[k] = true
+		}
+	}
+	return out, q.Err()
+}
+
 // rowsIn is the round's rows by id, as stored.
 func rowsIn(ctx context.Context, tx *sql.Tx, roundID int64) (map[string]row.Row, error) {
 	q, err := tx.QueryContext(ctx, `SELECT body FROM rows WHERE round_id = ?`, roundID)
@@ -393,11 +438,11 @@ func rowsIn(ctx context.Context, tx *sql.Tx, roundID int64) (map[string]row.Row,
 
 // DecideFile records the user's decision on a file and the files linked to
 // it, which are decided together: accept or reject sets each of them (an
-// accept leaves an edit on another file as it is); an edit is this file's,
-// and accepts the others not edited. The note is this file's alone. prints
-// holds each group file's fingerprint as the page showed it: ErrChanged
-// when one is missing or differs, ErrStale when the file is not in the
-// round, ErrNotReady while the round is recommending. All in one
+// accept leaves an edit, this file's or another's, as it is); an edit is
+// this file's, and accepts the others not edited. The note is this file's
+// alone. prints holds each group file's fingerprint as the page showed it:
+// ErrChanged when one is missing or differs, ErrStale when the file is not
+// in the round, ErrNotReady while the round is recommending. All in one
 // transaction.
 func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec.Decision, prints map[string]string) error {
 	if err := d.Validate(); err != nil {
@@ -437,6 +482,13 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 		for _, k := range group {
 			cur := by[k].Decision
 			switch {
+			case k == key && d.Action == "accept" && cur != nil && cur.Action == "edit":
+				// The page shows an edited file's edit, so accepting it
+				// approves the edit. Going back to the recommendation is
+				// UndecideFile first.
+				if err := put(k, rec.Decision{Action: "edit", Content: cur.Content, Note: d.Note}); err != nil {
+					return err
+				}
 			case k == key:
 				if err := put(k, d); err != nil {
 					return err

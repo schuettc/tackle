@@ -227,20 +227,25 @@ func Run(ctx context.Context, o Options) (Result, error) {
 			}
 		}
 	}
+	// A file outside any repo is never written, so it holds the files
+	// linked to it like any other held file; its approved content is saved
+	// for the user all the same.
+	for _, p := range outside {
+		p.why = "not in a git repo, so there is no branch to put it on: put the approved content in place yourself"
+		if len(p.a.Group) > 1 {
+			p.why += ", together with the files linked to it, which are held so the move goes in whole"
+		}
+	}
 	byKey := map[string]store.FileItem{}
 	for _, it := range items {
 		byKey[it.Key] = it
 	}
 	holdLinked(all, byKey)
 	for _, p := range outside {
-		if p.why != "" {
-			p.it.Why = p.why
-		} else {
-			p.it.Why = "not in a git repo, so there is no branch to put it on: put the approved content in place yourself"
-			if !o.DryRun {
-				if p.it.Approved, err = saveApproved(rd.ID, p.a); err != nil {
-					p.it.Why += " (saving it failed: " + oneLine(err.Error()) + ")"
-				}
+		p.it.Why = p.why
+		if !o.DryRun {
+			if p.it.Approved, err = saveApproved(rd.ID, p.a); err != nil {
+				p.it.Why += " (saving it failed: " + oneLine(err.Error()) + ")"
 			}
 		}
 		res.Left = append(res.Left, p.it)

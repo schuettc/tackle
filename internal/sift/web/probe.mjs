@@ -403,6 +403,48 @@ async function main() {
     ),
   );
 
+  // An edited file shows the edit, so 1 then keeps the edit; going back to
+  // the recommendation is its own step (u), which shows it again first.
+  await openFile(docs);
+  await openFile(shop);
+  check(
+    'an edited file, revisited, offers to accept your edit',
+    (await page
+      .locator('.sift-decide .kit-btn', { hasText: '1 accept your edit' })
+      .count()) === 1 &&
+      (await page
+        .locator('.sift-dl.add', { hasText: 'Ask the shop team.' })
+        .count()) === 1,
+  );
+  await page.keyboard.press('1');
+  check(
+    '1 on an edited file keeps the edit',
+    await until(async () => {
+      const d = (await fileOf(shop)).decision;
+      return d?.action === 'edit' && d.content === mine;
+    }),
+  );
+  await openFile(shop);
+  await page.keyboard.press('u');
+  check(
+    'u reverts to the recommendation and shows it again',
+    await until(
+      async () =>
+        !(await fileOf(shop)).decision &&
+        (await page
+          .locator('.sift-dl.add', { hasText: 'Ask the shop team.' })
+          .count()) === 0 &&
+        (await page
+          .locator('.sift-decide .kit-btn', { hasText: '1 accept your edit' })
+          .count()) === 0,
+    ),
+  );
+  await page.keyboard.press('2');
+  await ta.waitFor();
+  await ta.fill(mine);
+  await page.keyboard.press('Meta+Enter');
+  await until(async () => (await fileOf(shop)).decision?.action === 'edit');
+
   // ---- 4. 1 accepts, 3 rejects, n notes; linked files decided together
   console.log('keys');
   await openFile(docs);
@@ -638,6 +680,42 @@ async function main() {
   );
   await shoot(bp0, 'backlog');
   await bp0.close();
+
+  // A backlog round with an item the agent has not answered waits too: no
+  // item list, no Send, and a decision is refused.
+  const blRec = await startServe({ fixture: BACKLOG, recommending: true });
+  serves.push(blRec);
+  const bpr = await open(pageUrl(blRec), '.kit-doc h1');
+  check(
+    'a backlog round still being recommended says how far the agent got',
+    (await bpr.locator('.kit-doc h1').innerText()) ===
+      'The agent is recommending: 3 of 4 items',
+    await bpr.locator('.kit-doc h1').innerText(),
+  );
+  check(
+    'and lists no item and offers no Send',
+    (await bpr.locator('.kit-row').count()) === 0 &&
+      !(await bpr.locator('.kit-primary').isVisible()),
+  );
+  const blr = apiOf(blRec);
+  const recRow = (await blr.review()).rows.find((r) => r.verdict);
+  const refused = (
+    await blr.api('/api/decisions', {
+      method: 'PUT',
+      body: JSON.stringify({
+        round: blRec.round,
+        decisions: [
+          { id: recRow.id, action: 'accept', fingerprint: recRow.fingerprint },
+        ],
+      }),
+    })
+  ).status;
+  check(
+    'a decision on an answered item is refused until the round is ready',
+    refused === 409,
+    String(refused),
+  );
+  await bpr.close();
 
   // ---- 10. a round the size of a real one
   console.log('scale');

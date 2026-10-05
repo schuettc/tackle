@@ -14,12 +14,13 @@ import (
 	"github.com/schuettc/tackle/internal/sift/store"
 )
 
-// End to end: apply writes two approved files; reconcile finds each equal
-// to its approved content. A writer then changes one file by a character,
-// deletes the other and adds a file nobody approved, and reconcile reports
-// each.
-func TestReconcileAfterApply(t *testing.T) {
-	ctx := context.Background()
+var ctx = context.Background()
+
+// applied is a round whose two files (app's CLAUDE.md and docs/AGENTS.md)
+// were accepted, sent and applied: the store, the round, the repo, the
+// recommendations and the branch.
+func applied(t *testing.T) (*store.Store, int64, string, []rec.Rec, string) {
+	t.Helper()
 	st.Env(t)
 	t.Setenv("SIFT_HOME", t.TempDir())
 	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{"CLAUDE.md": "# App\n\n- Never push to main.\n", "docs/AGENTS.md": "# Docs\n\n- Don't guess.\n"})
@@ -28,7 +29,7 @@ func TestReconcileAfterApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = s.Close() }()
+	t.Cleanup(func() { _ = s.Close() })
 	commit := st.Git(t, repo, "rev-parse", "origin/main")
 	var files []rec.File
 	var rows []row.Row
@@ -45,7 +46,7 @@ func TestReconcileAfterApply(t *testing.T) {
 	var recs []rec.Rec
 	for _, f := range files {
 		recs = append(recs, rec.Rec{File: f.Key, Base: f.Base, Content: "# Rewritten " + f.Source.Path + "\n\n- Do it right.\n", Summary: "s",
-			Findings: []rec.Account{{Row: f.Rows[0], Did: "fixed", How: "guidance"}}})
+			Findings: []rec.Account{{Row: f.Rows[0], Did: "fixed", How: "removed"}}})
 	}
 	if _, err := s.Propose(ctx, round, recs); err != nil {
 		t.Fatal(err)
@@ -63,7 +64,15 @@ func TestReconcileAfterApply(t *testing.T) {
 	if err != nil || res.Repos[0].State != "branch" {
 		t.Fatalf("%+v %v", res, err)
 	}
-	branch := res.Repos[0].Branch
+	return s, round, repo, recs, res.Repos[0].Branch
+}
+
+// End to end: apply writes two approved files; reconcile finds each equal
+// to its approved content. A writer then changes one file by a character,
+// deletes the other and adds a file nobody approved, and reconcile reports
+// each.
+func TestReconcileAfterApply(t *testing.T) {
+	s, round, repo, _, branch := applied(t)
 	_, reps, err := reconcile.Run(ctx, s, 0)
 	if err != nil || len(reps) != 1 || reps[0].Problems() != 0 || len(reps[0].Files) != 2 || reps[0].Branch != branch {
 		t.Fatalf("straight after apply: %+v %v", reps, err)
@@ -93,5 +102,21 @@ func TestReconcileAfterApply(t *testing.T) {
 	}
 	if strings.Join(reps[0].Extra, ",") != "NOTES.md" || reps[0].Problems() != 3 {
 		t.Errorf("extra %v, problems %d", reps[0].Extra, reps[0].Problems())
+	}
+}
+
+// A file apply has written keeps the approval it was written with: a new
+// recommendation for it is refused, so reconcile still checks the branch
+// against what was approved.
+func TestReproposingAnAppliedFileIsRefused(t *testing.T) {
+	s, round, _, recs, _ := applied(t)
+	again := recs[0]
+	again.Content = "# Something else\n"
+	if _, err := s.Propose(ctx, round, []rec.Rec{again}); err == nil || !strings.Contains(err.Error(), "applied") {
+		t.Fatalf("re-proposal after apply: %v", err)
+	}
+	_, reps, err := reconcile.Run(ctx, s, round)
+	if err != nil || len(reps) != 1 || reps[0].Problems() != 0 || len(reps[0].Files) != 2 {
+		t.Fatalf("%+v %v", reps, err)
 	}
 }

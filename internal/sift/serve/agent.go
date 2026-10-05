@@ -175,8 +175,11 @@ func (s *Server) agentReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if prog.State == store.Recommending {
-		writeErr(w, http.StatusConflict, fmt.Sprintf("round %d is still being recommended: %d of %d file(s) have a recommendation; recommend the rest (sift_next, sift_propose), then review",
-			rd.ID, prog.Recommended, prog.Files))
+		how := fmt.Sprintf("%d of %d file(s) have a recommendation; recommend the rest (sift_next, sift_propose)", prog.Recommended, prog.Files)
+		if store.PerItem(rd.Kind) {
+			how = fmt.Sprintf("%d of %d item(s) have a verdict; add the rest (sift rows add)", prog.Recommended, prog.Files)
+		}
+		writeErr(w, http.StatusConflict, fmt.Sprintf("round %d is still being recommended: %s, then review", rd.ID, how))
 		return
 	}
 	open, err := s.open(r.Context(), rd, rows)

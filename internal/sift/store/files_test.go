@@ -208,6 +208,39 @@ func TestLinkedFilesAreDecidedTogether(t *testing.T) {
 	}
 }
 
+// Once a file is edited the page shows the edit, so accepting it approves
+// the edit: the file keeps its edit (and its other side stays accepted).
+// Going back to the recommendation is clearing the decision first.
+func TestAcceptKeepsTheFilesOwnEdit(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	mine := "# M\n\n- Mine.\n- Do x safely here.\n"
+	if err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: mine}, both()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept", Note: "looks right"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	its := items(t, s, id)
+	if d := its[m].Decision; d.Action != "edit" || d.Content != mine || d.Note != "looks right" {
+		t.Fatalf("accept after an edit: %+v", d)
+	}
+	if d := its[g].Decision; d.Action != "accept" {
+		t.Fatalf("the other side: %+v", d)
+	}
+	if err := s.UndecideFile(ctx, id, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	if d := items(t, s, id)[m].Decision; d.Action != "accept" || d.Content != "" {
+		t.Fatalf("accept after a revert: %+v", d)
+	}
+}
+
 // A decision carries the print of every file in its group as the page
 // showed it; a missing or old one is refused and nothing is stored.
 func TestDecideNeedsEveryPrint(t *testing.T) {
@@ -258,6 +291,42 @@ func TestReproposingDropsTheGroupsDecisions(t *testing.T) {
 	}
 }
 
+// A file apply has written, and every file linked to one, keeps its
+// recommendation and decision: a new recommendation is refused. Others in
+// the round can still be re-proposed.
+func TestProposeRefusesAnAppliedFileOrGroup(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, printsOf(t, s, id, g, m)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Send(ctx, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordApply(ctx, Apply{Round: id, Repo: "/w/m", State: "branch", Branch: "sift/round-1", Rows: []string{m}}); err != nil {
+		t.Fatal(err)
+	}
+	m2 := recM(f, g)
+	m2.Content += "- More.\n"
+	if _, err := s.Propose(ctx, id, []rec.Rec{m2}); err == nil || !strings.Contains(err.Error(), "applied") {
+		t.Fatalf("the applied file: %v", err)
+	}
+	g2 := recG(f, m)
+	g2.Content += "- More.\n"
+	if _, err := s.Propose(ctx, id, []rec.Rec{g2}); err == nil || !strings.Contains(err.Error(), "applied") {
+		t.Fatalf("a file linked to it: %v", err)
+	}
+	if d := decisions(t, s, id); d[g] != "accept" || d[m] != "accept" {
+		t.Fatalf("decisions %v", d)
+	}
+	q2 := recQ(f)
+	q2.Content += "- More.\n"
+	if _, err := s.Propose(ctx, id, []rec.Rec{q2}); err != nil {
+		t.Fatalf("a file apply did not write: %v", err)
+	}
+}
+
 // Nothing is decided while the agent is still recommending.
 func TestNoDecisionBeforeReady(t *testing.T) {
 	s, _ := open(t)
@@ -284,8 +353,44 @@ func TestABacklogRoundTakesNoRecommendations(t *testing.T) {
 	if _, err := s.AddRows(ctx, id, []row.Row{{ID: "i1", Check: "intake", Verdict: "issue", Source: row.Source{Entry: "1"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := s.State(ctx, id); st.State != Ready || st.Files != 0 {
+	if st, _ := s.State(ctx, id); st.State != Ready || st.Files != 1 || st.Recommended != 1 {
 		t.Fatalf("%+v", st)
+	}
+}
+
+// A backlog round is recommending until every item has the agent's verdict
+// (ask counts: it is the agent's answer that the user must say), and no
+// item is decided before then.
+func TestABacklogRoundWaitsForEveryItem(t *testing.T) {
+	s, _ := open(t)
+	id, err := s.RecordRound(ctx, Round{Kind: "backlog"}, []row.Row{
+		{ID: "i1", Check: "intake", Verdict: "issue", Title: "t", Text: "b", Destination: "acme/app", Source: row.Source{Entry: "1"}},
+		{ID: "i2", Check: "intake", Source: row.Source{Entry: "2"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.State(ctx, id); st.State != Recommending || st.Files != 2 || st.Recommended != 1 {
+		t.Fatalf("%+v", st)
+	}
+	_, rows, err := s.Round(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Answer(ctx, id, []Answer{{Row: "i1", Fingerprint: rows[0].Fingerprint, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("answer while recommending: %v", err)
+	}
+	if err := s.Decide(ctx, id, "i1", row.Decision{Action: "accept"}); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("decide while recommending: %v", err)
+	}
+	if _, err := s.AddRows(ctx, id, []row.Row{{ID: "i2", Verdict: "ask", Text: "which repo?"}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.State(ctx, id); st.State != Ready || st.Recommended != 2 {
+		t.Fatalf("%+v", st)
+	}
+	if err := s.Decide(ctx, id, "i1", row.Decision{Action: "accept"}); err != nil {
+		t.Fatal(err)
 	}
 }
 

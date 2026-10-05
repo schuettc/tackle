@@ -317,7 +317,8 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 // the row's fingerprint (row.Print, with its merge target) is still the
 // one given, and, for an edit to merge:C, C's is still TargetFingerprint:
 // ErrChanged when either is not, ErrStale when the row is not in the
-// round. The check and the write are one transaction.
+// round, ErrNotReady while a round decided per item still waits for the
+// agent's verdicts. The check and the write are one transaction.
 func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) error {
 	return s.answer(ctx, roundID, as, true)
 }
@@ -332,6 +333,23 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 		// The first statement is a write (the main connection begins deferred).
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
+		}
+		// A round decided per item waits for the agent's verdict on every
+		// item, as an audit round waits for every file's recommendation.
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM rounds WHERE id = ?`, roundID).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
+			return ErrStale
+		} else if err != nil {
+			return err
+		}
+		if PerItem(kind) {
+			p, err := stateIn(ctx, tx, roundID)
+			if err != nil {
+				return err
+			}
+			if p.State == Recommending {
+				return ErrNotReady
+			}
 		}
 		for _, a := range as {
 			cur, err := rowIn(ctx, tx, roundID, a.Row)

@@ -425,6 +425,8 @@ function decideLocal(files, key, d) {
     if (!m) continue;
     const cur = m.decision;
     if (d === null) m.decision = null;
+    else if (k === key && d.action === "accept" && cur?.action === "edit")
+      m.decision = { ...cur, note: d.note ?? "", sent: false };
     else if (k === key) m.decision = { ...d, sent: false };
     else if (d.action === "reject")
       m.decision = { action: "reject", note: cur?.note ?? "", sent: false };
@@ -432,9 +434,9 @@ function decideLocal(files, key, d) {
       continue;
     else m.decision = { action: "accept", note: cur?.note ?? "", sent: false };
   }
-  if (d?.action === "edit" && d.content !== void 0)
-    f.after = d.content.length;
-  else if (f.rec && d?.action !== "edit") f.after = f.rec.content.length;
+  if (f.decision?.action === "edit" && f.decision.content !== void 0)
+    f.after = f.decision.content.length;
+  else if (f.rec) f.after = f.rec.content.length;
 }
 function filesProgress(files) {
   const open = files.filter((f) => f.rec);
@@ -900,7 +902,11 @@ function fileDoc(ctx, f) {
   else parts.push(diffView(base, after, certainLines(rows)));
   const a = f.decision?.action;
   const bs = [
-    { label: "1 accept", fill: a === "accept", run: () => ctx.accept(f) },
+    {
+      label: edited ? "1 accept your edit" : "1 accept",
+      fill: a === "accept",
+      run: () => ctx.accept(f)
+    },
     { label: "2 edit", fill: a === "edit", run: () => ctx.startEdit(f) },
     {
       label: "3 reject",
@@ -909,7 +915,11 @@ function fileDoc(ctx, f) {
       run: () => ctx.reject(f)
     }
   ];
-  if (f.decision) bs.push({ label: "clear (u)", run: () => ctx.clear(f) });
+  if (f.decision)
+    bs.push({
+      label: edited ? "revert to the recommendation (u)" : "clear (u)",
+      run: () => ctx.clear(f)
+    });
   const decide = buttons(bs);
   decide.classList.add("sift-decide");
   parts.push(decide);
@@ -991,7 +1001,7 @@ function boot() {
   const api = client(newApi({ fetch: gated, onStale: () => goStale() }));
   const home = () => review?.home ?? "";
   const files = () => review?.files ?? [];
-  const recommending = () => !perItem(review) && review?.progress?.state === "recommending";
+  const recommending = () => review?.progress?.state === "recommending";
   const matchesRow = (r) => {
     if (filter && r.check !== filter) return false;
     if (!search) return true;
@@ -1247,7 +1257,11 @@ function boot() {
       l.setItems([]);
       const p = review.progress;
       read.replaceChildren(
-        message(
+        perItem(review) ? message(
+          "recommending",
+          `The agent is recommending: ${p.recommended} of ${plural2(p.files, "item")}`,
+          "Every item arrives with what the agent recommends doing about it. This page opens for review when the last one is in."
+        ) : message(
           "recommending",
           `The agent is recommending: ${p.recommended} of ${plural2(p.files, "file")}`,
           "Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in."

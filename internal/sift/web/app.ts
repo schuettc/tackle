@@ -131,8 +131,9 @@ export function boot(): void {
   // ---- derived ---------------------------------------------------------------
   const home = () => review?.home ?? '';
   const files = () => review?.files ?? [];
-  const recommending = () =>
-    !perItem(review) && review?.progress?.state === 'recommending';
+  // An audit round waits for every file's recommendation, a backlog round
+  // for the agent's verdict on every item.
+  const recommending = () => review?.progress?.state === 'recommending';
   const matchesRow = (r: Finding) => {
     if (filter && r.check !== filter) return false;
     if (!search) return true;
@@ -430,11 +431,17 @@ export function boot(): void {
       l.setItems([]);
       const p = review.progress;
       read.replaceChildren(
-        message(
-          'recommending',
-          `The agent is recommending: ${p.recommended} of ${plural(p.files, 'file')}`,
-          'Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in.',
-        ),
+        perItem(review)
+          ? message(
+              'recommending',
+              `The agent is recommending: ${p.recommended} of ${plural(p.files, 'item')}`,
+              'Every item arrives with what the agent recommends doing about it. This page opens for review when the last one is in.',
+            )
+          : message(
+              'recommending',
+              `The agent is recommending: ${p.recommended} of ${plural(p.files, 'file')}`,
+              'Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in.',
+            ),
       );
       return;
     }

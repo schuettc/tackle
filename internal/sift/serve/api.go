@@ -288,8 +288,9 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 }
 
 // answer stores the decisions (store.Answer) and writes the error when it
-// can't: 409 when the round moved on or a row changed since the page showed
-// it. ok is false after writing the error.
+// can't: 409 when the round moved on, a row changed since the page showed
+// it, or the agent is still answering the items. ok is false after writing
+// the error.
 func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64, as []store.Answer) bool {
 	err := s.st.Answer(ctx, round, as)
 	switch {
@@ -297,6 +298,9 @@ func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64,
 		writeErr(w, http.StatusConflict, "stale")
 	case errors.Is(err, store.ErrChanged):
 		writeErr(w, http.StatusConflict, "changed: the agent changed this row since the page showed it; look again")
+	case errors.Is(err, store.ErrNotReady):
+		p, _ := s.st.State(ctx, round)
+		writeErr(w, http.StatusConflict, fmt.Sprintf("the agent is still recommending: %d of %d items have its verdict; decisions open once every one has", p.Recommended, p.Files))
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err.Error())
 	}

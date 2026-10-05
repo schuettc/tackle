@@ -152,6 +152,23 @@ test('decideLocal mirrors the store: linked files decided together, an edit keep
   assert.deepEqual(printsFor(files, 'g'), { g: 'fp-g', m: 'fp-m' });
 });
 
+test('decideLocal: accepting an edited file keeps its edit; clearing it goes back to the recommendation', () => {
+  const files = [mk('m', '/m', { after: 2 })];
+  const m = files[0];
+  decideLocal(files, 'm', { action: 'edit', content: 'mine, longer\n' });
+  decideLocal(files, 'm', { action: 'accept', note: 'looks right' });
+  assert.equal(m.decision?.action, 'edit');
+  assert.equal(m.decision?.content, 'mine, longer\n');
+  assert.equal(m.decision?.note, 'looks right');
+  assert.equal(m.after, 'mine, longer\n'.length);
+  decideLocal(files, 'm', null);
+  assert.equal(m.decision, null);
+  assert.equal(m.after, m.rec!.content.length);
+  decideLocal(files, 'm', { action: 'accept' });
+  assert.equal(m.decision?.action, 'accept');
+  assert.equal(m.decision?.content, undefined);
+});
+
 test('filesProgress and unsentFiles', () => {
   const files = [
     mk('a', '/a', { decision: { action: 'accept', sent: true } }),

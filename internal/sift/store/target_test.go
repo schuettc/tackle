@@ -45,7 +45,7 @@ func TestAnEditsMergeTargetIsFingerprinted(t *testing.T) {
 	id, rows := round(t, s)
 	a, c := rows[0].ID, rows[1].ID
 	old := prints(t, s, id)
-	if _, err := s.AddRows(ctx, id, []row.Row{{ID: c, Verdict: "keep"}}); err != nil {
+	if _, err := s.AddRows(ctx, id, []row.Row{{ID: c, Verdict: "delete"}}); err != nil {
 		t.Fatal(err)
 	}
 	now := prints(t, s, id)

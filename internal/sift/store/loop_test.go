@@ -9,7 +9,8 @@ import (
 )
 
 // round records a round decided per item, of three rows: a judgment, a
-// second judgment and a certain one.
+// second judgment and a certain one, each with the agent's verdict (keep),
+// so the round is ready.
 func round(t *testing.T, s *Store) (int64, []row.Row) {
 	t.Helper()
 	rows := []row.Row{
@@ -18,6 +19,9 @@ func round(t *testing.T, s *Store) (int64, []row.Row) {
 		finding("/w/b/AGENTS.md", "dead-path", "see `gone.md`"),
 	}
 	rows[2].Certain = true
+	for i := range rows {
+		rows[i].Verdict = "keep"
+	}
 	id, err := s.RecordRound(ctx, Round{Kind: "backlog"}, rows)
 	if err != nil {
 		t.Fatal(err)
@@ -77,12 +81,12 @@ func TestAddRowsRejects(t *testing.T) {
 		"a decision":        {row.Row{ID: rows[0].ID, Decision: &row.Decision{Action: "accept"}}, "decision"},
 		"intake, no source": {row.Row{ID: "m1", Check: "intake", Summary: "s"}, "source"},
 	} {
-		if _, err := s.AddRows(ctx, id, []row.Row{{ID: rows[1].ID, Verdict: "keep"}, c.in}); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := s.AddRows(ctx, id, []row.Row{{ID: rows[1].ID, Verdict: "delete"}, c.in}); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err %v, want %q", name, err, c.want)
 		}
 	}
 	// All or nothing: the good row in each batch was not written either.
-	if _, got, _ := s.Round(ctx, id); got[1].Verdict != "" {
+	if _, got, _ := s.Round(ctx, id); got[1].Verdict != "keep" {
 		t.Errorf("a rejected batch was partly written: %+v", got[1])
 	}
 }

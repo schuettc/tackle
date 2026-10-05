@@ -10,8 +10,9 @@
 //
 // -scale N pads the round to N rows with stale-status findings spread over
 // generated files, as a large real round would be, each file recommended.
-// -recommending leaves one file without a recommendation, so the round is
-// still being recommended.
+// -recommending leaves one file without a recommendation (in a backlog
+// round, the last item without a verdict), so the round is still being
+// recommended.
 package main
 
 import (
@@ -62,7 +63,7 @@ type fixture struct {
 // Options says how to seed.
 type Options struct {
 	Scale        int  // pad the round to this many rows
-	Recommending bool // leave one file without a recommendation
+	Recommending bool // leave one file without a recommendation (an item without a verdict)
 }
 
 func git(ctx context.Context, dir string, args ...string) (string, error) {
@@ -124,6 +125,10 @@ func Seed(ctx context.Context, dbPath string, data []byte, base string, o Option
 		}
 		src.Canon = row.Resolve(src.File)
 		return src, ""
+	}
+	if o.Recommending && store.PerItem(fx.Kind) && len(fx.Rows) > 0 {
+		last := &fx.Rows[len(fx.Rows)-1].Row
+		last.Verdict, last.Title, last.Destination, last.Text, last.Reason = "", "", "", "", ""
 	}
 	rows := make([]row.Row, 0, len(fx.Rows))
 	byRel := map[string][]string{}
@@ -238,7 +243,7 @@ func pad(fx *fixture, n int) {
 
 func main() {
 	scale := flag.Int("scale", 0, "pad the round to this many rows")
-	recommending := flag.Bool("recommending", false, "leave one file without a recommendation")
+	recommending := flag.Bool("recommending", false, "leave one file without a recommendation, or one item without a verdict")
 	flag.Parse()
 	if flag.NArg() != 3 {
 		fmt.Fprintln(os.Stderr, "usage: seed [-scale N] [-recommending] <SIFT_HOME> <round.json> <base dir>")
