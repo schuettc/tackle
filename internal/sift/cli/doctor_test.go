@@ -96,3 +96,49 @@ func TestDoctorBrokenHarnessConfig(t *testing.T) {
 		t.Fatalf("code %d\n%s", code, out)
 	}
 }
+
+// The page server and each enabled harness's channel registration are
+// notes: sift works without them, but the user's decisions then reach a
+// session only through sift wait.
+func TestDoctorPageServerAndChannels(t *testing.T) {
+	home := siftEnv(t)
+	for _, d := range []string{".claude", ".codex", ".pi/agent"} {
+		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c := config.Default()
+	c.Profiles = []string{"claude-code", "codex", "pi"}
+	if err := config.Save(config.Path(), c); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "", "doctor")
+	for _, re := range []string{
+		`serve\s+note: sift serve is not running`,
+		`claude-code channel\s+note: sift is not in .*\.claude\.json mcpServers`,
+		`codex channel\s+note: sift is not in .*config\.toml \[mcp_servers\]`,
+		`pi channel\s+note: sift is not in .*channels\.json`,
+	} {
+		if !regexp.MustCompile(re).MatchString(out) {
+			t.Errorf("want %s:\n%s", re, out)
+		}
+	}
+	if code != 0 {
+		t.Fatalf("notes failed doctor: %d", code)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"sift":{"command":"sift","args":["channel"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.sift]\ncommand = \"sift\"\nargs = [\"channel\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".pi", "agent", "channels.json"), []byte(`{"channels":{"sift":{"command":"sift"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ = run(t, "", "doctor")
+	for _, re := range []string{`claude-code channel\s+ok`, `codex channel\s+ok`, `pi channel\s+ok`} {
+		if !regexp.MustCompile(re).MatchString(out) {
+			t.Errorf("want %s:\n%s", re, out)
+		}
+	}
+}

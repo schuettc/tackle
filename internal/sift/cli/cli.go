@@ -18,6 +18,7 @@ func Main(args []string, stdin io.Reader, out, errw io.Writer) int {
 		Groups: []tools.Group{
 			{Key: "setup", Heading: "Setup"},
 			{Key: "audit", Heading: "Audit"},
+			{Key: "review", Heading: "Review and apply"},
 		},
 	})
 	for _, c := range commands(stdin) {
