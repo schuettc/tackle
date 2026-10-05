@@ -18,6 +18,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/schuettc/tackle/internal/sift/gitenv"
 
 	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
 	_ "github.com/schuettc/tackle/internal/cull/extract/python"
@@ -149,7 +150,13 @@ func runGit(t *testing.T, dir, gitconfig string, args ...string) string {
 // answer cache (~/.cache/cull/answers): Run always builds its Cache from
 // tools.CacheDir("cull"), and without this, fake-evaluator answers from
 // tests would be written to, and read back from, that real cache.
+// TestMain clears the variables that point git at another repository (a git
+// hook exports them; the pre-push hook from a linked worktree sets GIT_DIR),
+// then gives the package a scratch CULL_HOME.
 func TestMain(m *testing.M) {
+	for _, k := range gitenv.Selectors {
+		_ = os.Unsetenv(k)
+	}
 	dir, err := os.MkdirTemp("", "cull-check-cache")
 	if err != nil {
 		panic(err)
