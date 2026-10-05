@@ -1,0 +1,143 @@
+// Package row is the one shape every sift finding takes, from an audit check
+// or a memory intake: where it is, what found it, the facts behind it, what
+// to do about it, and the answer.
+package row
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"regexp"
+	"strings"
+)
+
+// Row is one finding.
+type Row struct {
+	// ID is stable: the check, the file and the normalized passage, hashed;
+	// a repeat of the same passage in the file and check also hashes its
+	// ordinal (see Nth).
+	ID      string `json:"id"`
+	Check   string `json:"check"`
+	Summary string `json:"summary"`
+	Source  Source `json:"source"`
+	// Passage is the text the row is about, as it is now.
+	Passage  string `json:"passage,omitempty"`
+	Evidence []Fact `json:"evidence,omitempty"`
+	// Verdict is the proposal (see ValidVerdict); empty until one is made.
+	Verdict string `json:"verdict,omitempty"`
+	// Title is the issue's title, for issue rows.
+	Title string `json:"title,omitempty"`
+	// Destination is a file and section, for move, rewrite and intake rows;
+	// the repo, for issue rows.
+	Destination string `json:"destination,omitempty"`
+	// Text is the proposed text, written as guidance.
+	Text string `json:"text,omitempty"`
+	// Certain is true only for findings that cannot be wrong; sift applies
+	// those itself.
+	Certain  bool      `json:"certain"`
+	Decision *Decision `json:"decision,omitempty"`
+}
+
+// Source is where a row's passage is.
+type Source struct {
+	// File is the file's path as found (for a repo file, under the repo root).
+	File string `json:"file"`
+	// Repo, Ref and Path place a repo file: the repo root, the ref it was
+	// read at, and the repo-relative path.
+	Repo string `json:"repo,omitempty"`
+	Ref  string `json:"ref,omitempty"`
+	Path string `json:"path,omitempty"`
+	// Start and End are 1-based lines (0: the whole file).
+	Start int `json:"start,omitempty"`
+	End   int `json:"end,omitempty"`
+	// Entry names a memory entry (intake rows).
+	Entry string `json:"entry,omitempty"`
+}
+
+// Fact is one piece of evidence.
+type Fact struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// Decision is the answer to a row's proposal from the review page: accept
+// it, edit it (a changed verdict, title or text) or reject it.
+type Decision struct {
+	Action  string `json:"action"` // accept, edit or reject
+	Verdict string `json:"verdict,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Note    string `json:"note,omitempty"`
+}
+
+// Validate reports what is wrong with a decision: an unknown action, an edit
+// that changes nothing, an invalid verdict, or edits on an accept or reject.
+func (d Decision) Validate() error {
+	edited := d.Verdict != "" || d.Title != "" || d.Text != ""
+	switch d.Action {
+	case "accept", "reject":
+		if edited {
+			return fmt.Errorf("decision: %s takes no verdict, title or text (use edit)", d.Action)
+		}
+	case "edit":
+		if !edited {
+			return errors.New("decision: an edit changes the verdict, title or text")
+		}
+		if d.Verdict != "" && !ValidVerdict(d.Verdict) {
+			return fmt.Errorf("decision: %q is not a verdict", d.Verdict)
+		}
+	default:
+		return fmt.Errorf("decision: action %q is not accept, edit or reject", d.Action)
+	}
+	return nil
+}
+
+// ID is a row's id: the first 16 hex digits of a hash of the check, the
+// file and the passage with its whitespace collapsed.
+func ID(file, check, passage string) string {
+	h := sha256.Sum256([]byte(check + "\x00" + file + "\x00" + Normalize(passage)))
+	return hex.EncodeToString(h[:8])
+}
+
+// Nth is the id of the n-th repeat (0-based, in line order) of a passage
+// whose plain id is id: the first keeps id, so a passage gains no new id
+// when a copy of it is added below.
+func Nth(id string, n int) string {
+	if n == 0 {
+		return id
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", id, n)))
+	return hex.EncodeToString(h[:8])
+}
+
+// Normalize collapses runs of whitespace to one space and trims the ends.
+func Normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// plain verdicts take no argument; merge, drop and close take one after a
+// colon. ask means the row needs the user's own decision before any verdict.
+var plain = map[string]bool{
+	"keep": true, "delete": true, "rewrite": true, "move": true,
+	"issue": true, "global": true, "private": true, "ask": true,
+}
+
+// trackedRE is close:tracked's argument: the issue that already tracks it.
+var trackedRE = regexp.MustCompile(`^tracked:[\w.-]+(?:/[\w.-]+)?#\d+$`)
+
+// ValidVerdict reports whether v is a verdict: keep, delete, rewrite, move,
+// merge:ID, drop:REASON, issue, global, private, ask, or close:REASON where
+// REASON is done, obsolete or tracked:REPO#N.
+func ValidVerdict(v string) bool {
+	if plain[v] {
+		return true
+	}
+	for _, p := range []string{"merge:", "drop:"} {
+		if strings.HasPrefix(v, p) && strings.TrimSpace(v[len(p):]) != "" {
+			return true
+		}
+	}
+	if r, ok := strings.CutPrefix(v, "close:"); ok {
+		return r == "done" || r == "obsolete" || trackedRE.MatchString(r)
+	}
+	return false
+}

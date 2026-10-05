@@ -26,3 +26,7 @@ __pycache__/
 
 # built binaries
 /bin/
+
+# Design docs never live in this public repo: specs and plans are in private tools-ops (docs/<repo>/).
+docs/specs/
+docs/plans/
