@@ -30,14 +30,17 @@ export interface Client {
   decide(round: number, ds: DecisionIn[]): Promise<void>;
   clear(round: number, id: string): Promise<void>;
   /** A decision on an audit round's file (and the files linked to it),
-   * with the prints of every file in its group as the page shows them. */
+   * with the prints of every file in its group as the page shows them
+   * (an edit in place of a recommendation counts). Returns the group's
+   * prints after it, for the page's next decision. */
   decideFile(
     round: number,
     file: string,
     d: FileDecision,
     prints: Record<string, string>,
-  ): Promise<void>;
-  clearFile(round: number, file: string): Promise<void>;
+  ): Promise<Record<string, string>>;
+  /** Clears a file's group; returns its prints after. */
+  clearFile(round: number, file: string): Promise<Record<string, string>>;
   /** A file's content at the audit. */
   base(round: number, file: string): Promise<{ content: string }>;
   send(round: number): Promise<{ sent: number; to: string }>;
@@ -56,7 +59,7 @@ export function client(api: Api): Client {
       await api.del(`/decisions?${q.toString()}`);
     },
     async decideFile(round, file, d, prints) {
-      await api.put('/files', {
+      const r = await api.put<{ prints?: Record<string, string> }>('/files', {
         round,
         file,
         action: d.action,
@@ -64,10 +67,14 @@ export function client(api: Api): Client {
         note: d.note ?? '',
         prints,
       });
+      return r?.prints ?? {};
     },
     async clearFile(round, file) {
       const q = new URLSearchParams({ round: String(round), file });
-      await api.del(`/files?${q.toString()}`);
+      const r = await api.del<{ prints?: Record<string, string> }>(
+        `/files?${q.toString()}`,
+      );
+      return r?.prints ?? {};
     },
     base: (round, file) =>
       api.get<{ content: string }>('/base', { round: String(round), file }),

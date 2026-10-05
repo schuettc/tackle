@@ -135,7 +135,7 @@ type Skip struct {
 type Options struct {
 	Profiles []profile.Profile
 	Roots    []config.Root
-	// Include audits forks and vendor-managed skills too.
+	// Include audits forks and what is under vendor directories too.
 	Include config.Include
 }
 
@@ -149,11 +149,26 @@ type finder struct {
 	res   Result
 	real  map[string]*File     // realpath → file, so a file reached twice is one
 	repos map[string]*repoTree // root → repo
+	// vendor is each profile's vendor directories, as given and real,
+	// unless the config includes them: nothing under one is audited, by
+	// any route.
+	vendor []string
 }
 
 // Run discovers the files.
 func Run(ctx context.Context, opt Options) (Result, error) {
 	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}}
+	if !opt.Include.Vendor {
+		for _, p := range opt.Profiles {
+			for _, v := range p.Vendor {
+				d := filepath.Clean(p.Path(v))
+				f.vendor = append(f.vendor, d)
+				if r := realish(d); r != d {
+					f.vendor = append(f.vendor, r)
+				}
+			}
+		}
+	}
 	f.globals()
 	for _, root := range opt.Roots {
 		f.root(ctx, root)
@@ -171,6 +186,30 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		return a.Path < b.Path
 	})
 	return f.res, nil
+}
+
+// vendored reports whether p is a vendor directory or under one.
+func (f *finder) vendored(p string) bool {
+	for _, v := range f.vendor {
+		if p == v || strings.HasPrefix(p, v+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// realish is p with the symlinks in its longest existing prefix resolved.
+func realish(p string) string {
+	rest := ""
+	for d := p; ; d = filepath.Dir(d) {
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(d) == d {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
+	}
 }
 
 func (f *finder) warn(format string, a ...any) {
@@ -260,13 +299,13 @@ func (f *finder) globals() {
 // keeps its bundled skills in .system) and are skipped.
 func (f *finder) skillDirs() {
 	for _, p := range f.opt.Profiles {
-		seen := map[string]bool{}
 		if !f.opt.Include.Vendor {
-			// Walked first, so the skills walk below finds them seen.
+			seen := map[string]bool{}
 			for _, v := range p.Vendor {
 				f.skipVendor(p.Path(v), seen)
 			}
 		}
+		seen := map[string]bool{}
 		for _, s := range p.Skills {
 			f.walkSkills(p.Path(s), p.Name, seen)
 		}
@@ -274,8 +313,7 @@ func (f *finder) skillDirs() {
 }
 
 // skipVendor lists every SKILL.md under a vendor-managed directory as
-// skipped, and marks its real directories seen so the skills walk leaves
-// them out.
+// skipped. seen holds the real directories walked.
 func (f *finder) skipVendor(dir string, seen map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
 	if err != nil || seen[real] {
@@ -304,7 +342,7 @@ func (f *finder) skipVendor(dir string, seen map[string]bool) {
 // tree is not followed twice.
 func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
-	if err != nil || seen[real] {
+	if err != nil || seen[real] || f.vendored(dir) || f.vendored(real) {
 		return
 	}
 	seen[real] = true
@@ -364,6 +402,7 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 		return false
 	}
 	loose := map[string][]string{} // dir → instruction file names present, outside repos
+	realStart := realish(start)
 	err := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if p == start {
@@ -373,6 +412,9 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 		}
 		if d.IsDir() {
 			if p != start && skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if rel, rerr := filepath.Rel(start, p); rerr == nil && (f.vendored(p) || f.vendored(filepath.Join(realStart, rel))) {
 				return filepath.SkipDir
 			}
 			if st, gerr := os.Lstat(filepath.Join(p, ".git")); gerr == nil {
@@ -502,6 +544,14 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			}
 		}
 	}
+	realRoot, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		realRoot = dir
+	}
+	vendored := func(rel string) bool {
+		p := filepath.FromSlash(rel)
+		return f.vendored(filepath.Join(dir, p)) || f.vendored(filepath.Join(realRoot, p))
+	}
 	byDir := map[string][]string{}
 	for rel := range r.files {
 		name := path.Base(rel)
@@ -511,14 +561,10 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 		if name != profile.SkillFile && !f.isRepoFile(name) {
 			continue
 		}
-		if skipped(rel) || excluded(rel, root.Exclude) {
+		if skipped(rel) || excluded(rel, root.Exclude) || vendored(rel) {
 			continue
 		}
 		byDir[path.Dir(rel)] = append(byDir[path.Dir(rel)], name)
-	}
-	realRoot, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		realRoot = dir
 	}
 	dirs := make([]string, 0, len(byDir))
 	for d := range byDir {

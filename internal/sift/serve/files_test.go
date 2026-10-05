@@ -124,7 +124,7 @@ func TestFileDecisions(t *testing.T) {
 	f.propose(a, b, "# App\n")
 	old := f.prints()
 	w := f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"accept","note":"yes","prints":%s}`, f.round, a.Key, old))
-	if w.Code != 204 {
+	if w.Code != 200 {
 		t.Fatalf("accept: %d %s", w.Code, w.Body)
 	}
 	for _, x := range f.files().Files {
@@ -144,10 +144,10 @@ func TestFileDecisions(t *testing.T) {
 		t.Fatalf("an old page: %d %s", w.Code, w.Body)
 	}
 	w = f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"edit","content":"# Docs, mine\n","prints":%s}`, f.round, b.Key, f.prints()))
-	if w.Code != 204 {
+	if w.Code != 200 {
 		t.Fatalf("edit: %d %s", w.Code, w.Body)
 	}
-	if w := f.do("DELETE", fmt.Sprintf("/api/files?round=%d&file=%s", f.round, a.Key), ""); w.Code != 204 {
+	if w := f.do("DELETE", fmt.Sprintf("/api/files?round=%d&file=%s", f.round, a.Key), ""); w.Code != 200 {
 		t.Fatalf("clear: %d %s", w.Code, w.Body)
 	}
 	for _, x := range f.files().Files {
@@ -161,6 +161,49 @@ func TestFileDecisions(t *testing.T) {
 	w = f.do("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":"n1","action":"reject"}]}`, f.round))
 	if w.Code != 400 || !strings.Contains(w.Body.String(), "per file") {
 		t.Fatalf("a row decision in an audit round: %d %s", w.Code, w.Body)
+	}
+}
+
+// A decision answers the content the page shows. Its response carries the
+// group's prints for the page to hold; an old page that still shows an edit
+// another client cleared is refused, and after a reload it can accept.
+func TestAcceptAnswersTheEditThePageShowed(t *testing.T) {
+	f, a, b := auditFixture(t)
+	f.propose(a, b, "# App\n")
+	w := f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"edit","content":"# Docs, mine\n","prints":%s}`, f.round, b.Key, f.prints()))
+	if w.Code != 200 {
+		t.Fatalf("edit: %d %s", w.Code, w.Body)
+	}
+	var got struct {
+		Prints map[string]string `json:"prints"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("%v %s", err, w.Body)
+	}
+	shown := f.prints()
+	if b2, _ := json.Marshal(got.Prints); string(b2) != shown {
+		t.Fatalf("the response's prints %s are not the page's %s", b2, shown)
+	}
+	if w := f.do("DELETE", fmt.Sprintf("/api/files?round=%d&file=%s", f.round, b.Key), ""); w.Code != 200 {
+		t.Fatalf("clear: %d %s", w.Code, w.Body)
+	}
+	w = f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"accept","prints":%s}`, f.round, b.Key, shown))
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "changed") {
+		t.Fatalf("an old page's accept: %d %s", w.Code, w.Body)
+	}
+	for _, x := range f.files().Files {
+		if x.Decision != nil {
+			t.Fatalf("%s approved: %+v", x.Path, x.Decision)
+		}
+	}
+	w = f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"accept","prints":%s}`, f.round, b.Key, f.prints()))
+	if w.Code != 200 {
+		t.Fatalf("accept after a reload: %d %s", w.Code, w.Body)
+	}
+	for _, x := range f.files().Files {
+		if x.Decision == nil || x.Decision.Action != "accept" || x.Decision.Content != "" {
+			t.Fatalf("%s: %+v", x.Path, x.Decision)
+		}
 	}
 }
 

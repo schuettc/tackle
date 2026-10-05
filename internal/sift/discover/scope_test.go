@@ -2,7 +2,9 @@ package discover
 
 import (
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/config"
@@ -48,4 +50,79 @@ func TestForksAndVendorSkillsAreSkipped(t *testing.T) {
 	if n := len(res.Files); n != 6 || len(res.Skipped) != 0 {
 		t.Fatalf("with include: %d files %v, skipped %v", n, keys(byRel(res)), res.Skipped)
 	}
+}
+
+// A configured root that holds the harness home leaves out its vendor
+// directories as the skills walk does, on disk and in a repo's tree:
+// nothing under them is audited, an instruction file included.
+func TestARootHoldingTheHomeSkipsItsVendorDirs(t *testing.T) {
+	vendored := map[string]string{
+		"plugins/cache/p/CLAUDE.md":         "theirs\n",
+		"plugins/cache/p/skills/s/SKILL.md": "s\n",
+		"plugins/marketplaces/m/CLAUDE.md":  "theirs\n",
+		"skills/synced/a/SKILL.md":          "a\n",
+		"skills/synced/CLAUDE.md":           "theirs\n",
+	}
+	own := map[string]string{"skills/mine/SKILL.md": "mine\n", "notes/CLAUDE.md": "mine\n"}
+	all := map[string]string{}
+	for k, v := range vendored {
+		all[k] = v
+	}
+	for k, v := range own {
+		all[k] = v
+	}
+	audited := func(res Result) []string {
+		var out []string
+		for _, f := range res.Files {
+			p := f.Path
+			if f.Repo != nil {
+				p = f.Rel
+			}
+			out = append(out, filepath.ToSlash(p))
+		}
+		sort.Strings(out)
+		return out
+	}
+	check := func(t *testing.T, home string) {
+		t.Helper()
+		opt := Options{Profiles: profiles(t, "claude-code"), Roots: []config.Root{{Path: home}}}
+		got := audited(run(t, opt))
+		for _, p := range got {
+			for v := range vendored {
+				if strings.HasSuffix(p, v) {
+					t.Errorf("audited vendor file %s", p)
+				}
+			}
+		}
+		for o := range own {
+			if !slices.ContainsFunc(got, func(p string) bool { return strings.HasSuffix(p, o) }) {
+				t.Errorf("left out %s: %v", o, got)
+			}
+		}
+		opt.Include = config.Include{Vendor: true}
+		got = audited(run(t, opt))
+		for v := range vendored {
+			if !slices.ContainsFunc(got, func(p string) bool { return strings.HasSuffix(p, v) }) {
+				t.Errorf("with include, left out %s: %v", v, got)
+			}
+		}
+	}
+	t.Run("on disk", func(t *testing.T) {
+		st.Env(t)
+		home := st.Home(t)
+		for k, v := range all {
+			st.Write(t, home, ".claude/"+k, v)
+		}
+		check(t, home)
+	})
+	t.Run("in a repo", func(t *testing.T) {
+		st.Env(t)
+		home := st.Home(t)
+		files := map[string]string{}
+		for k, v := range all {
+			files[".claude/"+k] = v
+		}
+		st.Repo(t, home, files)
+		check(t, home)
+	})
 }

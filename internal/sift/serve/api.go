@@ -380,7 +380,7 @@ func fileErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrStale):
 		writeErr(w, http.StatusConflict, "stale")
 	case errors.Is(err, store.ErrChanged):
-		writeErr(w, http.StatusConflict, "changed: the agent changed this file's recommendation since the page showed it; look again")
+		writeErr(w, http.StatusConflict, "changed: this file's recommendation or edit changed since the page showed it; look again")
 	case errors.Is(err, store.ErrNotReady):
 		writeErr(w, http.StatusConflict, "the agent is still recommending: decisions open once every file has a recommendation")
 	default:
@@ -420,12 +420,14 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	if err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints); err != nil {
+	prints, err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints)
+	if err != nil {
 		fileErr(w, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
-	w.WriteHeader(http.StatusNoContent)
+	// The group's prints now: the page holds them for its next decision.
+	writeJSON(w, http.StatusOK, map[string]any{"prints": prints})
 }
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
@@ -441,12 +443,13 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	if err := s.st.UndecideFile(r.Context(), round, q.Get("file")); err != nil {
+	prints, err := s.st.UndecideFile(r.Context(), round, q.Get("file"))
+	if err != nil {
 		fileErr(w, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": round})
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"prints": prints})
 }
 
 // base returns a round file's content at the audit, read back at its

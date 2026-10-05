@@ -234,20 +234,32 @@ func short(h string) string {
 }
 
 // Print is the fingerprint a decision on r answers: its content, base,
-// findings, summary and links, and each linked recommendation's content and
-// base. A decision given against another print answered another
-// recommendation, and is refused.
-func Print(r Rec, linked []Rec) string {
+// findings, summary and links, each linked recommendation's content and
+// base, and the edit in force (edits, by file) on r's file and each linked
+// one. The page shows an edit in place of the recommendation, and an accept
+// keeps it, so a decision given against another print answered other
+// content, and is refused.
+func Print(r Rec, linked []Rec, edits map[string]string) string {
 	type side struct{ File, Base, Content string }
+	type edit struct{ File, Content string }
 	others := make([]side, 0, len(linked))
+	var shown []edit
+	if c, ok := edits[r.File]; ok {
+		shown = append(shown, edit{r.File, c})
+	}
 	for _, l := range linked {
 		others = append(others, side{l.File, l.Base, l.Content})
+		if c, ok := edits[l.File]; ok {
+			shown = append(shown, edit{l.File, c})
+		}
 	}
 	sort.Slice(others, func(i, j int) bool { return others[i].File < others[j].File })
+	sort.Slice(shown, func(i, j int) bool { return shown[i].File < shown[j].File })
 	b, _ := json.Marshal(struct {
 		Rec    Rec
 		Linked []side
-	}{r, others})
+		Edits  []edit `json:",omitempty"`
+	}{r, others, shown})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:8])
 }

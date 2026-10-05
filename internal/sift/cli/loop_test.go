@@ -210,7 +210,7 @@ func applyRig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	items, _ := s.Files(ctx, id)
-	if err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: items[0].Fingerprint}); err != nil {
+	if _, err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: items[0].Fingerprint}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(context.Background(), id, ""); err != nil {

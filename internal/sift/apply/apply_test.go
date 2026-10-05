@@ -109,7 +109,7 @@ func (g *rig) decide(f rec.File, d rec.Decision) {
 	for _, it := range items {
 		prints[it.Key] = it.Fingerprint
 	}
-	if err := g.s.DecideFile(ctx, g.round, f.Key, d, prints); err != nil {
+	if _, err := g.s.DecideFile(ctx, g.round, f.Key, d, prints); err != nil {
 		g.t.Fatal(err)
 	}
 }

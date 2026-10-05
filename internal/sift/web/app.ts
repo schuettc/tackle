@@ -36,6 +36,7 @@ import {
   fileEntries,
   fileMeta,
   filesProgress,
+  holdPrints,
   printsFor,
   unsentFiles,
   type FileEntry,
@@ -688,7 +689,8 @@ export function boot(): void {
       go(frag(nextFile(openKey)));
     else render();
     persist(
-      () => api.decideFile(round, f.key, full, prints),
+      async () =>
+        holdPrints(fs, await api.decideFile(round, f.key, full, prints)),
       () => {
         for (const p of prev) {
           p.m.decision = p.d;
@@ -708,8 +710,9 @@ export function boot(): void {
     const prev = group.map((m) => ({ m, d: m.decision, after: m.after }));
     decideLocal(files(), f.key, null);
     render();
+    const fs = files();
     persist(
-      () => api.clearFile(round, f.key),
+      async () => holdPrints(fs, await api.clearFile(round, f.key)),
       () => {
         for (const p of prev) {
           p.m.decision = p.d;
@@ -732,13 +735,17 @@ export function boot(): void {
     const old = d.note;
     d.note = text;
     d.sent = false;
+    const fs = files();
     persist(
-      () =>
-        api.decideFile(
-          round,
-          f.key,
-          { action: d.action, content: d.content, note: text },
-          printsFor(files(), f.key),
+      async () =>
+        holdPrints(
+          fs,
+          await api.decideFile(
+            round,
+            f.key,
+            { action: d.action, content: d.content, note: text },
+            printsFor(fs, f.key),
+          ),
         ),
       () => {
         d.note = old;

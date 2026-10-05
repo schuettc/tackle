@@ -21,7 +21,7 @@ function client(api) {
       await api.del(`/decisions?${q.toString()}`);
     },
     async decideFile(round, file, d, prints) {
-      await api.put("/files", {
+      const r = await api.put("/files", {
         round,
         file,
         action: d.action,
@@ -29,10 +29,14 @@ function client(api) {
         note: d.note ?? "",
         prints
       });
+      return r?.prints ?? {};
     },
     async clearFile(round, file) {
       const q = new URLSearchParams({ round: String(round), file });
-      await api.del(`/files?${q.toString()}`);
+      const r = await api.del(
+        `/files?${q.toString()}`
+      );
+      return r?.prints ?? {};
     },
     base: (round, file) => api.get("/base", { round: String(round), file }),
     async send(round) {
@@ -416,6 +420,12 @@ function printsFor(files, key) {
     if (m) out[k] = m.fingerprint;
   }
   return out;
+}
+function holdPrints(files, prints) {
+  for (const [k, p] of Object.entries(prints ?? {})) {
+    const f = files.find((x) => x.key === k);
+    if (f) f.fingerprint = p;
+  }
 }
 function decideLocal(files, key, d) {
   const f = files.find((x) => x.key === key);
@@ -1474,7 +1484,7 @@ function boot() {
       go(frag(nextFile(openKey)));
     else render();
     persist(
-      () => api.decideFile(round, f.key, full, prints),
+      async () => holdPrints(fs, await api.decideFile(round, f.key, full, prints)),
       () => {
         for (const p of prev) {
           p.m.decision = p.d;
@@ -1491,8 +1501,9 @@ function boot() {
     const prev = group2.map((m) => ({ m, d: m.decision, after: m.after }));
     decideLocal(files(), f.key, null);
     render();
+    const fs = files();
     persist(
-      () => api.clearFile(round, f.key),
+      async () => holdPrints(fs, await api.clearFile(round, f.key)),
       () => {
         for (const p of prev) {
           p.m.decision = p.d;
@@ -1514,12 +1525,16 @@ function boot() {
     const old = d.note;
     d.note = text;
     d.sent = false;
+    const fs = files();
     persist(
-      () => api.decideFile(
-        round,
-        f.key,
-        { action: d.action, content: d.content, note: text },
-        printsFor(files(), f.key)
+      async () => holdPrints(
+        fs,
+        await api.decideFile(
+          round,
+          f.key,
+          { action: d.action, content: d.content, note: text },
+          printsFor(fs, f.key)
+        )
       ),
       () => {
         d.note = old;

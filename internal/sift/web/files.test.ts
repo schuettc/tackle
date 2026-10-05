@@ -7,6 +7,7 @@ import {
   fileEntries,
   fileMeta,
   filesProgress,
+  holdPrints,
   hunks,
   printsFor,
   unsentFiles,
@@ -177,4 +178,18 @@ test('filesProgress and unsentFiles', () => {
   ];
   assert.deepEqual(filesProgress(files), { decided: 2, total: 3 });
   assert.equal(unsentFiles(files), 1);
+});
+
+test('holdPrints: the page holds the prints a decision returns, so its next decision answers what it now shows', () => {
+  const files = [
+    mk('g', '/g', { group: ['g', 'm'] }),
+    mk('m', '/m', { group: ['g', 'm'] }),
+    mk('q', '/q'),
+  ];
+  decideLocal(files, 'm', { action: 'edit', content: 'mine\n' });
+  holdPrints(files, { g: 'fp-g2', m: 'fp-m2' });
+  assert.deepEqual(printsFor(files, 'g'), { g: 'fp-g2', m: 'fp-m2' });
+  assert.deepEqual(printsFor(files, 'q'), { q: 'fp-q' });
+  holdPrints(files, undefined);
+  assert.deepEqual(printsFor(files, 'm'), { g: 'fp-g2', m: 'fp-m2' });
 });

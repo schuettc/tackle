@@ -129,11 +129,27 @@ func TestOneFileOncePerBatch(t *testing.T) {
 }
 
 // The print changes with the content, the base, the findings, the summary,
-// the links and a linked file's content or base; not with the decision.
+// the links, a linked file's content or base, and the edit in force on the
+// file or a linked one: the page shows the edit, and an accept keeps it.
+// An accept or reject leaves it as it is.
 func TestPrint(t *testing.T) {
 	files, _ := round()
 	rg, rm := good(files)
-	p := Print(rg, []Rec{rm})
+	p := Print(rg, []Rec{rm}, nil)
+	for name, edits := range map[string]map[string]string{
+		"an edit":            {rg.File: "# mine\n"},
+		"a linked edit":      {rm.File: "# mine\n"},
+		"another edit":       {rg.File: "# mine, again\n"},
+		"an edit to neither": {"other": "# mine\n"},
+	} {
+		got := Print(rg, []Rec{rm}, edits)
+		if (got == p) != (name == "an edit to neither") {
+			t.Errorf("%s: print %s, with none %s", name, got, p)
+		}
+	}
+	if Print(rg, []Rec{rm}, map[string]string{rg.File: "# mine\n"}) == Print(rg, []Rec{rm}, map[string]string{rg.File: "# mine, again\n"}) {
+		t.Error("two edits print alike")
+	}
 	for name, mut := range map[string]func(g, m *Rec){
 		"content":        func(g, _ *Rec) { g.Content += "x" },
 		"base":           func(g, _ *Rec) { g.Base = Hash("x") },
@@ -146,11 +162,11 @@ func TestPrint(t *testing.T) {
 		g, m := rg, rm
 		g.Findings = append([]Account{}, rg.Findings...)
 		mut(&g, &m)
-		if Print(g, []Rec{m}) == p {
+		if Print(g, []Rec{m}, nil) == p {
 			t.Errorf("%s: print unchanged", name)
 		}
 	}
-	if Print(rg, []Rec{rm}) != p {
+	if Print(rg, []Rec{rm}, nil) != p {
 		t.Error("not stable")
 	}
 }

@@ -366,7 +366,7 @@ func TestCheckRecommendReviewSendApply(t *testing.T) {
 			action = "accept"
 		}
 		body := fmt.Sprintf(`{"round":%d,"file":%q,"action":%q,"note":"yes","prints":{%q:%q}}`, chk.Round, it.Key, action, it.Key, it.Fingerprint)
-		if code, out := e.api("PUT", "/api/files", body); code != 204 {
+		if code, out := e.api("PUT", "/api/files", body); code != 200 {
 			t.Fatalf("decide %d %s", code, out)
 		}
 	}

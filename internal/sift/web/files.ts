@@ -234,6 +234,18 @@ export function printsFor(
   return out;
 }
 
+/** The prints a decision or clear returned: the group's content as it now
+ * stands (an edit counts), which the page's next decision answers. */
+export function holdPrints(
+  files: FileView[],
+  prints: Record<string, string> | undefined,
+): void {
+  for (const [k, p] of Object.entries(prints ?? {})) {
+    const f = files.find((x) => x.key === k);
+    if (f) f.fingerprint = p;
+  }
+}
+
 /** A decision on key as the store takes it, applied to the page's files:
  * accept or reject sets every linked file (an accept keeps any edit, key's
  * own included, and another file's accept); an edit is key's, and accepts
