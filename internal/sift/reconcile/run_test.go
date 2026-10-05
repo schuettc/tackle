@@ -41,6 +41,9 @@ func TestRunAfterApply(t *testing.T) {
 	for _, r := range rows {
 		_ = s.Decide(ctx, round, r.ID, row.Decision{Action: "accept"})
 	}
+	if _, err := s.Send(ctx, round, ""); err != nil {
+		t.Fatal(err)
+	}
 	res, err := apply.Run(ctx, apply.Options{Store: s, WorktreeDir: t.TempDir()})
 	if err != nil || res.Repos[0].State != "branch" {
 		t.Fatalf("%+v %v", res, err)

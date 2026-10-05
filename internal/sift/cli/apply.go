@@ -17,8 +17,8 @@ import (
 var ghRunner apply.Runner = apply.Gh
 
 var applyFlags = flags("apply", "sift apply [--round N] [--dry-run] [--json]",
-	"Applies the round: the certain fixes and the rows accepted or edited on the review page\n"+
-		"(delete, rewrite, move, merge), as one branch per repo (sift/round-N) cut from the fetched\n"+
+	"Applies the round: the certain fixes and the rows accepted or edited and sent from the review\n"+
+		"page (delete, rewrite, move, merge), as one branch per repo (sift/round-N) cut from the fetched\n"+
 		"base in a worktree, so the primary clone's checkout is left alone. A repo whose primary\n"+
 		"clone has uncommitted or unpushed work is held, with the reason. With gh and a GitHub\n"+
 		"remote the branch is pushed and a pull request opened (gh pr create --body-file);\n"+
@@ -97,6 +97,9 @@ func writeApply(w io.Writer, res apply.Result) {
 		for _, it := range r.Skipped {
 			_, _ = fmt.Fprintf(w, "  skipped  %-16s %-14s %s: %s\n", it.Row, it.Verdict, it.Where, it.Why)
 		}
+	}
+	if res.Unsent > 0 {
+		_, _ = fmt.Fprintf(w, "\n%d decided row(s) not sent yet: press Send on the page to include them\n", res.Unsent)
 	}
 	if len(res.Left) > 0 {
 		_, _ = fmt.Fprintln(w, "\nleft for you:")

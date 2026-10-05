@@ -78,7 +78,18 @@ func (g *rig) decide(id string, d row.Decision) {
 	}
 }
 
+// run presses Send, as the user does before the agent applies, then
+// applies.
 func (g *rig) run(o Options) Result {
+	g.t.Helper()
+	if _, err := g.s.Send(ctx, g.round, ""); err != nil {
+		g.t.Fatal(err)
+	}
+	return g.runUnsent(o)
+}
+
+// runUnsent applies without pressing Send.
+func (g *rig) runUnsent(o Options) Result {
 	g.t.Helper()
 	o.Store, o.Round = g.s, g.round
 	if o.WorktreeDir == "" {
@@ -319,5 +330,27 @@ func TestApplySkipsAnUndoneCertainRow(t *testing.T) {
 	res := g.run(Options{})
 	if len(res.Repos) != 0 {
 		t.Fatalf("%+v", res.Repos)
+	}
+}
+
+// A decision counts once it is sent: apply runs after Send, and a row the
+// user decided since is not approved yet. An undo needs no send: leaving a
+// file alone is always safe.
+func TestApplyTakesOnlySentDecisions(t *testing.T) {
+	g := newRig(t)
+	dead := g.at("dead", "dead-path", 14, "See `docs/gone.md` for the layout.")
+	dead.Certain = true
+	g.record(g.at("neg1", "negative-rule", 5, "- Never push to main."), g.at("neg2", "negative-rule", 6, "- Never force-push."), dead)
+	_, _ = g.s.AddRows(ctx, g.round, []row.Row{{ID: "neg1", Verdict: "delete"}, {ID: "neg2", Verdict: "delete"}})
+	g.decide("neg1", row.Decision{Action: "accept"})
+	if _, err := g.s.Send(ctx, g.round, ""); err != nil {
+		t.Fatal(err)
+	}
+	g.decide("neg2", row.Decision{Action: "accept"}) // after the send
+	g.decide("dead", row.Decision{Action: "reject"}) // an undo, unsent
+	res := g.runUnsent(Options{})
+	r := res.Repos[0]
+	if len(r.Applied) != 1 || r.Applied[0].Row != "neg1" || res.Unsent != 1 {
+		t.Fatalf("%+v unsent %d", r, res.Unsent)
 	}
 }

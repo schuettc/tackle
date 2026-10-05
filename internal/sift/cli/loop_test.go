@@ -204,6 +204,9 @@ func applyRig(t *testing.T) string {
 	if err := s.Decide(context.Background(), id, "neg", row.Decision{Action: "accept"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Send(context.Background(), id, ""); err != nil {
+		t.Fatal(err)
+	}
 	return repo
 }
 

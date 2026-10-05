@@ -90,6 +90,9 @@ type Result struct {
 	// Left are approved rows apply does not write: outside a repo, or a
 	// verdict for the agent (issue, global, private) or with nothing to edit.
 	Left []Item `json:"left"`
+	// Unsent counts rows decided on the page but not sent: not approved yet,
+	// so not applied.
+	Unsent int `json:"unsent"`
 }
 
 // Branch is the branch apply writes a round to.
@@ -124,6 +127,12 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	}
 	byRepo := map[string][]plan{}
 	for _, r := range rows {
+		// A judgment counts once the user sent it; an undone certain fix
+		// needs no send (Effective leaves it out either way).
+		if !r.Certain && r.Decision != nil && !r.Decision.Sent {
+			res.Unsent++
+			continue
+		}
 		c, ok := r.Effective()
 		if !ok {
 			continue
