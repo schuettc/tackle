@@ -59,8 +59,9 @@ func candidate(s string) string {
 // a repo file a relative path is resolved from the repo root and from the
 // file's directory, at the audited commit and then on disk (an untracked file
 // or a nested repo is alive), and then in the other audited repos (the line
-// may name a sibling's file). A file gone from all of them is certain; a
-// directory is a judgment, since it is often a convention or a name. Home and
+// may name a sibling's file). A miss is certain only when the repo's history
+// had the path as a file and deleted it; anything else (a directory, an
+// extensionless convention, a file still to write) is a judgment. Home and
 // absolute paths are checked on disk, and a miss there is a judgment: the
 // path may exist on another machine. Elsewhere only those are checked: a
 // skill is used in whatever repo the agent is in.
@@ -126,15 +127,15 @@ func resolve(f *discover.File, p string, repos []*discover.Repo) (alive, certain
 		rels = append(rels, path.Join(dir, p))
 	}
 	rels = append(rels, path.Clean(p))
-	inside := false
+	gone := false
 	for _, rel := range rels {
 		if rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
 		}
-		inside = true
 		if f.Repo.Has(rel) {
 			return true, false, true
 		}
+		gone = gone || f.Repo.Gone[rel]
 	}
 	for _, rel := range rels {
 		if _, err := os.Stat(filepath.Join(f.Repo.Root, filepath.FromSlash(rel))); err == nil {
@@ -146,5 +147,5 @@ func resolve(f *discover.File, p string, repos []*discover.Repo) (alive, certain
 			return true, false, true
 		}
 	}
-	return false, inside && !strings.HasSuffix(p, "/"), true
+	return false, gone && !strings.HasSuffix(p, "/"), true
 }

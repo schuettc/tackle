@@ -11,6 +11,7 @@ import (
 func TestDeadPath(t *testing.T) {
 	root := t.TempDir()
 	hit := inRepo(fixture(t, "dead-path", "hit.md", discover.ClassRepo), root, "CLAUDE.md", "cmd/tool/main.go")
+	hit.Repo.Gone = map[string]bool{"docs/CHANGES.md": true, "docs/retired-notes.md": true}
 	rows := only(t, "dead-path", input(hit))
 	if got := lines(rows); len(got) != 3 || got[0] != 3 || got[1] != 4 || got[2] != 5 {
 		t.Fatalf("lines %v: %+v", got, rows)
@@ -18,8 +19,8 @@ func TestDeadPath(t *testing.T) {
 	if evidence(rows[0], "missing") != "internal/tool/" || evidence(rows[1], "missing") != "docs/CHANGES.md" {
 		t.Errorf("evidence %+v %+v", rows[0].Evidence, rows[1].Evidence)
 	}
-	// A file gone at the audited commit and not on disk either is certain;
-	// a directory (line 3) is a judgment.
+	// A file the history had, gone at the audited commit and not on disk
+	// either, is certain; a directory (line 3) is a judgment.
 	for _, r := range rows {
 		if r.Certain != (r.Source.Start != 3) {
 			t.Errorf("line %d certain=%v", r.Source.Start, r.Certain)
@@ -91,6 +92,19 @@ func TestDeadPathOutsideARepo(t *testing.T) {
 		Content: "- See `~/present.md` and `~/absent.md`; in a repo, `internal/x/y.go`.\n"}
 	rows := only(t, "dead-path", input(f))
 	if len(rows) != 1 || evidence(rows[0], "missing") != "~/absent.md" || rows[0].Certain {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// A missing path is certain only when the repo's history had it as a file:
+// an extensionless name may be a directory convention ("`./docs/specs`"), and
+// a file that never existed may be one still to write.
+func TestDeadPathNeverInHistoryIsAJudgment(t *testing.T) {
+	f := inRepo(&discover.File{Class: discover.ClassRepo,
+		Content: "- Specs go in `./docs/specs`.\n- Notes go in `docs/plan.md`.\n- Old notes: `docs/old.md`.\n"}, t.TempDir(), "CLAUDE.md")
+	f.Repo.Gone = map[string]bool{"docs/old.md": true, "docs": true}
+	rows := only(t, "dead-path", input(f))
+	if len(rows) != 3 || rows[0].Certain || rows[1].Certain || !rows[2].Certain {
 		t.Fatalf("%+v", rows)
 	}
 }

@@ -408,3 +408,22 @@ func TestSymlinkedSkillDirectories(t *testing.T) {
 		t.Fatalf("%+v", f)
 	}
 }
+
+// A repo knows which files its history had and its base has not: the only
+// misses a dead-path row can be certain of.
+func TestRepoKnowsItsGoneFiles(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{"CLAUDE.md": "x\n", "docs/old.md": "x\n", "docs/moved.md": "x\n"})
+	st.Git(t, repo, "rm", "-q", "docs/old.md")
+	st.Git(t, repo, "mv", "docs/moved.md", "docs/new.md")
+	st.Commit(t, repo, nil)
+	res := run(t, Options{Profiles: profiles(t, "claude-code"), Roots: []config.Root{{Path: repo}}})
+	if len(res.Repos) != 1 {
+		t.Fatalf("repos %+v", res.Repos)
+	}
+	r := res.Repos[0]
+	if !r.Gone["docs/old.md"] || !r.Gone["docs/moved.md"] || r.Gone["docs/new.md"] || r.Gone["CLAUDE.md"] || r.Gone["docs"] {
+		t.Fatalf("gone %v", r.Gone)
+	}
+}

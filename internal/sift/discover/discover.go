@@ -59,6 +59,9 @@ type Repo struct {
 	Remote string // origin's URL, if any
 	// Tree holds every file and directory at Ref (repo-relative).
 	Tree map[string]bool
+	// Gone holds every file Ref's history deleted (renamed files under their
+	// old names) and Ref does not have.
+	Gone map[string]bool
 }
 
 // Has reports whether rel (a file or directory) exists at the repo's Ref.
@@ -461,6 +464,14 @@ func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, err
 		r.Tree[rel] = true
 		for d := path.Dir(rel); d != "."; d = path.Dir(d) {
 			r.Tree[d] = true
+		}
+	}
+	r.Gone = map[string]bool{}
+	if out, err := git(ctx, dir, "log", "--format=", "--name-only", "--no-renames", "--diff-filter=D", "-z", ref); err == nil {
+		for _, rel := range strings.Split(string(out), "\x00") {
+			if rel = strings.TrimSpace(rel); rel != "" && !r.files[rel] {
+				r.Gone[rel] = true
+			}
 		}
 	}
 	f.repos[dir] = r
