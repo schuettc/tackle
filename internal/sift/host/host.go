@@ -130,6 +130,10 @@ func Slug(remote string) (string, bool) {
 
 var refRE = regexp.MustCompile(`https?://github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)|(?:^|[^\w&/\[])(?:([\w.-]+/[\w.-]+))?#(\d+)\b`)
 
+// RefPattern matches one reference Refs reads (a GitHub URL, owner/name#N or
+// #N), for use inside a larger pattern.
+const RefPattern = `(?:https?://github\.com/[\w.-]+/[\w.-]+/(?:pull|issues)/\d+|(?:[\w.-]+/[\w.-]+)?#\d+\b)`
+
 // Refs returns the pull request and issue references in a line, in order: a
 // GitHub URL, owner/name#N, or a bare #N (which names repo, when there is
 // one). A link label ([#71](url)) is not a reference of its own.

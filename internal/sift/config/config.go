@@ -72,10 +72,16 @@ type Negative struct {
 }
 
 // Stale holds the stale-status phrases (case-insensitive regexps). Unset,
-// the shipped defaults apply.
+// the shipped defaults apply. Waits are the phrases that wait on a pull
+// request, with {ref} where the reference goes: a line matching one about a
+// PR the host reports done is certain.
 type Stale struct {
 	Phrases []string `toml:"phrases,omitempty"`
+	Waits   []string `toml:"waits,omitempty"`
 }
+
+// RefPlaceholder marks where a wait phrase's reference goes.
+const RefPlaceholder = "{ref}"
 
 // Retired is a memory store that has been migrated: any pointer to it in an
 // instruction file is now wrong.
@@ -108,6 +114,10 @@ func Default() Config {
 			`\bblocked (?:on|by)\b`,
 			`\b(?:until|once) [^.;:!?]{1,80}? (?:lands|merges|ships|is merged|is released)\b`,
 			`\bnot yet (?:merged|released|shipped|landed)\b`,
+		}, Waits: []string{
+			`\b(?:until|once|after) (?:[^.;:!?]{0,40}? )?{ref} (?:lands|merges|is merged|ships)\b`,
+			`\bwaiting (?:on|for) (?:[^.;:!?]{0,40}? )?{ref}`,
+			`\bblocked (?:on|by) (?:[^.;:!?]{0,40}? )?{ref}`,
 		}},
 	}
 }
@@ -187,6 +197,14 @@ func (c Config) Validate() error {
 	for _, p := range append(append([]string(nil), c.Negative.Patterns...), c.Stale.Phrases...) {
 		if _, err := regexp.Compile("(?i)" + p); err != nil {
 			return fmt.Errorf("pattern %q: %w", p, err)
+		}
+	}
+	for _, w := range c.Stale.Waits {
+		if !strings.Contains(w, RefPlaceholder) {
+			return fmt.Errorf("wait phrase %q: needs %s where the reference goes", w, RefPlaceholder)
+		}
+		if _, err := regexp.Compile("(?i)" + strings.ReplaceAll(w, RefPlaceholder, "#1")); err != nil {
+			return fmt.Errorf("wait phrase %q: %w", w, err)
 		}
 	}
 	for _, r := range c.Retired {

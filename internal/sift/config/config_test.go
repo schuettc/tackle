@@ -30,7 +30,7 @@ func TestDefaultsMatchTheSpec(t *testing.T) {
 	if d.Windows != (Windows{WeeklyDays: 7, UsageDays: 3, StaleDays: 30}) {
 		t.Errorf("windows %+v", d.Windows)
 	}
-	if len(d.Negative.Patterns) == 0 || len(d.Stale.Phrases) == 0 {
+	if len(d.Negative.Patterns) == 0 || len(d.Stale.Phrases) == 0 || len(d.Stale.Waits) == 0 {
 		t.Error("no default patterns")
 	}
 	if err := d.Validate(); err != nil {
@@ -95,6 +95,8 @@ func TestValidateRejects(t *testing.T) {
 		"bad custom":       "profiles = [\"x\"]\n[[profile]]\nname = \"x\"",
 		"shadowed builtin": "[[profile]]\nname = \"pi\"\nhome = \"~/.p\"\nrepo_files = [\"P.md\"]",
 		"empty retired":    "[[retired]]\nname = \"store\"",
+		"wait without ref": "[stale]\nwaits = [\"until it lands\"]",
+		"bad wait":         "[stale]\nwaits = [\"({ref}\"]",
 	} {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Errorf("%s: want an error", name)
