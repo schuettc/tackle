@@ -1476,8 +1476,11 @@ async function composerScenariosOn(context, serveHandle) {
       );
       if (!seeded) break attachedScenario;
       const plural = kind === 'branch' ? 'branches' : `${kind}s`;
-      const boxes = await pg.$$('.kit-row .kit-box');
-      for (const i of pick.slice(0, 4)) await boxes[i].click();
+      // Each box is found as it is clicked (a locator): a live redraw
+      // (events replayed on connect) replaces the rows, so a box looked up
+      // first can be detached by its click.
+      const boxes = pg.locator('.kit-row .kit-box');
+      for (const i of pick.slice(0, 4)) await boxes.nth(i).click();
       const want4 = `4 ${plural} selected`;
       check(
         `selecting 4 shows "attached: ${want4}"`,
@@ -1522,7 +1525,7 @@ async function composerScenariosOn(context, serveHandle) {
         `↵ commits the edit: "attached: ${want2}"`,
         (await value()).text === want2 && (await value()).edited,
       );
-      await boxes[pick[4]].click();
+      await boxes.nth(pick[4]).click();
       await pg.waitForTimeout(200);
       check(
         'the edit holds while the selection changes',
@@ -1580,9 +1583,12 @@ async function composerScenariosOn(context, serveHandle) {
       );
 
       // The open item, with nothing selected.
-      for (const b of await pg.$$('.kit-row .kit-box[aria-checked="true"]')) {
-        await b.click();
-      }
+      const ticked = await pg.$$eval('.kit-row .kit-box', (els) =>
+        els.flatMap((e, i) =>
+          e.getAttribute('aria-checked') === 'true' ? [i] : [],
+        ),
+      );
+      for (const i of ticked) await boxes.nth(i).click();
       const openKey = items[pick[0]].key;
       await pg.click(`.kit-row:nth-child(${pick[0] + 1}) .kit-title`);
       const wantOpen = openKey.slice(openKey.indexOf(':') + 1);
@@ -1715,11 +1721,19 @@ async function composerScenariosOn(context, serveHandle) {
     try {
       await pg.waitForSelector('.kit-row .kit-box');
       // The mock's "4 prs selected": the seeded t7-attached PRs.
-      const rows = await pg.$$('.kit-row');
-      for (const row of rows) {
-        const kicker = await row.$eval('.kit-kicker', (e) => e.textContent);
+      // Each row is found again as it is clicked: a live redraw (events
+      // replayed on connect) replaces the rows, so a row looked up first
+      // can be gone by its click.
+      const kickers = await pg.$$eval('.kit-row .kit-kicker', (els) =>
+        els.map((e) => e.textContent),
+      );
+      for (const kicker of kickers) {
         if (/^pr .*t7-attached#67\d$/.test(kicker)) {
-          await (await row.$('.kit-box')).click();
+          await pg
+            .locator('.kit-row')
+            .filter({ has: pg.getByText(kicker, { exact: true }) })
+            .locator('.kit-box')
+            .click();
         }
       }
       check(
@@ -1794,7 +1808,10 @@ async function composerScenariosOn(context, serveHandle) {
         listed,
       );
       if (!listed) break hiddenScenario;
-      for (const b of await pg.$$('.kit-row .kit-box')) await b.click();
+      const hiddenBoxes = pg.locator('.kit-row .kit-box');
+      for (let i = 0, n = await hiddenBoxes.count(); i < n; i++) {
+        await hiddenBoxes.nth(i).click();
+      }
       check(
         'Attention active: "attached: 2 prs selected"',
         await until(
@@ -2320,7 +2337,11 @@ async function rulesScenariosOn(context, serveHandle) {
       ],
       propose: { disposition: 'close' },
     });
-    const pg = await openDock(context, serveHandle, fx, {
+    // Playwright's clock belongs to the whole browser context: the faked,
+    // paused one gets a context of its own, or every later page of the
+    // shared one runs on it (seconds ahead of serve, or stopped).
+    const clockContext = await context.browser().newContext();
+    const pg = await openDock(clockContext, serveHandle, fx, {
       hash: '#/rules/r8-landed',
       clock: true,
     });
@@ -2501,14 +2522,15 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.click(
         `[data-testid="matches"] .cb-mr.x[data-key="${a1}"] .kit-box`,
       );
+      const retick = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-matches-label')?.textContent ===
+          'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
+      );
       check(
-        're-ticking includes it: the count is 6 again',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-matches-label')?.textContent ===
-            'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
-        ),
+        `re-ticking includes it: the count is 6 again${retick ? '' : ` (shows "${await pg.$eval('.cb-matches-label', (e) => e.textContent)}")`}`,
+        retick,
       );
       const afterIn = await ruleOf('r8-landed');
       check(
@@ -3012,6 +3034,7 @@ async function rulesScenariosOn(context, serveHandle) {
     } finally {
       stopPresent();
       await pg.close();
+      await clockContext.close();
     }
   }
 
@@ -3019,7 +3042,9 @@ async function rulesScenariosOn(context, serveHandle) {
   console.log('\nscenario: rules — a long match list pages at 200');
   {
     await agent.api('POST', '/api/rules/draft', R8_MANY);
-    const pg = await context.newPage();
+    // Its faked clock in a context of its own (see r8-landed's above).
+    const clockContext = await context.browser().newContext();
+    const pg = await clockContext.newPage();
     try {
       await pg.setViewportSize({ width: 1600, height: 900 });
       await pg.clock.install({ time: Date.now() });
@@ -3141,6 +3166,28 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.clock.resume();
     } finally {
       await pg.close();
+      await clockContext.close();
+    }
+    // The shared context's pages still run on the real clock: its timers
+    // fire, and its time is serve's.
+    const after = await context.newPage();
+    try {
+      await after.goto(serveHandle.url, { waitUntil: 'domcontentloaded' });
+      const skew = (await after.evaluate(() => Date.now())) - Date.now();
+      // A paused fake clock never fires the page's timer: node's own
+      // timer ends the wait.
+      const fired = await Promise.race([
+        after
+          .evaluate(() => new Promise((r) => setTimeout(() => r(true), 50)))
+          .catch(() => false), // the page closed with it waiting
+        sleep(2000).then(() => false),
+      ]);
+      check(
+        `the clocked rules pages leave the shared context's clock real (skew ${skew}ms, timer ${fired ? 'fired' : 'stood still'})`,
+        fired && Math.abs(skew) < 1500,
+      );
+    } finally {
+      await after.close();
     }
   }
 
@@ -5509,9 +5556,11 @@ async function run() {
     {
       // Select every visible row in 'new' view (repo:, pr:, issue:, branch: kinds).
       // Intersection of their allowed dispositions excludes 'merge' (pr-only).
-      const boxes = await page.$$('.kit-row .kit-box');
-      for (let i = 0; i < boxes.length; i++) {
-        await boxes[i].click();
+      // A locator, so each box is found as it is clicked (a live redraw
+      // can replace the rows between two clicks).
+      const boxes = page.locator('.kit-row .kit-box');
+      for (let i = 0, n = await boxes.count(); i < n; i++) {
+        await boxes.nth(i).click();
         await page.waitForTimeout(40);
       }
       await page.waitForTimeout(300);
@@ -5542,9 +5591,12 @@ async function run() {
         )
         .catch(() => {});
       await page.waitForTimeout(200);
-      const selBoxes = await page.$$('.kit-row .kit-box');
-      for (const b of selBoxes) {
-        await b.click().catch(() => {});
+      const selBoxes = page.locator('.kit-row .kit-box');
+      for (let i = 0, n = await selBoxes.count(); i < n; i++) {
+        await selBoxes
+          .nth(i)
+          .click()
+          .catch(() => {});
         await page.waitForTimeout(30);
       }
       await page.waitForTimeout(200);
@@ -5579,11 +5631,11 @@ async function run() {
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
 
-        const newBoxes = await partialPage.$$('.kit-row .kit-box');
-        if (newBoxes.length >= 2) {
-          await newBoxes[0].click();
+        const newBoxes = partialPage.locator('.kit-row .kit-box');
+        if ((await newBoxes.count()) >= 2) {
+          await newBoxes.nth(0).click();
           await partialPage.waitForTimeout(50);
-          await newBoxes[1].click();
+          await newBoxes.nth(1).click();
           await partialPage.waitForTimeout(300);
 
           // Intercept /api/decide to simulate a partial success:
@@ -5680,12 +5732,12 @@ async function run() {
       await page.waitForTimeout(600);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
-      const boxes = await page.$$('.kit-row .kit-box');
+      const boxes = page.locator('.kit-row .kit-box');
       // Select only 2 items to leave enough items alive for subsequent tests.
-      const selectCount = Math.min(2, boxes.length);
+      const selectCount = Math.min(2, await boxes.count());
 
       for (let i = 0; i < selectCount; i++) {
-        await boxes[i].click();
+        await boxes.nth(i).click();
         await page.waitForTimeout(50);
       }
 
@@ -5795,9 +5847,9 @@ async function run() {
       await page.waitForTimeout(600);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
-      const newBoxes = await page.$$('.kit-row .kit-box');
-      if (newBoxes.length > 0) {
-        await newBoxes[0].click();
+      const newBoxes = page.locator('.kit-row .kit-box');
+      if ((await newBoxes.count()) > 0) {
+        await newBoxes.first().click();
         await page.waitForTimeout(300);
         const primaryText = await page
           .$eval('.kit-primary', (el) => el.textContent ?? '')
@@ -7793,9 +7845,10 @@ async function run() {
           await footPage.waitForTimeout(400);
 
           // Select all visible rows to trigger the bulk/sel-count display.
-          const boxes = await footPage.$$('.kit-row .kit-box');
-          for (const box of boxes) {
-            await box.click();
+          const boxes = footPage.locator('.kit-row .kit-box');
+          const nBoxes = await boxes.count();
+          for (let i = 0; i < nBoxes; i++) {
+            await boxes.nth(i).click();
             await footPage.waitForTimeout(30);
           }
           await footPage.waitForTimeout(300);
@@ -7804,7 +7857,7 @@ async function run() {
           // Only assert for views where this behaviour is expected (opt-in via
           // assertSelAllHidden): the proposed view hides the button once every
           // listed item is checked.
-          if (assertSelAllHidden && boxes.length > 0) {
+          if (assertSelAllHidden && nBoxes > 0) {
             const selAllHidden = await footPage.evaluate(() => {
               const el = document.querySelector('.cb-sel-all');
               if (!el) return true; // absent → hidden for this view
