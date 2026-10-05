@@ -5860,7 +5860,7 @@ async function run() {
           primaryText.trim() === 'Decide 1',
         );
         // Clean up: deselect.
-        await newBoxes[0].click();
+        await newBoxes.first().click();
         await page.waitForTimeout(100);
       } else {
         // If no 'new' items remain (all are decided), primary must be hidden.
