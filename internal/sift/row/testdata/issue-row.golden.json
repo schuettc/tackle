@@ -1,0 +1,18 @@
+{
+  "id": "4b63836d0200babd",
+  "check": "intake",
+  "summary": "a to-do from the memory store",
+  "source": {
+    "file": "/m/MEMORY.md",
+    "entry": "todo-3"
+  },
+  "passage": "fix the flaky probe",
+  "verdict": "issue",
+  "title": "Probe is flaky on a cold start",
+  "destination": "owner/tool",
+  "text": "The probe times out on a cold start.",
+  "certain": false,
+  "decision": {
+    "action": "accept"
+  }
+}
