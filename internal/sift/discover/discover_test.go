@@ -367,3 +367,44 @@ func TestRootInsideARepoReadsItsBase(t *testing.T) {
 		t.Error("the repo's tree is the whole tree, for resolving paths")
 	}
 }
+
+// A skill installed as a symlink to its directory is followed: one file per
+// real path, merged into its source when sift audits that, read from disk
+// when not; a link back up the tree does not loop.
+func TestSymlinkedSkillDirectories(t *testing.T) {
+	st.Env(t)
+	home := st.Home(t)
+	repo := st.Repo(t, t.TempDir(), map[string]string{"skills/delta/SKILL.md": "delta\n"})
+	link := func(target, at string) {
+		t.Helper()
+		p := filepath.Join(home, at)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link(filepath.Join(repo, "skills", "delta"), ".pi/agent/skills/delta")
+	link(filepath.Join(repo, "skills", "delta"), ".claude/skills/delta")
+	link(filepath.Join(home, ".pi/agent/skills"), ".pi/agent/skills/loop")
+	installed := filepath.Join(home, ".pi/agent/skills/delta/SKILL.md")
+
+	// Its source audited too: one file, at the source.
+	res := run(t, Options{Profiles: profiles(t, "claude-code", "pi"), Roots: []config.Root{{Path: repo}}})
+	m := byRel(res)
+	src := m[filepath.Base(repo)+":skills/delta/SKILL.md"]
+	if len(res.Files) != 1 || src == nil || !contains(src.Also, installed) || !reflect.DeepEqual(src.Profiles, []string{"claude-code", "pi"}) {
+		t.Fatalf("files %v; %+v", keys(m), src)
+	}
+
+	// Only the installed link: read from disk, once.
+	res = run(t, Options{Profiles: profiles(t, "claude-code", "pi")})
+	if len(res.Files) != 1 {
+		t.Fatalf("files %v", keys(byRel(res)))
+	}
+	f := res.Files[0]
+	if f.Content != "delta\n" || f.Class != ClassSkill || f.Repo != nil || len(f.Profiles) != 2 {
+		t.Fatalf("%+v", f)
+	}
+}

@@ -178,34 +178,48 @@ func (f *finder) globals() {
 	}
 }
 
-// skillDirs adds every SKILL.md under each profile's skill directories (a
-// directory may itself be a symlink). Hidden directories in them are the
-// harness's own (Codex keeps its bundled skills in .system) and are skipped.
+// skillDirs adds every SKILL.md under each profile's skill directories,
+// following symlinks (the directory itself, or a skill installed as a link
+// to its source). Hidden directories in them are the harness's own (Codex
+// keeps its bundled skills in .system) and are skipped.
 func (f *finder) skillDirs() {
 	for _, p := range f.opt.Profiles {
 		for _, s := range p.Skills {
-			dir := p.Path(s)
-			real, err := filepath.EvalSymlinks(dir)
+			f.walkSkills(p.Path(s), p.Name, map[string]bool{})
+		}
+	}
+}
+
+// walkSkills adds the SKILL.md files under dir, named by the path they were
+// reached by. seen holds the real directories walked, so a link back up the
+// tree is not followed twice.
+func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil || seen[real] {
+		return
+	}
+	seen[real] = true
+	entries, err := os.ReadDir(real)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		fp := filepath.Join(dir, e.Name())
+		isDir, regular := e.IsDir(), e.Type().IsRegular()
+		if e.Type()&fs.ModeSymlink != 0 {
+			st, err := os.Stat(fp)
 			if err != nil {
 				continue
 			}
-			_ = filepath.WalkDir(real, func(fp string, d fs.DirEntry, err error) error {
-				if err != nil {
-					return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
-				}
-				if d.IsDir() {
-					if fp != real && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if d.Name() != profile.SkillFile {
-					return nil
-				}
-				rel, _ := filepath.Rel(real, fp)
-				f.add(filepath.Join(dir, rel), ClassSkill, p.Name)
-				return nil
-			})
+			isDir, regular = st.IsDir(), st.Mode().IsRegular()
+		}
+		switch {
+		case isDir:
+			if !skipDirs[e.Name()] && !strings.HasPrefix(e.Name(), ".") {
+				f.walkSkills(fp, prof, seen)
+			}
+		case regular && e.Name() == profile.SkillFile:
+			f.add(fp, ClassSkill, prof)
 		}
 	}
 }
