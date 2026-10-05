@@ -111,9 +111,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*Repo{}}
 	f.globals()
 	for _, root := range opt.Roots {
-		if err := f.root(ctx, root); err != nil {
-			return f.res, err
-		}
+		f.root(ctx, root)
 	}
 	f.skillDirs()
 	f.collapseCopies()
@@ -214,15 +212,15 @@ func (f *finder) skillDirs() {
 // root walks one root on disk: every directory holding a .git directory is
 // a repo, read at its base; a .git file (a linked worktree or submodule) is
 // skipped; files outside any repo are read from disk.
-func (f *finder) root(ctx context.Context, root config.Root) error {
+func (f *finder) root(ctx context.Context, root config.Root) {
 	start := root.Path
 	if st, err := os.Lstat(start); err != nil {
 		f.warn("root %s: %v", start, err)
-		return nil
+		return
 	} else if st.Mode()&os.ModeSymlink != 0 {
 		if start, err = filepath.EvalSymlinks(start); err != nil {
 			f.warn("root %s: %v", root.Path, err)
-			return nil
+			return
 		}
 	}
 	var repoRoots []string
@@ -246,22 +244,16 @@ func (f *finder) root(ctx context.Context, root config.Root) error {
 			if p != start && skipDirs[d.Name()] {
 				return filepath.SkipDir
 			}
-			st, gerr := os.Lstat(filepath.Join(p, ".git"))
-			switch {
-			case gerr != nil:
-			case st.IsDir():
+			if st, gerr := os.Lstat(filepath.Join(p, ".git")); gerr == nil {
+				// A .git file is a linked worktree or a submodule: skipped,
+				// unless it is the root itself.
+				if !st.IsDir() && p != start {
+					return filepath.SkipDir
+				}
 				repoRoots = append(repoRoots, p)
 				if err := f.repo(ctx, p, root); err != nil {
 					f.warn("repo %s: %v", p, err)
 				}
-			case p == start:
-				// A root that is itself a linked worktree is read as a repo.
-				repoRoots = append(repoRoots, p)
-				if err := f.repo(ctx, p, root); err != nil {
-					f.warn("repo %s: %v", p, err)
-				}
-			default:
-				return filepath.SkipDir
 			}
 			return nil
 		}
@@ -298,7 +290,6 @@ func (f *finder) root(ctx context.Context, root config.Root) error {
 			}
 		}
 	}
-	return nil
 }
 
 func (f *finder) isRepoFile(name string) bool {

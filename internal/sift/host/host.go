@@ -6,6 +6,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -40,7 +41,8 @@ type Runner func(ctx context.Context, name string, args ...string) ([]byte, erro
 // Exec is the Runner that runs real commands.
 func Exec(ctx context.Context, name string, args ...string) ([]byte, error) {
 	out, err := exec.CommandContext(ctx, name, args...).Output()
-	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
 		return out, fmt.Errorf("%s: %s", name, strings.TrimSpace(string(ee.Stderr)))
 	}
 	return out, err

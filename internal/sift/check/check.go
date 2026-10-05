@@ -106,10 +106,10 @@ func split(content string) []line {
 		code := in != ""
 		if m := fenceRE.FindStringSubmatch(t); m != nil {
 			code = true
-			switch {
-			case in == "":
+			switch in {
+			case "":
 				in = m[1]
-			case in == m[1]:
+			case m[1]:
 				in = ""
 			}
 		}
