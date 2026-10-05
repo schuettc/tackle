@@ -499,8 +499,10 @@ async function main() {
   );
   await page.keyboard.press('u');
   check(
-    'u again redoes it',
-    await until(async () => !(await rowOf(certain[0].id)).decision),
+    'u again redoes it: a decision Send carries, not a deletion',
+    await until(
+      async () => (await rowOf(certain[0].id)).decision?.action === 'accept',
+    ),
   );
   await page.keyboard.press('u');
   await until(

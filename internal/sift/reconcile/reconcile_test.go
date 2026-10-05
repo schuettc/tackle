@@ -9,7 +9,31 @@ import (
 
 func at(id, path, passage string) row.Row {
 	return row.Row{ID: id, Check: "negative-rule", Passage: passage, Source: row.Source{File: "/w/app/" + path, Repo: "/w/app", Path: path, Start: 5, End: 5},
-		Decision: &row.Decision{Action: "accept"}}
+		Decision: &row.Decision{Action: "accept", Sent: true}}
+}
+
+// compare runs Compare on a diff, with each file at the branch made of its
+// added lines: a hunk's lines together, hunks apart (unchanged lines
+// between them).
+func compare(rs []row.Row, d string) Report {
+	diff := Parse(d)
+	read := func(path string) (string, bool) {
+		for _, f := range diff {
+			if f.Path != path || f.Deleted {
+				continue
+			}
+			var b strings.Builder
+			for _, h := range f.Hunks {
+				b.WriteString("(unchanged)\n")
+				for _, l := range h.Added {
+					b.WriteString(l + "\n")
+				}
+			}
+			return b.String(), true
+		}
+		return "", false
+	}
+	return Compare(rs, diff, read)
 }
 
 func with(r row.Row, verdict, dest, text string) row.Row {
@@ -46,8 +70,8 @@ func rowsOK() []row.Row {
 
 func TestEveryApprovedRowIsInTheDiff(t *testing.T) {
 	rs := rowsOK()
-	rs[3].Decision = &row.Decision{Action: "reject"}
-	got := Compare(rs, Parse(diffOK))
+	rs[3].Decision = &row.Decision{Action: "reject", Sent: true}
+	got := compare(rs, diffOK)
 	if len(got.Rows) != 3 || len(got.Extra) != 0 || got.Problems() != 0 {
 		t.Fatalf("%+v", got)
 	}
@@ -59,7 +83,7 @@ func TestEveryApprovedRowIsInTheDiff(t *testing.T) {
 }
 
 func TestMissing(t *testing.T) {
-	got := Compare(rowsOK(), Parse(diffOK))
+	got := compare(rowsOK(), diffOK)
 	var judged *RowResult
 	for i := range got.Rows {
 		if got.Rows[i].Row == "judged" {
@@ -74,14 +98,14 @@ func TestMissing(t *testing.T) {
 // The writer kept the meaning but not the approved words.
 func TestNarrowed(t *testing.T) {
 	d := strings.Replace(diffOK, "+- Push to a branch and open a pull request.", "+- Push to a branch.", 1)
-	got := Compare(rowsOK()[:3], Parse(d))
+	got := compare(rowsOK()[:3], d)
 	if got.Rows[0].State != "narrowed" || !strings.Contains(got.Rows[0].Detail, "not verbatim") || got.Problems() != 1 {
 		t.Fatalf("%+v", got.Rows)
 	}
 	// A passage only partly removed is narrowed too.
 	two := with(at("both", "CLAUDE.md", "- Never push to main.\n- Never force-push."), "delete", "", "")
 	d2 := strings.Replace(diffOK, "-- Never force-push.\n", "", 1)
-	got = Compare([]row.Row{two}, Parse(d2))
+	got = compare([]row.Row{two}, d2)
 	if got.Rows[0].State != "narrowed" {
 		t.Fatalf("%+v", got.Rows)
 	}
@@ -97,7 +121,7 @@ index 5555555..6666666 100644
 +# new
 `
 	d = strings.Replace(d, "+- Run the slow suite before a release (app).\n", "+- Run the slow suite before a release (app).\n+- Something nobody approved.\n", 1)
-	got := Compare(rowsOK()[:3], Parse(d))
+	got := compare(rowsOK()[:3], d)
 	if len(got.Extra) != 2 || got.Extra[0].File != "README.md" || got.Extra[1].File != "docs/other.md" ||
 		!strings.Contains(strings.Join(got.Extra[1].Lines, "\n"), "nobody approved") {
 		t.Fatalf("extra %+v", got.Extra)

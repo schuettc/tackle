@@ -354,3 +354,99 @@ func TestApplyTakesOnlySentDecisions(t *testing.T) {
 		t.Fatalf("%+v unsent %d", r, res.Unsent)
 	}
 }
+
+// The agent changed an intake row after the user sent its acceptance: the
+// acceptance was for the old row, so apply does not write the new one.
+func TestApplySkipsAnIntakeRowChangedAfterItsSend(t *testing.T) {
+	g := newRig(t)
+	g.record(g.at("neg1", "negative-rule", 5, "- Never push to main."))
+	in := g.at("mem", "intake", 6, "- Never force-push.")
+	in.Verdict = "delete"
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{in}); err != nil {
+		t.Fatal(err)
+	}
+	g.decide("mem", row.Decision{Action: "accept"})
+	if _, err := g.s.Send(ctx, g.round, ""); err != nil {
+		t.Fatal(err)
+	}
+	in.Passage, in.Source.Start, in.Source.End = "- Never push to main.", 5, 5
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{in}); err != nil {
+		t.Fatal(err)
+	}
+	if res := g.runUnsent(Options{}); len(res.Repos) != 0 {
+		t.Fatalf("applied a changed intake row: %+v", res.Repos)
+	}
+}
+
+// A certain row's own fix applies with no decision. An agent's proposal that
+// replaces it makes the row a judgment: not applied until the user accepts
+// it and sends.
+func TestApplyAProposalOnACertainRowNeedsApproval(t *testing.T) {
+	g := newRig(t)
+	plain := g.at("plain", "dead-path", 14, "See `docs/gone.md` for the layout.")
+	plain.Certain = true
+	proposed := g.at("proposed", "dead-path", 5, "- Never push to main.")
+	proposed.Certain = true
+	g.record(plain, proposed)
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: "proposed", Verdict: "rewrite", Text: "- Rewritten by the agent."}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.s.Send(ctx, g.round, ""); err != nil {
+		t.Fatal(err)
+	}
+	g.decide("proposed", row.Decision{Action: "accept"}) // not sent
+	res := g.runUnsent(Options{DryRun: true})
+	if r := res.Repos[0]; len(r.Applied) != 1 || r.Applied[0].Row != "plain" || r.Applied[0].Verdict != "delete" || res.Unsent != 1 {
+		t.Fatalf("%+v unsent %d", r, res.Unsent)
+	}
+	// Sent, it applies as the proposal.
+	res = g.run(Options{})
+	r := res.Repos[0]
+	if len(r.Applied) != 2 {
+		t.Fatalf("%+v", r)
+	}
+	if got := g.show(r.Branch, "CLAUDE.md"); !strings.Contains(got, "- Rewritten by the agent.") || strings.Contains(got, "docs/gone.md") {
+		t.Errorf("CLAUDE.md\n%s", got)
+	}
+}
+
+// An edit that clears a move's text moves the passage itself.
+func TestApplyAnEditThatClearsTheText(t *testing.T) {
+	g := newRig(t)
+	g.record(g.at("slow", "misplaced", 10, "- Run the slow suite before a release."))
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: "slow", Verdict: "move", Destination: "docs/other.md#Notes", Text: "- Reworded by the agent."}}); err != nil {
+		t.Fatal(err)
+	}
+	g.decide("slow", row.Decision{Action: "edit", Cleared: []string{"text"}})
+	r := g.run(Options{}).Repos[0]
+	if got := g.show(r.Branch, "docs/other.md"); got != "# Other\n\n## Notes\n\n- one\n- Run the slow suite before a release.\n" {
+		t.Errorf("docs/other.md\n%s", got)
+	}
+}
+
+// An untracked instruction file (a name an enabled profile loads) holds the
+// repo: it may be the real destination, not committed yet. Any other
+// untracked file does not.
+func TestApplyHoldsForAnUntrackedInstructionFile(t *testing.T) {
+	for name, c := range map[string]struct {
+		file  string
+		names []string
+		held  bool
+	}{
+		"CLAUDE.md, default names": {"docs/CLAUDE.md", nil, true},
+		"SKILL.md":                 {"skills/x/SKILL.md", nil, true},
+		"AGENTS.md, codex only":    {"pkg/AGENTS.md", []string{"AGENTS.override.md", "AGENTS.md", "SKILL.md"}, true},
+		"CLAUDE.md, codex only":    {"pkg/CLAUDE.md", []string{"AGENTS.override.md", "AGENTS.md", "SKILL.md"}, false},
+		"a stray file":             {"notes.txt", nil, false},
+	} {
+		g := newRig(t)
+		g.record(g.at("neg1", "negative-rule", 5, "- Never push to main."))
+		_, _ = g.s.AddRows(ctx, g.round, []row.Row{{ID: "neg1", Verdict: "delete"}})
+		g.decide("neg1", row.Decision{Action: "accept"})
+		st.Write(t, g.repo, c.file, "# untracked\n")
+		r := g.run(Options{DryRun: true, Instructions: c.names}).Repos[0]
+		if held := r.State == "held"; held != c.held || (held && !strings.Contains(r.Detail, c.file)) {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+}

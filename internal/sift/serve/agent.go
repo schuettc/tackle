@@ -85,6 +85,19 @@ func (s *Server) present(id string) bool {
 	return cur != nil && s.clock().Sub(cur.seen) <= presenceTTL
 }
 
+// presentSessions lists the sessions present now.
+func (s *Server) presentSessions() []string {
+	s.ag.mu.Lock()
+	defer s.ag.mu.Unlock()
+	var out []string
+	for id, cur := range s.ag.sessions {
+		if s.clock().Sub(cur.seen) <= presenceTTL {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func (s *Server) labelOf(id string) string {
 	s.ag.mu.Lock()
 	defer s.ag.mu.Unlock()
@@ -168,7 +181,7 @@ func (s *Server) agentReview(w http.ResponseWriter, r *http.Request) {
 func openRows(rows []row.Row) int {
 	n := 0
 	for _, rw := range rows {
-		if !rw.Certain && rw.Decision == nil {
+		if !rw.FixOnly() && rw.Decision == nil {
 			n++
 		}
 	}
@@ -193,26 +206,19 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 	for {
 		wake := s.waker()
 		s.touch(id, "", "") // a connected long poll is a live session
-		owner := ""
-		if rd, _, err := s.st.LatestRound(r.Context()); err == nil {
-			owner = rd.OwnerSession
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		// Each send goes to the owner it was sent to while that owner is
+		// present; the store picks and claims it in one statement.
+		sd, ok, err := s.st.ClaimSend(r.Context(), id, s.presentSessions())
+		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		if owner == "" || owner == id || !s.present(owner) {
-			sd, ok, err := s.st.ClaimSend(r.Context(), id)
-			if err != nil {
-				if r.Context().Err() != nil {
-					return
-				}
-				writeErr(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-			if ok {
-				writeJSON(w, http.StatusOK, map[string]any{"id": sd.ID, "round": sd.Round, "counts": sd.Counts, "text": SendText(sd)})
-				return
-			}
+		if ok {
+			writeJSON(w, http.StatusOK, map[string]any{"id": sd.ID, "round": sd.Round, "counts": sd.Counts, "text": SendText(sd)})
+			return
 		}
 		select {
 		case <-r.Context().Done():
@@ -238,9 +244,9 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 		decided, sent, applied, undone := 0, 0, 0, 0
 		for _, rw := range rows {
 			switch {
-			case rw.Certain && rw.Decision == nil:
+			case rw.FixOnly() && (rw.Decision == nil || rw.Decision.Action == "accept"):
 				applied++
-			case rw.Certain && rw.Decision.Action == "reject":
+			case rw.FixOnly() && rw.Decision.Action == "reject":
 				undone++
 			case rw.Decision != nil && rw.Decision.Sent:
 				sent++
@@ -270,8 +276,8 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 func SendText(sd store.Send) string {
 	c := sd.Counts
 	var b strings.Builder
-	fmt.Fprintf(&b, "The user sent their decisions for sift round %d: %d accepted, %d edited, %d rejected; %d certain fix(es) to apply, %d undone.\n",
-		sd.Round, c.Accept, c.Edit, c.Reject, c.Applied, c.Undone)
+	fmt.Fprintf(&b, "The user sent their decisions for sift round %d: %d accepted, %d edited, %d rejected; %d certain fix(es) to apply, %d undone, %d redone.\n",
+		sd.Round, c.Accept, c.Edit, c.Reject, c.Applied, c.Undone, c.Redone)
 	if len(sd.Notes) > 0 {
 		b.WriteString("Notes:\n")
 		for _, n := range sd.Notes {

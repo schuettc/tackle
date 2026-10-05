@@ -24,10 +24,13 @@ import {
   displayPath,
   editDecision,
   entries,
+  fixDecision,
   groupTargets,
   groupsOf,
   inView,
   isBacklog,
+  isFix,
+  markSent,
   nextOpen,
   progress,
   rowMeta,
@@ -549,6 +552,7 @@ export function boot(): void {
         verdict: d.verdict,
         title: d.title,
         text: d.text,
+        cleared: d.cleared,
         note,
       };
     });
@@ -602,29 +606,39 @@ export function boot(): void {
     );
   }
 
-  function undo(rows: Finding[]): void {
+  // Undo and redo store a decision on a certain fix (reject, accept), sent
+  // like any other: a redo is never a deletion.
+  function fixOp(rows: Finding[], op: 'undo' | 'redo'): void {
     const round = review?.round?.id;
     const live = rows.filter(
-      (r) => r.certain && r.decision?.action !== 'reject',
+      (r) => isFix(r) && (r.decision?.action === 'reject') === (op === 'redo'),
     );
     if (!round || !live.length) return;
     for (const r of live) {
+      const prev = r.decision;
       const note = pending.get(r.id) ?? '';
       pending.delete(r.id);
-      r.decision = { action: 'reject', note };
+      r.decision = fixDecision(op, note);
       persist(
-        () => api.undo(round, r.id, note),
+        () =>
+          op === 'undo'
+            ? api.undo(round, r.id, note)
+            : api.redo(round, r.id, note),
         () => {
-          delete r.decision;
+          if (prev) r.decision = prev;
+          else delete r.decision;
         },
       );
     }
     render();
   }
 
+  function undo(rows: Finding[]): void {
+    fixOp(rows, 'undo');
+  }
+
   function redo(rows: Finding[]): void {
-    for (const r of rows)
-      if (r.certain && r.decision?.action === 'reject') clear(r);
+    fixOp(rows, 'redo');
   }
 
   function setNote(shownRow: Finding, text: string): void {
@@ -642,18 +656,21 @@ export function boot(): void {
     d.sent = false;
     persist(
       () =>
-        r.certain && d.action === 'reject'
+        isFix(r) && d.action === 'reject'
           ? api.undo(round, r.id, text)
-          : api.decide(round, [
-              {
-                id: r.id,
-                action: d.action,
-                verdict: d.verdict,
-                title: d.title,
-                text: d.text,
-                note: text,
-              },
-            ]),
+          : isFix(r) && d.action === 'accept'
+            ? api.redo(round, r.id, text)
+            : api.decide(round, [
+                {
+                  id: r.id,
+                  action: d.action,
+                  verdict: d.verdict,
+                  title: d.title,
+                  text: d.text,
+                  cleared: d.cleared,
+                  note: text,
+                },
+              ]),
       () => {
         d.note = old;
       },
@@ -667,7 +684,7 @@ export function boot(): void {
     try {
       const { sent, to } = await api.send(round);
       if (review) {
-        for (const r of review.rows) if (r.decision) r.decision.sent = true;
+        markSent(review.rows);
         if (sent) review.sends++;
       }
       refreshBar();
@@ -699,7 +716,7 @@ export function boot(): void {
     label: 'accept (a group: every undecided row)',
     group,
     run: onRow(
-      (r) => !r.certain && decide([r], 'accept'),
+      (r) => !isFix(r) && decide([r], 'accept'),
       (rows) =>
         view === 'open' && decide(groupTargets(rows, 'accept'), 'accept'),
     ),
@@ -709,7 +726,7 @@ export function boot(): void {
     label: 'edit the proposal',
     group,
     run: onRow(
-      (r) => !r.certain && ctx.startEdit(r),
+      (r) => !isFix(r) && ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`),
     ),
   });
@@ -718,7 +735,7 @@ export function boot(): void {
     label: 'reject (a group: every undecided row)',
     group,
     run: onRow(
-      (r) => !r.certain && decide([r], 'reject'),
+      (r) => !isFix(r) && decide([r], 'reject'),
       (rows) =>
         view === 'open' && decide(groupTargets(rows, 'reject'), 'reject'),
     ),
@@ -728,7 +745,7 @@ export function boot(): void {
     label: 'clear a decision; undo or redo a certain fix',
     group,
     run: onRow((r) => {
-      if (!r.certain) clear(r);
+      if (!isFix(r)) clear(r);
       else if (r.decision?.action === 'reject') redo([r]);
       else undo([r]);
     }),

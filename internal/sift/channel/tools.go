@@ -114,6 +114,11 @@ func (ch *Channel) apply(ctx context.Context, round int64, dry bool) (string, er
 	if _, err := ch.LookPath("gh"); err == nil {
 		o.Gh = apply.Gh
 	}
+	if cfg, err := ch.LoadConfig(); err == nil {
+		if ps, err := cfg.Enabled(); err == nil {
+			o.Instructions = apply.InstructionNames(ps)
+		}
+	}
 	res, err := apply.Run(ctx, o)
 	if err != nil {
 		return "", err

@@ -125,6 +125,8 @@ func TestDecisionValidate(t *testing.T) {
 		{Action: "edit", Verdict: "close:done"},
 		{Action: "edit", Title: "a better title"},
 		{Action: "edit", Text: "new text"},
+		{Action: "edit", Cleared: []string{"text"}},
+		{Action: "edit", Verdict: "issue", Cleared: []string{"title", "text"}},
 	} {
 		if err := d.Validate(); err != nil {
 			t.Errorf("%+v: %v", d, err)
@@ -137,6 +139,10 @@ func TestDecisionValidate(t *testing.T) {
 		{Action: "edit", Verdict: "cut"},
 		{Action: "accept", Verdict: "keep"},
 		{Action: "reject", Text: "x"},
+		{Action: "accept", Cleared: []string{"text"}},
+		{Action: "edit", Cleared: []string{"verdict"}},
+		{Action: "edit", Text: "x", Cleared: []string{"text"}},
+		{Action: "edit", Cleared: []string{"text", "text"}},
 	} {
 		if d.Validate() == nil {
 			t.Errorf("%+v: want an error", d)
@@ -161,8 +167,10 @@ func TestNthTellsRepeatsApart(t *testing.T) {
 }
 
 // Effective is what apply does with a row: the proposal, an edit's changes
-// over it, nothing when it is rejected or undecided; a certain row is
-// applied (as a delete when it has no verdict) unless it was undone.
+// over it, nothing when it is rejected or undecided. A certain row's own fix
+// (Fix, delete when unset) is applied unless it was undone; an agent's
+// proposal that replaces it makes the row a judgment, applied only once
+// accepted or edited.
 func TestEffective(t *testing.T) {
 	base := Row{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}
 	with := func(r Row, d *Decision) Row { r.Decision = d; return r }
@@ -172,19 +180,27 @@ func TestEffective(t *testing.T) {
 		want Change
 		ok   bool
 	}{
-		"undecided":            {base, Change{}, false},
-		"accepted":             {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
-		"edited text":          {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
-		"edited verdict":       {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
-		"rejected":             {with(base, &Decision{Action: "reject"}), Change{}, false},
-		"accepted, no verdict": {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
-		"certain":              {certain, Change{Verdict: "delete"}, true},
-		"certain, proposed":    {Row{Certain: true, Verdict: "rewrite", Text: "x"}, Change{Verdict: "rewrite", Text: "x"}, true},
-		"certain, undone":      {with(certain, &Decision{Action: "reject"}), Change{}, false},
+		"undecided":                  {base, Change{}, false},
+		"accepted":                   {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"edited text":                {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
+		"edited verdict":             {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"rejected":                   {with(base, &Decision{Action: "reject"}), Change{}, false},
+		"accepted, no verdict":       {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
+		"certain":                    {certain, Change{Verdict: "delete"}, true},
+		"certain, its own fix":       {Row{Certain: true, Fix: "delete", Verdict: "delete"}, Change{Verdict: "delete"}, true},
+		"certain, proposed":          {Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, Change{}, false},
+		"certain, proposed text":     {Row{Certain: true, Fix: "delete", Verdict: "delete", Text: "x"}, Change{}, false},
+		"certain, proposal accepted": {with(Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Text: "x"}, true},
+		"certain, proposal rejected": {with(Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, &Decision{Action: "reject"}), Change{}, false},
+		"certain, undone":            {with(certain, &Decision{Action: "reject"}), Change{}, false},
+		"certain, redone (accept)":   {with(certain, &Decision{Action: "accept"}), Change{Verdict: "delete"}, true},
 	} {
 		got, ok := c.r.Effective()
 		if ok != c.ok || got != c.want {
 			t.Errorf("%s: %+v %v, want %+v %v", name, got, ok, c.want, c.ok)
 		}
+	}
+	if !certain.FixOnly() || (Row{Certain: true, Fix: "delete", Verdict: "rewrite"}).FixOnly() || (Row{Verdict: "delete"}).FixOnly() {
+		t.Error("FixOnly")
 	}
 }

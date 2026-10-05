@@ -77,8 +77,39 @@ export function displayPath(src: Source, home: string): string {
   return src.file;
 }
 
+/** A certain row's own fix: the check's verdict, delete when unset. */
+export function fixOf(r: Finding): string {
+  return r.fix || 'delete';
+}
+
+/** A certain row still carrying only its own fix (row.FixOnly): no
+ * proposal, or one that repeats the fix. Any other row is a judgment. */
+export function isFix(r: Finding): boolean {
+  return (
+    r.certain &&
+    (!r.verdict || r.verdict === fixOf(r)) &&
+    !r.title &&
+    !r.destination &&
+    !r.text
+  );
+}
+
+/** The decision an undo or redo stores on a certain fix: reject (leave the
+ * file) or accept (apply the fix). Both are sent like any decision. */
+export function fixDecision(
+  op: 'undo' | 'redo',
+  note: string,
+): { action: 'accept' | 'reject'; note: string } {
+  return { action: op === 'undo' ? 'reject' : 'accept', note };
+}
+
+/** After a Send: every decision is sent. */
+export function markSent(rows: Finding[]): void {
+  for (const r of rows) if (r.decision) r.decision.sent = true;
+}
+
 export function inView(r: Finding, v: View): boolean {
-  return v === 'applied' ? r.certain : !r.certain;
+  return v === 'applied' ? isFix(r) : !isFix(r);
 }
 
 /** A backlog round groups by kind: its kind says so, or every row is intake. */
@@ -92,6 +123,15 @@ export function verdictOf(r: Finding): string {
   return (
     (r.decision?.action === 'edit' && r.decision.verdict) || r.verdict || ''
   );
+}
+
+/** A title or text as it counts now (row.Effective): an edit's value, ''
+ * when the edit cleared it, else the proposal's. */
+export function fieldOf(r: Finding, k: 'title' | 'text'): string {
+  const d = r.decision?.action === 'edit' ? r.decision : undefined;
+  if (d?.[k]) return d[k];
+  if (d?.cleared?.includes(k)) return '';
+  return r[k] ?? '';
 }
 
 const plural = (n: number, one: string, many: string) =>
@@ -199,15 +239,15 @@ export function nextOpen(es: Entry[], key: string): string {
 
 /** Decided of the rows that need you. */
 export function progress(rows: Finding[]): { decided: number; total: number } {
-  const open = rows.filter((r) => !r.certain);
+  const open = rows.filter((r) => !isFix(r));
   return { decided: open.filter((r) => r.decision).length, total: open.length };
 }
 
-/** What Send carries: unsent decisions (an undo is one), and on the round's
- * first send the certain rows nobody undid. */
+/** What Send carries: unsent decisions (an undo or redo is one), and on
+ * the round's first send the certain fixes nobody undid. */
 export function unsent(rows: Finding[], sends: number): number {
   let n = rows.filter((r) => r.decision && !r.decision.sent).length;
-  if (sends === 0) n += rows.filter((r) => r.certain && !r.decision).length;
+  if (sends === 0) n += rows.filter((r) => isFix(r) && !r.decision).length;
   return n;
 }
 
@@ -228,33 +268,36 @@ export interface EditForm {
   text: string;
 }
 
+export type EditDecision = {
+  action: 'edit';
+  verdict?: string;
+  title?: string;
+  text?: string;
+  cleared?: ('title' | 'text')[];
+};
+
 export type EditResult =
-  | {
-      ok: true;
-      decision: {
-        action: 'edit';
-        verdict?: string;
-        title?: string;
-        text?: string;
-      };
-    }
-  | { ok: false; error: string };
+  { ok: true; decision: EditDecision } | { ok: false; error: string };
 
 /** The edit decision for a form: only the fields that differ from the
- * proposal. */
+ * proposal. A field the user emptied is cleared explicitly: an empty value
+ * would mean "keep the proposal's". */
 export function editDecision(r: Finding, f: EditForm): EditResult {
   const verdict = f.verdict.trim();
   if (!verdict) return { ok: false, error: 'choose a verdict' };
   if (!validVerdict(verdict))
     return { ok: false, error: `“${verdict}” is not a verdict` };
-  const d: { action: 'edit'; verdict?: string; title?: string; text?: string } =
-    {
-      action: 'edit',
-    };
+  const d: EditDecision = { action: 'edit' };
   if (verdict !== (r.verdict ?? '')) d.verdict = verdict;
-  if (f.title !== (r.title ?? '') && f.title.trim() !== '') d.title = f.title;
-  if (f.text !== (r.text ?? '') && f.text.trim() !== '') d.text = f.text;
-  if (!d.verdict && !d.title && !d.text)
+  const cleared: ('title' | 'text')[] = [];
+  for (const k of ['title', 'text'] as const) {
+    const now = f[k];
+    if (now === (r[k] ?? '')) continue;
+    if (now.trim() !== '') d[k] = now;
+    else if (r[k]) cleared.push(k);
+  }
+  if (cleared.length) d.cleared = cleared;
+  if (!d.verdict && !d.title && !d.text && !d.cleared)
     return { ok: false, error: 'nothing changed: accept the proposal instead' };
   return { ok: true, decision: d };
 }
@@ -272,7 +315,10 @@ export function rowTitle(r: Finding): string {
 
 /** The list's right-hand word for a row. */
 export function rowMeta(r: Finding): string {
-  if (r.certain) return r.decision?.action === 'reject' ? 'undone' : 'applied';
+  if (isFix(r)) {
+    if (r.decision?.action === 'reject') return 'undone';
+    return r.decision && !r.decision.sent ? 'redone' : 'applied';
+  }
   if (!r.decision) return '·';
   if (r.decision.action === 'edit') return `edited · ${verdictOf(r)}`;
   if (r.decision.action === 'accept') return `accepted · ${r.verdict ?? ''}`;

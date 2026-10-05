@@ -14,7 +14,10 @@ import {
 import {
   PLAIN_VERDICTS,
   displayPath,
+  fieldOf,
+  fixOf,
   groupTargets,
+  isFix,
   rowMeta,
   rowTitle,
   verdictOf,
@@ -113,7 +116,7 @@ function editForm(ctx: Ctx, r: Finding): HTMLElement[] {
   const title = h('input', {
     class: 'sift-field sift-title',
     type: 'text',
-    value: d?.title || r.title || '',
+    value: fieldOf(r, 'title'),
     placeholder: 'title (issue rows)',
     'aria-label': 'title',
   }) as HTMLInputElement;
@@ -122,7 +125,9 @@ function editForm(ctx: Ctx, r: Finding): HTMLElement[] {
     'aria-label': 'proposed text',
     rows: 6,
   }) as HTMLTextAreaElement;
-  text.value = d?.text || r.text || r.passage || '';
+  text.value = d?.cleared?.includes('text')
+    ? ''
+    : fieldOf(r, 'text') || r.passage || '';
   const err = h('p', { class: 'sift-err', role: 'alert' });
   const pick = buttons(
     PLAIN_VERDICTS.map((v) => ({
@@ -181,12 +186,11 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
   if (ev.length) parts.push(facts(ev));
   if (r.passage)
     parts.push(
-      h('div', { class: 'kit-label' }, r.certain ? 'the passage' : 'now'),
+      h('div', { class: 'kit-label' }, isFix(r) ? 'the passage' : 'now'),
       prose(r.passage, { start: r.source.start || 1 }),
     );
   const v = verdictOf(r);
-  const text =
-    r.decision?.action === 'edit' && r.decision.text ? r.decision.text : r.text;
+  const text = fieldOf(r, 'text');
   if (text && v !== 'delete')
     parts.push(
       h(
@@ -199,7 +203,7 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
       prose(text, { start: r.source.start || 1 }),
     );
 
-  if (r.certain) {
+  if (isFix(r)) {
     const done = ctx.appliedIn(r);
     const undone = r.decision?.action === 'reject';
     parts.push(
@@ -207,10 +211,10 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
         edge: 'wait',
         head: undone
           ? 'undone · stays as it is'
-          : `applied · certain · ${r.verdict || 'delete'}`,
+          : `applied · certain · ${fixOf(r)}`,
         body: undone
           ? 'You took this fix out of the round: sift leaves the passage alone.'
-          : `${cap(r.summary)}. sift is certain of this one, so it ${r.verdict === 'rewrite' ? 'rewrites' : 'removes'} the passage when it applies the round, unless you undo it.`,
+          : `${cap(r.summary)}. sift is certain of this one, so it ${fixOf(r) === 'rewrite' ? 'rewrites' : 'removes'} the passage when it applies the round, unless you undo it.`,
       }),
       h('div', { class: 'kit-label' }, 'change'),
       done
@@ -285,9 +289,11 @@ export function groupDoc(ctx: Ctx, g: Group): HTMLElement {
   ];
   if (ctx.view === 'applied') {
     const live = rows.filter(
-      (r) => r.certain && r.decision?.action !== 'reject',
+      (r) => isFix(r) && r.decision?.action !== 'reject',
     );
-    const undone = rows.filter((r) => r.decision?.action === 'reject');
+    const undone = rows.filter(
+      (r) => isFix(r) && r.decision?.action === 'reject',
+    );
     parts.push(
       facts([
         ['applied', String(live.length)],

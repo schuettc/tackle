@@ -101,7 +101,7 @@ func TestParseDestination(t *testing.T) {
 		"AGENTS.md":              {"AGENTS.md", ""},
 		"CLAUDE.md § Tests":      {"CLAUDE.md", "Tests"},
 	} {
-		p, s := parseDestination(in)
+		p, s := ParseDestination(in)
 		if p != want[0] || s != want[1] {
 			t.Errorf("%q: %q %q", in, p, s)
 		}

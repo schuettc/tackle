@@ -23,6 +23,9 @@ function client(api) {
     async undo(round, id, note) {
       await api.post("/undo", { round, id, note });
     },
+    async redo(round, id, note) {
+      await api.post("/redo", { round, id, note });
+    },
     async send(round) {
       const r = await api.post("/send", {
         round
@@ -98,8 +101,20 @@ function displayPath(src, home) {
     return "~" + src.file.slice(home.length);
   return src.file;
 }
+function fixOf(r) {
+  return r.fix || "delete";
+}
+function isFix(r) {
+  return r.certain && (!r.verdict || r.verdict === fixOf(r)) && !r.title && !r.destination && !r.text;
+}
+function fixDecision(op, note) {
+  return { action: op === "undo" ? "reject" : "accept", note };
+}
+function markSent(rows) {
+  for (const r of rows) if (r.decision) r.decision.sent = true;
+}
 function inView(r, v) {
-  return v === "applied" ? r.certain : !r.certain;
+  return v === "applied" ? isFix(r) : !isFix(r);
 }
 function isBacklog(round, rows) {
   if (round?.kind === "backlog") return true;
@@ -107,6 +122,12 @@ function isBacklog(round, rows) {
 }
 function verdictOf(r) {
   return r.decision?.action === "edit" && r.decision.verdict || r.verdict || "";
+}
+function fieldOf(r, k) {
+  const d = r.decision?.action === "edit" ? r.decision : void 0;
+  if (d?.[k]) return d[k];
+  if (d?.cleared?.includes(k)) return "";
+  return r[k] ?? "";
 }
 var plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function groupsOf(rows, backlog, home) {
@@ -191,12 +212,12 @@ function nextOpen(es, key) {
   return es[i + 1]?.key ?? key;
 }
 function progress(rows) {
-  const open = rows.filter((r) => !r.certain);
+  const open = rows.filter((r) => !isFix(r));
   return { decided: open.filter((r) => r.decision).length, total: open.length };
 }
 function unsent(rows, sends) {
   let n = rows.filter((r) => r.decision && !r.decision.sent).length;
-  if (sends === 0) n += rows.filter((r) => r.certain && !r.decision).length;
+  if (sends === 0) n += rows.filter((r) => isFix(r) && !r.decision).length;
   return n;
 }
 function groupTargets(rows, action) {
@@ -209,13 +230,17 @@ function editDecision(r, f) {
   if (!verdict) return { ok: false, error: "choose a verdict" };
   if (!validVerdict(verdict))
     return { ok: false, error: `“${verdict}” is not a verdict` };
-  const d = {
-    action: "edit"
-  };
+  const d = { action: "edit" };
   if (verdict !== (r.verdict ?? "")) d.verdict = verdict;
-  if (f.title !== (r.title ?? "") && f.title.trim() !== "") d.title = f.title;
-  if (f.text !== (r.text ?? "") && f.text.trim() !== "") d.text = f.text;
-  if (!d.verdict && !d.title && !d.text)
+  const cleared = [];
+  for (const k of ["title", "text"]) {
+    const now = f[k];
+    if (now === (r[k] ?? "")) continue;
+    if (now.trim() !== "") d[k] = now;
+    else if (r[k]) cleared.push(k);
+  }
+  if (cleared.length) d.cleared = cleared;
+  if (!d.verdict && !d.title && !d.text && !d.cleared)
     return { ok: false, error: "nothing changed: accept the proposal instead" };
   return { ok: true, decision: d };
 }
@@ -225,7 +250,10 @@ function rowTitle(r) {
   return first || r.summary;
 }
 function rowMeta(r) {
-  if (r.certain) return r.decision?.action === "reject" ? "undone" : "applied";
+  if (isFix(r)) {
+    if (r.decision?.action === "reject") return "undone";
+    return r.decision && !r.decision.sent ? "redone" : "applied";
+  }
   if (!r.decision) return "·";
   if (r.decision.action === "edit") return `edited · ${verdictOf(r)}`;
   if (r.decision.action === "accept") return `accepted · ${r.verdict ?? ""}`;
@@ -312,7 +340,7 @@ function editForm(ctx, r) {
   const title = h2("input", {
     class: "sift-field sift-title",
     type: "text",
-    value: d?.title || r.title || "",
+    value: fieldOf(r, "title"),
     placeholder: "title (issue rows)",
     "aria-label": "title"
   });
@@ -321,7 +349,7 @@ function editForm(ctx, r) {
     "aria-label": "proposed text",
     rows: 6
   });
-  text.value = d?.text || r.text || r.passage || "";
+  text.value = d?.cleared?.includes("text") ? "" : fieldOf(r, "text") || r.passage || "";
   const err = h2("p", { class: "sift-err", role: "alert" });
   const pick = buttons(
     PLAIN_VERDICTS.map((v) => ({
@@ -378,11 +406,11 @@ function rowDoc(ctx, r) {
   if (ev.length) parts.push(facts(ev));
   if (r.passage)
     parts.push(
-      h2("div", { class: "kit-label" }, r.certain ? "the passage" : "now"),
+      h2("div", { class: "kit-label" }, isFix(r) ? "the passage" : "now"),
       prose(r.passage, { start: r.source.start || 1 })
     );
   const v = verdictOf(r);
-  const text = r.decision?.action === "edit" && r.decision.text ? r.decision.text : r.text;
+  const text = fieldOf(r, "text");
   if (text && v !== "delete")
     parts.push(
       h2(
@@ -392,14 +420,14 @@ function rowDoc(ctx, r) {
       ),
       prose(text, { start: r.source.start || 1 })
     );
-  if (r.certain) {
+  if (isFix(r)) {
     const done = ctx.appliedIn(r);
     const undone = r.decision?.action === "reject";
     parts.push(
       card({
         edge: "wait",
-        head: undone ? "undone · stays as it is" : `applied · certain · ${r.verdict || "delete"}`,
-        body: undone ? "You took this fix out of the round: sift leaves the passage alone." : `${cap(r.summary)}. sift is certain of this one, so it ${r.verdict === "rewrite" ? "rewrites" : "removes"} the passage when it applies the round, unless you undo it.`
+        head: undone ? "undone · stays as it is" : `applied · certain · ${fixOf(r)}`,
+        body: undone ? "You took this fix out of the round: sift leaves the passage alone." : `${cap(r.summary)}. sift is certain of this one, so it ${fixOf(r) === "rewrite" ? "rewrites" : "removes"} the passage when it applies the round, unless you undo it.`
       }),
       h2("div", { class: "kit-label" }, "change"),
       done ? h2(
@@ -462,9 +490,11 @@ function groupDoc(ctx, g) {
   ];
   if (ctx.view === "applied") {
     const live2 = rows.filter(
-      (r) => r.certain && r.decision?.action !== "reject"
+      (r) => isFix(r) && r.decision?.action !== "reject"
     );
-    const undone = rows.filter((r) => r.decision?.action === "reject");
+    const undone = rows.filter(
+      (r) => isFix(r) && r.decision?.action === "reject"
+    );
     parts.push(
       facts([
         ["applied", String(live2.length)],
@@ -997,6 +1027,7 @@ function boot() {
         verdict: d.verdict,
         title: d.title,
         text: d.text,
+        cleared: d.cleared,
         note
       };
     });
@@ -1042,28 +1073,32 @@ function boot() {
       }
     );
   }
-  function undo(rows) {
+  function fixOp(rows, op) {
     const round = review?.round?.id;
     const live2 = rows.filter(
-      (r) => r.certain && r.decision?.action !== "reject"
+      (r) => isFix(r) && r.decision?.action === "reject" === (op === "redo")
     );
     if (!round || !live2.length) return;
     for (const r of live2) {
+      const prev = r.decision;
       const note = pending.get(r.id) ?? "";
       pending.delete(r.id);
-      r.decision = { action: "reject", note };
+      r.decision = fixDecision(op, note);
       persist(
-        () => api.undo(round, r.id, note),
+        () => op === "undo" ? api.undo(round, r.id, note) : api.redo(round, r.id, note),
         () => {
-          delete r.decision;
+          if (prev) r.decision = prev;
+          else delete r.decision;
         }
       );
     }
     render();
   }
+  function undo(rows) {
+    fixOp(rows, "undo");
+  }
   function redo(rows) {
-    for (const r of rows)
-      if (r.certain && r.decision?.action === "reject") clear(r);
+    fixOp(rows, "redo");
   }
   function setNote(shownRow, text) {
     const r = rowById(shownRow.id) ?? shownRow;
@@ -1079,13 +1114,14 @@ function boot() {
     d.note = text;
     d.sent = false;
     persist(
-      () => r.certain && d.action === "reject" ? api.undo(round, r.id, text) : api.decide(round, [
+      () => isFix(r) && d.action === "reject" ? api.undo(round, r.id, text) : isFix(r) && d.action === "accept" ? api.redo(round, r.id, text) : api.decide(round, [
         {
           id: r.id,
           action: d.action,
           verdict: d.verdict,
           title: d.title,
           text: d.text,
+          cleared: d.cleared,
           note: text
         }
       ]),
@@ -1101,7 +1137,7 @@ function boot() {
     try {
       const { sent, to } = await api.send(round);
       if (review) {
-        for (const r of review.rows) if (r.decision) r.decision.sent = true;
+        markSent(review.rows);
         if (sent) review.sends++;
       }
       refreshBar();
@@ -1126,7 +1162,7 @@ function boot() {
     label: "accept (a group: every undecided row)",
     group,
     run: onRow(
-      (r) => !r.certain && decide([r], "accept"),
+      (r) => !isFix(r) && decide([r], "accept"),
       (rows) => view === "open" && decide(groupTargets(rows, "accept"), "accept")
     )
   });
@@ -1135,7 +1171,7 @@ function boot() {
     label: "edit the proposal",
     group,
     run: onRow(
-      (r) => !r.certain && ctx.startEdit(r),
+      (r) => !isFix(r) && ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`)
     )
   });
@@ -1144,7 +1180,7 @@ function boot() {
     label: "reject (a group: every undecided row)",
     group,
     run: onRow(
-      (r) => !r.certain && decide([r], "reject"),
+      (r) => !isFix(r) && decide([r], "reject"),
       (rows) => view === "open" && decide(groupTargets(rows, "reject"), "reject")
     )
   });
@@ -1153,7 +1189,7 @@ function boot() {
     label: "clear a decision; undo or redo a certain fix",
     group,
     run: onRow((r) => {
-      if (!r.certain) clear(r);
+      if (!isFix(r)) clear(r);
       else if (r.decision?.action === "reject") redo([r]);
       else undo([r]);
     })

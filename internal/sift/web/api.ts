@@ -10,6 +10,7 @@ export interface DecisionIn {
   verdict?: string;
   title?: string;
   text?: string;
+  cleared?: ('title' | 'text')[];
   note?: string;
 }
 
@@ -25,6 +26,7 @@ export interface Client {
   decide(round: number, ds: DecisionIn[]): Promise<void>;
   clear(round: number, id: string): Promise<void>;
   undo(round: number, id: string, note: string): Promise<void>;
+  redo(round: number, id: string, note: string): Promise<void>;
   send(round: number): Promise<{ sent: number; to: string }>;
   file(round: number, id: string): Promise<FileOut>;
 }
@@ -42,6 +44,9 @@ export function client(api: Api): Client {
     },
     async undo(round, id, note) {
       await api.post('/undo', { round, id, note });
+    },
+    async redo(round, id, note) {
+      await api.post('/redo', { round, id, note });
     },
     async send(round) {
       const r = await api.post<{ sent: number; to?: string }>('/send', {

@@ -20,6 +20,7 @@ interface Decision {
   verdict?: string;
   title?: string;
   text?: string;
+  cleared?: ('title' | 'text')[];
   note?: string;
   sent?: boolean;
 }
@@ -37,6 +38,7 @@ interface Finding {
   text?: string;
   reason?: string;
   certain: boolean;
+  fix?: string;
   decision?: Decision;
 }
 
@@ -57,6 +59,8 @@ interface ApplyRecord {
   detail: string;
   rows: string[];
   at: string;
+  last_state?: string;
+  last_detail?: string;
 }
 
 interface Review {

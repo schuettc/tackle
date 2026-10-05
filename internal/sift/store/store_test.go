@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -93,7 +94,7 @@ func TestDecideNeedsTheRowInTheRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, got, _ := s.LatestRound(ctx)
-	if got[0].Decision == nil || *got[0].Decision != want {
+	if got[0].Decision == nil || !reflect.DeepEqual(*got[0].Decision, want) {
 		t.Fatalf("decision %+v", got[0].Decision)
 	}
 }

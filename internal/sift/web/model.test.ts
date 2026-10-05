@@ -4,12 +4,17 @@ import {
   displayPath,
   editDecision,
   entries,
+  fieldOf,
+  fixDecision,
   groupTargets,
   groupsOf,
   inView,
   isBacklog,
+  isFix,
+  markSent,
   nextOpen,
   progress,
+  rowMeta,
   rowTitle,
   unsent,
   validVerdict,
@@ -95,6 +100,51 @@ test('views: certain rows are applied, the rest need you', () => {
   const b = mk('b', '/f', 'dead-path', 2, { certain: true });
   assert.ok(inView(a, 'open') && !inView(a, 'applied'));
   assert.ok(inView(b, 'applied') && !inView(b, 'open'));
+});
+
+test('a proposal that replaces a certain fix makes the row a judgment (row.FixOnly)', () => {
+  const fix = mk('f', '/f', 'dead-path', 1, { certain: true, fix: 'delete' });
+  const same = mk('s', '/f', 'dead-path', 2, {
+    certain: true,
+    fix: 'delete',
+    verdict: 'delete',
+  });
+  const proposed = mk('p', '/f', 'dead-path', 3, {
+    certain: true,
+    fix: 'delete',
+    verdict: 'rewrite',
+    text: 'x',
+  });
+  const text = mk('t', '/f', 'dead-path', 4, {
+    certain: true,
+    verdict: 'delete',
+    text: 'x',
+  });
+  assert.ok(isFix(fix) && isFix(same));
+  assert.ok(!isFix(proposed) && !isFix(text));
+  assert.ok(inView(proposed, 'open') && !inView(proposed, 'applied'));
+  assert.deepEqual(progress([fix, proposed]), { decided: 0, total: 1 });
+  // The first send carries the fix, not the proposal.
+  assert.equal(unsent([fix, proposed], 0), 1);
+});
+
+test('undo, Send, redo, Send: the redo is a decision the second Send carries', () => {
+  const r = mk('d', '/f', 'dead-path', 4, { certain: true, fix: 'delete' });
+  const rows = [r];
+  assert.equal(rowMeta(r), 'applied');
+  r.decision = fixDecision('undo', '');
+  assert.equal(rowMeta(r), 'undone');
+  assert.equal(unsent(rows, 0), 1);
+  markSent(rows);
+  assert.equal(unsent(rows, 1), 0);
+  r.decision = fixDecision('redo', 'gone after all');
+  assert.deepEqual(r.decision, { action: 'accept', note: 'gone after all' });
+  assert.equal(rowMeta(r), 'redone');
+  assert.ok(inView(r, 'applied'));
+  assert.equal(unsent(rows, 1), 1);
+  markSent(rows);
+  assert.equal(unsent(rows, 2), 0);
+  assert.equal(rowMeta(r), 'applied');
 });
 
 test('audit groups: by file, then check in the spec order, rows by line', () => {
@@ -259,6 +309,29 @@ test('editDecision sends only what changed, and refuses a bad verdict or no chan
     text: 'x',
   });
   assert.ok(!none.ok && none.error.includes('verdict'));
+});
+
+test('editDecision clears a field the user emptied (explicit, not "use the proposal")', () => {
+  const r = mk('a', '/f', 'misplaced', 1, {
+    verdict: 'move',
+    text: 'reworded',
+    title: 't',
+  });
+  assert.deepEqual(editDecision(r, { verdict: 'move', title: 't', text: '' }), {
+    ok: true,
+    decision: { action: 'edit', cleared: ['text'] },
+  });
+  assert.deepEqual(
+    editDecision(r, { verdict: 'move', title: '  ', text: 'reworded' }),
+    { ok: true, decision: { action: 'edit', cleared: ['title'] } },
+  );
+  r.decision = { action: 'edit', cleared: ['text'] };
+  assert.equal(fieldOf(r, 'text'), '');
+  assert.equal(fieldOf(r, 'title'), 't');
+  // Nothing to clear when the proposal had none.
+  const bare = mk('b', '/f', 'misplaced', 2, { verdict: 'delete' });
+  const same = editDecision(bare, { verdict: 'delete', title: '', text: '' });
+  assert.ok(!same.ok && same.error.includes('nothing changed'));
 });
 
 test('rowTitle: issue title, else the passage first line, else the summary', () => {

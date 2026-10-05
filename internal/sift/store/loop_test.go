@@ -143,15 +143,18 @@ func TestSendCountsAndClaims(t *testing.T) {
 	if und, _ := s.Undelivered(ctx); len(und) != 2 {
 		t.Fatalf("undelivered %d", len(und))
 	}
-	got, ok, err := s.ClaimSend(ctx, "sess-2")
+	// sess-1 owns the first send and is present: sess-2 can't take it.
+	if got, ok, err := s.ClaimSend(ctx, "sess-2", []string{"sess-1", "sess-2"}); err != nil || !ok || got.ID == sd.ID {
+		t.Fatalf("claim of a present owner's send %+v %v %v", got, ok, err)
+	}
+	got, ok, err := s.ClaimSend(ctx, "sess-2", nil)
 	if err != nil || !ok || got.ID != sd.ID || got.DeliveredTo != "sess-2" {
 		t.Fatalf("claim %+v %v %v", got, ok, err)
 	}
-	if und, _ := s.Undelivered(ctx); len(und) != 1 {
-		t.Fatalf("undelivered after a claim %d", len(und))
+	if und, _ := s.Undelivered(ctx); len(und) != 0 {
+		t.Fatalf("undelivered after two claims %d", len(und))
 	}
-	_, _, _ = s.ClaimSend(ctx, "sess-2")
-	if _, ok, _ := s.ClaimSend(ctx, "sess-2"); ok {
+	if _, ok, _ := s.ClaimSend(ctx, "sess-2", nil); ok {
 		t.Fatal("claimed a delivered send")
 	}
 	// Sent decisions say so.
@@ -207,8 +210,58 @@ func TestApplies(t *testing.T) {
 	if err := s.RecordApply(ctx, a); err != nil {
 		t.Fatal(err)
 	}
+	// A success is permanent: the held attempt is kept apart.
 	got, err := s.Applies(ctx, id)
-	if err != nil || len(got) != 1 || got[0].State != "held" || got[0].Rows[0] != rows[0].ID || got[0].At.IsZero() {
+	if err != nil || len(got) != 1 || got[0].State != "pr" || got[0].PR != "https://x/pr/1" || got[0].Rows[0] != rows[0].ID ||
+		got[0].At.IsZero() || got[0].Last.State != "held" || got[0].Last.Detail != "uncommitted changes" {
 		t.Fatalf("%+v %v", got, err)
+	}
+	// A held record is replaced by the next attempt.
+	b := Apply{Round: id, Repo: "/w/b", State: "held", Detail: "dirty"}
+	_ = s.RecordApply(ctx, b)
+	b.State, b.Detail, b.Branch = "branch", "", "sift/round-1"
+	_ = s.RecordApply(ctx, b)
+	got, _ = s.Applies(ctx, id)
+	if got[1].State != "branch" || got[1].Last.State != "" {
+		t.Fatalf("%+v", got[1])
+	}
+}
+
+// An intake row is the agent's own, so any change to what it would do (its
+// source, lines or passage as much as its proposal) drops a decision, sent
+// or not: the user approved the old row, not this one.
+func TestAddRowsClearsADecisionOnAChangedIntakeRow(t *testing.T) {
+	base := row.Row{ID: "mem-1", Check: "intake", Summary: "a memory entry", Passage: "use the shared runner",
+		Source: row.Source{File: "/w/a/CLAUDE.md", Repo: "/w/a", Path: "CLAUDE.md", Start: 3, End: 3}, Verdict: "delete"}
+	for name, change := range map[string]func(*row.Row){
+		"repo":    func(r *row.Row) { r.Source.Repo = "/w/b" },
+		"path":    func(r *row.Row) { r.Source.Path = "AGENTS.md" },
+		"file":    func(r *row.Row) { r.Source.File = "/w/a/AGENTS.md" },
+		"lines":   func(r *row.Row) { r.Source.Start, r.Source.End = 9, 9 },
+		"entry":   func(r *row.Row) { r.Source.Entry = "MEMORY.md#2" },
+		"passage": func(r *row.Row) { r.Passage = "use the other runner" },
+		"title":   func(r *row.Row) { r.Title = "t" },
+	} {
+		s, _ := open(t)
+		id, _ := round(t, s)
+		if _, err := s.AddRows(ctx, id, []row.Row{base}); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Decide(ctx, id, base.ID, row.Decision{Action: "accept"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Send(ctx, id, ""); err != nil {
+			t.Fatal(err)
+		}
+		next := base
+		change(&next)
+		res, err := s.AddRows(ctx, id, []row.Row{next})
+		if err != nil || res.Cleared != 1 {
+			t.Errorf("%s: %+v %v", name, res, err)
+		}
+		_, got, _ := s.Round(ctx, id)
+		if d := got[len(got)-1].Decision; d != nil {
+			t.Errorf("%s: the decision survived: %+v", name, d)
+		}
 	}
 }

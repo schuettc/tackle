@@ -2,8 +2,9 @@
 // rows the user approved (delete, rewrite, move, merge) as one branch per
 // repo, cut from the fetched base in a worktree of its own, so the primary
 // clone's checkout is never touched. A repo whose primary clone holds
-// uncommitted or unpushed work is held: the change might belong on top of
-// that work. With gh and a GitHub remote the branch is pushed and a pull
+// uncommitted or unpushed work, or an untracked instruction file, is held:
+// the change might belong on top of that work. Every path is confined to
+// the repo (confine.go). With gh and a GitHub remote the branch is pushed and a pull
 // request opened; otherwise the committed branch is left for the user.
 // Every git command goes through discover.Git, so a hook's variables never
 // point it at another repository.
@@ -17,6 +18,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -24,6 +26,7 @@ import (
 
 	"github.com/schuettc/tackle/internal/sift/discover"
 	"github.com/schuettc/tackle/internal/sift/host"
+	"github.com/schuettc/tackle/internal/sift/profile"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/store"
 	tools "github.com/schuettc/tools-common"
@@ -57,6 +60,10 @@ type Options struct {
 	WorktreeDir string
 	// DryRun works out what would change and touches nothing.
 	DryRun bool
+	// Instructions are the instruction file names the enabled profiles
+	// load (nil: every shipped profile's, see InstructionNames). An
+	// untracked one holds its repo.
+	Instructions []string
 }
 
 // Item is one row in the result.
@@ -98,10 +105,61 @@ type Result struct {
 // Branch is the branch apply writes a round to.
 func Branch(round int64) string { return "sift/round-" + strconv.FormatInt(round, 10) }
 
-// plan is one approved row on its way into a repo.
-type plan struct {
-	r row.Row
-	c row.Change
+// Plan is one approved row on its way into a repo: the row and the change
+// the user approved.
+type Plan struct {
+	Row    row.Row
+	Change row.Change
+}
+
+// Selection is what a round's rows approve: the plans to write per repo,
+// the approved rows apply leaves to the agent or the user, and how many
+// decisions are not sent yet.
+type Selection struct {
+	ByRepo map[string][]Plan
+	Left   []Item
+	Unsent int
+}
+
+// Select works out what the rows approve, in their order. It is the one
+// place that says what counts as approved: a certain row's own fix, or a
+// decision the user sent (reconcile uses it too).
+func Select(rows []row.Row) Selection {
+	sel := Selection{ByRepo: map[string][]Plan{}, Left: []Item{}}
+	for _, r := range rows {
+		// A decision counts once the user sent it. Until then the row is
+		// left alone; an unsent undo of a certain fix needs no send to leave
+		// the file as it is, so it is not counted.
+		if d := r.Decision; d != nil && !d.Sent {
+			if !r.FixOnly() || d.Action != "reject" {
+				sel.Unsent++
+			}
+			continue
+		}
+		c, ok := r.Effective()
+		if !ok {
+			continue
+		}
+		it := item(r, c.Verdict)
+		switch {
+		case c.Verdict == "keep" || c.Verdict == "ask":
+			continue
+		case strings.HasPrefix(c.Verdict, "drop:") || strings.HasPrefix(c.Verdict, "close:"):
+			it.Why = "nothing to edit in a repo"
+			sel.Left = append(sel.Left, it)
+			continue
+		case c.Verdict == "issue" || c.Verdict == "global" || c.Verdict == "private":
+			it.Why = "left for the agent: apply does not file issues or write global and private destinations"
+			sel.Left = append(sel.Left, it)
+			continue
+		case r.Source.Repo == "":
+			it.Why = "not in a git repo (" + r.Source.File + "): edit it by hand"
+			sel.Left = append(sel.Left, it)
+			continue
+		}
+		sel.ByRepo[r.Source.Repo] = append(sel.ByRepo[r.Source.Repo], Plan{Row: r, Change: c})
+	}
+	return sel
 }
 
 // Run applies the round.
@@ -120,49 +178,19 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	res := Result{Round: rd.ID, Repos: []Repo{}, Left: []Item{}}
 	byID := map[string]row.Row{}
 	for _, r := range rows {
 		byID[r.ID] = r
 	}
-	byRepo := map[string][]plan{}
-	for _, r := range rows {
-		// A judgment counts once the user sent it; an undone certain fix
-		// needs no send (Effective leaves it out either way).
-		if !r.Certain && r.Decision != nil && !r.Decision.Sent {
-			res.Unsent++
-			continue
-		}
-		c, ok := r.Effective()
-		if !ok {
-			continue
-		}
-		it := item(r, c.Verdict)
-		switch {
-		case c.Verdict == "keep" || c.Verdict == "ask":
-			continue
-		case strings.HasPrefix(c.Verdict, "drop:") || strings.HasPrefix(c.Verdict, "close:"):
-			it.Why = "nothing to edit in a repo"
-			res.Left = append(res.Left, it)
-			continue
-		case c.Verdict == "issue" || c.Verdict == "global" || c.Verdict == "private":
-			it.Why = "left for the agent: apply does not file issues or write global and private destinations"
-			res.Left = append(res.Left, it)
-			continue
-		case r.Source.Repo == "":
-			it.Why = "not in a git repo (" + r.Source.File + "): edit it by hand"
-			res.Left = append(res.Left, it)
-			continue
-		}
-		byRepo[r.Source.Repo] = append(byRepo[r.Source.Repo], plan{r: r, c: c})
-	}
-	repos := make([]string, 0, len(byRepo))
-	for p := range byRepo {
+	sel := Select(rows)
+	res := Result{Round: rd.ID, Repos: []Repo{}, Left: sel.Left, Unsent: sel.Unsent}
+	repos := make([]string, 0, len(sel.ByRepo))
+	for p := range sel.ByRepo {
 		repos = append(repos, p)
 	}
 	sort.Strings(repos)
 	for _, p := range repos {
-		rp := applyRepo(ctx, o, rd.ID, p, byRepo[p], byID)
+		rp := applyRepo(ctx, o, rd.ID, p, sel.ByRepo[p], byID)
 		if !o.DryRun {
 			ids := make([]string, 0, len(rp.Applied))
 			for _, it := range rp.Applied {
@@ -204,10 +232,35 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	return strings.TrimRight(string(out), "\n"), nil
 }
 
+// InstructionNames is every instruction file name the profiles load: their
+// repo files, their global files' names, and SKILL.md.
+func InstructionNames(ps []profile.Profile) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		if n = path.Base(filepath.ToSlash(n)); n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	for _, p := range ps {
+		for _, n := range p.RepoFiles {
+			add(n)
+		}
+		for _, n := range p.Global {
+			add(n)
+		}
+	}
+	add(profile.SkillFile)
+	return out
+}
+
 // hold reports why the primary clone's work must land first: tracked files
-// changed, or commits on its branch that the base (or its upstream) lacks.
-// Untracked files don't hold a repo.
-func hold(ctx context.Context, repo, base string) (string, error) {
+// changed, an untracked instruction file (one of names: it may be the real
+// destination, not committed yet), or commits on its branch that the base
+// (or its upstream) lacks. Other untracked files don't hold a repo: stray
+// ones would hold it for good.
+func hold(ctx context.Context, repo, base string, names []string) (string, error) {
 	st, err := git(ctx, repo, "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return "", err
@@ -220,6 +273,22 @@ func hold(ctx context.Context, repo, base string) (string, error) {
 			}
 		}
 		return fmt.Sprintf("uncommitted changes in the primary clone (%s): commit or stash them, push, then apply again", strings.Join(first(files, 3), ", ")), nil
+	}
+	others, err := git(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return "", err
+	}
+	var untracked []string
+	for _, f := range strings.Split(others, "\x00") {
+		for _, n := range names {
+			if f != "" && strings.EqualFold(path.Base(f), n) {
+				untracked = append(untracked, f)
+				break
+			}
+		}
+	}
+	if len(untracked) > 0 {
+		return fmt.Sprintf("untracked instruction file(s) in the primary clone (%s): commit them (or remove them), push, then apply again", strings.Join(first(untracked, 3), ", ")), nil
 	}
 	upstream := "@{u}"
 	if _, err := git(ctx, repo, "rev-parse", "--verify", "-q", upstream); err != nil {
@@ -255,9 +324,19 @@ type files struct {
 	existing map[string]bool
 }
 
-func (fs *files) get(rel string) (*fileEdit, error) {
+// get reads rel (checked by RepoPath) at the base. A path that is a
+// symlink at the base, or runs through one, is refused: what it points at
+// is not the repo's to write.
+func (fs *files) get(p string) (*fileEdit, error) {
+	rel, err := RepoPath(p)
+	if err != nil {
+		return nil, err
+	}
 	if f, ok := fs.m[rel]; ok {
 		return f, nil
+	}
+	if err := fs.noSymlink(rel); err != nil {
+		return nil, err
 	}
 	out, err := git(fs.ctx, fs.repo, "show", fs.base+":"+rel)
 	f := &fileEdit{}
@@ -269,6 +348,27 @@ func (fs *files) get(rel string) (*fileEdit, error) {
 	}
 	fs.m[rel] = f
 	return f, nil
+}
+
+// noSymlink refuses rel when it, or a directory on the way to it, is a
+// symlink at the base.
+func (fs *files) noSymlink(rel string) error {
+	parts := strings.Split(rel, "/")
+	args := []string{"ls-tree", "-z", fs.base, "--"}
+	for i := range parts {
+		args = append(args, strings.Join(parts[:i+1], "/"))
+	}
+	out, err := git(fs.ctx, fs.repo, args...)
+	if err != nil {
+		return err
+	}
+	for _, e := range strings.Split(out, "\x00") {
+		if mode, rest, ok := strings.Cut(e, " "); ok && mode == "120000" {
+			_, name, _ := strings.Cut(rest, "\t")
+			return fmt.Errorf("%s is a symlink at %s: apply does not write through one", name, fs.base)
+		}
+	}
+	return nil
 }
 
 // snapshot and restore make one row's edits all or nothing.
@@ -291,13 +391,12 @@ func (fs *files) restore(s map[string]fileEdit) {
 }
 
 // edit applies one row's change to the repo's files.
-func (fs *files) edit(p plan, byID map[string]row.Row) error {
-	r, c := p.r, p.c
-	rel := r.Source.Path
-	if rel == "" {
+func (fs *files) edit(p Plan, byID map[string]row.Row) error {
+	r, c := p.Row, p.Change
+	if r.Source.Path == "" {
 		return fmt.Errorf("the row has no repo path")
 	}
-	src, err := fs.get(rel)
+	src, err := fs.get(r.Source.Path)
 	if err != nil {
 		return err
 	}
@@ -321,8 +420,8 @@ func (fs *files) edit(p plan, byID map[string]row.Row) error {
 		if whole {
 			return fmt.Errorf("a whole-file move: move the file by hand")
 		}
-		path, section := parseDestination(c.Destination)
-		dest, err := fs.destination(path)
+		dp, section := ParseDestination(c.Destination)
+		dest, err := fs.destination(dp)
 		if err != nil {
 			return err
 		}
@@ -368,9 +467,15 @@ func (fs *files) edit(p plan, byID map[string]row.Row) error {
 	return fmt.Errorf("apply does not write %q", c.Verdict)
 }
 
-// destination resolves a move's destination path to a repo-relative one:
-// relative to the repo root, or an absolute (or ~/) path inside the repo.
+// destination resolves a move's destination path to a repo-relative one.
 func (fs *files) destination(p string) (string, error) {
+	return Destination(fs.repo, p)
+}
+
+// Destination resolves a move's destination path (without its section) to
+// a clean repo-relative one: relative to the repo root, or an absolute (or
+// ~/) path inside the repo. Anything else is refused (RepoPath).
+func Destination(repo, p string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("a move with no destination")
 	}
@@ -380,23 +485,26 @@ func (fs *files) destination(p string) (string, error) {
 		}
 	}
 	if !filepath.IsAbs(p) {
-		return filepath.ToSlash(filepath.Clean(p)), nil
+		return RepoPath(p)
 	}
-	root, _ := filepath.EvalSymlinks(fs.repo)
+	p = filepath.Clean(p)
+	root, _ := filepath.EvalSymlinks(repo)
 	abs, err := filepath.EvalSymlinks(filepath.Dir(p))
 	if err != nil {
 		abs = filepath.Dir(p)
 	}
-	for _, r := range []string{fs.repo, root} {
-		if rel, err := filepath.Rel(r, filepath.Join(abs, filepath.Base(p))); err == nil && !strings.HasPrefix(rel, "..") {
-			return filepath.ToSlash(rel), nil
+	for _, r := range []string{repo, root} {
+		for _, cand := range []string{p, filepath.Join(abs, filepath.Base(p))} {
+			if rel, err := filepath.Rel(r, cand); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return RepoPath(rel)
+			}
 		}
 	}
-	return "", fmt.Errorf("the destination %s is outside this repo: move it by hand", p)
+	return "", fmt.Errorf("the destination %s is outside the repo: move it by hand", p)
 }
 
-func applyRepo(ctx context.Context, o Options, round int64, repo string, plans []plan, byID map[string]row.Row) (rp Repo) {
-	base := plans[0].r.Source.Ref
+func applyRepo(ctx context.Context, o Options, round int64, repo string, plans []Plan, byID map[string]row.Row) (rp Repo) {
+	base := plans[0].Row.Source.Ref
 	if base == "" {
 		base = "HEAD"
 	}
@@ -405,7 +513,11 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 		rp.State, rp.Detail = "failed", err.Error()
 		return rp
 	}
-	why, err := hold(ctx, repo, base)
+	instr := o.Instructions
+	if instr == nil {
+		instr = InstructionNames(profile.Builtins())
+	}
+	why, err := hold(ctx, repo, base, instr)
 	if err != nil {
 		return fail(err)
 	}
@@ -426,7 +538,7 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 
 	fs := &files{ctx: ctx, repo: repo, base: base, m: map[string]*fileEdit{}, existing: map[string]bool{}}
 	for _, p := range plans {
-		it := item(p.r, p.c.Verdict)
+		it := item(p.Row, p.Change.Verdict)
 		snap := fs.snapshot()
 		if err := fs.edit(p, byID); err != nil {
 			fs.restore(snap)
@@ -460,9 +572,16 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	if _, err := git(ctx, repo, "worktree", "add", "-q", "-b", branch, wt, base); err != nil {
 		return fail(err)
 	}
+	committed := false
 	defer func() {
-		if _, err := git(context.WithoutCancel(ctx), repo, "worktree", "remove", "--force", wt); err != nil {
+		bg := context.WithoutCancel(ctx)
+		if _, err := git(bg, repo, "worktree", "remove", "--force", wt); err != nil {
 			rp.Detail = strings.TrimSpace(rp.Detail + "; worktree left at " + wt)
+		}
+		if !committed {
+			// Nothing was committed: the branch is the base, and would only
+			// hold the next apply.
+			_, _ = git(bg, repo, "branch", "-D", branch)
 		}
 	}()
 	names := make([]string, 0, len(fs.m))
@@ -472,17 +591,13 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	sort.Strings(names)
 	for _, rel := range names {
 		f := fs.m[rel]
-		target := filepath.Join(wt, filepath.FromSlash(rel))
 		if f.gone {
-			if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			if err := removeInside(wt, rel); err != nil {
 				return fail(err)
 			}
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fail(err)
-		}
-		if err := os.WriteFile(target, []byte(f.String()), 0o644); err != nil {
+		if err := writeInside(wt, rel, f.String()); err != nil {
 			return fail(err)
 		}
 	}
@@ -495,9 +610,9 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	}
 	defer func() { _ = os.Remove(msg) }()
 	if _, err := git(ctx, wt, "commit", "-q", "-F", msg); err != nil {
-		_, _ = git(ctx, repo, "branch", "-D", branch)
 		return fail(err)
 	}
+	committed = true
 	rp.Branch, rp.State = branch, "branch"
 
 	remote, _ := git(ctx, repo, "config", "--get", "remote.origin.url")

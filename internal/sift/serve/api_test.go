@@ -174,11 +174,11 @@ func TestUndoAndRedo(t *testing.T) {
 	if d := f.review().Rows[2].Decision; d == nil || d.Action != "reject" || d.Note != "keep the hint" {
 		t.Fatalf("undo stored %+v", d)
 	}
-	if w := f.do("DELETE", fmt.Sprintf("/api/decisions?round=%d&id=r-dead", f.round), ""); w.Code != 204 {
+	if w := f.do("POST", "/api/redo", fmt.Sprintf(`{"round":%d,"id":"r-dead"}`, f.round)); w.Code != 204 {
 		t.Fatalf("redo: %d", w.Code)
 	}
-	if d := f.review().Rows[2].Decision; d != nil {
-		t.Fatalf("redo left %+v", d)
+	if d := f.review().Rows[2].Decision; d == nil || d.Action != "accept" {
+		t.Fatalf("redo stored %+v", d)
 	}
 	// Once apply wrote the row's repo, the page can't change it.
 	if err := f.st.RecordApply(context.Background(), store.Apply{Round: f.round, Repo: "/w/b", State: "branch", Branch: "sift/round-1"}); err != nil {
@@ -242,4 +242,23 @@ func TestWatchEmitsOnRevision(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("no round event after the agent's proposals")
+}
+
+// An edit can clear the title or text: "cleared" names the fields, which
+// an empty value can't (empty means "keep the proposal's").
+func TestPutClearsAField(t *testing.T) {
+	f := newFixture(t)
+	if w := f.decide("r-neg", "edit", `,"verdict":"delete","cleared":["text"]`); w.Code != 204 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	d := f.review().Rows[0].Decision
+	if d == nil || len(d.Cleared) != 1 || d.Cleared[0] != "text" {
+		t.Fatalf("decision %+v", d)
+	}
+	if c, ok := f.review().Rows[0].Effective(); !ok || c.Text != "" || c.Verdict != "delete" {
+		t.Fatalf("effective %+v %v", c, ok)
+	}
+	if w := f.decide("r-neg", "edit", `,"cleared":["verdict"]`); w.Code != 400 {
+		t.Fatalf("clearing the verdict: %d", w.Code)
+	}
 }

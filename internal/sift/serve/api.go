@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"syscall"
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/discover"
@@ -24,6 +25,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/decisions", s.putDecisions)
 	mux.HandleFunc("DELETE /api/decisions", s.deleteDecision)
 	mux.HandleFunc("POST /api/undo", s.undo)
+	mux.HandleFunc("POST /api/redo", s.redo)
 	mux.HandleFunc("POST /api/send", s.send)
 	mux.HandleFunc("GET /api/file", s.file)
 	mux.HandleFunc("POST /api/agent/presence", s.agentPresence)
@@ -78,6 +80,10 @@ type applyJSON struct {
 	Detail string   `json:"detail"`
 	Rows   []string `json:"rows"`
 	At     string   `json:"at"`
+	// LastState and LastDetail are a later attempt that left a success as
+	// it was (held: the branch exists).
+	LastState  string `json:"last_state,omitempty"`
+	LastDetail string `json:"last_detail,omitempty"`
 }
 
 func (s *Server) review(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +107,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	aj := make([]applyJSON, 0, len(applies))
 	for _, a := range applies {
 		aj = append(aj, applyJSON{Repo: a.Repo, Base: a.Base, Branch: a.Branch, PR: a.PR, State: a.State, Detail: a.Detail,
-			Rows: append([]string{}, a.Rows...), At: rfc(a.At)})
+			Rows: append([]string{}, a.Rows...), At: rfc(a.At), LastState: a.Last.State, LastDetail: a.Last.Detail})
 	}
 	sends, err := s.st.Sends(r.Context(), rd.ID)
 	if err != nil {
@@ -165,12 +171,17 @@ func (s *Server) current(w http.ResponseWriter, ctx context.Context, round int64
 }
 
 type decisionIn struct {
-	ID      string `json:"id"`
-	Action  string `json:"action"`
-	Verdict string `json:"verdict"`
-	Title   string `json:"title"`
-	Text    string `json:"text"`
-	Note    string `json:"note"`
+	ID      string   `json:"id"`
+	Action  string   `json:"action"`
+	Verdict string   `json:"verdict"`
+	Title   string   `json:"title"`
+	Text    string   `json:"text"`
+	Cleared []string `json:"cleared"`
+	Note    string   `json:"note"`
+}
+
+func (d decisionIn) decision() row.Decision {
+	return row.Decision{Action: d.Action, Verdict: d.Verdict, Title: d.Title, Text: d.Text, Cleared: d.Cleared, Note: d.Note}
 }
 
 func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
@@ -187,7 +198,7 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, d := range b.Decisions {
-		if err := (row.Decision{Action: d.Action, Verdict: d.Verdict, Title: d.Title, Text: d.Text}).Validate(); err != nil {
+		if err := d.decision().Validate(); err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -203,7 +214,7 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for _, d := range b.Decisions {
-		err := s.st.Decide(r.Context(), b.Round, d.ID, row.Decision{Action: d.Action, Verdict: d.Verdict, Title: d.Title, Text: d.Text, Note: d.Note})
+		err := s.st.Decide(r.Context(), b.Round, d.ID, d.decision())
 		if errors.Is(err, store.ErrStale) {
 			writeErr(w, http.StatusConflict, "stale")
 			return
@@ -225,7 +236,7 @@ func (s *Server) applied(ctx context.Context, round int64, rw row.Row) (bool, er
 		return false, err
 	}
 	for _, a := range as {
-		if a.Repo == rw.Source.Repo && (a.State == "pr" || a.State == "branch") {
+		if a.Repo == rw.Source.Repo && a.Succeeded() {
 			return true, nil
 		}
 	}
@@ -244,14 +255,9 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "stale")
 		return
 	}
-	if rw.Certain {
-		if done, err := s.applied(r.Context(), round, rw); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		} else if done {
-			writeErr(w, http.StatusConflict, "already applied: change it on the branch")
-			return
-		}
+	if rw.FixOnly() {
+		writeErr(w, http.StatusBadRequest, "a certain fix is undone or redone, not cleared")
+		return
 	}
 	if err := s.st.Undecide(r.Context(), round, rw.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -261,8 +267,16 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// undo takes a certain row out of what sift applies: a reject on it.
-func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
+// undo takes a certain fix out of what sift applies: a reject on it.
+func (s *Server) undo(w http.ResponseWriter, r *http.Request) { s.fixDecision(w, r, "reject") }
+
+// redo puts an undone certain fix back: an accept of the fix, a decision
+// the next Send carries like any other.
+func (s *Server) redo(w http.ResponseWriter, r *http.Request) { s.fixDecision(w, r, "accept") }
+
+// fixDecision stores action on a certain row that carries only its own fix
+// (row.FixOnly), until apply has written the row's repo.
+func (s *Server) fixDecision(w http.ResponseWriter, r *http.Request, action string) {
 	var b struct {
 		Round int64  `json:"round"`
 		ID    string `json:"id"`
@@ -281,8 +295,8 @@ func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "stale")
 		return
 	}
-	if !rw.Certain {
-		writeErr(w, http.StatusBadRequest, "only an applied (certain) row can be undone; reject it instead")
+	if !rw.FixOnly() {
+		writeErr(w, http.StatusBadRequest, "only a certain fix can be undone or redone; accept or reject a proposal instead")
 		return
 	}
 	if done, err := s.applied(r.Context(), b.Round, rw); err != nil {
@@ -292,7 +306,7 @@ func (s *Server) undo(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: change it on the branch")
 		return
 	}
-	if err := s.st.Decide(r.Context(), b.Round, b.ID, row.Decision{Action: "reject", Note: b.Note}); err != nil {
+	if err := s.st.Decide(r.Context(), b.Round, b.ID, row.Decision{Action: action, Note: b.Note}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -339,9 +353,32 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 // maxFile caps what /api/file returns.
 const maxFile = 2 << 20
 
+// moved says why a row's file on disk can't be read as audited: its path
+// is not clean and absolute, or it resolves somewhere other than it did then
+// (a symlink, the leaf or a parent, retargeted). "" when it can be read.
+func moved(src row.Source) string {
+	if src.Canon == "" {
+		return "sift did not record where " + src.File + " resolved: run sift check again"
+	}
+	if now := row.Resolve(src.File); now != src.Canon {
+		return src.File + " resolves somewhere else since the audit: run sift check again"
+	}
+	return ""
+}
+
+// readNoFollow reads up to n bytes of path, refusing a symlink at the leaf.
+func readNoFollow(path string, n int64) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(io.LimitReader(f, n))
+}
+
 // file returns the whole file a row is about, as it was audited: a repo
-// file at the ref it was read at, any other file from disk. Only a row's
-// own file can be read.
+// file at the ref it was read at, any other file from disk where it
+// resolved at the audit (see moved). Only a row's own file can be read.
 func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	round, _ := strconv.ParseInt(q.Get("round"), 10, 64)
@@ -361,7 +398,11 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 	case src.Repo != "" && src.Ref != "" && src.Path != "":
 		b, err = discover.Git(r.Context(), src.Repo, "show", src.Ref+":"+src.Path).Output()
 	case src.File != "":
-		b, err = os.ReadFile(src.File)
+		if why := moved(src); why != "" {
+			writeErr(w, http.StatusForbidden, why)
+			return
+		}
+		b, err = readNoFollow(src.Canon, maxFile+1)
 	default:
 		writeErr(w, http.StatusNotFound, "this row has no file")
 		return

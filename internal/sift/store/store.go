@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/row"
@@ -86,10 +87,21 @@ CREATE TABLE applies (
 );
 `
 
+// schemaV3: the fields an edit cleared (an edit can empty the title or
+// text), and apply's latest attempt kept apart from a success, which is
+// never overwritten.
+const schemaV3 = `
+ALTER TABLE decisions ADD COLUMN cleared TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_detail TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_at INTEGER NOT NULL DEFAULT 0;
+`
+
 // Migrations is the append-only list of schema steps.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
 	sqlitedb.SQL(schemaV2),
+	sqlitedb.SQL(schemaV3),
 }
 
 // ErrStale is returned when a decision names a row that is not in the round
@@ -156,6 +168,16 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 			return err
 		}
 		for i, rw := range rows {
+			if rw.Source.FromDisk() {
+				rw.Source.Canon = row.Resolve(rw.Source.File)
+			}
+			if rw.Certain && rw.Fix == "" {
+				// The check's own fix, kept apart from any later proposal.
+				rw.Fix = rw.Verdict
+				if rw.Fix == "" {
+					rw.Fix = rw.CertainFix()
+				}
+			}
 			body, err := json.Marshal(rw)
 			if err != nil {
 				return err
@@ -210,7 +232,7 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	if err := json.Unmarshal([]byte(sum), &r.Summary); err != nil {
 		return r, nil, err
 	}
-	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.note, d.sent_at FROM rows r
+	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.cleared, d.note, d.sent_at FROM rows r
 		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
 		WHERE r.round_id = ? ORDER BY r.seq`, r.ID)
 	if err != nil {
@@ -220,9 +242,9 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	var rows []row.Row
 	for q.Next() {
 		var body string
-		var action, verdict, title, text, note sql.NullString
+		var action, verdict, title, text, cleared, note sql.NullString
 		var sent sql.NullInt64
-		if err := q.Scan(&body, &action, &verdict, &title, &text, &note, &sent); err != nil {
+		if err := q.Scan(&body, &action, &verdict, &title, &text, &cleared, &note, &sent); err != nil {
 			return r, nil, err
 		}
 		var rw row.Row
@@ -233,6 +255,9 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 		if action.Valid {
 			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String,
 				Note: note.String, Sent: sent.Int64 != 0}
+			if cleared.String != "" {
+				rw.Decision.Cleared = strings.Split(cleared.String, ",")
+			}
 		}
 		rows = append(rows, rw)
 	}
@@ -253,11 +278,12 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 		if n == 0 {
 			return ErrStale
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at, sent_at)
-			VALUES (?,?,?,?,?,?,?,?,0)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, cleared, note, decided_at, sent_at)
+			VALUES (?,?,?,?,?,?,?,?,?,0)
 			ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
-			  title = excluded.title, text = excluded.text, note = excluded.note, decided_at = excluded.decided_at, sent_at = 0`,
-			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, d.Note, time.Now().UnixMilli()); err != nil {
+			  title = excluded.title, text = excluded.text, cleared = excluded.cleared, note = excluded.note,
+			  decided_at = excluded.decided_at, sent_at = 0`,
+			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, strings.Join(d.Cleared, ","), d.Note, time.Now().UnixMilli()); err != nil {
 			return err
 		}
 		return bump(ctx, tx, roundID)

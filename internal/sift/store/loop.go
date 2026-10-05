@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/row"
@@ -27,7 +28,8 @@ type AddResult struct {
 // round lacks is added after the others, never certain. Anything else is an
 // error: no id, an unknown verdict, an id not in the round, a decision
 // (decisions are the user's), an intake row with no source. A decision on a
-// row whose proposal changed is dropped: it answered another proposal.
+// row whose proposal, source or passage changed is dropped, sent or not: it
+// answered another row.
 func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddResult, error) {
 	var res AddResult
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -66,6 +68,10 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 					return fmt.Errorf("%s: an intake row needs a source (entry or file)", where)
 				}
 				r.Certain = false
+				r.Source.Canon = ""
+				if r.Source.FromDisk() {
+					r.Source.Canon = row.Resolve(r.Source.File)
+				}
 				if err := putRow(ctx, tx, roundID, seq, r, true); err != nil {
 					return err
 				}
@@ -80,13 +86,18 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 			if err := json.Unmarshal([]byte(body), &cur); err != nil {
 				return err
 			}
-			changed := cur.Verdict != r.Verdict || cur.Title != r.Title || cur.Destination != r.Destination || cur.Text != r.Text
+			next := cur
 			if r.Check == "intake" && cur.Check == "intake" {
 				r.Certain = false
-				cur = r // an intake row is the agent's own: all of it is replaced
+				r.Source.Canon = ""
+				if r.Source.FromDisk() {
+					r.Source.Canon = row.Resolve(r.Source.File)
+				}
+				next = r // an intake row is the agent's own: all of it is replaced
 			}
-			cur.Verdict, cur.Title, cur.Destination, cur.Text, cur.Reason = r.Verdict, r.Title, r.Destination, r.Text, r.Reason
-			if err := putRow(ctx, tx, roundID, 0, cur, false); err != nil {
+			next.Verdict, next.Title, next.Destination, next.Text, next.Reason = r.Verdict, r.Title, r.Destination, r.Text, r.Reason
+			changed := actionChanged(cur, next)
+			if err := putRow(ctx, tx, roundID, 0, next, false); err != nil {
 				return err
 			}
 			res.Updated++
@@ -106,6 +117,14 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 		return AddResult{}, err
 	}
 	return res, nil
+}
+
+// actionChanged reports whether what applying a row would do changed: its
+// proposal (verdict, title, destination, text) or what it is about (its
+// source and passage). A decision answered the old row, so it is dropped.
+func actionChanged(a, b row.Row) bool {
+	return a.Verdict != b.Verdict || a.Title != b.Title || a.Destination != b.Destination || a.Text != b.Text ||
+		a.Source != b.Source || a.Passage != b.Passage
 }
 
 func putRow(ctx context.Context, tx *sql.Tx, roundID int64, seq int, r row.Row, insert bool) error {
@@ -133,14 +152,16 @@ type Counts struct {
 	Accept int `json:"accept"`
 	Edit   int `json:"edit"`
 	Reject int `json:"reject"`
-	// Undone counts certain rows the user undid; Applied the certain rows
-	// left to apply (first send of a round only).
+	// Undone counts certain fixes the user undid, Redone those put back
+	// after a sent undo; Applied the certain fixes left to apply (first send
+	// of a round only).
 	Undone  int `json:"undone"`
+	Redone  int `json:"redone"`
 	Applied int `json:"applied"`
 }
 
 // Total is every answer counted.
-func (c Counts) Total() int { return c.Accept + c.Edit + c.Reject + c.Undone + c.Applied }
+func (c Counts) Total() int { return c.Accept + c.Edit + c.Reject + c.Undone + c.Redone + c.Applied }
 
 // Note is the user's note on one row, with where the row is.
 type Note struct {
@@ -163,7 +184,7 @@ type Send struct {
 
 // Send marks the round's unsent decisions sent and records one send for
 // them, in one transaction. The round's first send also carries its certain
-// rows nobody undid, so a round with nothing to judge can still be sent.
+// fixes nobody undid, so a round with nothing to judge can still be sent.
 // With nothing new it returns a zero Send and records nothing.
 func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, error) {
 	now := time.Now()
@@ -198,7 +219,7 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 				return err
 			}
 			if !action.Valid {
-				if r.Certain && sends == 0 {
+				if r.FixOnly() && sends == 0 {
 					sd.Counts.Applied++
 				}
 				continue
@@ -208,8 +229,10 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 			}
 			unsent = append(unsent, r.ID)
 			switch {
-			case r.Certain && action.String == "reject":
+			case r.FixOnly() && action.String == "reject":
 				sd.Counts.Undone++
+			case r.FixOnly() && action.String == "accept":
+				sd.Counts.Redone++
 			case action.String == "accept":
 				sd.Counts.Accept++
 			case action.String == "edit":
@@ -295,17 +318,27 @@ func scanSend(r scanner) (Send, error) {
 	return sd, nil
 }
 
-// ClaimSend delivers to session the oldest undelivered send, marking it
-// delivered in the same statement, so two claimers never both get it. serve
-// decides who may claim. ok is false when nothing is undelivered.
-func (s *Store) ClaimSend(ctx context.Context, session string) (Send, bool, error) {
+// ClaimSend delivers to session the oldest undelivered send it may take:
+// one whose recorded owner is session, has no owner, or whose owner is not
+// in present (the sessions serve sees connected). Picking and marking it
+// delivered is one statement, so two claimers never both get it. ok is
+// false when there is none.
+func (s *Store) ClaimSend(ctx context.Context, session string, present []string) (Send, bool, error) {
 	var sd Send
 	found := true
+	args := []any{session, time.Now().UnixMilli(), session}
+	notIn := " OR 1" // nobody present: every owner is gone
+	if len(present) > 0 {
+		notIn = " OR owner NOT IN (?" + strings.Repeat(",?", len(present)-1) + ")"
+		for _, p := range present {
+			args = append(args, p)
+		}
+	}
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		var err error
 		sd, err = scanSend(tx.QueryRowContext(ctx, `UPDATE sends SET delivered_to = ?, delivered_at = ?
-			WHERE id = (SELECT id FROM sends WHERE delivered_to IS NULL ORDER BY id LIMIT 1)
-			AND delivered_to IS NULL RETURNING `+sendCols, session, time.Now().UnixMilli()))
+			WHERE id = (SELECT id FROM sends WHERE delivered_to IS NULL AND (owner = ? OR owner = ''`+notIn+`) ORDER BY id LIMIT 1)
+			AND delivered_to IS NULL RETURNING `+sendCols, args...))
 		if errors.Is(err, sql.ErrNoRows) {
 			found = false
 			return nil
@@ -356,20 +389,52 @@ type Apply struct {
 	Detail string
 	Rows   []string // the row ids applied
 	At     time.Time
+	// Last is a later attempt that did not replace a success (pr or branch):
+	// a success is permanent. Its State is "" when there was none.
+	Last Attempt
 }
 
-// RecordApply stores (or replaces) what apply did in one repo.
+// Attempt is one apply that is not the record's own.
+type Attempt struct {
+	State  string
+	Detail string
+	At     time.Time
+}
+
+// Succeeded reports whether apply wrote the repo's branch: a pr or branch
+// record.
+func (a Apply) Succeeded() bool { return a.State == "pr" || a.State == "branch" }
+
+// RecordApply stores what apply did in one repo. A success (pr or branch)
+// is permanent: a later attempt after it is kept as Last and changes
+// nothing else.
 func (s *Store) RecordApply(ctx context.Context, a Apply) error {
 	if a.At.IsZero() {
 		a.At = time.Now()
 	}
 	ids, _ := json.Marshal(append([]string{}, a.Rows...))
 	return s.db.Tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, rows, at) VALUES (?,?,?,?,?,?,?,?,?)
-			ON CONFLICT(round_id, repo) DO UPDATE SET base = excluded.base, branch = excluded.branch, pr = excluded.pr,
-			  state = excluded.state, detail = excluded.detail, rows = excluded.rows, at = excluded.at`,
-			a.Round, a.Repo, a.Base, a.Branch, a.PR, a.State, a.Detail, string(ids), a.At.UnixMilli()); err != nil {
+		var state string
+		err := tx.QueryRowContext(ctx, `SELECT state FROM applies WHERE round_id = ? AND repo = ?`, a.Round, a.Repo).Scan(&state)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if _, err := tx.ExecContext(ctx, `INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, rows, at) VALUES (?,?,?,?,?,?,?,?,?)`,
+				a.Round, a.Repo, a.Base, a.Branch, a.PR, a.State, a.Detail, string(ids), a.At.UnixMilli()); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
+		case (Apply{State: state}).Succeeded():
+			if _, err := tx.ExecContext(ctx, `UPDATE applies SET last_state = ?, last_detail = ?, last_at = ? WHERE round_id = ? AND repo = ?`,
+				a.State, a.Detail, a.At.UnixMilli(), a.Round, a.Repo); err != nil {
+				return err
+			}
+		default:
+			if _, err := tx.ExecContext(ctx, `UPDATE applies SET base = ?, branch = ?, pr = ?, state = ?, detail = ?, rows = ?, at = ?,
+				last_state = '', last_detail = '', last_at = 0 WHERE round_id = ? AND repo = ?`,
+				a.Base, a.Branch, a.PR, a.State, a.Detail, string(ids), a.At.UnixMilli(), a.Round, a.Repo); err != nil {
+				return err
+			}
 		}
 		return bump(ctx, tx, a.Round)
 	})
@@ -377,7 +442,8 @@ func (s *Store) RecordApply(ctx context.Context, a Apply) error {
 
 // Applies lists what apply did for a round, by repo.
 func (s *Store) Applies(ctx context.Context, roundID int64) ([]Apply, error) {
-	rs, err := s.db.QueryContext(ctx, `SELECT round_id, repo, base, branch, pr, state, detail, rows, at FROM applies WHERE round_id = ? ORDER BY repo`, roundID)
+	rs, err := s.db.QueryContext(ctx, `SELECT round_id, repo, base, branch, pr, state, detail, rows, at, last_state, last_detail, last_at
+		FROM applies WHERE round_id = ? ORDER BY repo`, roundID)
 	if err != nil {
 		return nil, err
 	}
@@ -386,11 +452,15 @@ func (s *Store) Applies(ctx context.Context, roundID int64) ([]Apply, error) {
 	for rs.Next() {
 		var a Apply
 		var ids string
-		var at int64
-		if err := rs.Scan(&a.Round, &a.Repo, &a.Base, &a.Branch, &a.PR, &a.State, &a.Detail, &ids, &at); err != nil {
+		var at, lastAt int64
+		if err := rs.Scan(&a.Round, &a.Repo, &a.Base, &a.Branch, &a.PR, &a.State, &a.Detail, &ids, &at,
+			&a.Last.State, &a.Last.Detail, &lastAt); err != nil {
 			return nil, err
 		}
 		a.At = time.UnixMilli(at)
+		if lastAt != 0 {
+			a.Last.At = time.UnixMilli(lastAt)
+		}
 		if err := json.Unmarshal([]byte(ids), &a.Rows); err != nil {
 			return nil, err
 		}

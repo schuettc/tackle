@@ -197,10 +197,14 @@ func insertAt(lines []string, in insertion) []string {
 		add = append(add, "")
 	}
 	if in.section != "" {
-		add = append(add, "## "+in.section, "")
+		add = append(add, SectionHeading(in.section), "")
 	}
 	return append(append(lines, add...), text...)
 }
+
+// SectionHeading is the heading apply adds for a section a move's
+// destination file lacks.
+func SectionHeading(section string) string { return "## " + section }
 
 func ensureNL(s string) string {
 	if s == "" || strings.HasSuffix(s, "\n") {
@@ -209,9 +213,9 @@ func ensureNL(s string) string {
 	return s + "\n"
 }
 
-// parseDestination splits "path#Section" (or "path § Section") into the
+// ParseDestination splits "path#Section" (or "path § Section") into the
 // path and the section's heading.
-func parseDestination(d string) (string, string) {
+func ParseDestination(d string) (string, string) {
 	for _, sep := range []string{"#", "§"} {
 		if p, s, ok := strings.Cut(d, sep); ok {
 			return strings.TrimSpace(p), strings.TrimSpace(s)

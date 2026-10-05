@@ -107,12 +107,44 @@ func TestStatus(t *testing.T) {
 }
 
 func TestSendTextFormat(t *testing.T) {
-	got := SendText(store.Send{Round: 4, Counts: store.Counts{Accept: 2, Edit: 1, Reject: 3, Applied: 1, Undone: 1},
+	got := SendText(store.Send{Round: 4, Counts: store.Counts{Accept: 2, Edit: 1, Reject: 3, Applied: 1, Undone: 1, Redone: 1},
 		Notes: []store.Note{{Row: "/w/a/CLAUDE.md:3 · negative-rule", Note: "shorter"}}})
-	want := "The user sent their decisions for sift round 4: 2 accepted, 1 edited, 3 rejected; 1 certain fix(es) to apply, 1 undone.\n" +
+	want := "The user sent their decisions for sift round 4: 2 accepted, 1 edited, 3 rejected; 1 certain fix(es) to apply, 1 undone, 1 redone.\n" +
 		"Notes:\n- /w/a/CLAUDE.md:3 · negative-rule: shorter\n" +
 		"Next: run sift_apply (or `sift apply`): a branch per repo with the accepted and edited rows and the certain fixes. Then run `sift reconcile` and review each branch before it merges."
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Each pending send goes to its own owner, as recorded when it was sent,
+// not to the latest round's owner: two rounds, two owners present, two
+// pending sends, and each owner gets only its own.
+func TestEachSendGoesToItsOwnOwner(t *testing.T) {
+	f := newFixture(t)
+	f.srv.waitUnit = 20 * time.Millisecond
+	f.presence("a", "pi · a")
+	f.presence("b", "pi · b")
+	f.do("POST", "/api/agent/review", `{"session":"a"}`)
+	f.sendNow()
+	first := f.round
+	f.record()
+	f.do("POST", "/api/agent/review", `{"session":"b"}`)
+	f.sendNow()
+	var got struct {
+		Round int64 `json:"round"`
+	}
+	w := f.wait("b")
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != 200 || got.Round != f.round {
+		t.Fatalf("b got round %d (%d), want its own %d", got.Round, w.Code, f.round)
+	}
+	if w := f.wait("b"); w.Code != 204 {
+		t.Fatalf("b took a's send too: %d %s", w.Code, w.Body)
+	}
+	w = f.wait("a")
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if w.Code != 200 || got.Round != first {
+		t.Fatalf("a got round %d (%d), want %d", got.Round, w.Code, first)
 	}
 }

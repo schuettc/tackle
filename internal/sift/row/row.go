@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -37,7 +38,12 @@ type Row struct {
 	Reason string `json:"reason,omitempty"`
 	// Certain is true only for findings that cannot be wrong; sift applies
 	// those itself.
-	Certain  bool      `json:"certain"`
+	Certain bool `json:"certain"`
+	// Fix is a certain row's own fix, the check's verdict (delete when it had
+	// none), set when the round is recorded. Only this fix applies with no
+	// decision: an agent's proposal that replaces it makes the row a
+	// judgment (see FixOnly).
+	Fix      string    `json:"fix,omitempty"`
 	Decision *Decision `json:"decision,omitempty"`
 }
 
@@ -55,6 +61,30 @@ type Source struct {
 	End   int `json:"end,omitempty"`
 	// Entry names a memory entry (intake rows).
 	Entry string `json:"entry,omitempty"`
+	// Canon is where File resolved (symlinks followed) when the row was
+	// recorded, for a row read from disk rather than from git; "" when File
+	// is not a clean absolute path. The file is read there, and only while
+	// File still resolves to it.
+	Canon string `json:"canon,omitempty"`
+}
+
+// FromDisk reports whether the row's file is read from disk: it is not a
+// repo file read at a ref.
+func (s Source) FromDisk() bool {
+	return s.File != "" && (s.Repo == "" || s.Ref == "" || s.Path == "")
+}
+
+// Resolve is where file resolves now, for Canon: "" when file is not a
+// clean absolute path ("..", ".", or relative) or does not resolve.
+func Resolve(file string) string {
+	if !filepath.IsAbs(file) || filepath.Clean(file) != file {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(file)
+	if err != nil {
+		return ""
+	}
+	return real
 }
 
 // Fact is one piece of evidence.
@@ -70,7 +100,10 @@ type Decision struct {
 	Verdict string `json:"verdict,omitempty"`
 	Title   string `json:"title,omitempty"`
 	Text    string `json:"text,omitempty"`
-	Note    string `json:"note,omitempty"`
+	// Cleared names the fields an edit empties ("title", "text"): an empty
+	// Title or Text keeps the proposal's.
+	Cleared []string `json:"cleared,omitempty"`
+	Note    string   `json:"note,omitempty"`
 	// Sent is set once the user pressed Send with this decision; the store
 	// fills it, Validate ignores it.
 	Sent bool `json:"sent,omitempty"`
@@ -82,19 +115,35 @@ type Change struct {
 	Verdict, Title, Destination, Text string
 }
 
+// CertainFix is a certain row's own fix: Fix, or delete when unset.
+func (r Row) CertainFix() string {
+	if r.Fix != "" {
+		return r.Fix
+	}
+	return "delete"
+}
+
+// FixOnly reports whether r is a certain row still carrying only its own
+// fix: no proposal, or one that repeats the fix. Such a row is applied with
+// no decision unless undone; any other row is a judgment.
+func (r Row) FixOnly() bool {
+	return r.Certain && (r.Verdict == "" || r.Verdict == r.CertainFix()) && r.Title == "" && r.Destination == "" && r.Text == ""
+}
+
 // Effective is the change the user approved. ok is false when there is none:
 // the row is undecided, rejected, or accepted with no verdict. A certain row
-// needs no decision: it is applied (as a delete when it has no verdict)
-// unless it was undone, which is a reject.
+// carrying only its own fix (FixOnly) needs no decision: the fix applies
+// unless it was undone (a reject); a redo is an accept of the fix.
 func (r Row) Effective() (Change, bool) {
-	c := Change{Verdict: r.Verdict, Title: r.Title, Destination: r.Destination, Text: r.Text}
 	d := r.Decision
-	switch {
-	case d == nil && r.Certain:
-		if c.Verdict == "" {
-			c.Verdict = "delete"
+	if r.FixOnly() && (d == nil || d.Action != "edit") {
+		if d != nil && d.Action == "reject" {
+			return Change{}, false
 		}
-		return c, true
+		return Change{Verdict: r.CertainFix()}, true
+	}
+	c := Change{Verdict: r.Verdict, Title: r.Title, Destination: r.Destination, Text: r.Text}
+	switch {
 	case d == nil, d.Action == "reject":
 		return Change{}, false
 	case d.Action == "edit":
@@ -107,6 +156,14 @@ func (r Row) Effective() (Change, bool) {
 		if d.Text != "" {
 			c.Text = d.Text
 		}
+		for _, f := range d.Cleared {
+			switch f {
+			case "title":
+				c.Title = ""
+			case "text":
+				c.Text = ""
+			}
+		}
 	}
 	if c.Verdict == "" {
 		return Change{}, false
@@ -115,17 +172,30 @@ func (r Row) Effective() (Change, bool) {
 }
 
 // Validate reports what is wrong with a decision: an unknown action, an edit
-// that changes nothing, an invalid verdict, or edits on an accept or reject.
+// that changes nothing, an invalid verdict, a field cleared that can't be
+// (or also set), or edits on an accept or reject.
 func (d Decision) Validate() error {
-	edited := d.Verdict != "" || d.Title != "" || d.Text != ""
+	edited := d.Verdict != "" || d.Title != "" || d.Text != "" || len(d.Cleared) > 0
 	switch d.Action {
 	case "accept", "reject":
 		if edited {
-			return fmt.Errorf("decision: %s takes no verdict, title or text (use edit)", d.Action)
+			return fmt.Errorf("decision: %s takes no verdict, title, text or cleared field (use edit)", d.Action)
 		}
 	case "edit":
 		if !edited {
 			return errors.New("decision: an edit changes the verdict, title or text")
+		}
+		seen := map[string]bool{}
+		for _, f := range d.Cleared {
+			switch {
+			case f != "title" && f != "text":
+				return fmt.Errorf("decision: %q can't be cleared (title or text can)", f)
+			case seen[f]:
+				return fmt.Errorf("decision: %s is cleared twice", f)
+			case f == "title" && d.Title != "", f == "text" && d.Text != "":
+				return fmt.Errorf("decision: %s is both set and cleared", f)
+			}
+			seen[f] = true
 		}
 		if d.Verdict != "" && !ValidVerdict(d.Verdict) {
 			return fmt.Errorf("decision: %q is not a verdict", d.Verdict)
