@@ -5832,12 +5832,15 @@ ${dispositions.join(" ")}`;
       refuseActivate();
       return false;
     }
+    const sentMatch = work.map((c) => ({ ...c }));
+    const sentPropose = { ...workPropose };
     try {
       const d = await ctx.api.post(
         `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        body()
+        { ...body(), match: sentMatch, propose: sentPropose }
       );
-      draw(d);
+      const later = !sameConditions(work, sentMatch) || !sameAction(workPropose, sentPropose);
+      draw(d, later ? { match: work, propose: workPropose } : void 0);
       hooks.saved();
       if (conflict) {
         const { detail: newer, by } = conflict;

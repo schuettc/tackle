@@ -1091,12 +1091,20 @@ export function renderRule(
       refuseActivate();
       return false;
     }
+    // What this save sends. An edit Court makes while it is in flight is
+    // newer than serve's reply: it is kept over the copy saved.
+    const sentMatch = work.map((c) => ({ ...c }));
+    const sentPropose = { ...workPropose };
     try {
       const d = await ctx.api.post<RuleDetailView>(
         `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        body(),
+        { ...body(), match: sentMatch, propose: sentPropose },
       );
-      draw(d); // drops a conflict that was this save, heard live first
+      const later =
+        !sameConditions(work, sentMatch) ||
+        !sameAction(workPropose, sentPropose);
+      // drops a conflict that was this save, heard live first
+      draw(d, later ? { match: work, propose: workPropose } : undefined);
       hooks.saved();
       if (conflict) {
         // A change that landed after his save (serve took the save

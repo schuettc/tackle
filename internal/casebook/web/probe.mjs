@@ -3830,6 +3830,17 @@ async function rulesScenariosOn(context, serveHandle) {
         'the until row showed for wait, not for archive',
         withWait && !(await untilShown()),
       );
+      // serve's reply to the save is held until Court has changed a
+      // condition after it (as a slow runner delivers it late): his change
+      // is newer than the copy saved, and stays.
+      let releaseSave;
+      const saveReleased = new Promise((r) => (releaseSave = r));
+      const holdSave = async (route) => {
+        const res = await route.fetch();
+        await saveReleased;
+        await route.fulfill({ response: res });
+      };
+      await pg.route('**/api/rules/draft?*', holdSave);
       await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
       check(
         'saved: serve has the disposition and the conditions, and it is valid',
@@ -3849,6 +3860,24 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.selectOption(
         '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
         'branch',
+      );
+      const saveReplied = pg.waitForResponse((r) =>
+        r.url().includes('/api/rules/draft?'),
+      );
+      releaseSave();
+      await saveReplied;
+      await pg.unroute('**/api/rules/draft?*', holdSave);
+      check(
+        'a condition changed while the save was in flight stays changed once its reply lands',
+        !(await until(
+          pg,
+          () =>
+            document.querySelector(
+              '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
+            )?.value !== 'branch',
+          undefined,
+          1500,
+        )),
       );
       const branchDisps = (
         await agent.api('POST', '/api/rules/preview', {
