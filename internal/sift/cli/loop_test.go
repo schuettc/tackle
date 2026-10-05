@@ -118,11 +118,16 @@ func decideAndPressSend(t *testing.T, s *store.Store) {
 	if err := s.Decide(ctx, id, "r1", row.Decision{Action: "reject", Note: "it is fine"}); err != nil {
 		t.Fatal(err)
 	}
+	_, rows, err := s.Round(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown, _ := json.Marshal(map[string]store.Seen{"r1": {Fingerprint: rows[0].Fingerprint, Decision: rows[0].Decision.ID}})
 	adv, err := serve.Running()
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest("POST", adv.Base+"/api/send", strings.NewReader(fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r1":{"action":"reject","note":"it is fine"}}}`, id)))
+	req, _ := http.NewRequest("POST", adv.Base+"/api/send", strings.NewReader(fmt.Sprintf(`{"round":%d,"files":{},"rows":%s}`, id, shown)))
 	req.Header.Set(localweb.TokenHeader, adv.Token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -210,7 +215,7 @@ func applyRig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	items, _ := s.Files(ctx, id)
-	if _, err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: items[0].Fingerprint}); err != nil {
+	if _, err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]store.Seen{f.Key: {Fingerprint: items[0].Fingerprint}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(context.Background(), id, "", nil); err != nil {

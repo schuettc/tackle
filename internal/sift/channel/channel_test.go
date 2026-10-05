@@ -360,7 +360,6 @@ func TestCheckRecommendReviewSendApply(t *testing.T) {
 
 	// The user decides and sends; the event reaches this session.
 	items, _ := e.st.Files(context.Background(), chk.Round)
-	shown := map[string]map[string]string{}
 	for _, it := range items {
 		action := "reject"
 		if it.Source.Repo != "" {
@@ -370,7 +369,12 @@ func TestCheckRecommendReviewSendApply(t *testing.T) {
 		if code, out := e.api("PUT", "/api/files", body); code != 200 {
 			t.Fatalf("decide %d %s", code, out)
 		}
-		shown[it.Key] = map[string]string{"action": action, "note": "yes"}
+	}
+	// The page shows each decision by its id and its file's print.
+	items, _ = e.st.Files(context.Background(), chk.Round)
+	shown := map[string]store.Seen{}
+	for _, it := range items {
+		shown[it.Key] = store.Seen{Fingerprint: it.Fingerprint, Decision: it.Decision.ID}
 	}
 	files, _ := json.Marshal(shown)
 	if code, body := e.api("POST", "/api/send", fmt.Sprintf(`{"round":%d,"files":%s,"rows":{}}`, chk.Round, files)); code != 200 || !strings.Contains(body, `"to":"claude · s1"`) {

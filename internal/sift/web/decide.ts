@@ -9,14 +9,52 @@
 // decisions do nothing, and neither does Send. Send is exclusive: while it
 // is in flight nothing else runs, and it carries the decisions the page
 // shows; the server sends only those still in force and names them, and
-// only those are marked sent. Every decision and clear carries the prints
-// of what the page shows; a 409 reloads the group from the server and
-// shows that. Notes are the exception: they approve nothing, so they are
-// shown at once and saved on their own (and wait while Send is in flight).
+// only those are marked sent. Every decision, clear and Send names what
+// the page showed of each item it covers: the id of the decision in force
+// (new each time a decision is made, never reused) and the item's print. A
+// 409 reloads the group from the server and shows that. An open editor is
+// bound to the snapshot it opened on (snapRow, snapFile): its save names
+// that snapshot, never a fresher one shown since, and a 409 says the item
+// changed under it. Notes are the exception: they approve nothing, so they
+// are shown at once and saved on their own (and wait while Send is in
+// flight).
 
 import type { DecisionIn } from './api.ts';
-import { holdFiles, printsFor } from './files.ts';
+import { holdFiles, seenFor } from './files.ts';
 import { editTarget, holdRows } from './model.ts';
+
+/** What the page showed of a group's files: each one's print, and the id
+ * of its decision (none when undecided). */
+export interface GroupSeen {
+  prints: Record<string, string>;
+  decisions: Record<string, string>;
+}
+
+/** What the page showed of one item: the id of its decision ('' for none)
+ * and its print (for an edited merge, the print covers the target's). */
+export interface Seen {
+  decision_id: string;
+  fingerprint: string;
+}
+
+/** An open row editor's snapshot: the row as the editor opened on it,
+ * content, print and decision, and every row's print then (the merge
+ * target an edit picks is bound to the one the person saw). */
+export interface RowSnap {
+  row: Finding;
+  prints: Record<string, string>;
+}
+
+/** An open file editor's snapshot: the file as the editor opened on it,
+ * and its group as the page showed it then. */
+export interface FileSnap {
+  file: FileView;
+  seen: GroupSeen;
+}
+
+/** How a save went: saved; busy (did nothing); changed (409: the item is
+ * not as the page showed it, and the page now shows it as it is); failed. */
+export type Saved = 'saved' | 'busy' | 'changed' | 'failed';
 
 /** The calls the decisions make (api.ts's client, or a test's fake). */
 export interface DecisionServer {
@@ -25,15 +63,16 @@ export interface DecisionServer {
     round: number,
     file: string,
     d: FileDecision,
-    prints: Record<string, string>,
+    seen: GroupSeen,
   ): Promise<FileView[]>;
-  clearFile(
-    round: number,
-    file: string,
-    prints: Record<string, string>,
-  ): Promise<FileView[]>;
+  clearFile(round: number, file: string, seen: GroupSeen): Promise<FileView[]>;
   decide(round: number, ds: DecisionIn[]): Promise<Finding[]>;
-  clear(round: number, id: string, fingerprint: string): Promise<Finding[]>;
+  clear(
+    round: number,
+    id: string,
+    fingerprint: string,
+    decisionID: string,
+  ): Promise<Finding[]>;
   note(
     round: number,
     on: { file?: string; id?: string },
@@ -43,10 +82,10 @@ export interface DecisionServer {
 }
 
 /** The decisions the page shows unsent, which a Send covers: by file key
- * and by row id. */
+ * and by row id, each as its decision id and its item's print. */
 export interface Shown {
-  files: Record<string, FileDecision>;
-  rows: Record<string, Decision>;
+  files: Record<string, Seen>;
+  rows: Record<string, Seen>;
 }
 
 /** What a Send sent: how many, to whom, and which (file keys, row ids). */
@@ -89,6 +128,13 @@ export interface Decider {
   clearFile(key: string): Promise<boolean>;
   rows(ds: { id: string; d: Decision }[]): Promise<boolean>;
   clearRow(id: string): Promise<boolean>;
+  /** An editor's snapshot of a row or file as the page shows it now; null
+   * when there is none. */
+  snapRow(id: string): RowSnap | null;
+  snapFile(key: string): FileSnap | null;
+  /** Saves an edit against the snapshot its editor opened on. */
+  editRow(snap: RowSnap, d: Decision): Promise<Saved>;
+  editFile(snap: FileSnap, content: string): Promise<Saved>;
   noteFile(key: string, text: string): void;
   noteRow(id: string, text: string): void;
   /** Send what the page shows unsent, unless a request is in flight (null
@@ -157,16 +203,16 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
     round: number,
     keys: string[],
     call: () => Promise<void>,
-  ): Promise<boolean> {
-    if (busy(keys)) return false;
+  ): Promise<Saved> {
+    if (busy(keys)) return 'busy';
     keys.forEach((k) => locks.add(k));
     hooks.changed();
     try {
       await call();
       epoch++;
-      return true;
+      return 'saved';
     } catch (err) {
-      if (staleErr(err)) return false;
+      if (staleErr(err)) return 'failed';
       if (statusOf(err) === 409) {
         try {
           await reload(round, keys);
@@ -178,10 +224,10 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
           if (!staleErr(e))
             hooks.failed(`The review changed; reload: ${msgOf(e)}`, true);
         }
-        return false;
+        return 'changed';
       }
       hooks.failed(`Not saved: ${msgOf(err)}`, false);
-      return false;
+      return 'failed';
     } finally {
       keys.forEach((k) => locks.delete(k));
       hooks.changed();
@@ -258,6 +304,69 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
     saveNote(k, r.decision, text, { id });
   }
 
+  const saved = (p: Promise<Saved>) => p.then((s) => s === 'saved');
+
+  /** A file decision on key against seen (its group as the page showed
+   * it); the note is the one given, else the decision's. */
+  function decideFile(
+    key: string,
+    d: FileDecision,
+    seen: GroupSeen,
+    f: FileView,
+  ): Promise<Saved> {
+    const round = hooks.review()?.round?.id;
+    if (!round) return Promise.resolve('failed');
+    const keys = groupKeys(f);
+    if (busy(keys)) return Promise.resolve('busy');
+    const k = `f:${key}`;
+    const full: FileDecision = {
+      ...d,
+      note: notes.get(k) ?? fileOf(key)?.decision?.note ?? '',
+    };
+    return run(round, keys, async () => {
+      const snap = await server.decideFile(round, key, full, seen);
+      if (notes.get(k) === full.note) notes.delete(k);
+      const cur = shownRound(round);
+      if (cur) holdFiles(cur.files, snap);
+    });
+  }
+
+  /** Row decisions, each against what the page showed of its row (and,
+   * for an edit to merge:C, of C): seen gives them. */
+  function decideRows(
+    ds: { id: string; d: Decision }[],
+    seen: (id: string) => { row: Finding; target: (id: string) => string },
+  ): Promise<Saved> {
+    const round = hooks.review()?.round?.id;
+    if (!round || !ds.length) return Promise.resolve('failed');
+    const keys = ds.map((x) => `r:${x.id}`);
+    if (busy(keys)) return Promise.resolve('busy');
+    const body: DecisionIn[] = [];
+    for (const { id, d } of ds) {
+      const { row, target } = seen(id);
+      const t = editTarget(d);
+      body.push({
+        id,
+        action: d.action,
+        verdict: d.verdict,
+        title: d.title,
+        text: d.text,
+        cleared: d.cleared,
+        note: notes.get(`r:${id}`) ?? rowOf(id)?.decision?.note ?? '',
+        fingerprint: row.fingerprint,
+        decision_id: row.decision?.id ?? '',
+        target_fingerprint: t ? target(t) : undefined,
+      });
+    }
+    return run(round, keys, async () => {
+      const snap = await server.decide(round, body);
+      for (const b of body)
+        if (notes.get(`r:${b.id}`) === b.note) notes.delete(`r:${b.id}`);
+      const cur = shownRound(round);
+      if (cur) holdRows(cur.rows, snap);
+    });
+  }
+
   return {
     busy,
     idle,
@@ -269,25 +378,13 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
     },
     noteOf: (key) => notes.get(key),
 
+    // A decision or clear from the page binds to the item as it shows it
+    // now; an edit binds to its editor's snapshot (editRow, editFile).
     file(key, d) {
       const r = hooks.review();
-      const round = r?.round?.id;
       const f = fileOf(key);
-      if (!r || !round || !f) return Promise.resolve(false);
-      const keys = groupKeys(f);
-      if (busy(keys)) return Promise.resolve(false);
-      const k = `f:${key}`;
-      const full: FileDecision = {
-        ...d,
-        note: notes.get(k) ?? f.decision?.note ?? '',
-      };
-      const prints = printsFor(r.files, key);
-      return run(round, keys, async () => {
-        const snap = await server.decideFile(round, key, full, prints);
-        if (notes.get(k) === full.note) notes.delete(k);
-        const cur = shownRound(round);
-        if (cur) holdFiles(cur.files, snap);
-      });
+      if (!r || !f) return Promise.resolve(false);
+      return saved(decideFile(key, d, seenFor(r.files, key), f));
     },
 
     clearFile(key) {
@@ -295,44 +392,24 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
       const round = r?.round?.id;
       const f = fileOf(key);
       if (!r || !round || !f?.decision) return Promise.resolve(false);
-      const prints = printsFor(r.files, key);
-      return run(round, groupKeys(f), async () => {
-        const snap = await server.clearFile(round, key, prints);
-        const cur = shownRound(round);
-        if (cur) holdFiles(cur.files, snap);
-      });
+      const seen = seenFor(r.files, key);
+      return saved(
+        run(round, groupKeys(f), async () => {
+          const snap = await server.clearFile(round, key, seen);
+          const cur = shownRound(round);
+          if (cur) holdFiles(cur.files, snap);
+        }),
+      );
     },
 
     rows(ds) {
-      const r = hooks.review();
-      const round = r?.round?.id;
-      if (!r || !round || !ds.length) return Promise.resolve(false);
-      const keys = ds.map((x) => `r:${x.id}`);
-      if (busy(keys)) return Promise.resolve(false);
-      const body: DecisionIn[] = [];
-      for (const { id, d } of ds) {
-        const row = rowOf(id);
-        if (!row) return Promise.resolve(false);
-        const target = editTarget(d);
-        body.push({
-          id,
-          action: d.action,
-          verdict: d.verdict,
-          title: d.title,
-          text: d.text,
-          cleared: d.cleared,
-          note: notes.get(`r:${id}`) ?? row.decision?.note ?? '',
-          fingerprint: row.fingerprint,
-          target_fingerprint: target ? rowOf(target)?.fingerprint : undefined,
-        });
-      }
-      return run(round, keys, async () => {
-        const snap = await server.decide(round, body);
-        for (const b of body)
-          if (notes.get(`r:${b.id}`) === b.note) notes.delete(`r:${b.id}`);
-        const cur = shownRound(round);
-        if (cur) holdRows(cur.rows, snap);
-      });
+      if (ds.some((x) => !rowOf(x.id))) return Promise.resolve(false);
+      return saved(
+        decideRows(ds, (id) => ({
+          row: rowOf(id)!,
+          target: (t) => rowOf(t)?.fingerprint ?? '',
+        })),
+      );
     },
 
     clearRow(id) {
@@ -340,11 +417,50 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
       const row = rowOf(id);
       if (!round || !row?.decision) return Promise.resolve(false);
       const print = row.fingerprint;
-      return run(round, [`r:${id}`], async () => {
-        const snap = await server.clear(round, id, print);
-        const cur = shownRound(round);
-        if (cur) holdRows(cur.rows, snap);
-      });
+      const decision = row.decision.id ?? '';
+      return saved(
+        run(round, [`r:${id}`], async () => {
+          const snap = await server.clear(round, id, print, decision);
+          const cur = shownRound(round);
+          if (cur) holdRows(cur.rows, snap);
+        }),
+      );
+    },
+
+    snapRow(id) {
+      const r = hooks.review();
+      const row = rowOf(id);
+      if (!r || !row) return null;
+      return {
+        row: structuredClone(row),
+        prints: Object.fromEntries(r.rows.map((x) => [x.id, x.fingerprint])),
+      };
+    },
+
+    snapFile(key) {
+      const r = hooks.review();
+      const f = fileOf(key);
+      if (!r || !f) return null;
+      return { file: structuredClone(f), seen: seenFor(r.files, key) };
+    },
+
+    editRow(snap, d) {
+      if (!rowOf(snap.row.id)) return Promise.resolve('changed');
+      return decideRows([{ id: snap.row.id, d }], () => ({
+        row: snap.row,
+        target: (t) => snap.prints[t] ?? '',
+      }));
+    },
+
+    editFile(snap, content) {
+      const f = fileOf(snap.file.key);
+      if (!f) return Promise.resolve('changed');
+      return decideFile(
+        snap.file.key,
+        { action: 'edit', content },
+        snap.seen,
+        f,
+      );
     },
 
     noteFile,
@@ -357,10 +473,16 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
       const shown: Shown = { files: {}, rows: {} };
       for (const f of r.files)
         if (f.decision && !f.decision.sent)
-          shown.files[f.key] = { ...f.decision };
+          shown.files[f.key] = {
+            decision_id: f.decision.id ?? '',
+            fingerprint: f.fingerprint,
+          };
       for (const x of r.rows)
         if (x.decision && !x.decision.sent)
-          shown.rows[x.id] = { ...x.decision };
+          shown.rows[x.id] = {
+            decision_id: x.decision.id ?? '',
+            fingerprint: x.fingerprint,
+          };
       sending = true;
       hooks.changed();
       try {

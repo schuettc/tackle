@@ -98,18 +98,22 @@ func (g *rig) propose(rs ...rec.Rec) {
 	}
 }
 
-// decide answers f's recommendation with the prints the page shows.
+// decide answers f's recommendation with what the page shows: each file's
+// print and decision id.
 func (g *rig) decide(f rec.File, d rec.Decision) {
 	g.t.Helper()
 	items, err := g.s.Files(ctx, g.round)
 	if err != nil {
 		g.t.Fatal(err)
 	}
-	prints := map[string]string{}
+	seen := map[string]store.Seen{}
 	for _, it := range items {
-		prints[it.Key] = it.Fingerprint
+		seen[it.Key] = store.Seen{Fingerprint: it.Fingerprint}
+		if it.Decision != nil {
+			seen[it.Key] = store.Seen{Fingerprint: it.Fingerprint, Decision: it.Decision.ID}
+		}
 	}
-	if _, err := g.s.DecideFile(ctx, g.round, f.Key, d, prints); err != nil {
+	if _, err := g.s.DecideFile(ctx, g.round, f.Key, d, seen); err != nil {
 		g.t.Fatal(err)
 	}
 }

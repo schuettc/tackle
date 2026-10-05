@@ -32,8 +32,10 @@ import type { FileOut } from './api.ts';
 
 export interface Ctx {
   home: string;
-  /** The row being edited, if any. */
+  /** The row being edited, if any, and that row as the editor opened on
+   * it (the form is drawn from it). */
   editing: string | null;
+  edited: Finding | null;
   noteOf(r: Finding): string;
   setNote(r: Finding, v: string): void;
   accept(rows: Finding[]): void;
@@ -174,7 +176,7 @@ function editForm(ctx: Ctx, r: Finding): HTMLElement[] {
 export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
   const parts: (HTMLElement | string)[] = [
     h('div', { class: 'kit-kick' }, `${r.check} · ${where(r, ctx.home)}`),
-    h('h1', { class: 'kit-h1' }, r.title || r.summary),
+    h('h1', { class: 'kit-h1' }, fieldOf(r, 'title') || r.summary),
   ];
   const ev: [string, string][] = (r.evidence ?? []).map((f) => [
     f.name,
@@ -257,7 +259,7 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
           `your decision: ${rowMeta(r)}${r.decision.sent ? ' · sent' : ''}`,
         ),
       );
-    if (ctx.editing === r.id) parts.push(...editForm(ctx, r));
+    if (ctx.editing === r.id) parts.push(...editForm(ctx, ctx.edited ?? r));
   }
   parts.push(...noteBlock(ctx, r));
   if (r.source.file || r.source.repo) parts.push(wholeFile(ctx, r));
@@ -359,8 +361,10 @@ export function message(
 /** What the file view needs from app.ts. */
 export interface FileCtx {
   home: string;
-  /** The file being edited, if any. */
+  /** The file being edited, if any, and that file as the editor opened on
+   * it (the form is drawn from it). */
   editing: string | null;
+  edited: FileView | null;
   /** The round's files (for linked files' paths). */
   files: FileView[];
   /** The file's findings, in line order. */
@@ -618,7 +622,7 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
   if (busy) said.push('saving');
   if (said.length)
     parts.push(h('p', { class: 'sift-why' }, said.join('. ') + '.'));
-  if (ctx.editing === f.key) parts.push(fileEdit(ctx, f));
+  if (ctx.editing === f.key) parts.push(fileEdit(ctx, ctx.edited ?? f));
 
   parts.push(
     h('div', { class: 'kit-label' }, 'findings'),

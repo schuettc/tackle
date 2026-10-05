@@ -12,6 +12,9 @@
 // once the server has it, from the snapshot it returns; while it saves, its
 // group's decisions (keys and buttons) and Send wait, and while Send is in
 // flight everything waits. A 409 reloads the group and says so in the bar.
+// An edit form is bound to the item as it was when the form opened (its
+// snapshot): it is drawn from it and saved against it, and a 409 reopens
+// it on the item as it is now, for the person to redo the edit.
 
 import {
   bar,
@@ -25,7 +28,12 @@ import {
   type StatusTone,
 } from '/_kit/kit.js';
 import { ApiError, client, newApi } from './api.ts';
-import { createDecider } from './decide.ts';
+import {
+  createDecider,
+  type FileSnap,
+  type RowSnap,
+  type Saved,
+} from './decide.ts';
 import {
   fileDoc,
   groupDoc,
@@ -102,6 +110,11 @@ export function boot(): void {
   let review: Review | null = null;
   let openKey: string | null = null;
   let editing: string | null = null;
+  // The open editor's snapshot (a row's or a file's), and which opening of
+  // it the form on screen is: a form from another opening is not kept.
+  let rowSnap: RowSnap | null = null;
+  let fileSnap: FileSnap | null = null;
+  let editGen = 0;
   let filter = '';
   let search = '';
   let lastFrag = '';
@@ -336,17 +349,19 @@ export function boot(): void {
     get editing() {
       return editing;
     },
+    get edited() {
+      return rowSnap?.row ?? null;
+    },
     noteOf: (r) => decider.noteOf(`r:${r.id}`) ?? r.decision?.note ?? '',
     setNote: (r, text) => decider.noteRow(r.id, text),
     accept: (rows) => decide(rows, 'accept'),
     reject: (rows) => decide(rows, 'reject'),
     startEdit(r) {
       if (ctx.busy([r])) return;
-      editing = r.id;
-      render();
+      openEdit(r.id, false);
     },
     cancelEdit() {
-      editing = null;
+      closeEdit();
       render();
     },
     saveEdit,
@@ -362,6 +377,9 @@ export function boot(): void {
     },
     get editing() {
       return editing;
+    },
+    get edited() {
+      return fileSnap?.file ?? null;
     },
     get files() {
       return files();
@@ -382,14 +400,17 @@ export function boot(): void {
     reject: (f) => putFile(f, { action: 'reject' }),
     startEdit(f) {
       if (fctx.busy(f)) return;
-      editing = f.key;
-      render();
+      openEdit(f.key, true);
     },
     cancelEdit() {
-      editing = null;
+      closeEdit();
       render();
     },
-    saveEdit(f, content) {
+    saveEdit(_f, content) {
+      // Against the file as the editor opened on it, never a fresher one.
+      const snap = fileSnap;
+      if (!snap) return 'the editor is closed';
+      const f = snap.file;
       if (!content.trim())
         return 'the file is empty: reject it to leave it as it is';
       const was =
@@ -397,7 +418,10 @@ export function boot(): void {
       if (content === was)
         return 'nothing changed: accept the recommendation instead';
       if (fctx.busy(f)) return 'the last decision on this file is saving';
-      putFile(f, { action: 'edit', content });
+      const at = openKey;
+      void decider
+        .editFile(snap, content)
+        .then((out) => edited(out, f.key, true, at));
       return null;
     },
     clear: (f) => void decider.clearFile(f.key),
@@ -497,7 +521,16 @@ export function boot(): void {
         (focus === oldNote || oldNote.value !== noteNow)
       )
         doc.querySelector('.kit-note')?.replaceWith(oldNote);
-      if (oldEdit && lastView === vkey)
+      // The form kept is this opening's: one the editor reopened on (after
+      // a 409) is drawn afresh from its new snapshot.
+      doc
+        .querySelector<HTMLElement>('.sift-edit')
+        ?.setAttribute('data-gen', String(editGen));
+      if (
+        oldEdit &&
+        lastView === vkey &&
+        oldEdit.dataset.gen === String(editGen)
+      )
         doc.querySelector('.sift-edit')?.replaceWith(oldEdit);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
@@ -545,7 +578,7 @@ export function boot(): void {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
     const key = parseRoute(f);
-    if (key !== openKey) editing = null;
+    if (key !== openKey) closeEdit();
     openKey = key;
     render();
   }
@@ -656,6 +689,47 @@ export function boot(): void {
   }
 
   // ---- decisions -------------------------------------------------------------
+  /** Opens the editor on a row or file as the page shows it now: the
+   * snapshot the form is drawn from and its save binds to. */
+  function openEdit(key: string, file: boolean): void {
+    rowSnap = file ? null : decider.snapRow(key);
+    fileSnap = file ? decider.snapFile(key) : null;
+    editing = key;
+    editGen++;
+    render();
+  }
+
+  function closeEdit(): void {
+    editing = null;
+    rowSnap = null;
+    fileSnap = null;
+  }
+
+  /** An edit's save, landed: saved closes the editor (a row moves on, as
+   * its other decisions do); changed (409) reopens it on the item as it is
+   * now; busy or failed leave it open, with what was typed. */
+  function edited(
+    out: Saved,
+    key: string,
+    file: boolean,
+    at: string | null,
+  ): void {
+    if (editing !== key) return;
+    if (out === 'changed') {
+      openEdit(key, file);
+      flash(
+        'This changed while the editor was open; the editor now shows it as it is. Redo your edit.',
+        'danger',
+      );
+      return;
+    }
+    if (out !== 'saved') return;
+    closeEdit();
+    if (!file && at && openKey === at && at === `r:${key}`)
+      go(frag(nextOpen(shown as Entry[], at)));
+    else render();
+  }
+
   /** The next file with no decision after key, else the next file. */
   function nextFile(key: string): string {
     const i = shown.findIndex((e) => e.key === key);
@@ -672,7 +746,7 @@ export function boot(): void {
     const at = `f:${f.key}`;
     void decider.file(f.key, d).then((ok) => {
       if (!ok) return;
-      if (editing === f.key) editing = null;
+      if (editing === f.key) closeEdit();
       if (openKey === at && d.action !== 'edit') go(frag(nextFile(at)));
       else render();
     });
@@ -687,7 +761,7 @@ export function boot(): void {
       .rows(rows.map((r) => ({ id: r.id, d: make(r) })))
       .then((ok) => {
         if (!ok) return;
-        if (rows.some((r) => r.id === editing)) editing = null;
+        if (rows.some((r) => r.id === editing)) closeEdit();
         if (single && at && openKey === at)
           go(frag(nextOpen(shown as Entry[], at)));
         else render();
@@ -707,14 +781,21 @@ export function boot(): void {
     put(targets, () => ({ action }));
   }
 
+  /** Saves a row's edit: the whole form, against the row as the editor
+   * opened on it, never a fresher one shown since. */
   function saveEdit(
-    r: Finding,
+    _r: Finding,
     f: Parameters<Ctx['saveEdit']>[1],
   ): string | null {
-    const res = editDecision(r, f);
+    const snap = rowSnap;
+    if (!snap) return 'the editor is closed';
+    const res = editDecision(snap.row, f);
     if (!res.ok) return res.error;
-    if (ctx.busy([r])) return 'the last decision on this row is saving';
-    put([r], () => res.decision);
+    if (ctx.busy([snap.row])) return 'the last decision on this row is saving';
+    const at = openKey;
+    void decider
+      .editRow(snap, res.decision)
+      .then((out) => edited(out, snap.row.id, false, at));
     return null;
   }
 

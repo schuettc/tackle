@@ -13,8 +13,10 @@ export interface DecisionIn {
   text?: string;
   cleared?: ('title' | 'text')[];
   note?: string;
-  /** The row's fingerprint as the page shows it: a changed row is refused. */
+  /** The row's fingerprint as the page shows it, and the id of the
+   * decision it shows in force ('' for none): either changed is refused. */
   fingerprint: string;
+  decision_id: string;
   /** For an edit to merge:C, C's fingerprint as the page shows it. */
   target_fingerprint?: string;
 }
@@ -33,7 +35,8 @@ export interface Client extends DecisionServer {
 }
 
 /** The client over a kit Api (base /api; the page's cookie authenticates).
- * A decision or clear returns the server's snapshot of what it touched:
+ * Every decision, clear and Send names what the page showed: each item's
+ * print and the id of its decision. A decision or clear returns the server's snapshot of what it touched:
  * the group's files, or the rows, each with the print its next decision
  * answers. */
 export function client(api: Api): Client {
@@ -46,29 +49,36 @@ export function client(api: Api): Client {
       });
       return r?.rows ?? [];
     },
-    async clear(round, id, fingerprint) {
-      const q = new URLSearchParams({ round: String(round), id, fingerprint });
+    async clear(round, id, fingerprint, decisionID) {
+      const q = new URLSearchParams({
+        round: String(round),
+        id,
+        fingerprint,
+        decision_id: decisionID,
+      });
       const r = await api.del<{ rows?: Finding[] }>(
         `/decisions?${q.toString()}`,
       );
       return r?.rows ?? [];
     },
-    async decideFile(round, file, d, prints) {
+    async decideFile(round, file, d, seen) {
       const r = await api.put<{ files?: FileView[] }>('/files', {
         round,
         file,
         action: d.action,
         content: d.content ?? '',
         note: d.note ?? '',
-        prints,
+        prints: seen.prints,
+        decisions: seen.decisions,
       });
       return r?.files ?? [];
     },
-    async clearFile(round, file, prints) {
+    async clearFile(round, file, seen) {
       const r = await api.post<{ files?: FileView[] }>('/files/clear', {
         round,
         file,
-        prints,
+        prints: seen.prints,
+        decisions: seen.decisions,
       });
       return r?.files ?? [];
     },

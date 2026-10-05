@@ -65,6 +65,10 @@ func TestMigrateAPopulatedV1Database(t *testing.T) {
 	if d := rows[1].Decision; d == nil || d.Action != "reject" || d.Note != "keep the hint" || d.Sent {
 		t.Errorf("undo %+v", d)
 	}
+	// Each stored decision got an id of its own.
+	if a, b := rows[0].Decision.ID, rows[1].Decision.ID; len(a) != 16 || len(b) != 16 || a == b {
+		t.Errorf("decision ids %q %q", a, b)
+	}
 	if kept, n, err := s.Unmuted(ctx, []row.Row{{ID: "muted-row"}}); err != nil || len(kept) != 0 || n != 1 {
 		t.Errorf("mute lost: %d %d %v", len(kept), n, err)
 	}

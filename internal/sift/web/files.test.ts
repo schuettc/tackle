@@ -8,7 +8,7 @@ import {
   filesProgress,
   holdFiles,
   hunks,
-  printsFor,
+  seenFor,
   unsentFiles,
 } from './files.ts';
 
@@ -145,7 +145,7 @@ test('holdFiles: a snapshot replaces the files it holds, content and print toget
   ];
   const m2 = mk('m', '/m', {
     group: ['g', 'm'],
-    decision: { action: 'edit', content: 'mine\n' },
+    decision: { action: 'edit', content: 'mine\n', id: 'd-m2' },
     fingerprint: 'fp-m2',
   });
   holdFiles(files, [
@@ -153,8 +153,14 @@ test('holdFiles: a snapshot replaces the files it holds, content and print toget
     m2,
   ]);
   assert.equal(files[1], m2);
-  assert.deepEqual(printsFor(files, 'g'), { g: 'fp-g2', m: 'fp-m2' });
-  assert.deepEqual(printsFor(files, 'q'), { q: 'fp-q' });
+  assert.deepEqual(seenFor(files, 'g'), {
+    prints: { g: 'fp-g2', m: 'fp-m2' },
+    decisions: { m: 'd-m2' },
+  });
+  assert.deepEqual(seenFor(files, 'q'), {
+    prints: { q: 'fp-q' },
+    decisions: {},
+  });
   holdFiles(files, [mk('nope', '/nope')]);
   assert.equal(files.length, 3);
 });

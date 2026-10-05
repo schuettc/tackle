@@ -104,12 +104,12 @@ export function verdictOf(r: Finding): string {
   );
 }
 
-/** A title or text as it counts now (row.Effective): an edit's value, ''
- * when the edit cleared it, else the proposal's. */
+/** A title or text as the page shows it (row.Shown): '' when the edit in
+ * force cleared it, else the edit's value, else the proposal's. */
 export function fieldOf(r: Finding, k: 'title' | 'text'): string {
   const d = r.decision?.action === 'edit' ? r.decision : undefined;
-  if (d?.[k]) return d[k];
   if (d?.cleared?.includes(k)) return '';
+  if (d?.[k]) return d[k];
   return r[k] ?? '';
 }
 
@@ -254,33 +254,38 @@ export type EditDecision = {
 export type EditResult =
   { ok: true; decision: EditDecision } | { ok: false; error: string };
 
-/** The edit decision for a form: only the fields that differ from the
- * proposal. A field the user emptied is cleared explicitly: an empty value
- * would mean "keep the proposal's". */
+/** The edit decision for a form opened on r (the row as the editor
+ * captured it): the whole form, its verdict, title and text, so the edit
+ * stands on its own and does not borrow a field from whatever the proposal
+ * is when it lands. A field the user emptied is cleared explicitly where
+ * the proposal had one: an empty value would mean "keep the proposal's".
+ * A form equal to the proposal changes nothing. */
 export function editDecision(r: Finding, f: EditForm): EditResult {
   const verdict = f.verdict.trim();
   if (!verdict) return { ok: false, error: 'choose a verdict' };
   if (!validVerdict(verdict))
     return { ok: false, error: `“${verdict}” is not a verdict` };
-  const d: EditDecision = { action: 'edit' };
-  if (verdict !== (r.verdict ?? '')) d.verdict = verdict;
+  const d: EditDecision = { action: 'edit', verdict };
+  let changed = verdict !== (r.verdict ?? '');
   const cleared: ('title' | 'text')[] = [];
   for (const k of ['title', 'text'] as const) {
     const now = f[k];
-    if (now === (r[k] ?? '')) continue;
+    if (now !== (r[k] ?? '')) changed = true;
     if (now.trim() !== '') d[k] = now;
     else if (r[k]) cleared.push(k);
   }
   if (cleared.length) d.cleared = cleared;
-  if (!d.verdict && !d.title && !d.text && !d.cleared)
+  if (!changed)
     return { ok: false, error: 'nothing changed: accept the proposal instead' };
   return { ok: true, decision: d };
 }
 
-/** A row's title in the list: an issue's title, else its passage's first
- * line, else the check's summary. */
+/** A row's title in the list: its title as the page shows it (an edit's,
+ * none when the edit cleared it, else the proposal's), else its passage's
+ * first line, else the check's summary. */
 export function rowTitle(r: Finding): string {
-  if (r.title) return r.title;
+  const title = fieldOf(r, 'title');
+  if (title) return title;
   const first = (r.passage ?? '')
     .split('\n')
     .map((l) => l.trim())

@@ -110,6 +110,10 @@ type Decision struct {
 	// Sent is set once the user pressed Send with this decision; the store
 	// fills it, Validate ignores it.
 	Sent bool `json:"sent,omitempty"`
+	// ID names this decision: the store gives each decision it creates or
+	// replaces a new one, never reused, and every check of an approval
+	// binds to it (with the row's fingerprint as the page showed it).
+	ID string `json:"id,omitempty"`
 }
 
 // Change is what applying a row does: its verdict, title, destination and

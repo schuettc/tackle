@@ -21,6 +21,21 @@ func prints(t *testing.T, s *Store, id int64) map[string]string {
 	return m
 }
 
+// ids is the id of each row's decision in force ("" for none), as the page
+// shows it.
+func ids(t *testing.T, s *Store, id int64) map[string]string {
+	t.Helper()
+	_, rows, err := s.Round(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]string{}
+	for _, r := range rows {
+		m[r.ID] = idOf(r.Decision)
+	}
+	return m
+}
+
 // decided is how many of the round's rows hold a decision.
 func decided(t *testing.T, s *Store, id int64) int {
 	t.Helper()
@@ -140,14 +155,14 @@ func TestARowsClearAnswersWhatThePageShowed(t *testing.T) {
 	if _, err := s.Answer(ctx, id, []Answer{{Row: c, Fingerprint: prints(t, s, id)[c], Decision: row.Decision{Action: "reject"}}}); err != nil {
 		t.Fatal(err)
 	}
-	after, err := s.Undecide(ctx, id, c, old[c])
+	after, err := s.Undecide(ctx, id, c, old[c], ids(t, s, id)[c])
 	if !errors.Is(err, ErrChanged) || after.ID != "" {
 		t.Fatalf("a stale clear: %v, returned %+v", err, after)
 	}
 	if n := decided(t, s, id); n != 1 {
 		t.Fatalf("%d rows decided, want the reject kept", n)
 	}
-	after, err = s.Undecide(ctx, id, c, prints(t, s, id)[c])
+	after, err = s.Undecide(ctx, id, c, prints(t, s, id)[c], ids(t, s, id)[c])
 	if err != nil || after.ID != c || after.Decision != nil || after.Fingerprint != prints(t, s, id)[c] {
 		t.Fatalf("a current clear: %+v %v", after, err)
 	}
@@ -186,7 +201,7 @@ func TestAcceptingAnEditedRowKeepsTheEdit(t *testing.T) {
 	if snap[0].Fingerprint != prints(t, s, id)[a] {
 		t.Fatal("the snapshot's print is not the round's")
 	}
-	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: snap[0].Fingerprint, Decision: row.Decision{Action: "accept", Note: "fine"}}})
+	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: snap[0].Fingerprint, DecisionID: snap[0].Decision.ID, Decision: row.Decision{Action: "accept", Note: "fine"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,10 +213,10 @@ func TestAcceptingAnEditedRowKeepsTheEdit(t *testing.T) {
 	if _, err := s.Answer(ctx, id, []Answer{{Row: b, Fingerprint: now[b], Decision: row.Decision{Action: "edit", Text: "theirs"}}}); err != nil {
 		t.Fatal(err)
 	}
-	now = prints(t, s, id)
+	now, in := prints(t, s, id), ids(t, s, id)
 	snap, err = s.Answer(ctx, id, []Answer{
-		{Row: a, Fingerprint: now[a], Decision: row.Decision{Action: "accept"}},
-		{Row: b, Fingerprint: now[b], Decision: row.Decision{Action: "accept"}},
+		{Row: a, Fingerprint: now[a], DecisionID: in[a], Decision: row.Decision{Action: "accept"}},
+		{Row: b, Fingerprint: now[b], DecisionID: in[b], Decision: row.Decision{Action: "accept"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +229,7 @@ func TestAcceptingAnEditedRowKeepsTheEdit(t *testing.T) {
 		t.Fatalf("what apply would do: %+v %v", c, ok)
 	}
 	// The clear is the way back: the page then shows the proposal again.
-	after, err := s.Undecide(ctx, id, a, snap[0].Fingerprint)
+	after, err := s.Undecide(ctx, id, a, snap[0].Fingerprint, snap[0].Decision.ID)
 	if err != nil || after.Decision != nil || after.Fingerprint != old[a] {
 		t.Fatalf("the clear: %+v %v", after, err)
 	}
@@ -231,12 +246,12 @@ func TestAStaleAcceptOfAClearedEditIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	shown := snap[0].Fingerprint
+	shown, edit := snap[0].Fingerprint, snap[0].Decision.ID
 	// Another page clears the edit.
-	if _, err := s.Undecide(ctx, id, a, shown); err != nil {
+	if _, err := s.Undecide(ctx, id, a, shown, edit); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: shown, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: shown, DecisionID: edit, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
 		t.Fatalf("a stale accept: %v, want ErrChanged", err)
 	}
 	if n := decided(t, s, id); n != 0 {
@@ -261,7 +276,7 @@ func TestAnEditedMergeCoversItsTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	merged := snap[0].Fingerprint
+	merged, edit := snap[0].Fingerprint, snap[0].Decision.ID
 	if _, err := s.Answer(ctx, id, []Answer{{Row: c, Fingerprint: old[c], Decision: row.Decision{Action: "edit", Text: "c's own"}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,10 +284,10 @@ func TestAnEditedMergeCoversItsTarget(t *testing.T) {
 	if now[a] == merged {
 		t.Fatal("the merge's print did not change with its target's")
 	}
-	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: merged, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: merged, DecisionID: edit, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
 		t.Fatalf("an accept against the old target: %v, want ErrChanged", err)
 	}
-	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: now[a], Decision: row.Decision{Action: "accept"}}})
+	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: now[a], DecisionID: edit, Decision: row.Decision{Action: "accept"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

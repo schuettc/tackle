@@ -232,8 +232,10 @@ type decisionIn struct {
 	Text    string   `json:"text"`
 	Cleared []string `json:"cleared"`
 	Note    string   `json:"note"`
-	// Fingerprint is the row's fingerprint as the page showed it.
+	// Fingerprint is the row's fingerprint as the page showed it, and
+	// DecisionID the id of the decision it showed in force ("" for none).
 	Fingerprint string `json:"fingerprint"`
+	DecisionID  string `json:"decision_id"`
 	// TargetFingerprint is, for an edit to merge:C, C's fingerprint as the
 	// page showed it.
 	TargetFingerprint string `json:"target_fingerprint"`
@@ -279,7 +281,7 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, "stale")
 			return
 		}
-		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, TargetFingerprint: d.TargetFingerprint, Decision: d.decision()})
+		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, DecisionID: d.DecisionID, TargetFingerprint: d.TargetFingerprint, Decision: d.decision()})
 	}
 	after, err := s.st.Answer(r.Context(), b.Round, as)
 	if err != nil {
@@ -344,7 +346,7 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 	if !s.perItem(w, r.Context(), round) {
 		return
 	}
-	after, err := s.st.Undecide(r.Context(), round, rw.ID, q.Get("fingerprint"))
+	after, err := s.st.Undecide(r.Context(), round, rw.ID, q.Get("fingerprint"), q.Get("decision_id"))
 	if err != nil {
 		s.rowErr(w, r.Context(), round, err)
 		return
@@ -403,6 +405,9 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 		Content string            `json:"content"`
 		Note    string            `json:"note"`
 		Prints  map[string]string `json:"prints"`
+		// Decisions is the id of each group file's decision as the page
+		// showed it (none for a file it showed undecided).
+		Decisions map[string]string `json:"decisions"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -427,13 +432,23 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	after, err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints)
+	after, err := s.st.DecideFile(r.Context(), b.Round, b.File, d, seenIn(b.Prints, b.Decisions))
 	if err != nil {
 		fileErr(w, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
 	writeJSON(w, http.StatusOK, map[string]any{"files": filesOf(after)})
+}
+
+// seenIn is what the page showed of a group's files: each one's print,
+// with the id of its decision ("" when it showed none).
+func seenIn(prints, decisions map[string]string) map[string]store.Seen {
+	out := make(map[string]store.Seen, len(prints))
+	for k, p := range prints {
+		out[k] = store.Seen{Fingerprint: p, Decision: decisions[k]}
+	}
+	return out
 }
 
 // filesOf is a decision's snapshot on the wire: the group's files as they
@@ -450,9 +465,10 @@ func filesOf(items []store.FileItem) []fileJSON {
 // recommendation), against the prints the page showed, as putFile decides.
 func (s *Server) clearFile(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Round  int64             `json:"round"`
-		File   string            `json:"file"`
-		Prints map[string]string `json:"prints"`
+		Round     int64             `json:"round"`
+		File      string            `json:"file"`
+		Prints    map[string]string `json:"prints"`
+		Decisions map[string]string `json:"decisions"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -472,7 +488,7 @@ func (s *Server) clearFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	after, err := s.st.UndecideFile(r.Context(), b.Round, b.File, b.Prints)
+	after, err := s.st.UndecideFile(r.Context(), b.Round, b.File, seenIn(b.Prints, b.Decisions))
 	if err != nil {
 		fileErr(w, err)
 		return
@@ -563,15 +579,17 @@ func (s *Server) base(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, http.StatusNotFound, "no such file in the round")
 }
 
-// send marks sent the decisions the page shows (files by key, rows by id),
-// each only while it is still the one in force: a decision made since Send
-// was pressed waits for the next. The response names what it sent, and the
-// page marks only those. A Send that names no decisions is refused.
+// send marks sent the decisions the page shows unsent (files by key, rows
+// by id, each as its decision id and its item's print), each only while
+// both still match: a decision made since Send was pressed, even an
+// identical one, waits for the next, and so does one whose item changed.
+// The response names what it sent, and the page marks only those. A Send
+// that names no decisions is refused.
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Round int64                   `json:"round"`
-		Files map[string]rec.Decision `json:"files"`
-		Rows  map[string]row.Decision `json:"rows"`
+		Round int64                 `json:"round"`
+		Files map[string]store.Seen `json:"files"`
+		Rows  map[string]store.Seen `json:"rows"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())

@@ -115,7 +115,7 @@ func (s *Store) Files(ctx context.Context, roundID int64) ([]FileItem, error) {
 }
 
 func filesIn(ctx context.Context, tx *sql.Tx, roundID int64) ([]FileItem, error) {
-	q, err := tx.QueryContext(ctx, `SELECT f.body, r.body, d.action, d.content, d.note, d.sent_at FROM files f
+	q, err := tx.QueryContext(ctx, `SELECT f.body, r.body, d.action, d.content, d.note, d.sent_at, d.decision_id FROM files f
 		LEFT JOIN recs r ON r.round_id = f.round_id AND r.key = f.key
 		LEFT JOIN file_decisions d ON d.round_id = f.round_id AND d.key = f.key
 		WHERE f.round_id = ? ORDER BY f.seq`, roundID)
@@ -126,9 +126,9 @@ func filesIn(ctx context.Context, tx *sql.Tx, roundID int64) ([]FileItem, error)
 	var out []FileItem
 	for q.Next() {
 		var body string
-		var rb, action, content, note sql.NullString
+		var rb, action, content, note, did sql.NullString
 		var sent sql.NullInt64
-		if err := q.Scan(&body, &rb, &action, &content, &note, &sent); err != nil {
+		if err := q.Scan(&body, &rb, &action, &content, &note, &sent, &did); err != nil {
 			return nil, err
 		}
 		var it FileItem
@@ -143,7 +143,7 @@ func filesIn(ctx context.Context, tx *sql.Tx, roundID int64) ([]FileItem, error)
 			it.Rec = &r
 		}
 		if action.Valid {
-			it.Decision = &rec.Decision{Action: action.String, Content: content.String, Note: note.String, Sent: sent.Int64 != 0}
+			it.Decision = &rec.Decision{Action: action.String, Content: content.String, Note: note.String, Sent: sent.Int64 != 0, ID: did.String}
 		}
 		out = append(out, it)
 	}
@@ -453,14 +453,15 @@ func rowsIn(ctx context.Context, tx *sql.Tx, roundID int64) (map[string]row.Row,
 // it, which are decided together: accept or reject sets each of them (an
 // accept leaves an edit, this file's or another's, as it is); an edit is
 // this file's, and accepts the others not edited. The note is this file's
-// alone. prints holds each group file's fingerprint as the page showed it,
-// which covers the edit it showed in place of a recommendation: ErrChanged
-// when one is missing or differs from the content in force, ErrStale when
+// alone. seen holds what the page showed of each group file: its
+// fingerprint, which covers the edit it showed in place of a
+// recommendation, and the id of its decision in force: ErrChanged when one
+// is missing or differs from the file now, ErrStale when
 // the file is not in the round, ErrNotReady while the round is
 // recommending. It returns the group's files after the decision, read in
 // the same transaction: the snapshot the page shows next, each file with
 // the print its next decision answers. All in one transaction.
-func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec.Decision, prints map[string]string) ([]FileItem, error) {
+func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec.Decision, seen map[string]Seen) ([]FileItem, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
@@ -477,16 +478,18 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 		for _, it := range items {
 			by[it.Key] = it
 		}
-		if err := checkPrints(group, by, prints); err != nil {
+		if err := checkSeen(group, by, seen); err != nil {
 			return err
 		}
 		now := time.Now().UnixMilli()
+		// Each decision put is a new one, with a new id, even when it
+		// equals the one it replaces.
 		put := func(k string, dd rec.Decision) error {
-			_, err := tx.ExecContext(ctx, `INSERT INTO file_decisions(round_id, key, action, content, note, decided_at, sent_at)
-				VALUES (?,?,?,?,?,?,0)
+			_, err := tx.ExecContext(ctx, `INSERT INTO file_decisions(round_id, key, action, content, note, decided_at, sent_at, decision_id)
+				VALUES (?,?,?,?,?,?,0,?)
 				ON CONFLICT(round_id, key) DO UPDATE SET action = excluded.action, content = excluded.content,
-				  note = excluded.note, decided_at = excluded.decided_at, sent_at = 0`,
-				roundID, k, dd.Action, dd.Content, dd.Note, now)
+				  note = excluded.note, decided_at = excluded.decided_at, sent_at = 0, decision_id = excluded.decision_id`,
+				roundID, k, dd.Action, dd.Content, dd.Note, now, newID())
 			return err
 		}
 		for _, k := range group {
@@ -555,19 +558,28 @@ func (s *Store) NoteFile(ctx context.Context, roundID int64, key, note string) e
 	})
 }
 
-// checkPrints is ErrChanged unless each group file has a recommendation
-// and prints holds its print as it is now.
-func checkPrints(group []string, by map[string]FileItem, prints map[string]string) error {
+// checkSeen is ErrChanged unless each group file has a recommendation and
+// seen holds its print and the id of its decision as they are now.
+func checkSeen(group []string, by map[string]FileItem, seen map[string]Seen) error {
 	for _, k := range group {
 		it := by[k]
 		if it.Rec == nil {
 			return fmt.Errorf("%w: %s has no recommendation", ErrChanged, k)
 		}
-		if p := prints[k]; p == "" || p != it.Fingerprint {
+		w, ok := seen[k]
+		if !ok || w.Fingerprint == "" || w.Fingerprint != it.Fingerprint || w.Decision != fileID(it.Decision) {
 			return fmt.Errorf("%w: %s", ErrChanged, it.Source.File)
 		}
 	}
 	return nil
+}
+
+// fileID is a file decision's id, "" for none.
+func fileID(d *rec.Decision) string {
+	if d == nil {
+		return ""
+	}
+	return d.ID
 }
 
 func noteOf(d *rec.Decision) string {
@@ -601,10 +613,10 @@ func groupFor(ctx context.Context, tx *sql.Tx, roundID int64, key string) ([]str
 }
 
 // UndecideFile clears the decisions on a file and the files linked to it
-// (for an edited file: reverts it to the recommendation). prints is each
-// group file's print as the page showed it, checked as DecideFile checks
-// it. It returns the group's files after, as DecideFile does.
-func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string, prints map[string]string) ([]FileItem, error) {
+// (for an edited file: reverts it to the recommendation). seen is what the
+// page showed of each group file, checked as DecideFile checks it. It
+// returns the group's files after, as DecideFile does.
+func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string, seen map[string]Seen) ([]FileItem, error) {
 	var after []FileItem
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		if err := bump(ctx, tx, roundID); err != nil {
@@ -618,7 +630,7 @@ func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string, pri
 		for _, it := range items {
 			by[it.Key] = it
 		}
-		if err := checkPrints(group, by, prints); err != nil {
+		if err := checkSeen(group, by, seen); err != nil {
 			return err
 		}
 		for _, k := range group {

@@ -48,7 +48,7 @@ func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 		Findings: []rec.Account{{Row: "dead", Did: "fixed", How: "removed"}}}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DecideFile(ctx, round, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: printOf(t, s, round, f.Key)}); err != nil {
+	if _, err := s.DecideFile(ctx, round, f.Key, rec.Decision{Action: "accept"}, map[string]store.Seen{f.Key: {Fingerprint: printOf(t, s, round, f.Key)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(ctx, round, "", nil); err != nil {

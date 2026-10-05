@@ -223,7 +223,7 @@ test('groupTargets: accept takes undecided rows with a proposal; reject every un
   );
 });
 
-test('editDecision sends only what changed, and refuses a bad verdict or no change', () => {
+test('editDecision sends the whole form, and refuses a bad verdict or no change', () => {
   const r = mk('a', '/f', 'stale-status', 1, {
     verdict: 'rewrite',
     text: 'old',
@@ -233,14 +233,16 @@ test('editDecision sends only what changed, and refuses a bad verdict or no chan
     editDecision(r, { verdict: 'rewrite', title: 't', text: 'new' }),
     {
       ok: true,
-      decision: { action: 'edit', text: 'new' },
+      decision: { action: 'edit', verdict: 'rewrite', title: 't', text: 'new' },
     },
   );
+  // Only the verdict changed: the title and text go too, as the form held
+  // them, so the edit stands on its own whatever the proposal is by then.
   assert.deepEqual(
     editDecision(r, { verdict: 'delete', title: 't', text: 'old' }),
     {
       ok: true,
-      decision: { action: 'edit', verdict: 'delete' },
+      decision: { action: 'edit', verdict: 'delete', title: 't', text: 'old' },
     },
   );
   const bad = editDecision(r, { verdict: 'cut', title: 't', text: 'old' });
@@ -263,11 +265,24 @@ test('editDecision clears a field the user emptied (explicit, not "use the propo
   });
   assert.deepEqual(editDecision(r, { verdict: 'move', title: 't', text: '' }), {
     ok: true,
-    decision: { action: 'edit', cleared: ['text'] },
+    decision: {
+      action: 'edit',
+      verdict: 'move',
+      title: 't',
+      cleared: ['text'],
+    },
   });
   assert.deepEqual(
     editDecision(r, { verdict: 'move', title: '  ', text: 'reworded' }),
-    { ok: true, decision: { action: 'edit', cleared: ['title'] } },
+    {
+      ok: true,
+      decision: {
+        action: 'edit',
+        verdict: 'move',
+        text: 'reworded',
+        cleared: ['title'],
+      },
+    },
   );
   r.decision = { action: 'edit', cleared: ['text'] };
   assert.equal(fieldOf(r, 'text'), '');
@@ -291,6 +306,23 @@ test('rowTitle: issue title, else the passage first line, else the summary', () 
     rowTitle(mk('a', '/f', 'size', 0, { passage: '' })),
     'size summary',
   );
+});
+
+test('an edited title is the one shown, and a cleared one is not', () => {
+  const r = mk('a', '/f', 'intake', 1, {
+    title: "The agent's title",
+    passage: '- [ ] the item',
+    verdict: 'issue',
+  });
+  r.decision = { action: 'edit', title: 'My title' };
+  assert.equal(fieldOf(r, 'title'), 'My title');
+  assert.equal(rowTitle(r), 'My title');
+  r.decision = { action: 'edit', cleared: ['title'] };
+  assert.equal(fieldOf(r, 'title'), '');
+  assert.equal(rowTitle(r), '- [ ] the item');
+  // An accept or reject shows the proposal's.
+  r.decision = { action: 'reject' };
+  assert.equal(rowTitle(r), "The agent's title");
 });
 
 test('editTarget names the row an edit chooses to merge into', () => {

@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createDecider, type DecisionServer } from './decide.ts';
+import {
+  createDecider,
+  type DecisionServer,
+  type GroupSeen,
+} from './decide.ts';
+import type { DecisionIn } from './api.ts';
+import { editDecision } from './model.ts';
 
 // A fake sift serve for an audit round of three files, g and m linked, q
 // alone, that decides as the store does (internal/sift/store DecideFile)
@@ -27,7 +33,12 @@ interface Dec {
   content?: string;
   note?: string;
   sent?: boolean;
+  id?: string;
 }
+
+// Each decision the fakes store gets a new id, never reused.
+let ids = 0;
+const newID = () => `d${++ids}`;
 
 const conflict = () =>
   Object.assign(new Error('changed: look again'), { status: 409 });
@@ -82,27 +93,34 @@ class Fake {
       home: '',
     };
   }
-  check(key: string, prints: Record<string, string>): void {
+  /** As the store's checkSeen: each group file's print and decision id. */
+  check(key: string, seen: GroupSeen): void {
     for (const k of groups[key])
-      if (!prints[k] || prints[k] !== this.print(k)) throw conflict();
+      if (
+        !seen.prints[k] ||
+        seen.prints[k] !== this.print(k) ||
+        (seen.decisions[k] ?? '') !== (this.dec[k]?.id ?? '')
+      )
+        throw conflict();
   }
-  decideFile(key: string, d: FileDecision, prints: Record<string, string>) {
-    this.check(key, prints);
+  decideFile(key: string, d: FileDecision, seen: GroupSeen) {
+    this.check(key, seen);
     for (const k of groups[key]) {
       const cur = this.dec[k];
       if (k === key && d.action === 'accept' && cur?.action === 'edit')
-        this.dec[k] = { ...cur, note: d.note ?? '' };
-      else if (k === key) this.dec[k] = { ...d };
+        this.dec[k] = { ...cur, note: d.note ?? '', id: newID() };
+      else if (k === key) this.dec[k] = { ...d, id: newID() };
       else if (d.action === 'reject')
-        this.dec[k] = { action: 'reject', note: cur?.note ?? '' };
+        this.dec[k] = { action: 'reject', note: cur?.note ?? '', id: newID() };
       else if (cur && (cur.action === 'edit' || cur.action === 'accept'))
         continue;
-      else this.dec[k] = { action: 'accept', note: cur?.note ?? '' };
+      else
+        this.dec[k] = { action: 'accept', note: cur?.note ?? '', id: newID() };
     }
     return groups[key].map((k) => this.view(k));
   }
-  clearFile(key: string, prints: Record<string, string>) {
-    this.check(key, prints);
+  clearFile(key: string, seen: GroupSeen) {
+    this.check(key, seen);
     for (const k of groups[key]) this.dec[k] = null;
     return groups[key].map((k) => this.view(k));
   }
@@ -145,12 +163,12 @@ class Fake {
   server(): DecisionServer {
     return {
       review: () => Promise.resolve(this.review()),
-      decideFile: (_r, key, d, prints) =>
+      decideFile: (_r, key, d, seen) =>
         this.call('decide ' + key + ' ' + d.action, () =>
-          this.decideFile(key, d, prints),
+          this.decideFile(key, d, seen),
         ),
-      clearFile: (_r, key, prints) =>
-        this.call('clear ' + key, () => this.clearFile(key, prints)),
+      clearFile: (_r, key, seen) =>
+        this.call('clear ' + key, () => this.clearFile(key, seen)),
       decide: () => Promise.reject(new Error('no rows here')),
       clear: () => Promise.reject(new Error('no rows here')),
       note: (_r, on, note) =>
@@ -160,19 +178,18 @@ class Fake {
           d.note = note;
           d.sent = false;
         }),
-      // As the store's Send: each decision the page showed, only while it
-      // is still the one in force and unsent.
+      // As the store's Send: each decision the page showed, by its id and
+      // its file's print, only while both still match and it is unsent.
       send: (_r, shown) =>
         this.call('send', () => {
           const files: string[] = [];
           for (const [k, w] of Object.entries(shown.files)) {
             const d = this.dec[k];
             if (
-              d &&
+              d?.id &&
               !d.sent &&
-              d.action === w.action &&
-              (d.content ?? '') === (w.content ?? '') &&
-              (d.note ?? '') === (w.note ?? '')
+              w.decision_id === d.id &&
+              w.fingerprint === this.print(k)
             ) {
               d.sent = true;
               files.push(k);
@@ -554,12 +571,9 @@ for (const order of ['edit stored first', 'Send stored first, answered last'])
         `a: ${k}`,
       );
     assert.equal(sentOn(a.p.review).q, true);
-    if (order === 'edit stored first')
-      assert.deepEqual(
-        out?.files,
-        ['g', 'q'],
-        'the accept a showed on m was replaced first',
-      );
+    // The accept a showed on m was replaced first, and g's print covers
+    // m's edit: g is not as a showed it either.
+    if (order === 'edit stored first') assert.deepEqual(out?.files, ['q']);
     else assert.deepEqual(out?.files, ['g', 'm', 'q']);
     // Once a reloads, it shows the edit, unsent.
     const r = await fake.server().review();
@@ -609,3 +623,213 @@ for (const order of ['edit stored first', 'Send stored first, answered last'])
       'the edit did not run while Send was in flight',
     );
   });
+
+test('Send names each decision by its id and print: an identical decision made again after Send was pressed is not sent', async () => {
+  const fake = new Fake();
+  const a = page(fake);
+  const g = a.d.file('g', { action: 'accept', note: 'fine' });
+  const q = a.d.file('q', { action: 'reject' });
+  await fake.run();
+  assert.equal((await g) && (await q), true);
+  const send = a.d.send();
+  const si = fake.calls.length - 1;
+  // Another page clears q and rejects it again, the same decision, before
+  // a's Send is stored.
+  const b = page(fake);
+  const last = async () => {
+    fake.serve(fake.calls.length - 1);
+    await fake.deliver(fake.calls.length - 1);
+  };
+  const clear = b.d.clearFile('q');
+  await last();
+  assert.equal(await clear, true);
+  const again = b.d.file('q', { action: 'reject' });
+  await last();
+  assert.equal(await again, true);
+  assert.equal(fake.calls[si].out, undefined, 'the Send is not stored yet');
+  fake.serve(si);
+  await fake.deliver(si);
+  const out = await send;
+  assert.deepEqual(out?.files, ['g', 'm'], 'q was decided again: not sent');
+  assert.equal(fake.dec.q?.sent ?? false, false, 'the store: q is unsent');
+  assert.deepEqual(sentOn(a.p.review), { g: true, m: true, q: false });
+});
+
+/** A backlog round of three rows as the fake store holds them, a and c
+ * proposals, with each row's print as row.Print makes it (the proposal
+ * with the edit in force over it, and for a merge its target's). */
+class RowFake {
+  rows: Record<string, Finding> = {
+    a: {
+      id: 'a',
+      check: 'intake',
+      summary: 's',
+      source: { file: '', entry: 'a' },
+      verdict: 'issue',
+      title: 'A',
+      text: 'theirs',
+      certain: false,
+      fingerprint: '',
+    },
+    c: {
+      id: 'c',
+      check: 'intake',
+      summary: 's',
+      source: { file: '', entry: 'c' },
+      verdict: 'keep',
+      text: 'C',
+      certain: false,
+      fingerprint: '',
+    },
+  };
+  stored: DecisionIn[] = [];
+  shown(id: string) {
+    const r = this.rows[id];
+    const d = r.decision?.action === 'edit' ? r.decision : undefined;
+    const pick = (k: 'title' | 'text') =>
+      d?.cleared?.includes(k) ? '' : d?.[k] || r[k] || '';
+    return {
+      verdict: d?.verdict || r.verdict,
+      title: pick('title'),
+      text: pick('text'),
+    };
+  }
+  print(id: string): string {
+    const v = this.shown(id);
+    const t = v.verdict?.startsWith('merge:') ? v.verdict.slice(6) : '';
+    return JSON.stringify([v, t && this.rows[t] ? this.print(t) : '']);
+  }
+  review(): Review {
+    return {
+      ...new Fake().review(),
+      round: { id: 1, kind: 'backlog', at: '', summary: {}, owner: '' },
+      files: [],
+      rows: Object.values(this.rows).map((r) => ({
+        ...structuredClone(r),
+        fingerprint: this.print(r.id),
+      })),
+    };
+  }
+  /** The agent re-proposes id. */
+  repropose(id: string, p: Partial<Finding>): void {
+    Object.assign(this.rows[id], p);
+    delete this.rows[id].decision;
+  }
+  server(): DecisionServer {
+    return {
+      ...new Fake().server(),
+      review: () => Promise.resolve(this.review()),
+      decide: (_r, ds) => {
+        for (const x of ds) {
+          const r = this.rows[x.id];
+          const t = x.verdict?.startsWith('merge:') ? x.verdict.slice(6) : '';
+          if (
+            x.fingerprint !== this.print(x.id) ||
+            (x.decision_id ?? '') !== (r.decision?.id ?? '') ||
+            (t && x.target_fingerprint !== this.print(t))
+          )
+            return Promise.reject(conflict());
+        }
+        for (const x of ds) {
+          this.stored.push(x);
+          this.rows[x.id].decision = {
+            action: x.action,
+            verdict: x.verdict,
+            title: x.title,
+            text: x.text,
+            cleared: x.cleared,
+            note: x.note,
+            id: newID(),
+          };
+        }
+        return Promise.resolve(
+          this.review().rows.filter((r) => ds.some((x) => x.id === r.id)),
+        );
+      },
+    };
+  }
+}
+
+test('an open editor is bound to the row it opened on: re-proposed underneath, a save that changes only the verdict is refused, and nothing is stored', async () => {
+  const fake = new RowFake();
+  const review = fake.review();
+  const failures: string[] = [];
+  const d = createDecider(fake.server(), {
+    review: () => review,
+    replace: () => {},
+    changed: () => {},
+    failed: (msg) => failures.push(msg),
+  });
+  const snap = d.snapRow('a');
+  assert.ok(snap);
+  // The agent re-proposes a; the page reloads and shows it, under the form.
+  fake.repropose('a', { text: 'reworded' });
+  Object.assign(review, fake.review());
+  // The person changes only the verdict, and saves.
+  const res = editDecision(snap.row, {
+    verdict: 'delete',
+    title: 'A',
+    text: 'theirs',
+  });
+  assert.ok(res.ok);
+  assert.equal(await d.editRow(snap, res.decision), 'changed');
+  assert.deepEqual(fake.stored, [], 'nothing stored');
+  assert.equal(failures.length, 1);
+  // Reopened on the row as it is now, the same edit saves, whole.
+  const now = d.snapRow('a');
+  assert.equal(now?.row.text, 'reworded');
+  const redo = editDecision(now!.row, {
+    verdict: 'delete',
+    title: 'A',
+    text: 'reworded',
+  });
+  assert.ok(redo.ok);
+  assert.equal(await d.editRow(now!, redo.decision), 'saved');
+  assert.equal(fake.stored[0].fingerprint, now!.row.fingerprint);
+  assert.equal(review.rows[0].decision?.verdict, 'delete');
+});
+
+test('an open editor keeps its snapshot: a fresher print underneath is never picked up, even for the merge target', async () => {
+  const fake = new RowFake();
+  const review = fake.review();
+  const d = createDecider(fake.server(), {
+    review: () => review,
+    replace: () => {},
+    changed: () => {},
+    failed: () => {},
+  });
+  const snap = d.snapRow('a');
+  assert.ok(snap);
+  // c, the row the edit will merge into, changes; the page shows it.
+  fake.repropose('c', { text: 'C, reworded' });
+  Object.assign(review, fake.review());
+  const res = editDecision(snap.row, {
+    verdict: 'merge:c',
+    title: 'A',
+    text: 'both',
+  });
+  assert.ok(res.ok);
+  assert.equal(await d.editRow(snap, res.decision), 'changed');
+  assert.deepEqual(fake.stored, []);
+});
+
+test('a file editor is bound to its snapshot too: re-recommended underneath, its save is refused and nothing is stored', async () => {
+  const fake = new Fake();
+  const { p, d } = page(fake);
+  const snap = d.snapFile('m');
+  assert.ok(snap);
+  // The agent replaces m's recommendation; the page reloads and shows it.
+  fake.recs.m = 'M2\n';
+  p.review = fake.review();
+  const save = d.editFile(snap, 'mine\n');
+  await fake.run();
+  assert.equal(await save, 'changed');
+  assert.equal(fake.dec.m, null, 'nothing stored');
+  // Reopened on the file as it is now, the edit saves.
+  const now = d.snapFile('m');
+  assert.equal(now?.file.rec?.content, 'M2\n');
+  const redo = d.editFile(now!, 'mine\n');
+  await fake.run();
+  assert.equal(await redo, 'saved');
+  assert.equal(fake.dec.m?.content, 'mine\n');
+});

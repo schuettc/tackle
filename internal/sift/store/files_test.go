@@ -61,12 +61,14 @@ func items(t *testing.T, s *Store, id int64) map[string]FileItem {
 	return out
 }
 
-func printsOf(t *testing.T, s *Store, id int64, keys ...string) map[string]string {
+// seenOf is what the page shows now of the files keys: each one's print
+// and the id of its decision.
+func seenOf(t *testing.T, s *Store, id int64, keys ...string) map[string]Seen {
 	t.Helper()
 	its := items(t, s, id)
-	out := map[string]string{}
+	out := map[string]Seen{}
 	for _, k := range keys {
-		out[k] = its[k].Fingerprint
+		out[k] = Seen{Fingerprint: its[k].Fingerprint, Decision: fileID(its[k].Decision)}
 	}
 	return out
 }
@@ -163,7 +165,7 @@ func TestLinkedFilesAreDecidedTogether(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	both := func() map[string]Seen { return seenOf(t, s, id, g, m) }
 
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept", Note: "good"}, both()); err != nil {
 		t.Fatal(err)
@@ -201,7 +203,7 @@ func TestLinkedFilesAreDecidedTogether(t *testing.T) {
 	}
 	// A file with no links is decided alone.
 	q := f["q"].Key
-	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, seenOf(t, s, id, q)); err != nil {
 		t.Fatal(err)
 	}
 	if d := decisions(t, s, id); len(d) != 1 || d[q] != "reject" {
@@ -216,7 +218,7 @@ func TestAcceptKeepsTheFilesOwnEdit(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	both := func() map[string]Seen { return seenOf(t, s, id, g, m) }
 	mine := "# M\n\n- Mine.\n- Do x safely here.\n"
 	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: mine}, both()); err != nil {
 		t.Fatal(err)
@@ -250,7 +252,7 @@ func TestAcceptAnswersTheContentThePageShowed(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	both := func() map[string]Seen { return seenOf(t, s, id, g, m) }
 	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# M\n\n- Mine.\n- Do x safely here.\n"}, both()); err != nil {
 		t.Fatal(err)
 	}
@@ -281,12 +283,12 @@ func TestDecideNeedsEveryPrint(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	ps := printsOf(t, s, id, g, m)
-	only := map[string]string{g: ps[g]}
+	ps := seenOf(t, s, id, g, m)
+	only := map[string]Seen{g: ps[g]}
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, only); !errors.Is(err, ErrChanged) {
 		t.Fatalf("a missing print: %v", err)
 	}
-	old := map[string]string{g: ps[g], m: "0000000000000000"}
+	old := map[string]Seen{g: ps[g], m: {Fingerprint: "0000000000000000"}}
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); !errors.Is(err, ErrChanged) {
 		t.Fatalf("an old print: %v", err)
 	}
@@ -304,7 +306,7 @@ func TestReproposingDropsTheGroupsDecisions(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	old := printsOf(t, s, id, g, m)
+	old := seenOf(t, s, id, g, m)
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +334,7 @@ func TestProposeRefusesAnAppliedFileOrGroup(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, printsOf(t, s, id, g, m)); err != nil {
+	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, seenOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(ctx, id, "", nil); err != nil {
@@ -369,7 +371,7 @@ func TestNoDecisionBeforeReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := f["q"].Key
-	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "accept"}, printsOf(t, s, id, q)); !errors.Is(err, ErrNotReady) {
+	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "accept"}, seenOf(t, s, id, q)); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("got %v", err)
 	}
 }
@@ -434,10 +436,10 @@ func TestSendCarriesFileDecisions(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m, q := f["g"].Key, f["m"].Key, f["q"].Key
-	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept", Note: "nice"}, printsOf(t, s, id, g, m)); err != nil {
+	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept", Note: "nice"}, seenOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, seenOf(t, s, id, q)); err != nil {
 		t.Fatal(err)
 	}
 	sd, err := s.Send(ctx, id, "", nil)
@@ -468,7 +470,7 @@ func TestAStaleClearIsRefused(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m := f["g"].Key, f["m"].Key
-	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	both := func() map[string]Seen { return seenOf(t, s, id, g, m) }
 	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# M\n\n- Mine.\n- Do x safely here.\n"}, both()); err != nil {
 		t.Fatal(err)
 	}
@@ -487,7 +489,7 @@ func TestAStaleClearIsRefused(t *testing.T) {
 		t.Fatalf("an accept with the old prints: %v", err)
 	}
 	// The page reloads and shows the new recommendation.
-	got, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, map[string]string{g: its[g].Fingerprint, m: its[m].Fingerprint})
+	got, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, map[string]Seen{g: {Fingerprint: its[g].Fingerprint}, m: {Fingerprint: its[m].Fingerprint}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,56 +516,51 @@ func TestAFileNoteChangesOnlyTheNote(t *testing.T) {
 		t.Fatalf("a note on an undecided file: %v", err)
 	}
 	mine := "# M\n\n- Mine.\n- Do x safely here.\n"
-	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: mine}, printsOf(t, s, id, g, m)); err != nil {
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: mine}, seenOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
-	before := printsOf(t, s, id, g, m)
+	before := seenOf(t, s, id, g, m)
 	if err := s.NoteFile(ctx, id, m, "why"); err != nil {
 		t.Fatal(err)
 	}
 	if d := items(t, s, id)[m].Decision; d.Action != "edit" || d.Content != mine || d.Note != "why" {
 		t.Fatalf("after the note: %+v", d)
 	}
-	if after := printsOf(t, s, id, g, m); after[g] != before[g] || after[m] != before[m] {
+	if after := seenOf(t, s, id, g, m); after[g] != before[g] || after[m] != before[m] {
 		t.Fatalf("a note changed the prints: %v -> %v", before, after)
 	}
 }
 
 // A Send covers the decisions the page showed when Send was pressed, and
 // names the ones it sent. A decision made since, by another page and
-// stored before the Send, is not sent: on a file, or on a row. One stored
-// after the Send is unsent again.
+// stored before the Send, is not sent: on a file, or on a row. Nor is one
+// whose print changed under it: g's accept stays, but g's print covers
+// m's edit, so g is not as the page showed it either.
 func TestASendSendsOnlyWhatThePageShowed(t *testing.T) {
 	s, _ := open(t)
 	id, f := ready(t, s)
 	g, m, q := f["g"].Key, f["m"].Key, f["q"].Key
-	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, printsOf(t, s, id, g, m)); err != nil {
+	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, seenOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, seenOf(t, s, id, q)); err != nil {
 		t.Fatal(err)
 	}
 	// The page shows g, m accepted and q rejected, and presses Send.
-	shown := &Shown{Files: map[string]rec.Decision{}}
-	for k, it := range items(t, s, id) {
-		shown.Files[k] = *it.Decision
-	}
+	shown := shownNow(t, s, id)
 	// Another page edits m before the Send is stored.
-	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# mine\n"}, printsOf(t, s, id, g, m)); err != nil {
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# mine\n"}, seenOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
 	sd, err := s.Send(ctx, id, "", shown)
 	if err != nil {
 		t.Fatal(err)
 	}
-	slices.Sort(sd.Files)
-	want := []string{g, q}
-	slices.Sort(want)
-	if !slices.Equal(sd.Files, want) || sd.Counts != (Counts{Accept: 1, Reject: 1}) {
+	if want := []string{q}; !slices.Equal(sd.Files, want) || sd.Counts != (Counts{Reject: 1}) {
 		t.Fatalf("sent %v %+v, want %v", sd.Files, sd.Counts, want)
 	}
 	for k, it := range items(t, s, id) {
-		if it.Decision.Sent == (k == m) {
+		if it.Decision.Sent != (k == q) {
 			t.Errorf("%s: sent %v", k, it.Decision.Sent)
 		}
 	}
@@ -586,17 +583,16 @@ func TestASendSendsOnlyTheRowsThePageShowed(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, rs, _ := s.Round(ctx, id)
-	shown := &Shown{Rows: map[string]row.Decision{a: *rs[0].Decision, b: *rs[1].Decision}}
+	shown := shownNow(t, s, id)
 	// Another page edits a before the Send is stored.
-	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], Decision: row.Decision{Action: "edit", Text: "mine"}}}); err != nil {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], DecisionID: ids(t, s, id)[a], Decision: row.Decision{Action: "edit", Text: "mine"}}}); err != nil {
 		t.Fatal(err)
 	}
 	sd, err := s.Send(ctx, id, "", shown)
 	if err != nil || !slices.Equal(sd.Rows, []string{b}) || sd.Counts != (Counts{Reject: 1}) || len(sd.Notes) != 1 {
 		t.Fatalf("%+v %v", sd, err)
 	}
-	_, rs, _ = s.Round(ctx, id)
+	_, rs, _ := s.Round(ctx, id)
 	if rs[0].Decision.Sent || !rs[1].Decision.Sent {
 		t.Fatalf("sent flags: %+v %+v", rs[0].Decision, rs[1].Decision)
 	}

@@ -20,29 +20,36 @@ function client(api) {
       });
       return r?.rows ?? [];
     },
-    async clear(round, id, fingerprint) {
-      const q = new URLSearchParams({ round: String(round), id, fingerprint });
+    async clear(round, id, fingerprint, decisionID) {
+      const q = new URLSearchParams({
+        round: String(round),
+        id,
+        fingerprint,
+        decision_id: decisionID
+      });
       const r = await api.del(
         `/decisions?${q.toString()}`
       );
       return r?.rows ?? [];
     },
-    async decideFile(round, file, d, prints) {
+    async decideFile(round, file, d, seen) {
       const r = await api.put("/files", {
         round,
         file,
         action: d.action,
         content: d.content ?? "",
         note: d.note ?? "",
-        prints
+        prints: seen.prints,
+        decisions: seen.decisions
       });
       return r?.files ?? [];
     },
-    async clearFile(round, file, prints) {
+    async clearFile(round, file, seen) {
       const r = await api.post("/files/clear", {
         round,
         file,
-        prints
+        prints: seen.prints,
+        decisions: seen.decisions
       });
       return r?.files ?? [];
     },
@@ -132,8 +139,8 @@ function verdictOf(r) {
 }
 function fieldOf(r, k) {
   const d = r.decision?.action === "edit" ? r.decision : void 0;
-  if (d?.[k]) return d[k];
   if (d?.cleared?.includes(k)) return "";
+  if (d?.[k]) return d[k];
   return r[k] ?? "";
 }
 var plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -234,22 +241,23 @@ function editDecision(r, f) {
   if (!verdict) return { ok: false, error: "choose a verdict" };
   if (!validVerdict(verdict))
     return { ok: false, error: `“${verdict}” is not a verdict` };
-  const d = { action: "edit" };
-  if (verdict !== (r.verdict ?? "")) d.verdict = verdict;
+  const d = { action: "edit", verdict };
+  let changed = verdict !== (r.verdict ?? "");
   const cleared = [];
   for (const k of ["title", "text"]) {
     const now = f[k];
-    if (now === (r[k] ?? "")) continue;
+    if (now !== (r[k] ?? "")) changed = true;
     if (now.trim() !== "") d[k] = now;
     else if (r[k]) cleared.push(k);
   }
   if (cleared.length) d.cleared = cleared;
-  if (!d.verdict && !d.title && !d.text && !d.cleared)
+  if (!changed)
     return { ok: false, error: "nothing changed: accept the proposal instead" };
   return { ok: true, decision: d };
 }
 function rowTitle(r) {
-  if (r.title) return r.title;
+  const title = fieldOf(r, "title");
+  if (title) return title;
   const first = (r.passage ?? "").split("\n").map((l) => l.trim()).find((l) => l !== "");
   return first || r.summary;
 }
@@ -419,12 +427,17 @@ function fileMeta(f) {
     " ·"
   );
 }
-function printsFor(files, key) {
+function seenFor(files, key) {
   const f = files.find((x) => x.key === key);
-  const out = {};
+  const out = {
+    prints: {},
+    decisions: {}
+  };
   for (const k of f?.group ?? [key]) {
     const m = files.find((x) => x.key === k);
-    if (m) out[k] = m.fingerprint;
+    if (!m) continue;
+    out.prints[k] = m.fingerprint;
+    if (m.decision?.id) out.decisions[k] = m.decision.id;
   }
   return out;
 }
@@ -492,15 +505,15 @@ function createDecider(server, hooks) {
     cur.progress = r.progress;
   }
   async function run(round, keys, call) {
-    if (busy(keys)) return false;
+    if (busy(keys)) return "busy";
     keys.forEach((k) => locks.add(k));
     hooks.changed();
     try {
       await call();
       epoch++;
-      return true;
+      return "saved";
     } catch (err) {
-      if (staleErr(err)) return false;
+      if (staleErr(err)) return "failed";
       if (statusOf(err) === 409) {
         try {
           await reload(round, keys);
@@ -512,10 +525,10 @@ function createDecider(server, hooks) {
           if (!staleErr(e))
             hooks.failed(`The review changed; reload: ${msgOf(e)}`, true);
         }
-        return false;
+        return "changed";
       }
       hooks.failed(`Not saved: ${msgOf(err)}`, false);
-      return false;
+      return "failed";
     } finally {
       keys.forEach((k) => locks.delete(k));
       hooks.changed();
@@ -576,6 +589,54 @@ function createDecider(server, hooks) {
     }
     saveNote(k, r.decision, text, { id });
   }
+  const saved = (p) => p.then((s) => s === "saved");
+  function decideFile(key, d, seen, f) {
+    const round = hooks.review()?.round?.id;
+    if (!round) return Promise.resolve("failed");
+    const keys = groupKeys(f);
+    if (busy(keys)) return Promise.resolve("busy");
+    const k = `f:${key}`;
+    const full = {
+      ...d,
+      note: notes.get(k) ?? fileOf(key)?.decision?.note ?? ""
+    };
+    return run(round, keys, async () => {
+      const snap = await server.decideFile(round, key, full, seen);
+      if (notes.get(k) === full.note) notes.delete(k);
+      const cur = shownRound(round);
+      if (cur) holdFiles(cur.files, snap);
+    });
+  }
+  function decideRows(ds, seen) {
+    const round = hooks.review()?.round?.id;
+    if (!round || !ds.length) return Promise.resolve("failed");
+    const keys = ds.map((x) => `r:${x.id}`);
+    if (busy(keys)) return Promise.resolve("busy");
+    const body = [];
+    for (const { id, d } of ds) {
+      const { row, target } = seen(id);
+      const t = editTarget(d);
+      body.push({
+        id,
+        action: d.action,
+        verdict: d.verdict,
+        title: d.title,
+        text: d.text,
+        cleared: d.cleared,
+        note: notes.get(`r:${id}`) ?? rowOf(id)?.decision?.note ?? "",
+        fingerprint: row.fingerprint,
+        decision_id: row.decision?.id ?? "",
+        target_fingerprint: t ? target(t) : void 0
+      });
+    }
+    return run(round, keys, async () => {
+      const snap = await server.decide(round, body);
+      for (const b of body)
+        if (notes.get(`r:${b.id}`) === b.note) notes.delete(`r:${b.id}`);
+      const cur = shownRound(round);
+      if (cur) holdRows(cur.rows, snap);
+    });
+  }
   return {
     busy,
     idle,
@@ -586,79 +647,82 @@ function createDecider(server, hooks) {
       return epoch;
     },
     noteOf: (key) => notes.get(key),
+    // A decision or clear from the page binds to the item as it shows it
+    // now; an edit binds to its editor's snapshot (editRow, editFile).
     file(key, d) {
       const r = hooks.review();
-      const round = r?.round?.id;
       const f = fileOf(key);
-      if (!r || !round || !f) return Promise.resolve(false);
-      const keys = groupKeys(f);
-      if (busy(keys)) return Promise.resolve(false);
-      const k = `f:${key}`;
-      const full = {
-        ...d,
-        note: notes.get(k) ?? f.decision?.note ?? ""
-      };
-      const prints = printsFor(r.files, key);
-      return run(round, keys, async () => {
-        const snap = await server.decideFile(round, key, full, prints);
-        if (notes.get(k) === full.note) notes.delete(k);
-        const cur = shownRound(round);
-        if (cur) holdFiles(cur.files, snap);
-      });
+      if (!r || !f) return Promise.resolve(false);
+      return saved(decideFile(key, d, seenFor(r.files, key), f));
     },
     clearFile(key) {
       const r = hooks.review();
       const round = r?.round?.id;
       const f = fileOf(key);
       if (!r || !round || !f?.decision) return Promise.resolve(false);
-      const prints = printsFor(r.files, key);
-      return run(round, groupKeys(f), async () => {
-        const snap = await server.clearFile(round, key, prints);
-        const cur = shownRound(round);
-        if (cur) holdFiles(cur.files, snap);
-      });
+      const seen = seenFor(r.files, key);
+      return saved(
+        run(round, groupKeys(f), async () => {
+          const snap = await server.clearFile(round, key, seen);
+          const cur = shownRound(round);
+          if (cur) holdFiles(cur.files, snap);
+        })
+      );
     },
     rows(ds) {
-      const r = hooks.review();
-      const round = r?.round?.id;
-      if (!r || !round || !ds.length) return Promise.resolve(false);
-      const keys = ds.map((x) => `r:${x.id}`);
-      if (busy(keys)) return Promise.resolve(false);
-      const body = [];
-      for (const { id, d } of ds) {
-        const row = rowOf(id);
-        if (!row) return Promise.resolve(false);
-        const target = editTarget(d);
-        body.push({
-          id,
-          action: d.action,
-          verdict: d.verdict,
-          title: d.title,
-          text: d.text,
-          cleared: d.cleared,
-          note: notes.get(`r:${id}`) ?? row.decision?.note ?? "",
-          fingerprint: row.fingerprint,
-          target_fingerprint: target ? rowOf(target)?.fingerprint : void 0
-        });
-      }
-      return run(round, keys, async () => {
-        const snap = await server.decide(round, body);
-        for (const b of body)
-          if (notes.get(`r:${b.id}`) === b.note) notes.delete(`r:${b.id}`);
-        const cur = shownRound(round);
-        if (cur) holdRows(cur.rows, snap);
-      });
+      if (ds.some((x) => !rowOf(x.id))) return Promise.resolve(false);
+      return saved(
+        decideRows(ds, (id) => ({
+          row: rowOf(id),
+          target: (t) => rowOf(t)?.fingerprint ?? ""
+        }))
+      );
     },
     clearRow(id) {
       const round = hooks.review()?.round?.id;
       const row = rowOf(id);
       if (!round || !row?.decision) return Promise.resolve(false);
       const print = row.fingerprint;
-      return run(round, [`r:${id}`], async () => {
-        const snap = await server.clear(round, id, print);
-        const cur = shownRound(round);
-        if (cur) holdRows(cur.rows, snap);
-      });
+      const decision = row.decision.id ?? "";
+      return saved(
+        run(round, [`r:${id}`], async () => {
+          const snap = await server.clear(round, id, print, decision);
+          const cur = shownRound(round);
+          if (cur) holdRows(cur.rows, snap);
+        })
+      );
+    },
+    snapRow(id) {
+      const r = hooks.review();
+      const row = rowOf(id);
+      if (!r || !row) return null;
+      return {
+        row: structuredClone(row),
+        prints: Object.fromEntries(r.rows.map((x) => [x.id, x.fingerprint]))
+      };
+    },
+    snapFile(key) {
+      const r = hooks.review();
+      const f = fileOf(key);
+      if (!r || !f) return null;
+      return { file: structuredClone(f), seen: seenFor(r.files, key) };
+    },
+    editRow(snap, d) {
+      if (!rowOf(snap.row.id)) return Promise.resolve("changed");
+      return decideRows([{ id: snap.row.id, d }], () => ({
+        row: snap.row,
+        target: (t) => snap.prints[t] ?? ""
+      }));
+    },
+    editFile(snap, content) {
+      const f = fileOf(snap.file.key);
+      if (!f) return Promise.resolve("changed");
+      return decideFile(
+        snap.file.key,
+        { action: "edit", content },
+        snap.seen,
+        f
+      );
     },
     noteFile,
     noteRow,
@@ -669,10 +733,16 @@ function createDecider(server, hooks) {
       const shown = { files: {}, rows: {} };
       for (const f of r.files)
         if (f.decision && !f.decision.sent)
-          shown.files[f.key] = { ...f.decision };
+          shown.files[f.key] = {
+            decision_id: f.decision.id ?? "",
+            fingerprint: f.fingerprint
+          };
       for (const x of r.rows)
         if (x.decision && !x.decision.sent)
-          shown.rows[x.id] = { ...x.decision };
+          shown.rows[x.id] = {
+            decision_id: x.decision.id ?? "",
+            fingerprint: x.fingerprint
+          };
       sending = true;
       hooks.changed();
       try {
@@ -842,7 +912,7 @@ function editForm(ctx, r) {
 function rowDoc(ctx, r) {
   const parts = [
     h2("div", { class: "kit-kick" }, `${r.check} · ${where(r, ctx.home)}`),
-    h2("h1", { class: "kit-h1" }, r.title || r.summary)
+    h2("h1", { class: "kit-h1" }, fieldOf(r, "title") || r.summary)
   ];
   const ev = (r.evidence ?? []).map((f) => [
     f.name,
@@ -914,7 +984,7 @@ function rowDoc(ctx, r) {
           `your decision: ${rowMeta(r)}${r.decision.sent ? " · sent" : ""}`
         )
       );
-    if (ctx.editing === r.id) parts.push(...editForm(ctx, r));
+    if (ctx.editing === r.id) parts.push(...editForm(ctx, ctx.edited ?? r));
   }
   parts.push(...noteBlock(ctx, r));
   if (r.source.file || r.source.repo) parts.push(wholeFile(ctx, r));
@@ -1217,7 +1287,7 @@ function fileDoc(ctx, f) {
   if (busy) said.push("saving");
   if (said.length)
     parts.push(h2("p", { class: "sift-why" }, said.join(". ") + "."));
-  if (ctx.editing === f.key) parts.push(fileEdit(ctx, f));
+  if (ctx.editing === f.key) parts.push(fileEdit(ctx, ctx.edited ?? f));
   parts.push(
     h2("div", { class: "kit-label" }, "findings"),
     findingsTable(f, rows)
@@ -1263,6 +1333,9 @@ function boot() {
   let review = null;
   let openKey = null;
   let editing = null;
+  let rowSnap = null;
+  let fileSnap = null;
+  let editGen = 0;
   let filter = "";
   let search = "";
   let lastFrag = "";
@@ -1452,17 +1525,19 @@ function boot() {
     get editing() {
       return editing;
     },
+    get edited() {
+      return rowSnap?.row ?? null;
+    },
     noteOf: (r) => decider.noteOf(`r:${r.id}`) ?? r.decision?.note ?? "",
     setNote: (r, text) => decider.noteRow(r.id, text),
     accept: (rows) => decide(rows, "accept"),
     reject: (rows) => decide(rows, "reject"),
     startEdit(r) {
       if (ctx.busy([r])) return;
-      editing = r.id;
-      render();
+      openEdit(r.id, false);
     },
     cancelEdit() {
-      editing = null;
+      closeEdit();
       render();
     },
     saveEdit,
@@ -1477,6 +1552,9 @@ function boot() {
     },
     get editing() {
       return editing;
+    },
+    get edited() {
+      return fileSnap?.file ?? null;
     },
     get files() {
       return files();
@@ -1493,21 +1571,24 @@ function boot() {
     reject: (f) => putFile(f, { action: "reject" }),
     startEdit(f) {
       if (fctx.busy(f)) return;
-      editing = f.key;
-      render();
+      openEdit(f.key, true);
     },
     cancelEdit() {
-      editing = null;
+      closeEdit();
       render();
     },
-    saveEdit(f, content) {
+    saveEdit(_f, content) {
+      const snap = fileSnap;
+      if (!snap) return "the editor is closed";
+      const f = snap.file;
       if (!content.trim())
         return "the file is empty: reject it to leave it as it is";
       const was = f.decision?.action === "edit" ? f.decision.content : f.rec?.content;
       if (content === was)
         return "nothing changed: accept the recommendation instead";
       if (fctx.busy(f)) return "the last decision on this file is saving";
-      putFile(f, { action: "edit", content });
+      const at = openKey;
+      void decider.editFile(snap, content).then((out) => edited(out, f.key, true, at));
       return null;
     },
     clear: (f) => void decider.clearFile(f.key),
@@ -1586,7 +1667,8 @@ function boot() {
       const noteNow = e.kind === "file" ? fctx.noteOf(e.file) : e.kind === "row" ? ctx.noteOf(e.row) : "";
       if (oldNote && lastView === vkey && (focus === oldNote || oldNote.value !== noteNow))
         doc.querySelector(".kit-note")?.replaceWith(oldNote);
-      if (oldEdit && lastView === vkey)
+      doc.querySelector(".sift-edit")?.setAttribute("data-gen", String(editGen));
+      if (oldEdit && lastView === vkey && oldEdit.dataset.gen === String(editGen))
         doc.querySelector(".sift-edit")?.replaceWith(oldEdit);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
@@ -1629,7 +1711,7 @@ function boot() {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
     const key = parseRoute(f);
-    if (key !== openKey) editing = null;
+    if (key !== openKey) closeEdit();
     openKey = key;
     render();
   }
@@ -1730,6 +1812,34 @@ function boot() {
     liveHandle?.stop();
     b.setLive("stale");
   }
+  function openEdit(key, file) {
+    rowSnap = file ? null : decider.snapRow(key);
+    fileSnap = file ? decider.snapFile(key) : null;
+    editing = key;
+    editGen++;
+    render();
+  }
+  function closeEdit() {
+    editing = null;
+    rowSnap = null;
+    fileSnap = null;
+  }
+  function edited(out, key, file, at) {
+    if (editing !== key) return;
+    if (out === "changed") {
+      openEdit(key, file);
+      flash(
+        "This changed while the editor was open; the editor now shows it as it is. Redo your edit.",
+        "danger"
+      );
+      return;
+    }
+    if (out !== "saved") return;
+    closeEdit();
+    if (!file && at && openKey === at && at === `r:${key}`)
+      go(frag(nextOpen(shown, at)));
+    else render();
+  }
   function nextFile(key) {
     const i = shown.findIndex((e) => e.key === key);
     for (let j = i + 1; j < shown.length; j++) {
@@ -1742,7 +1852,7 @@ function boot() {
     const at = `f:${f.key}`;
     void decider.file(f.key, d).then((ok) => {
       if (!ok) return;
-      if (editing === f.key) editing = null;
+      if (editing === f.key) closeEdit();
       if (openKey === at && d.action !== "edit") go(frag(nextFile(at)));
       else render();
     });
@@ -1753,7 +1863,7 @@ function boot() {
     const at = openKey;
     void decider.rows(rows.map((r) => ({ id: r.id, d: make(r) }))).then((ok) => {
       if (!ok) return;
-      if (rows.some((r) => r.id === editing)) editing = null;
+      if (rows.some((r) => r.id === editing)) closeEdit();
       if (single && at && openKey === at)
         go(frag(nextOpen(shown, at)));
       else render();
@@ -1769,11 +1879,14 @@ function boot() {
     }
     put(targets, () => ({ action }));
   }
-  function saveEdit(r, f) {
-    const res = editDecision(r, f);
+  function saveEdit(_r, f) {
+    const snap = rowSnap;
+    if (!snap) return "the editor is closed";
+    const res = editDecision(snap.row, f);
     if (!res.ok) return res.error;
-    if (ctx.busy([r])) return "the last decision on this row is saving";
-    put([r], () => res.decision);
+    if (ctx.busy([snap.row])) return "the last decision on this row is saving";
+    const at = openKey;
+    void decider.editRow(snap, res.decision).then((out) => edited(out, snap.row.id, false, at));
     return null;
   }
   async function send() {

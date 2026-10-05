@@ -9,11 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 )
 
@@ -244,19 +242,22 @@ type Send struct {
 	Files, Rows []string
 }
 
-// Shown is the decisions the page showed when Send was pressed, by file key
-// and by row id. A Send given it sends each only while it is still the
-// decision in force, unsent; a decision made since is left for the next.
+// Shown is the decisions the page showed unsent when Send was pressed, by
+// file key and by row id: each by its decision id and the item's print as
+// the page showed it (for an edited merge, the print covers the target's).
+// A Send given it sends each only while both still match; a decision made
+// since, even an identical one, has another id and is left for the next.
 type Shown struct {
-	Files map[string]rec.Decision
-	Rows  map[string]row.Decision
+	Files map[string]Seen
+	Rows  map[string]Seen
 }
 
 // Send marks the round's unsent decisions sent, on files and on rows, and
 // records one send for them, in one transaction. Given what the page
 // showed (shown, non-nil), it sends only those decisions, each only while
-// it is still the one in force: a decision made since Send was pressed
-// waits for the next. nil sends every unsent decision. With nothing to
+// its id and its item's print are still the ones shown: a decision made
+// since Send was pressed waits for the next, and so does one whose item
+// changed under it. nil sends every unsent decision. With nothing to
 // send it returns a zero Send and records nothing. The Send names the
 // decisions it marked (Files, Rows).
 func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Shown) (Send, error) {
@@ -283,7 +284,7 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Sh
 		}
 		for _, it := range items {
 			d := it.Decision
-			if d == nil || d.Sent || !shown.hasFile(it.Key, *d) {
+			if d == nil || d.Sent || !shown.hasFile(it.Key, d.ID, it.Fingerprint) {
 				continue
 			}
 			sd.Files = append(sd.Files, it.Key)
@@ -298,7 +299,7 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Sh
 		}
 		for _, r := range rows {
 			d := r.Decision
-			if d == nil || d.Sent || !shown.hasRow(r.ID, *d) {
+			if d == nil || d.Sent || !shown.hasRow(r.ID, d.ID, r.Fingerprint) {
 				continue
 			}
 			sd.Rows = append(sd.Rows, r.ID)
@@ -339,25 +340,20 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Sh
 	return sd, nil
 }
 
-// hasFile reports whether the page showed d on file key (a nil Shown shows
-// everything).
-func (sh *Shown) hasFile(key string, d rec.Decision) bool {
-	if sh == nil {
-		return true
-	}
-	w, ok := sh.Files[key]
-	return ok && w.Action == d.Action && w.Content == d.Content && w.Note == d.Note
+// hasFile reports whether the page showed decision id on file key, with the
+// file's print as it is now (a nil Shown shows everything).
+func (sh *Shown) hasFile(key, id, print string) bool {
+	return sh == nil || saw(sh.Files[key], id, print)
 }
 
-// hasRow reports whether the page showed d on row id (a nil Shown shows
-// everything).
-func (sh *Shown) hasRow(id string, d row.Decision) bool {
-	if sh == nil {
-		return true
-	}
-	w, ok := sh.Rows[id]
-	return ok && w.Action == d.Action && w.Verdict == d.Verdict && w.Title == d.Title && w.Text == d.Text &&
-		slices.Equal(w.Cleared, d.Cleared) && w.Note == d.Note
+// hasRow is hasFile for a row.
+func (sh *Shown) hasRow(rowID, id, print string) bool {
+	return sh == nil || saw(sh.Rows[rowID], id, print)
+}
+
+// saw reports whether w is decision id on an item whose print is print.
+func saw(w Seen, id, print string) bool {
+	return id != "" && w.Decision == id && w.Fingerprint == print
 }
 
 // where names a row for a note: file:line · check.

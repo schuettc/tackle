@@ -220,16 +220,22 @@ export function fileMeta(f: FileView): string {
   );
 }
 
-/** The prints a decision on key carries: each file of its group's. */
-export function printsFor(
+/** What a decision on key carries: each file of its group as files show
+ * it, its print and the id of its decision (none when undecided). */
+export function seenFor(
   files: FileView[],
   key: string,
-): Record<string, string> {
+): { prints: Record<string, string>; decisions: Record<string, string> } {
   const f = files.find((x) => x.key === key);
-  const out: Record<string, string> = {};
+  const out = {
+    prints: {} as Record<string, string>,
+    decisions: {} as Record<string, string>,
+  };
   for (const k of f?.group ?? [key]) {
     const m = files.find((x) => x.key === k);
-    if (m) out[k] = m.fingerprint;
+    if (!m) continue;
+    out.prints[k] = m.fingerprint;
+    if (m.decision?.id) out.decisions[k] = m.decision.id;
   }
   return out;
 }

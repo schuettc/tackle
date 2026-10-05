@@ -23,6 +23,9 @@ interface Decision {
   cleared?: ('title' | 'text')[];
   note?: string;
   sent?: boolean;
+  /** This decision's id: new each time a decision is made, never reused.
+   * Every decision, clear and Send names the one it saw by it. */
+  id?: string;
 }
 
 interface Account {
@@ -46,6 +49,8 @@ interface FileDecision {
   content?: string;
   note?: string;
   sent?: boolean;
+  /** As Decision.id. */
+  id?: string;
 }
 
 /** One of an audit round's files (internal/sift/serve fileJSON). */

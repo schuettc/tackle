@@ -90,6 +90,10 @@ type Decision struct {
 	Note    string `json:"note,omitempty"`
 	// Sent is set once the user pressed Send with this decision.
 	Sent bool `json:"sent,omitempty"`
+	// ID names this decision: the store gives each decision it creates or
+	// replaces a new one, never reused, and every check of an approval
+	// binds to it (with the print of what the page showed).
+	ID string `json:"id,omitempty"`
 }
 
 // Validate reports what is wrong with a decision.

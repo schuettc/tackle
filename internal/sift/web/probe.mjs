@@ -777,6 +777,128 @@ async function main() {
     ),
   );
   await shoot(bp0, 'backlog');
+
+  // An open editor is bound to the item as it was when it opened: the agent
+  // re-proposes b2 under it, and a save that changes only the verdict is
+  // refused (409), stores nothing, and reopens on the new proposal.
+  console.log('editor');
+  const puts = [];
+  bp0.on('response', (r) => {
+    if (r.request().method() === 'PUT' && r.url().includes('/api/decisions'))
+      puts.push(r.status());
+  });
+  await bp0.goto(pageUrl(blServe, {}, `#/open/${encodeURIComponent('r:b2')}`));
+  await bp0.waitForSelector('.kit-card');
+  await decideKey(bp0, '2');
+  await bp0.waitForSelector('.sift-edit');
+  const reworded = 'Reworded by the agent while the editor was open.';
+  blServe.sift(
+    ['rows', 'add'],
+    JSON.stringify({
+      id: 'b2',
+      verdict: 'issue',
+      title: 'probe: flaky under load',
+      destination: 'acme/tools',
+      text: reworded,
+      reason: 'Three CI runs this week.',
+    }) + '\n',
+  );
+  check(
+    'the page shows the new proposal under the open editor',
+    await until(async () =>
+      (await bp0.locator('.kit-doc').innerText()).includes(reworded),
+    ),
+  );
+  await bp0.locator('.sift-verdict').fill('delete');
+  await bp0.locator('.sift-edit button', { hasText: 'save edit' }).click();
+  check(
+    'the save gets an answer',
+    await until(async () => puts.length > 0),
+    puts.join(','),
+  );
+  check('  with 409', puts[0] === 409, puts.join(','));
+  await settled(bp0);
+  check(
+    'and nothing is stored',
+    !(await bl.review()).rows.find((r) => r.id === 'b2')?.decision,
+  );
+  check(
+    'the editor reopens on the new proposal',
+    await until(
+      async () =>
+        (await bp0.locator('.sift-edit .sift-text').inputValue()) ===
+          reworded &&
+        (await bp0.locator('.sift-verdict').inputValue()) === 'issue',
+    ),
+  );
+  check(
+    'and the bar says it changed',
+    /changed/i.test(await bp0.locator('.kit-status').innerText()),
+    await bp0.locator('.kit-status').innerText(),
+  );
+
+  // Edited titles are shown, and cleared ones are not, once saved and
+  // reopened.
+  console.log('titles');
+  await bp0.locator('.sift-edit .sift-title').fill('probe: my own title');
+  await bp0.locator('.sift-edit button', { hasText: 'save edit' }).click();
+  check(
+    'an edited title saves',
+    await until(
+      async () =>
+        (await bl.review()).rows.find((r) => r.id === 'b2')?.decision?.title ===
+        'probe: my own title',
+    ),
+  );
+  await settled(bp0);
+  const reopen = async () => {
+    await bp0.goto(pageUrl(blServe, {}, '#/open'));
+    await bp0.waitForSelector('.kit-row');
+    await bp0.goto(
+      pageUrl(blServe, {}, `#/open/${encodeURIComponent('r:b2')}`),
+    );
+    await bp0.waitForSelector('.kit-card');
+  };
+  await reopen();
+  check(
+    'reopened, the item shows the edited title',
+    (await bp0.locator('.kit-doc h1').innerText()) === 'probe: my own title',
+    await bp0.locator('.kit-doc h1').innerText(),
+  );
+  check(
+    'and so does the list',
+    (await bp0.locator('.kit-row.open').innerText()).includes(
+      'probe: my own title',
+    ),
+    await bp0.locator('.kit-row.open').innerText(),
+  );
+  await decideKey(bp0, 'u');
+  await until(
+    async () => !(await bl.review()).rows.find((r) => r.id === 'b2')?.decision,
+  );
+  await decideKey(bp0, '2');
+  await bp0.waitForSelector('.sift-edit');
+  await bp0.locator('.sift-edit .sift-title').fill('');
+  await bp0.locator('.sift-edit button', { hasText: 'save edit' }).click();
+  check(
+    'a cleared title saves',
+    await until(async () =>
+      (
+        (await bl.review()).rows.find((r) => r.id === 'b2')?.decision
+          ?.cleared ?? []
+      ).includes('title'),
+    ),
+  );
+  await settled(bp0);
+  await reopen();
+  const h1 = await bp0.locator('.kit-doc h1').innerText();
+  const listed = await bp0.locator('.kit-row.open').innerText();
+  check(
+    'reopened, a cleared title is not shown, in the item or the list',
+    !h1.includes('probe: flaky under load') &&
+      !listed.includes('probe: flaky under load'),
+    `${h1} | ${listed}`,
+  );
   await bp0.close();
 
   // A backlog round with an item the agent has not answered waits too: no

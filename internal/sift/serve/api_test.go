@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
@@ -60,6 +60,12 @@ func (f *fixture) record() {
 func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 	f.t.Helper()
 	body = f.withPrints(method, path, body)
+	if method == "DELETE" && strings.HasPrefix(path, "/api/decisions?") && !strings.Contains(path, "decision_id=") {
+		// A clear names the decision it clears, as the page does.
+		if q, err := url.ParseQuery(path[len("/api/decisions?"):]); err == nil {
+			path += "&decision_id=" + f.currentID(q.Get("id"))
+		}
+	}
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	f.h.ServeHTTP(w, req)
@@ -68,11 +74,15 @@ func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 
 // withPrints gives a decision request that names no fingerprint the row's
 // current one, and an edit to merge:C that names no target fingerprint C's
-// current one, as the page sends what it shows. A test about fingerprints
-// sets the key itself.
+// current one, as the page sends what it shows; so with the id of the
+// decision in force (decision_id), on rows and on files. A test about
+// fingerprints or ids sets the key itself.
 func (f *fixture) withPrints(method, path, body string) string {
 	if method == "POST" && path == "/api/send" {
 		return f.withShown(body)
+	}
+	if (method == "PUT" && path == "/api/files") || (method == "POST" && path == "/api/files/clear") {
+		return f.withFileIDs(body)
 	}
 	if method == "GET" || path != "/api/decisions" {
 		return body
@@ -85,6 +95,10 @@ func (f *fixture) withPrints(method, path, body string) string {
 		if _, ok := d["fingerprint"]; !ok {
 			id, _ := d["id"].(string)
 			d["fingerprint"] = f.currentPrint(id)
+		}
+		if _, ok := d["decision_id"]; !ok {
+			id, _ := d["id"].(string)
+			d["decision_id"] = f.currentID(id)
 		}
 		v, _ := d["verdict"].(string)
 		if _, ok := d["target_fingerprint"]; !ok && d["action"] == "edit" && row.MergeTarget(v) != "" {
@@ -119,17 +133,17 @@ func (f *fixture) withShown(body string) string {
 		return body
 	}
 	ctx := context.Background()
-	rows, files := map[string]row.Decision{}, map[string]rec.Decision{}
+	rows, files := map[string]store.Seen{}, map[string]store.Seen{}
 	if rd, rs, err := f.st.LatestRound(ctx); err == nil {
 		for _, r := range rs {
 			if r.Decision != nil && !r.Decision.Sent {
-				rows[r.ID] = *r.Decision
+				rows[r.ID] = store.Seen{Fingerprint: r.Fingerprint, Decision: r.Decision.ID}
 			}
 		}
 		items, _ := f.st.Files(ctx, rd.ID)
 		for _, it := range items {
 			if it.Decision != nil && !it.Decision.Sent {
-				files[it.Key] = *it.Decision
+				files[it.Key] = store.Seen{Fingerprint: it.Fingerprint, Decision: it.Decision.ID}
 			}
 		}
 	}
@@ -140,6 +154,47 @@ func (f *fixture) withShown(body string) string {
 
 // currentPrint is a row's fingerprint in the latest round ("-" when it has
 // no such row).
+// withFileIDs gives a file decision or clear that names no decision ids
+// the current id of each file it names a print for.
+func (f *fixture) withFileIDs(body string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return body
+	}
+	prints, _ := m["prints"].(map[string]any)
+	if _, ok := m["decisions"]; ok || prints == nil {
+		return body
+	}
+	rd, _, err := f.st.LatestRound(context.Background())
+	if err != nil {
+		return body
+	}
+	items, _ := f.st.Files(context.Background(), rd.ID)
+	ids := map[string]string{}
+	for _, it := range items {
+		if _, ok := prints[it.Key]; ok && it.Decision != nil {
+			ids[it.Key] = it.Decision.ID
+		}
+	}
+	m["decisions"] = ids
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// currentID is the id of row id's decision now ("" for none).
+func (f *fixture) currentID(id string) string {
+	_, rows, err := f.st.LatestRound(context.Background())
+	if err != nil {
+		return ""
+	}
+	for _, r := range rows {
+		if r.ID == id && r.Decision != nil {
+			return r.Decision.ID
+		}
+	}
+	return ""
+}
+
 func (f *fixture) currentPrint(id string) string {
 	_, rows, err := f.st.LatestRound(context.Background())
 	if err != nil {
@@ -301,15 +356,24 @@ func TestSend(t *testing.T) {
 	}
 }
 
-// A Send names the decisions the page shows, and sends each only while it
-// is still in force: one changed by another page since is left unsent, and
-// the response names what it sent. A Send that names nothing is refused.
+// sendShowing is a Send body naming row id as the page shows it now: its
+// decision's id and its print.
+func (f *fixture) sendShowing(id string) string {
+	return fmt.Sprintf(`{"round":%d,"files":{},"rows":{%q:{"decision_id":%q,"fingerprint":%q}}}`, f.round, id, f.currentID(id), f.currentPrint(id))
+}
+
+// A Send names the decisions the page shows, by id and print, and sends
+// each only while both still match: one replaced by another page since,
+// even by an identical one, is left unsent, and the response names what it
+// sent. A Send that names nothing is refused.
 func TestSendSendsWhatThePageShowed(t *testing.T) {
 	f := newFixture(t)
 	f.decide("r-neg", "accept", "")
-	shown := fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r-neg":{"action":"accept"}}}`, f.round)
-	// Another page rejects it before the Send is stored.
+	shown := f.sendShowing("r-neg")
+	// Another page rejects it, and accepts it again, before the Send is
+	// stored.
 	f.decide("r-neg", "reject", "")
+	f.decide("r-neg", "accept", "")
 	w := f.do("POST", "/api/send", shown)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":0`) || !strings.Contains(w.Body.String(), `"rows":[]`) {
 		t.Fatalf("send %d %s", w.Code, w.Body)
@@ -317,7 +381,7 @@ func TestSendSendsWhatThePageShowed(t *testing.T) {
 	if rv := f.review(); rv.Rows[0].Decision.Sent || rv.Sends != 0 {
 		t.Fatalf("the reject was sent: %+v, sends %d", rv.Rows[0].Decision, rv.Sends)
 	}
-	w = f.do("POST", "/api/send", fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r-neg":{"action":"reject"}}}`, f.round))
+	w = f.do("POST", "/api/send", f.sendShowing("r-neg"))
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":1`) || !strings.Contains(w.Body.String(), `"rows":["r-neg"]`) || !strings.Contains(w.Body.String(), `"files":[]`) {
 		t.Fatalf("send %d %s", w.Code, w.Body)
 	}

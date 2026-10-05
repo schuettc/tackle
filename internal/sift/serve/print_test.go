@@ -112,6 +112,11 @@ func TestAnOldPageCannotClearAChangedProposal(t *testing.T) {
 	if d := f.decisionOf("r-neg"); d == nil {
 		t.Fatal("the old page's clear cleared it")
 	}
+	// The print alone is not enough: the clear names the decision it
+	// clears, and another one is refused.
+	if w := f.do("DELETE", fmt.Sprintf("/api/decisions?round=%d&id=r-neg&fingerprint=%s&decision_id=other", f.round, f.printOf("r-neg")), ""); w.Code != 409 {
+		t.Fatalf("a clear of another decision: %d %s", w.Code, w.Body)
+	}
 	if w := clear(""); w.Code != 400 {
 		t.Fatalf("a clear with no fingerprint: %d", w.Code)
 	}

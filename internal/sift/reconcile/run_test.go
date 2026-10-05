@@ -53,7 +53,7 @@ func applied(t *testing.T) (*store.Store, int64, string, []rec.Rec, string) {
 	}
 	items, _ := s.Files(ctx, round)
 	for _, it := range items {
-		if _, err := s.DecideFile(ctx, round, it.Key, rec.Decision{Action: "accept"}, map[string]string{it.Key: it.Fingerprint}); err != nil {
+		if _, err := s.DecideFile(ctx, round, it.Key, rec.Decision{Action: "accept"}, map[string]store.Seen{it.Key: {Fingerprint: it.Fingerprint}}); err != nil {
 			t.Fatal(err)
 		}
 	}
