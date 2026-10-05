@@ -152,9 +152,9 @@ func TestApplyRefusesSymlinksOutOfTheRepo(t *testing.T) {
 }
 
 // The write itself stays inside the worktree, whatever the plan said: a
-// symlinked leaf, a symlinked parent pointing out, "..", and .git are
-// refused; a symlinked parent that stays inside is followed.
-func TestWriteInside(t *testing.T) {
+// symlinked leaf, a symlinked parent (pointing out, or anywhere inside),
+// "..", .git and an absolute path are refused; new directories are made.
+func TestWriteFile(t *testing.T) {
 	root := t.TempDir()
 	out := t.TempDir()
 	target := filepath.Join(out, "target.md")
@@ -173,11 +173,11 @@ func TestWriteInside(t *testing.T) {
 	if err := os.Symlink(filepath.Join(root, "docs"), filepath.Join(root, "alias")); err != nil {
 		t.Fatal(err)
 	}
-	for _, rel := range []string{"leaf.md", "ext/new.md", "ext/sub/new.md", "../up.md", "a/../../up.md", ".git/config", "/abs.md"} {
-		if err := writeInside(root, rel, "x\n"); err == nil {
+	for _, rel := range []string{"leaf.md", "ext/new.md", "ext/sub/new.md", "../up.md", "a/../../up.md", ".git/config", "/abs.md", "alias/inside.md"} {
+		if err := writeAt(root, rel, "x\n"); err == nil {
 			t.Errorf("%s: written", rel)
 		}
-		if err := removeInside(root, rel); err == nil && rel == "leaf.md" {
+		if err := removeAt(root, rel); err == nil && (rel == "leaf.md" || rel == "alias/inside.md") {
 			t.Errorf("%s: removed through a symlink", rel)
 		}
 	}
@@ -187,14 +187,23 @@ func TestWriteInside(t *testing.T) {
 	if files := tree(t, out); len(files) != 1 {
 		t.Errorf("files outside: %v", files)
 	}
-	if err := writeInside(root, "alias/inside.md", "in\n"); err != nil {
-		t.Errorf("a symlinked parent inside the worktree: %v", err)
+	if _, err := os.Stat(filepath.Join(root, "docs", "inside.md")); err == nil {
+		t.Error("written through the alias")
 	}
-	if err := writeInside(root, "new/dir/file.md", "in\n"); err != nil {
+	if err := writeAt(root, "new/dir/file.md", "in\n"); err != nil {
 		t.Errorf("a new directory: %v", err)
 	}
-	if b, _ := os.ReadFile(filepath.Join(root, "docs", "inside.md")); string(b) != "in\n" {
-		t.Errorf("inside.md %q", b)
+	if err := writeAt(root, "new/dir/file.md", "again\n"); err != nil {
+		t.Errorf("an existing file: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "new", "dir", "file.md")); string(b) != "again\n" {
+		t.Errorf("file.md %q", b)
+	}
+	if err := removeAt(root, "new/dir/file.md"); err != nil {
+		t.Errorf("remove: %v", err)
+	}
+	if err := removeAt(root, "gone/file.md"); err != nil {
+		t.Errorf("remove a missing file: %v", err)
 	}
 }
 

@@ -554,6 +554,7 @@ export function boot(): void {
         text: d.text,
         cleared: d.cleared,
         note,
+        fingerprint: r.fingerprint,
       };
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
@@ -621,9 +622,7 @@ export function boot(): void {
       r.decision = fixDecision(op, note);
       persist(
         () =>
-          op === 'undo'
-            ? api.undo(round, r.id, note)
-            : api.redo(round, r.id, note),
+          op === 'undo' ? api.undo(round, r, note) : api.redo(round, r, note),
         () => {
           if (prev) r.decision = prev;
           else delete r.decision;
@@ -657,9 +656,9 @@ export function boot(): void {
     persist(
       () =>
         isFix(r) && d.action === 'reject'
-          ? api.undo(round, r.id, text)
+          ? api.undo(round, r, text)
           : isFix(r) && d.action === 'accept'
-            ? api.redo(round, r.id, text)
+            ? api.redo(round, r, text)
             : api.decide(round, [
                 {
                   id: r.id,
@@ -669,6 +668,7 @@ export function boot(): void {
                   text: d.text,
                   cleared: d.cleared,
                   note: text,
+                  fingerprint: r.fingerprint,
                 },
               ]),
       () => {

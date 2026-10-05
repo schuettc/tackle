@@ -12,6 +12,8 @@ export interface DecisionIn {
   text?: string;
   cleared?: ('title' | 'text')[];
   note?: string;
+  /** The row's fingerprint as the page shows it: a changed row is refused. */
+  fingerprint: string;
 }
 
 export interface FileOut {
@@ -25,8 +27,16 @@ export interface Client {
   review(): Promise<Review>;
   decide(round: number, ds: DecisionIn[]): Promise<void>;
   clear(round: number, id: string): Promise<void>;
-  undo(round: number, id: string, note: string): Promise<void>;
-  redo(round: number, id: string, note: string): Promise<void>;
+  undo(
+    round: number,
+    r: Pick<Finding, 'id' | 'fingerprint'>,
+    note: string,
+  ): Promise<void>;
+  redo(
+    round: number,
+    r: Pick<Finding, 'id' | 'fingerprint'>,
+    note: string,
+  ): Promise<void>;
   send(round: number): Promise<{ sent: number; to: string }>;
   file(round: number, id: string): Promise<FileOut>;
 }
@@ -42,11 +52,21 @@ export function client(api: Api): Client {
       const q = new URLSearchParams({ round: String(round), id });
       await api.del(`/decisions?${q.toString()}`);
     },
-    async undo(round, id, note) {
-      await api.post('/undo', { round, id, note });
+    async undo(round, r, note) {
+      await api.post('/undo', {
+        round,
+        id: r.id,
+        note,
+        fingerprint: r.fingerprint,
+      });
     },
-    async redo(round, id, note) {
-      await api.post('/redo', { round, id, note });
+    async redo(round, r, note) {
+      await api.post('/redo', {
+        round,
+        id: r.id,
+        note,
+        fingerprint: r.fingerprint,
+      });
     },
     async send(round) {
       const r = await api.post<{ sent: number; to?: string }>('/send', {

@@ -22,7 +22,8 @@ var applyFlags = flags("apply", "sift apply [--round N] [--dry-run] [--json]",
 		"page (delete, rewrite, move, merge), as one branch per repo (sift/round-N) cut from the fetched\n"+
 		"base in a worktree, so the primary clone's checkout is left alone. A repo whose primary\n"+
 		"clone has uncommitted or unpushed work, or an untracked instruction file, is held, with\n"+
-		"the reason. Paths are confined to the repo: no .., no .git, no symlinks. With gh and a GitHub\n"+
+		"the reason. Paths are confined to the repo: no .., no .git, no symlinks, and every write\n"+
+		"goes through an os.Root on the worktree. With gh and a GitHub\n"+
 		"remote the branch is pushed and a pull request opened (gh pr create --body-file);\n"+
 		"otherwise the committed branch is left. Prints what it did per repo, and the approved rows\n"+
 		"it leaves to you. Exit 0 all applied, 1 something was held, skipped or failed, 2 error.",

@@ -9,10 +9,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
-	"syscall"
+	"strings"
 	"time"
 
+	"github.com/schuettc/tackle/internal/sift/apply"
 	"github.com/schuettc/tackle/internal/sift/discover"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/store"
@@ -178,6 +180,8 @@ type decisionIn struct {
 	Text    string   `json:"text"`
 	Cleared []string `json:"cleared"`
 	Note    string   `json:"note"`
+	// Fingerprint is the row's fingerprint as the page showed it.
+	Fingerprint string `json:"fingerprint"`
 }
 
 func (d decisionIn) decision() row.Decision {
@@ -202,30 +206,44 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if d.Fingerprint == "" {
+			writeErr(w, http.StatusBadRequest, "a decision carries the fingerprint of the row it answers")
+			return
+		}
 	}
 	rows, ok := s.current(w, r.Context(), b.Round)
 	if !ok {
 		return
 	}
+	as := make([]store.Answer, 0, len(b.Decisions))
 	for _, d := range b.Decisions {
 		if _, ok := rows[d.ID]; !ok {
 			writeErr(w, http.StatusConflict, "stale")
 			return
 		}
+		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, Decision: d.decision()})
 	}
-	for _, d := range b.Decisions {
-		err := s.st.Decide(r.Context(), b.Round, d.ID, d.decision())
-		if errors.Is(err, store.ErrStale) {
-			writeErr(w, http.StatusConflict, "stale")
-			return
-		}
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	if !s.answer(w, r.Context(), b.Round, as) {
+		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// answer stores the decisions (store.Answer) and writes the error when it
+// can't: 409 when the round moved on or a row changed since the page showed
+// it. ok is false after writing the error.
+func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64, as []store.Answer) bool {
+	err := s.st.Answer(ctx, round, as)
+	switch {
+	case errors.Is(err, store.ErrStale):
+		writeErr(w, http.StatusConflict, "stale")
+	case errors.Is(err, store.ErrChanged):
+		writeErr(w, http.StatusConflict, "changed: the agent changed this row since the page showed it; look again")
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	}
+	return err == nil
 }
 
 // applied reports whether apply already wrote rw's repo for the round: an
@@ -278,12 +296,17 @@ func (s *Server) redo(w http.ResponseWriter, r *http.Request) { s.fixDecision(w,
 // (row.FixOnly), until apply has written the row's repo.
 func (s *Server) fixDecision(w http.ResponseWriter, r *http.Request, action string) {
 	var b struct {
-		Round int64  `json:"round"`
-		ID    string `json:"id"`
-		Note  string `json:"note"`
+		Round       int64  `json:"round"`
+		ID          string `json:"id"`
+		Note        string `json:"note"`
+		Fingerprint string `json:"fingerprint"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if b.Fingerprint == "" {
+		writeErr(w, http.StatusBadRequest, "an undo or redo carries the fingerprint of the row it answers")
 		return
 	}
 	rows, ok := s.current(w, r.Context(), b.Round)
@@ -306,8 +329,7 @@ func (s *Server) fixDecision(w http.ResponseWriter, r *http.Request, action stri
 		writeErr(w, http.StatusConflict, "already applied: change it on the branch")
 		return
 	}
-	if err := s.st.Decide(r.Context(), b.Round, b.ID, row.Decision{Action: action, Note: b.Note}); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	if !s.answer(w, r.Context(), b.Round, []store.Answer{{Row: b.ID, Fingerprint: b.Fingerprint, Decision: row.Decision{Action: action, Note: b.Note}}}) {
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
@@ -350,6 +372,10 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	}{n, to})
 }
 
+// beforeOpen, when set (tests), runs after a row's file is validated and
+// before it is opened.
+var beforeOpen func()
+
 // maxFile caps what /api/file returns.
 const maxFile = 2 << 20
 
@@ -366,14 +392,25 @@ func moved(src row.Source) string {
 	return ""
 }
 
-// readNoFollow reads up to n bytes of path, refusing a symlink at the leaf.
-func readNoFollow(path string, n int64) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+// readCanon reads up to n bytes of canon (clean, absolute, resolved at the
+// audit) through an os.Root at the filesystem root, by apply's walk: every
+// component is checked not to be a symlink and opened by descriptor, so a
+// parent swapped after moved's check can't redirect the read.
+func readCanon(canon string, n int64) ([]byte, error) {
+	if !filepath.IsAbs(canon) || filepath.Clean(canon) != canon {
+		return nil, fmt.Errorf("%s is not a clean absolute path", canon)
+	}
+	top := filepath.VolumeName(canon) + string(filepath.Separator)
+	root, err := os.OpenRoot(top)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, n))
+	defer func() { _ = root.Close() }()
+	if beforeOpen != nil {
+		beforeOpen()
+	}
+	rel := filepath.ToSlash(strings.TrimPrefix(canon, top))
+	return apply.ReadNoLink(root, rel, n)
 }
 
 // file returns the whole file a row is about, as it was audited: a repo
@@ -402,7 +439,7 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, why)
 			return
 		}
-		b, err = readNoFollow(src.Canon, maxFile+1)
+		b, err = readCanon(src.Canon, maxFile+1)
 	default:
 		writeErr(w, http.StatusNotFound, "this row has no file")
 		return

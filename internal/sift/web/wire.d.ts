@@ -40,6 +40,8 @@ interface Finding {
   certain: boolean;
   fix?: string;
   decision?: Decision;
+  /** The proposal's fingerprint; every decision on the row sends it back. */
+  fingerprint: string;
 }
 
 interface ReviewRound {

@@ -82,3 +82,29 @@ func TestFileFromDiskIsTheAuditedFile(t *testing.T) {
 		t.Errorf("another round's row in the latest round: %d", c)
 	}
 }
+
+// A parent of the audited file swapped for a symlink after the row is
+// validated and before the file is opened: no other file's content is
+// returned.
+func TestFileParentSwappedBeforeTheOpen(t *testing.T) {
+	f := newFixture(t)
+	dir, _ := filepath.EvalSymlinks(t.TempDir())
+	mustWrite(t, filepath.Join(dir, "one", "f.md"), "audited\n")
+	mustWrite(t, filepath.Join(dir, "two", "f.md"), "secret elsewhere\n")
+	id, err := f.st.RecordRound(context.Background(), store.Round{Kind: "on-demand"},
+		[]row.Row{{ID: "f", Check: "size", Source: row.Source{File: filepath.Join(dir, "one", "f.md")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeOpen = func() {
+		if err := os.Rename(filepath.Join(dir, "one"), filepath.Join(dir, "one.moved")); err != nil {
+			t.Error(err)
+		}
+		retarget(t, filepath.Join(dir, "one"), filepath.Join(dir, "two"))
+	}
+	t.Cleanup(func() { beforeOpen = nil })
+	w := f.do("GET", fmt.Sprintf("/api/file?round=%d&id=f", id), "")
+	if w.Code == 200 || strings.Contains(w.Body.String(), "secret") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}

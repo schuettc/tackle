@@ -35,6 +35,7 @@ function mk(
     source: { file, start, end: start },
     passage: `line ${start} of ${file}`,
     certain: false,
+    fingerprint: `fp-${id}`,
     ...extra,
   };
 }

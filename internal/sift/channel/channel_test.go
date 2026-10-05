@@ -328,7 +328,14 @@ func TestCheckReviewSendApply(t *testing.T) {
 	if _, err := e.st.AddRows(context.Background(), chk.Round, rowsIn(neg)); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := e.api("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":%q,"action":"accept","note":"yes"}]}`, chk.Round, neg)); code != 204 {
+	_, rows, _ = e.st.LatestRound(context.Background())
+	var print string
+	for _, r := range rows {
+		if r.ID == neg {
+			print = r.Fingerprint
+		}
+	}
+	if code, body := e.api("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":%q,"action":"accept","note":"yes","fingerprint":%q}]}`, chk.Round, neg, print)); code != 204 {
 		t.Fatalf("decide %d %s", code, body)
 	}
 	if code, body := e.api("POST", "/api/send", fmt.Sprintf(`{"round":%d}`, chk.Round)); code != 200 || !strings.Contains(body, `"to":"claude · s1"`) {

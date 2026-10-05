@@ -4,7 +4,8 @@
 // clone's checkout is never touched. A repo whose primary clone holds
 // uncommitted or unpushed work, or an untracked instruction file, is held:
 // the change might belong on top of that work. Every path is confined to
-// the repo (confine.go). With gh and a GitHub remote the branch is pushed and a pull
+// the repo, and written through an os.Root on the worktree (confine.go).
+// With gh and a GitHub remote the branch is pushed and a pull
 // request opened; otherwise the committed branch is left for the user.
 // Every git command goes through discover.Git, so a hook's variables never
 // point it at another repository.
@@ -509,7 +510,14 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 		base = "HEAD"
 	}
 	rp = Repo{Path: repo, Base: base, Applied: []Item{}, Skipped: []Item{}}
+	// committed: the branch has its commit, so the repo is at least
+	// "branch" and a later failure only goes into the detail.
+	committed := false
 	fail := func(err error) Repo {
+		if committed {
+			rp.Detail = joinDetail(rp.Detail, oneLine(err.Error()))
+			return rp
+		}
 		rp.State, rp.Detail = "failed", err.Error()
 		return rp
 	}
@@ -572,7 +580,6 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	if _, err := git(ctx, repo, "worktree", "add", "-q", "-b", branch, wt, base); err != nil {
 		return fail(err)
 	}
-	committed := false
 	defer func() {
 		bg := context.WithoutCancel(ctx)
 		if _, err := git(bg, repo, "worktree", "remove", "--force", wt); err != nil {
@@ -584,6 +591,12 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 			_, _ = git(bg, repo, "branch", "-D", branch)
 		}
 	}()
+	// Every write goes through one os.Root on the worktree (confine.go).
+	root, err := os.OpenRoot(wt)
+	if err != nil {
+		return fail(err)
+	}
+	defer func() { _ = root.Close() }()
 	names := make([]string, 0, len(fs.m))
 	for rel := range fs.m {
 		names = append(names, rel)
@@ -592,12 +605,12 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	for _, rel := range names {
 		f := fs.m[rel]
 		if f.gone {
-			if err := removeInside(wt, rel); err != nil {
+			if err := removeFile(root, rel); err != nil {
 				return fail(err)
 			}
 			continue
 		}
-		if err := writeInside(wt, rel, f.String()); err != nil {
+		if err := writeFile(root, rel, f.String()); err != nil {
 			return fail(err)
 		}
 	}
@@ -631,7 +644,8 @@ func applyRepo(ctx context.Context, o Options, round int64, repo string, plans [
 	}
 	body, err := tempFile(prBody(round, rp))
 	if err != nil {
-		return fail(err)
+		rp.Detail = joinDetail(rp.Detail, "the branch is pushed but the pull request's body could not be written: "+oneLine(err.Error()))
+		return rp
 	}
 	defer func() { _ = os.Remove(body) }()
 	args := []string{"pr", "create", "--repo", slug, "--head", branch, "--title", fmt.Sprintf("sift: round %d", round), "--body-file", body}
@@ -661,7 +675,10 @@ func lastLine(s string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-func tempFile(content string) (string, error) {
+// tempFile writes content to a new temporary file (tests replace it).
+var tempFile = writeTemp
+
+func writeTemp(content string) (string, error) {
 	f, err := os.CreateTemp("", "sift-apply-*.md")
 	if err != nil {
 		return "", err

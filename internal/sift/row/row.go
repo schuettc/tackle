@@ -6,6 +6,7 @@ package row
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -45,6 +46,10 @@ type Row struct {
 	// judgment (see FixOnly).
 	Fix      string    `json:"fix,omitempty"`
 	Decision *Decision `json:"decision,omitempty"`
+	// Fingerprint is Print's hash of the proposal as the store holds it
+	// now, filled when a round is read (never stored). The page sends it
+	// back with each decision, and a decision on a changed row is refused.
+	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
 // Source is where a row's passage is.
@@ -113,6 +118,40 @@ type Decision struct {
 // text once the decision's edits are over the proposal.
 type Change struct {
 	Verdict, Title, Destination, Text string
+}
+
+// MergeTarget is the row id a merge verdict names ("" for any other).
+func MergeTarget(verdict string) string {
+	id, _ := strings.CutPrefix(verdict, "merge:")
+	if id == verdict {
+		return ""
+	}
+	return id
+}
+
+// Print hashes every field that says what applying r does: the verdict,
+// title, destination, text, the whole source, the passage, the certain fix,
+// and, for a merge, its target's source and passage (target is that row;
+// nil for any other verdict or a target not in the round). A decision
+// answers one print: when it changes, the decision answered another row.
+func (r Row) Print(target *Row) string {
+	type about struct {
+		Source  Source
+		Passage string
+	}
+	v := struct {
+		Verdict, Title, Destination, Text string
+		Source                            Source
+		Passage, Fix                      string
+		Certain                           bool
+		Target                            *about
+	}{r.Verdict, r.Title, r.Destination, r.Text, r.Source, r.Passage, r.Fix, r.Certain, nil}
+	if target != nil {
+		v.Target = &about{target.Source, target.Passage}
+	}
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:8])
 }
 
 // CertainFix is a certain row's own fix: Fix, or delete when unset.

@@ -20,11 +20,21 @@ function client(api) {
       const q = new URLSearchParams({ round: String(round), id });
       await api.del(`/decisions?${q.toString()}`);
     },
-    async undo(round, id, note) {
-      await api.post("/undo", { round, id, note });
+    async undo(round, r, note) {
+      await api.post("/undo", {
+        round,
+        id: r.id,
+        note,
+        fingerprint: r.fingerprint
+      });
     },
-    async redo(round, id, note) {
-      await api.post("/redo", { round, id, note });
+    async redo(round, r, note) {
+      await api.post("/redo", {
+        round,
+        id: r.id,
+        note,
+        fingerprint: r.fingerprint
+      });
     },
     async send(round) {
       const r = await api.post("/send", {
@@ -1028,7 +1038,8 @@ function boot() {
         title: d.title,
         text: d.text,
         cleared: d.cleared,
-        note
+        note,
+        fingerprint: r.fingerprint
       };
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
@@ -1085,7 +1096,7 @@ function boot() {
       pending.delete(r.id);
       r.decision = fixDecision(op, note);
       persist(
-        () => op === "undo" ? api.undo(round, r.id, note) : api.redo(round, r.id, note),
+        () => op === "undo" ? api.undo(round, r, note) : api.redo(round, r, note),
         () => {
           if (prev) r.decision = prev;
           else delete r.decision;
@@ -1114,7 +1125,7 @@ function boot() {
     d.note = text;
     d.sent = false;
     persist(
-      () => isFix(r) && d.action === "reject" ? api.undo(round, r.id, text) : isFix(r) && d.action === "accept" ? api.redo(round, r.id, text) : api.decide(round, [
+      () => isFix(r) && d.action === "reject" ? api.undo(round, r, text) : isFix(r) && d.action === "accept" ? api.redo(round, r, text) : api.decide(round, [
         {
           id: r.id,
           action: d.action,
@@ -1122,7 +1133,8 @@ function boot() {
           title: d.title,
           text: d.text,
           cleared: d.cleared,
-          note: text
+          note: text,
+          fingerprint: r.fingerprint
         }
       ]),
       () => {

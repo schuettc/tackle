@@ -29,7 +29,8 @@ type AddResult struct {
 // error: no id, an unknown verdict, an id not in the round, a decision
 // (decisions are the user's), an intake row with no source. A decision on a
 // row whose proposal, source or passage changed is dropped, sent or not: it
-// answered another row.
+// answered another row. So is every merge into a row whose source or
+// passage changed (dropMergesInto).
 func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddResult, error) {
 	var res AddResult
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -110,6 +111,15 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 					res.Cleared++
 				}
 			}
+			if cur.Source != next.Source || cur.Passage != next.Passage {
+				// A merge into this row was approved against its old source
+				// and passage.
+				k, err := dropMergesInto(ctx, tx, roundID, r.ID)
+				if err != nil {
+					return err
+				}
+				res.Cleared += k
+			}
 		}
 		return bump(ctx, tx, roundID)
 	})
@@ -117,6 +127,49 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 		return AddResult{}, err
 	}
 	return res, nil
+}
+
+// dropMergesInto drops every decision in the round whose verdict (the
+// decision's own, or the proposal it accepted) is merge:id, and says how
+// many.
+func dropMergesInto(ctx context.Context, tx *sql.Tx, roundID int64, id string) (int, error) {
+	q, err := tx.QueryContext(ctx, `SELECT d.row_id, d.verdict, r.body FROM decisions d
+		JOIN rows r ON r.round_id = d.round_id AND r.row_id = d.row_id WHERE d.round_id = ?`, roundID)
+	if err != nil {
+		return 0, err
+	}
+	var drop []string
+	for q.Next() {
+		var rowID, verdict, body string
+		if err := q.Scan(&rowID, &verdict, &body); err != nil {
+			_ = q.Close()
+			return 0, err
+		}
+		if verdict == "" {
+			var r row.Row
+			if err := json.Unmarshal([]byte(body), &r); err != nil {
+				_ = q.Close()
+				return 0, err
+			}
+			verdict = r.Verdict
+		}
+		if row.MergeTarget(verdict) == id {
+			drop = append(drop, rowID)
+		}
+	}
+	if err := q.Err(); err != nil {
+		_ = q.Close()
+		return 0, err
+	}
+	if err := q.Close(); err != nil {
+		return 0, err
+	}
+	for _, rowID := range drop {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM decisions WHERE round_id = ? AND row_id = ?`, roundID, rowID); err != nil {
+			return 0, err
+		}
+	}
+	return len(drop), nil
 }
 
 // actionChanged reports whether what applying a row would do changed: its
@@ -128,7 +181,7 @@ func actionChanged(a, b row.Row) bool {
 }
 
 func putRow(ctx context.Context, tx *sql.Tx, roundID int64, seq int, r row.Row, insert bool) error {
-	r.Decision = nil
+	r.Decision, r.Fingerprint = nil, ""
 	b, err := json.Marshal(r)
 	if err != nil {
 		return err

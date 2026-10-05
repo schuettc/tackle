@@ -178,6 +178,7 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 					rw.Fix = rw.CertainFix()
 				}
 			}
+			rw.Decision, rw.Fingerprint = nil, ""
 			body, err := json.Marshal(rw)
 			if err != nil {
 				return err
@@ -261,33 +262,103 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 		}
 		rows = append(rows, rw)
 	}
-	return r, rows, q.Err()
+	if err := q.Err(); err != nil {
+		return r, nil, err
+	}
+	byID := make(map[string]*row.Row, len(rows))
+	for i := range rows {
+		byID[rows[i].ID] = &rows[i]
+	}
+	for i := range rows {
+		rows[i].Fingerprint = rows[i].Print(byID[row.MergeTarget(rows[i].Verdict)])
+	}
+	return r, rows, nil
+}
+
+// ErrChanged is returned when a decision answers a fingerprint the row no
+// longer has: the proposal changed since the page showed it.
+var ErrChanged = errors.New("store: the row changed since it was shown")
+
+// Answer is one decision on a row, given against the row's fingerprint as
+// the page showed it.
+type Answer struct {
+	Row         string
+	Fingerprint string
+	Decision    row.Decision
 }
 
 // Decide records the answer to one row of a round (accept, edit or reject
-// its proposal), replacing an earlier one.
+// its proposal), replacing an earlier one, whatever the row holds now. The
+// review page's decisions go through Answer, which checks the fingerprint.
 func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.Decision) error {
-	if err := d.Validate(); err != nil {
-		return err
+	return s.answer(ctx, roundID, []Answer{{Row: rowID, Decision: d}}, false)
+}
+
+// Answer records decisions on a round's rows, all or nothing, each only if
+// the row's fingerprint (row.Print, with its merge target) is still the
+// one given: ErrChanged when it is not, ErrStale when the row is not in the
+// round. The check and the write are one transaction.
+func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) error {
+	return s.answer(ctx, roundID, as, true)
+}
+
+func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bool) error {
+	for _, a := range as {
+		if err := a.Decision.Validate(); err != nil {
+			return err
+		}
 	}
 	return s.db.Tx(ctx, func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&n); err != nil {
+		// The first statement is a write (the main connection begins deferred).
+		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		if n == 0 {
-			return ErrStale
+		for _, a := range as {
+			cur, err := rowIn(ctx, tx, roundID, a.Row)
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrStale
+			}
+			if err != nil {
+				return err
+			}
+			if check {
+				var target *row.Row
+				if id := row.MergeTarget(cur.Verdict); id != "" {
+					t, err := rowIn(ctx, tx, roundID, id)
+					if err == nil {
+						target = &t
+					} else if !errors.Is(err, sql.ErrNoRows) {
+						return err
+					}
+				}
+				if a.Fingerprint == "" || cur.Print(target) != a.Fingerprint {
+					return fmt.Errorf("%w: %s", ErrChanged, a.Row)
+				}
+			}
+			d := a.Decision
+			if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, cleared, note, decided_at, sent_at)
+				VALUES (?,?,?,?,?,?,?,?,?,0)
+				ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
+				  title = excluded.title, text = excluded.text, cleared = excluded.cleared, note = excluded.note,
+				  decided_at = excluded.decided_at, sent_at = 0`,
+				roundID, a.Row, d.Action, d.Verdict, d.Title, d.Text, strings.Join(d.Cleared, ","), d.Note, time.Now().UnixMilli()); err != nil {
+				return err
+			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, cleared, note, decided_at, sent_at)
-			VALUES (?,?,?,?,?,?,?,?,?,0)
-			ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
-			  title = excluded.title, text = excluded.text, cleared = excluded.cleared, note = excluded.note,
-			  decided_at = excluded.decided_at, sent_at = 0`,
-			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, strings.Join(d.Cleared, ","), d.Note, time.Now().UnixMilli()); err != nil {
-			return err
-		}
-		return bump(ctx, tx, roundID)
+		return nil
 	})
+}
+
+// rowIn reads one row of a round as stored (no decision); sql.ErrNoRows
+// when the round has no such row.
+func rowIn(ctx context.Context, tx *sql.Tx, roundID int64, rowID string) (row.Row, error) {
+	var body string
+	if err := tx.QueryRowContext(ctx, `SELECT body FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&body); err != nil {
+		return row.Row{}, err
+	}
+	var r row.Row
+	err := json.Unmarshal([]byte(body), &r)
+	return r, err
 }
 
 // Undecide removes the answer to one row (for a certain row: redoes it).

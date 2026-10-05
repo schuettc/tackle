@@ -18,12 +18,16 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   channel registration.
 - `sift rows add`: merges the agent's proposals (verdict, title,
   destination, text, reason) and intake rows, as JSON lines, into the round.
+  A changed proposal drops its decision, and a changed merge target drops
+  every merge into it.
 - `sift serve`: the review page. Rows in two views, needs you and applied,
   grouped by file and check (a backlog round: issues by repo, decisions,
   closes); accept, edit or reject a row (1–3) or a whole group; a note per
   row; an edit can clear the title or text; undo and redo of a certain fix,
-  each sent like any decision; passages in a wrapping prose view. Send
-  delivers the decisions to the agent session that opened that review.
+  each sent like any decision; passages in a wrapping prose view. Each
+  decision carries the fingerprint of the proposal the page showed, and one
+  on a row the agent has changed since is refused. Send delivers the
+  decisions to the agent session that opened that review.
 - `sift wait`: returns when you press Send and prints what to do, for
   sessions without the channel.
 - `sift channel`: the MCP server for an agent session, with `sift_check`,
@@ -31,12 +35,14 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 - `sift apply`: the certain fixes and the rows approved and sent (delete,
   rewrite, move, merge) as one branch per repo, cut from the fetched base in
   a worktree; every path stays inside the repo (no `..`, no `.git`, no
-  symlinks); a repo with uncommitted or unpushed work, or an untracked
+  symlinks), and every write goes through an `os.Root` on the worktree; a
+  failure after the commit keeps the branch; a repo with uncommitted or unpushed work, or an untracked
   instruction file, in its primary clone is held; with `gh` and a GitHub
   remote, a pull request (`--body-file`).
 - `sift reconcile`: each apply branch against the rows apply approved:
-  missing, narrowed (approved text not verbatim and contiguous in the file)
-  and extra lines, each diff line owned by at most one row.
+  missing, narrowed (approved text not added by the branch verbatim, as one
+  run, at its place in the file) and extra lines, each diff line owned by at
+  most one row.
 
 ## [casebook 0.2.1] - 2026-10-01
 

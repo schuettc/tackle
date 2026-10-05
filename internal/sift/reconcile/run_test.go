@@ -110,7 +110,7 @@ func TestApplyTwiceKeepsTheSuccess(t *testing.T) {
 	}
 	h := serve.New(s).Handler()
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/undo", strings.NewReader(fmt.Sprintf(`{"round":%d,"id":"dead"}`, round))))
+	h.ServeHTTP(w, httptest.NewRequest("POST", "/api/undo", strings.NewReader(fmt.Sprintf(`{"round":%d,"id":"dead","fingerprint":%q}`, round, printOf(t, s, round, "dead")))))
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "already applied") {
 		t.Fatalf("undo after two applies: %d %s", w.Code, w.Body)
 	}
@@ -167,4 +167,20 @@ func TestReconcileSharesApplysRules(t *testing.T) {
 	if r := reps[0]; r.Problems() != 0 || len(r.Rows) != 2 {
 		t.Fatalf("rows %+v extra %+v", r.Rows, r.Extra)
 	}
+}
+
+// printOf is a row's fingerprint, as the page shows it.
+func printOf(t *testing.T, s *store.Store, round int64, id string) string {
+	t.Helper()
+	_, rows, err := s.Round(context.Background(), round)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.ID == id {
+			return r.Fingerprint
+		}
+	}
+	t.Fatalf("no row %s", id)
+	return ""
 }

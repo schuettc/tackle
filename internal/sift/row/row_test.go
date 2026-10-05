@@ -204,3 +204,39 @@ func TestEffective(t *testing.T) {
 		t.Error("FixOnly")
 	}
 }
+
+// Print changes with every field that says what applying the row does, and
+// with a merge target's source and passage; not with the reason or the
+// decision.
+func TestPrint(t *testing.T) {
+	base := Row{ID: "a", Check: "duplicate", Verdict: "merge:b", Text: "t", Passage: "p", Source: Source{File: "/r/x.md", Repo: "/r", Path: "x.md", Start: 1, End: 1}}
+	target := Row{ID: "b", Passage: "q", Source: Source{Path: "y.md", Start: 2}}
+	want := base.Print(&target)
+	for name, change := range map[string]func(r, t *Row){
+		"verdict":        func(r, _ *Row) { r.Verdict = "delete" },
+		"title":          func(r, _ *Row) { r.Title = "x" },
+		"destination":    func(r, _ *Row) { r.Destination = "d.md#S" },
+		"text":           func(r, _ *Row) { r.Text = "u" },
+		"path":           func(r, _ *Row) { r.Source.Path = "z.md" },
+		"lines":          func(r, _ *Row) { r.Source.Start = 9 },
+		"passage":        func(r, _ *Row) { r.Passage = "p2" },
+		"fix":            func(r, _ *Row) { r.Fix = "delete" },
+		"certain":        func(r, _ *Row) { r.Certain = true },
+		"target path":    func(_, t *Row) { t.Source.Path = "w.md" },
+		"target passage": func(_, t *Row) { t.Passage = "q2" },
+	} {
+		r, tg := base, target
+		change(&r, &tg)
+		if r.Print(&tg) == want {
+			t.Errorf("%s: print unchanged", name)
+		}
+	}
+	r := base
+	r.Reason, r.Decision, r.Fingerprint = "why", &Decision{Action: "accept"}, "x"
+	if r.Print(&target) != want {
+		t.Error("the reason or decision changed the print")
+	}
+	if base.Print(nil) == want {
+		t.Error("the target is not in the print")
+	}
+}

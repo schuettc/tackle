@@ -20,11 +20,13 @@ import (
 	"github.com/schuettc/tackle/internal/sift/store"
 )
 
-// Hunk is one hunk of a unified diff (-U0): the lines it removes and adds.
+// Hunk is one hunk of a unified diff (-U0): the lines it removes and adds,
+// and the line in the new file where its added lines start.
 type Hunk struct {
-	Header  string
-	Removed []string
-	Added   []string
+	Header   string
+	NewStart int
+	Removed  []string
+	Added    []string
 }
 
 // File is one file of a diff.
@@ -58,7 +60,7 @@ func Parse(diff string) []File {
 				cur.Path = p
 			}
 		case strings.HasPrefix(l, "@@"):
-			cur.Hunks = append(cur.Hunks, Hunk{Header: hunkHeader(l)})
+			cur.Hunks = append(cur.Hunks, Hunk{Header: hunkHeader(l), NewStart: newStart(l)})
 			h = &cur.Hunks[len(cur.Hunks)-1]
 		case h == nil:
 		case strings.HasPrefix(l, "-"):
@@ -76,6 +78,22 @@ func hunkHeader(l string) string {
 		return l[:i+4]
 	}
 	return l
+}
+
+// newStart is c in "@@ -a,b +c,d @@" (0 when it can't be read).
+func newStart(l string) int {
+	_, rest, ok := strings.Cut(l, " +")
+	if !ok {
+		return 0
+	}
+	n := 0
+	for _, c := range rest {
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // RowResult is one approved row against the diff.
@@ -240,10 +258,11 @@ func expectation(repo string, p apply.Plan, byID map[string]row.Row) (expect, bo
 }
 
 // line is one removed or added line of the diff; each is consumed by at
-// most one row.
+// most one row. at is an added line's line number in the new file.
 type line struct {
 	text string
 	used bool
+	at   int
 }
 
 type hunkLines struct {
@@ -262,8 +281,10 @@ func diffLines(diff []File) map[string][]*hunkLines {
 			for _, l := range nonBlank(h.Removed) {
 				hl.removed = append(hl.removed, &line{text: l})
 			}
-			for _, l := range nonBlank(h.Added) {
-				hl.added = append(hl.added, &line{text: l})
+			for i, l := range h.Added {
+				if strings.TrimSpace(l) != "" {
+					hl.added = append(hl.added, &line{text: l, at: h.NewStart + i})
+				}
 			}
 			out[f.Path] = append(out[f.Path], hl)
 		}
@@ -273,8 +294,10 @@ func diffLines(diff []File) map[string][]*hunkLines {
 
 // Compare holds one repo's approved rows (as apply.Select chooses them)
 // against its branch: the diff's lines, each occurrence consumed by at most
-// one row, and read, the files at the branch, where approved text must be
-// verbatim and contiguous.
+// one row, and read, the files at the branch. Approved text must come from
+// lines the diff adds: a run of one hunk's added lines, whose span in the
+// file at the branch is the text verbatim. Text that is in the file but
+// was not added (unchanged, elsewhere) does not count.
 func Compare(rows []row.Row, diff []File, read func(path string) (string, bool)) Report {
 	deleted := map[string]bool{}
 	for _, f := range diff {
@@ -328,14 +351,17 @@ func Compare(rows []row.Row, diff []File, read func(path string) (string, bool))
 	// 2. Approved text found verbatim as a run of one hunk's added lines,
 	// before any row takes lines one by one.
 	found := make([][]bool, len(exps))
+	spans := make([][][2]int, len(exps)) // each found block's first and last line at the branch
 	for i := range exps {
 		e := &exps[i]
 		found[i] = make([]bool, len(e.blocks))
+		spans[i] = make([][2]int, len(e.blocks))
 		for j, b := range e.blocks {
 			nb := nonBlank(b.lines)
 			want[i] += len(nb)
-			if takeRun(hunks[b.path], anchors[i], b.anchored, nb) {
+			if first, last, ok := takeRun(hunks[b.path], anchors[i], b.anchored, nb); ok {
 				found[i][j] = true
+				spans[i][j] = [2]int{first, last}
 				got[i] += len(nb)
 			}
 		}
@@ -375,11 +401,15 @@ func Compare(rows []row.Row, diff []File, read func(path string) (string, bool))
 				}
 			}
 		}
-		// The approved text, verbatim and contiguous in the file at the
-		// branch.
-		for _, b := range e.blocks {
+		// The approved text: added by the diff as one run, and verbatim
+		// at that run's place in the file at the branch.
+		for j, b := range e.blocks {
+			if !found[i][j] {
+				e.problems = append(e.problems, "the approved text is not verbatim among the lines the branch adds to "+b.path)
+				continue
+			}
 			content, ok := read(b.path)
-			if !ok || !contiguous(textLines(content), b.lines) {
+			if !ok || !spanIs(textLines(content), spans[i][j], trimBlank(b.lines)) {
 				e.problems = append(e.problems, "the approved text is not verbatim and contiguous in "+b.path+" at the branch")
 			}
 		}
@@ -446,12 +476,13 @@ func addedOf(hs []*hunkLines) []*hunkLines {
 }
 
 // takeRun marks the first run of unused added lines equal to want inside
-// one hunk, trying the row's anchor hunks first when anchored.
-func takeRun(hs []*hunkLines, anchors map[*hunkLines]bool, anchored bool, want []string) bool {
+// one hunk, trying the row's anchor hunks first when anchored, and returns
+// the run's first and last line in the new file.
+func takeRun(hs []*hunkLines, anchors map[*hunkLines]bool, anchored bool, want []string) (int, int, bool) {
 	if len(want) == 0 {
-		return true
+		return 0, 0, true
 	}
-	try := func(h *hunkLines) bool {
+	try := func(h *hunkLines) (int, int, bool) {
 		for i := 0; i+len(want) <= len(h.added); i++ {
 			ok := true
 			for j, w := range want {
@@ -464,44 +495,56 @@ func takeRun(hs []*hunkLines, anchors map[*hunkLines]bool, anchored bool, want [
 				for j := range want {
 					h.added[i+j].used = true
 				}
-				return true
+				return h.added[i].at, h.added[i+len(want)-1].at, true
 			}
 		}
-		return false
+		return 0, 0, false
 	}
 	if anchored {
 		for _, h := range hs {
-			if anchors[h] && try(h) {
-				return true
+			if !anchors[h] {
+				continue
+			}
+			if first, last, ok := try(h); ok {
+				return first, last, true
 			}
 		}
 	}
 	for _, h := range hs {
-		if try(h) {
-			return true
+		if first, last, ok := try(h); ok {
+			return first, last, true
 		}
 	}
-	return false
+	return 0, 0, false
 }
 
-// contiguous reports whether want appears as a run in have.
-func contiguous(have, want []string) bool {
+// trimBlank drops leading and trailing blank lines.
+func trimBlank(lines []string) []string {
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// spanIs reports whether have's lines span[0]..span[1] (1-based) are want
+// exactly. An empty want has no span and is there.
+func spanIs(have []string, span [2]int, want []string) bool {
 	if len(want) == 0 {
 		return true
 	}
-	for i := 0; i+len(want) <= len(have); i++ {
-		ok := true
-		for j := range want {
-			if have[i+j] != want[j] {
-				ok = false
-				break
-			}
-		}
-		if ok {
-			return true
+	first, last := span[0], span[1]
+	if first < 1 || last > len(have) || last-first+1 != len(want) {
+		return false
+	}
+	for i, w := range want {
+		if have[first-1+i] != w {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func where(r row.Row) string {

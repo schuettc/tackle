@@ -13,8 +13,8 @@ func at(id, path, passage string) row.Row {
 }
 
 // compare runs Compare on a diff, with each file at the branch made of its
-// added lines: a hunk's lines together, hunks apart (unchanged lines
-// between them).
+// added lines, each at its line in the new file (from the hunk header), and
+// "(unchanged)" on every other line.
 func compare(rs []row.Row, d string) Report {
 	diff := Parse(d)
 	read := func(path string) (string, bool) {
@@ -22,14 +22,16 @@ func compare(rs []row.Row, d string) Report {
 			if f.Path != path || f.Deleted {
 				continue
 			}
-			var b strings.Builder
+			var lines []string
 			for _, h := range f.Hunks {
-				b.WriteString("(unchanged)\n")
-				for _, l := range h.Added {
-					b.WriteString(l + "\n")
+				for i, l := range h.Added {
+					for len(lines) < h.NewStart+i {
+						lines = append(lines, "(unchanged)")
+					}
+					lines[h.NewStart+i-1] = l
 				}
 			}
-			return b.String(), true
+			return strings.Join(lines, "\n") + "\n", true
 		}
 		return "", false
 	}
@@ -130,7 +132,7 @@ index 5555555..6666666 100644
 
 func TestParse(t *testing.T) {
 	fs := Parse(diffOK + "diff --git a/old.md b/old.md\ndeleted file mode 100644\nindex 7..0\n--- a/old.md\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-a\n-b\n")
-	if len(fs) != 3 || fs[0].Path != "CLAUDE.md" || len(fs[0].Hunks) != 2 || len(fs[0].Hunks[0].Removed) != 2 || fs[0].Hunks[0].Header != "@@ -5,2 +5 @@" {
+	if len(fs) != 3 || fs[0].Path != "CLAUDE.md" || len(fs[0].Hunks) != 2 || len(fs[0].Hunks[0].Removed) != 2 || fs[0].Hunks[0].Header != "@@ -5,2 +5 @@" || fs[0].Hunks[0].NewStart != 5 || fs[1].Hunks[0].NewStart != 6 {
 		t.Fatalf("%+v", fs)
 	}
 	if fs[2].Path != "old.md" || !fs[2].Deleted {

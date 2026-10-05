@@ -58,10 +58,56 @@ func (f *fixture) record() {
 
 func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 	f.t.Helper()
+	body = f.withPrints(method, path, body)
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	w := httptest.NewRecorder()
 	f.h.ServeHTTP(w, req)
 	return w
+}
+
+// withPrints gives a decision request that names no fingerprint the row's
+// current one, as the page sends what it shows. A test about fingerprints
+// sets the key itself.
+func (f *fixture) withPrints(method, path, body string) string {
+	if method == "GET" || (path != "/api/decisions" && path != "/api/undo" && path != "/api/redo") {
+		return body
+	}
+	var m map[string]any
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return body
+	}
+	add := func(d map[string]any) {
+		if _, ok := d["fingerprint"]; !ok {
+			id, _ := d["id"].(string)
+			d["fingerprint"] = f.currentPrint(id)
+		}
+	}
+	if ds, ok := m["decisions"].([]any); ok {
+		for _, d := range ds {
+			if d, ok := d.(map[string]any); ok {
+				add(d)
+			}
+		}
+	} else {
+		add(m)
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// currentPrint is a row's fingerprint in the latest round ("-" when it has
+// no such row).
+func (f *fixture) currentPrint(id string) string {
+	_, rows, err := f.st.LatestRound(context.Background())
+	if err != nil {
+		return "-"
+	}
+	for _, r := range rows {
+		if r.ID == id {
+			return r.Fingerprint
+		}
+	}
+	return "-"
 }
 
 type reviewOut struct {

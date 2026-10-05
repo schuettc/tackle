@@ -62,3 +62,51 @@ func hasExtra(r Report, line string) bool {
 	}
 	return false
 }
+
+// files is a read over fixed file contents at the branch.
+func files(m map[string]string) func(string) (string, bool) {
+	return func(p string) (string, bool) {
+		s, ok := m[p]
+		return s, ok
+	}
+}
+
+// 4. The approved replacement is already in the file, unchanged, elsewhere,
+// and the branch only deletes the passage: the text must come from lines
+// the diff adds, so the rewrite is not ok.
+func TestUnchangedTextElsewhereIsNotTheRewrite(t *testing.T) {
+	rw := with(at("neg1", "CLAUDE.md", "- Never push to main."), "rewrite", "", "- Push to a branch.")
+	d := `diff --git a/CLAUDE.md b/CLAUDE.md
+index 1111111..2222222 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -5 +4,0 @@
+-- Never push to main.
+`
+	got := Compare([]row.Row{rw}, Parse(d), files(map[string]string{
+		"CLAUDE.md": "# App\n\n## Git\n\n\n## Notes\n\n- Push to a branch.\n",
+	}))
+	if got.Rows[0].State == "ok" {
+		t.Fatalf("%+v", got.Rows)
+	}
+}
+
+// 5. The same for a move: the destination already has the approved text,
+// and the branch only deletes the passage.
+func TestUnchangedTextElsewhereIsNotTheMove(t *testing.T) {
+	mv := with(at("slow", "CLAUDE.md", "- Run the slow suite."), "move", "docs/other.md#Notes", "- one")
+	d := `diff --git a/CLAUDE.md b/CLAUDE.md
+index 1111111..2222222 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -5 +4,0 @@
+-- Run the slow suite.
+`
+	got := Compare([]row.Row{mv}, Parse(d), files(map[string]string{
+		"CLAUDE.md":     "# App\n\n## Tests\n\n",
+		"docs/other.md": "# Other\n\n## Notes\n\n- one\n",
+	}))
+	if got.Rows[0].State == "ok" {
+		t.Fatalf("%+v", got.Rows)
+	}
+}

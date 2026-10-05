@@ -16,7 +16,8 @@ import (
 var reconcileFlags = flags("reconcile", "sift reconcile [--round N] [--json]",
 	"Holds each branch sift apply wrote for the round against the rows approved for its repo,\n"+
 		"by content: a row whose change is missing from the branch, a row narrowed (its approved\n"+
-		"text not on the branch verbatim, or its passage only partly removed), and hunks no approved\n"+
+		"text not added by the branch verbatim, as one run at its place in the file, or its passage\n"+
+		"only partly removed), and hunks no approved\n"+
 		"row accounts for (extra). Run it after a writer or reviewer changed a branch.\n"+
 		"Exit 0 everything matches, 1 something does not, 2 error.",
 	func(fs *flag.FlagSet) {
