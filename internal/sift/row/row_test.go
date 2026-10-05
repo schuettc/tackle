@@ -23,6 +23,7 @@ func TestRowJSONGolden(t *testing.T) {
 		Verdict:     "rewrite",
 		Destination: "CLAUDE.md#Git",
 		Text:        "- Push to a branch and open a pull request.",
+		Reason:      "says what to do instead of what to avoid",
 		Decision:    &Decision{Action: "edit", Verdict: "rewrite", Text: "- Push to a branch; open a pull request.", Note: "fine"},
 	}
 	got, err := json.MarshalIndent(r, "", "  ")
@@ -156,5 +157,34 @@ func TestNthTellsRepeatsApart(t *testing.T) {
 	}
 	if Nth(ID("/f", "negative-rule", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
 		t.Error("an ordinal id is not stable")
+	}
+}
+
+// Effective is what apply does with a row: the proposal, an edit's changes
+// over it, nothing when it is rejected or undecided; a certain row is
+// applied (as a delete when it has no verdict) unless it was undone.
+func TestEffective(t *testing.T) {
+	base := Row{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}
+	with := func(r Row, d *Decision) Row { r.Decision = d; return r }
+	certain := Row{Certain: true}
+	for name, c := range map[string]struct {
+		r    Row
+		want Change
+		ok   bool
+	}{
+		"undecided":            {base, Change{}, false},
+		"accepted":             {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"edited text":          {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
+		"edited verdict":       {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"rejected":             {with(base, &Decision{Action: "reject"}), Change{}, false},
+		"accepted, no verdict": {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
+		"certain":              {certain, Change{Verdict: "delete"}, true},
+		"certain, proposed":    {Row{Certain: true, Verdict: "rewrite", Text: "x"}, Change{Verdict: "rewrite", Text: "x"}, true},
+		"certain, undone":      {with(certain, &Decision{Action: "reject"}), Change{}, false},
+	} {
+		got, ok := c.r.Effective()
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: %+v %v, want %+v %v", name, got, ok, c.want, c.ok)
+		}
 	}
 }

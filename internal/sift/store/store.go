@@ -53,9 +53,43 @@ CREATE TABLE mutes (
 );
 `
 
+// schemaV2 is the review loop: each round's revision (bumped by every change
+// the page must see), the agent session the round's review goes to, when a
+// decision was sent, one row per press of Send (kept until delivered), and
+// what apply did per repo.
+const schemaV2 = `
+ALTER TABLE rounds ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rounds ADD COLUMN owner_session TEXT NOT NULL DEFAULT '';
+ALTER TABLE rounds ADD COLUMN owner_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE decisions ADD COLUMN sent_at INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE sends (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id     INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  counts       TEXT NOT NULL,
+  notes        TEXT NOT NULL,
+  owner        TEXT NOT NULL DEFAULT '',
+  delivered_to TEXT,
+  delivered_at INTEGER
+);
+CREATE TABLE applies (
+  round_id INTEGER NOT NULL,
+  repo     TEXT NOT NULL,
+  base     TEXT NOT NULL DEFAULT '',
+  branch   TEXT NOT NULL DEFAULT '',
+  pr       TEXT NOT NULL DEFAULT '',
+  state    TEXT NOT NULL,
+  detail   TEXT NOT NULL DEFAULT '',
+  rows     TEXT NOT NULL DEFAULT '[]',
+  at       INTEGER NOT NULL,
+  PRIMARY KEY (round_id, repo)
+);
+`
+
 // Migrations is the append-only list of schema steps.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
+	sqlitedb.SQL(schemaV2),
 }
 
 // ErrStale is returned when a decision names a row that is not in the round
@@ -90,6 +124,12 @@ type Round struct {
 	Kind    string
 	At      time.Time
 	Summary map[string]int // rows per check
+	// Rev counts the changes to the round since it was recorded: proposals
+	// merged, decisions, applies.
+	Rev int64
+	// OwnerSession and OwnerLabel name the agent session the review goes to
+	// (the last one that opened it).
+	OwnerSession, OwnerLabel string
 }
 
 // RecordRound stores a round and its rows in one transaction, then prunes
@@ -141,11 +181,28 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 // LatestRound returns the newest round and its rows in the order they were
 // recorded, each with its decision; sql.ErrNoRows when there is none.
 func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
+	id, _, err := s.Latest(ctx)
+	if err != nil {
+		return Round{}, nil, err
+	}
+	return s.Round(ctx, id)
+}
+
+// Latest returns the newest round's id and revision; sql.ErrNoRows when
+// there is none.
+func (s *Store) Latest(ctx context.Context) (id, rev int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT id, rev FROM rounds ORDER BY id DESC LIMIT 1`).Scan(&id, &rev)
+	return id, rev, err
+}
+
+// Round returns a round and its rows in the order they were recorded, each
+// with its decision; sql.ErrNoRows when there is no such round.
+func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	var r Round
 	var at int64
 	var sum string
-	err := s.db.QueryRowContext(ctx, `SELECT id, kind, at, summary FROM rounds ORDER BY id DESC LIMIT 1`).
-		Scan(&r.ID, &r.Kind, &at, &sum)
+	err := s.db.QueryRowContext(ctx, `SELECT id, kind, at, summary, rev, owner_session, owner_label FROM rounds WHERE id = ?`, id).
+		Scan(&r.ID, &r.Kind, &at, &sum, &r.Rev, &r.OwnerSession, &r.OwnerLabel)
 	if err != nil {
 		return r, nil, err
 	}
@@ -153,7 +210,7 @@ func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
 	if err := json.Unmarshal([]byte(sum), &r.Summary); err != nil {
 		return r, nil, err
 	}
-	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.note FROM rows r
+	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.note, d.sent_at FROM rows r
 		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
 		WHERE r.round_id = ? ORDER BY r.seq`, r.ID)
 	if err != nil {
@@ -164,15 +221,18 @@ func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
 	for q.Next() {
 		var body string
 		var action, verdict, title, text, note sql.NullString
-		if err := q.Scan(&body, &action, &verdict, &title, &text, &note); err != nil {
+		var sent sql.NullInt64
+		if err := q.Scan(&body, &action, &verdict, &title, &text, &note, &sent); err != nil {
 			return r, nil, err
 		}
 		var rw row.Row
 		if err := json.Unmarshal([]byte(body), &rw); err != nil {
 			return r, nil, err
 		}
+		rw.Decision = nil
 		if action.Valid {
-			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String, Note: note.String}
+			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String,
+				Note: note.String, Sent: sent.Int64 != 0}
 		}
 		rows = append(rows, rw)
 	}
@@ -193,13 +253,38 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 		if n == 0 {
 			return ErrStale
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at)
-			VALUES (?,?,?,?,?,?,?,?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at, sent_at)
+			VALUES (?,?,?,?,?,?,?,?,0)
 			ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
-			  title = excluded.title, text = excluded.text, note = excluded.note, decided_at = excluded.decided_at`,
-			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, d.Note, time.Now().UnixMilli())
-		return err
+			  title = excluded.title, text = excluded.text, note = excluded.note, decided_at = excluded.decided_at, sent_at = 0`,
+			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, d.Note, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+		return bump(ctx, tx, roundID)
 	})
+}
+
+// Undecide removes the answer to one row (for a certain row: redoes it).
+func (s *Store) Undecide(ctx context.Context, roundID int64, rowID string) error {
+	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		var n int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			return ErrStale
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM decisions WHERE round_id = ? AND row_id = ?`, roundID, rowID); err != nil {
+			return err
+		}
+		return bump(ctx, tx, roundID)
+	})
+}
+
+// bump counts one change to the round, so a page watching it reloads.
+func bump(ctx context.Context, tx *sql.Tx, roundID int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE rounds SET rev = rev + 1 WHERE id = ?`, roundID)
+	return err
 }
 
 // Mute stops flagging a row id ("keep, stop flagging"). The id hashes the

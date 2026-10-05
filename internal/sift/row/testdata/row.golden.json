@@ -20,6 +20,7 @@
   "verdict": "rewrite",
   "destination": "CLAUDE.md#Git",
   "text": "- Push to a branch and open a pull request.",
+  "reason": "says what to do instead of what to avoid",
   "certain": false,
   "decision": {
     "action": "edit",

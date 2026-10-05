@@ -9,13 +9,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"sort"
-	"time"
 
-	"github.com/schuettc/tackle/internal/sift/check"
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/host"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/schuettc/tackle/internal/sift/audit"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -34,25 +29,6 @@ var checkFlags = flags("check", "sift check [--json]",
 		fs.Bool("json", false, "print the round as JSON")
 	})
 
-// report is what check prints with --json.
-type report struct {
-	Round    int64          `json:"round"`
-	Kind     string         `json:"kind"`
-	At       time.Time      `json:"at"`
-	Files    int            `json:"files"`
-	Repos    int            `json:"repos"`
-	Copies   []copyJSON     `json:"copies"`
-	Warnings []string       `json:"warnings"`
-	Muted    int            `json:"muted"`
-	Summary  map[string]int `json:"summary"`
-	Rows     []row.Row      `json:"rows"`
-}
-
-type copyJSON struct {
-	Path string `json:"path"`
-	Of   string `json:"of"`
-}
-
 func runCheck(args []string, out, errw io.Writer) error {
 	fs := checkFlags()
 	pos, err := parse(fs, args, out)
@@ -66,47 +42,12 @@ func runCheck(args []string, out, errw io.Writer) error {
 	if err != nil {
 		return err
 	}
-	profiles, err := cfg.Enabled()
-	if err != nil {
-		return tools.Exitf(2, "%v", err)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-
-	found, err := discover.Run(ctx, discover.Options{Profiles: profiles, Roots: cfg.Roots})
+	rep, err := audit.Run(ctx, audit.Options{Config: cfg, LookPath: lookPath, Warn: errw})
 	if err != nil {
 		return tools.Exitf(2, "%v", err)
 	}
-	in := &check.Input{
-		Files: found.Files, Chains: found.Chains, Repos: found.Repos, Config: cfg,
-		Host: host.Detect(lookPath, host.Exec), Now: time.Now(),
-	}
-	rows := check.Run(ctx, in)
-
-	rep := report{Kind: "on-demand", At: in.Now, Files: len(found.Files), Repos: len(found.Repos),
-		Copies: []copyJSON{}, Warnings: append([]string{}, found.Warnings...), Summary: map[string]int{}}
-	for _, c := range found.Copies {
-		rep.Copies = append(rep.Copies, copyJSON(c))
-	}
-	s, err := store.Open(ctx, store.Path())
-	if err != nil {
-		_, _ = fmt.Fprintf(errw, "sift: warning: the round is not recorded: %v\n", err)
-	} else {
-		defer func() { _ = s.Close() }()
-		if rows, rep.Muted, err = s.Unmuted(ctx, rows); err != nil {
-			return tools.Exitf(2, "%v", err)
-		}
-	}
-	for _, r := range rows {
-		rep.Summary[r.Check]++
-	}
-	if s != nil {
-		if rep.Round, err = s.RecordRound(ctx, store.Round{Kind: rep.Kind, At: rep.At, Summary: rep.Summary}, rows); err != nil {
-			_, _ = fmt.Fprintf(errw, "sift: warning: the round is not recorded: %v\n", err)
-		}
-	}
-	rep.Rows = append([]row.Row{}, rows...)
-
 	if boolFlag(fs, "json") {
 		if err := tools.PrintJSON(out, rep); err != nil {
 			return err
@@ -114,14 +55,14 @@ func runCheck(args []string, out, errw io.Writer) error {
 	} else {
 		writeTable(out, rep)
 	}
-	if len(rows) > 0 {
-		return tools.Exitf(1, "%d finding(s) in round %d", len(rows), rep.Round)
+	if len(rep.Rows) > 0 {
+		return tools.Exitf(1, "%d finding(s) in round %d", len(rep.Rows), rep.Round)
 	}
 	return nil
 }
 
 // writeTable prints the rows grouped by file, then a summary.
-func writeTable(w io.Writer, rep report) {
+func writeTable(w io.Writer, rep audit.Report) {
 	file := ""
 	for _, r := range rep.Rows {
 		if r.Source.File != file {

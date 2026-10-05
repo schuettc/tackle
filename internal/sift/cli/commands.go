@@ -23,5 +23,10 @@ func commands(stdin io.Reader) []tools.Command {
 			Summary:  "audit the instruction files and record the round's findings as rows",
 			NewFlags: checkFlags, Run: runCheck,
 		},
+		{
+			Name: "rows", Group: "audit", Synopsis: "add [--round N] < rows.jsonl", Subcommands: []string{"add"},
+			Summary:  "merge the agent's proposals and intake rows (JSON lines on stdin) into the round",
+			NewFlags: rowsFlags, Run: runRows(stdin),
+		},
 	}
 }

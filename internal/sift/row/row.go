@@ -33,6 +33,8 @@ type Row struct {
 	Destination string `json:"destination,omitempty"`
 	// Text is the proposed text, written as guidance.
 	Text string `json:"text,omitempty"`
+	// Reason is why the agent proposes the verdict, shown with the proposal.
+	Reason string `json:"reason,omitempty"`
 	// Certain is true only for findings that cannot be wrong; sift applies
 	// those itself.
 	Certain  bool      `json:"certain"`
@@ -69,6 +71,47 @@ type Decision struct {
 	Title   string `json:"title,omitempty"`
 	Text    string `json:"text,omitempty"`
 	Note    string `json:"note,omitempty"`
+	// Sent is set once the user pressed Send with this decision; the store
+	// fills it, Validate ignores it.
+	Sent bool `json:"sent,omitempty"`
+}
+
+// Change is what applying a row does: its verdict, title, destination and
+// text once the decision's edits are over the proposal.
+type Change struct {
+	Verdict, Title, Destination, Text string
+}
+
+// Effective is the change the user approved. ok is false when there is none:
+// the row is undecided, rejected, or accepted with no verdict. A certain row
+// needs no decision: it is applied (as a delete when it has no verdict)
+// unless it was undone, which is a reject.
+func (r Row) Effective() (Change, bool) {
+	c := Change{Verdict: r.Verdict, Title: r.Title, Destination: r.Destination, Text: r.Text}
+	d := r.Decision
+	switch {
+	case d == nil && r.Certain:
+		if c.Verdict == "" {
+			c.Verdict = "delete"
+		}
+		return c, true
+	case d == nil, d.Action == "reject":
+		return Change{}, false
+	case d.Action == "edit":
+		if d.Verdict != "" {
+			c.Verdict = d.Verdict
+		}
+		if d.Title != "" {
+			c.Title = d.Title
+		}
+		if d.Text != "" {
+			c.Text = d.Text
+		}
+	}
+	if c.Verdict == "" {
+		return Change{}, false
+	}
+	return c, true
 }
 
 // Validate reports what is wrong with a decision: an unknown action, an edit
