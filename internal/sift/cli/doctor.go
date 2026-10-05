@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 
 	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/store"
 	tools "github.com/schuettc/tools-common"
 )
+
+// ghAuth is a test seam: whether gh is logged in.
+var ghAuth = func() error { return exec.Command("gh", "auth", "status").Run() }
 
 var doctorFlags = flags("doctor", "sift doctor",
 	"Checks what sift needs, one line per check: ok, or what to fix. Exit 0 when nothing\n"+
@@ -91,6 +95,8 @@ func runDoctor(args []string, out, errw io.Writer) error {
 	}
 	if _, err := lookPath("gh"); err != nil {
 		line("gh", false, "not on PATH: PR and issue references are left for you to judge", "")
+	} else if err := ghAuth(); err != nil {
+		line("gh", false, "not logged in (gh auth login): PR and issue references are left for you to judge", "")
 	} else {
 		line("gh", false, "", "")
 	}

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -50,5 +52,26 @@ func TestDoctorReportsEachItem(t *testing.T) {
 	}
 	if code, out, _ := run(t, "", "doctor"); code != 1 || !strings.Contains(out, "gone") {
 		t.Fatalf("code %d\n%s", code, out)
+	}
+}
+
+// gh on PATH but not logged in looks up nothing: doctor says so.
+func TestDoctorGhNotLoggedIn(t *testing.T) {
+	siftEnv(t)
+	c := config.Default()
+	if err := config.Save(config.Path(), c); err != nil {
+		t.Fatal(err)
+	}
+	oldLook, oldAuth := lookPath, ghAuth
+	lookPath = func(string) (string, error) { return "/bin/gh", nil }
+	ghAuth = func() error { return errors.New("exit status 1") }
+	t.Cleanup(func() { lookPath, ghAuth = oldLook, oldAuth })
+	code, out, _ := run(t, "", "doctor")
+	if code != 0 || !strings.Contains(out, "gh auth login") {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+	ghAuth = func() error { return nil }
+	if _, out, _ := run(t, "", "doctor"); !regexp.MustCompile(`gh\s+ok`).MatchString(out) {
+		t.Fatalf("%s", out)
 	}
 }
