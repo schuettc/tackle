@@ -1,8 +1,20 @@
 # Changelog
 
-All notable changes to `scratch`, `proj`, `casebook` and `cull` are documented here (proj, casebook and cull entries are headed with the tool's name; older proj and casebook releases have none). The format follows
+All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are documented here (proj, casebook, cull and sift entries are headed with the tool's name; older proj and casebook releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [sift 0.1.0] - Unreleased
+
+### Added
+- `sift init`: detects the agent harnesses you use (Claude Code, Codex, pi)
+  and writes sift's config: profiles, roots, budgets and windows.
+- `sift check`: audits instruction files (global files, repo files and
+  skills, read at each repo's fetched base) and records the round's findings
+  as rows: size, load limit, duplicate, dead path, stale status, retired
+  store, misplaced content, negative rule and secret. `--json` prints them.
+- `sift doctor`: config, profiles found, roots readable, and whether `gh` is
+  there for PR and issue state.
 
 ## [casebook 0.2.1] - 2026-10-01
 
