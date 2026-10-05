@@ -75,3 +75,24 @@ func TestDoctorGhNotLoggedIn(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 }
+
+// A harness config sift cannot read (Codex's config.toml) is a failure, not
+// a quiet "no profiles".
+func TestDoctorBrokenHarnessConfig(t *testing.T) {
+	home := siftEnv(t)
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("project_doc_max_bytes = \"big\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Default()
+	c.Profiles = []string{"codex"}
+	if err := config.Save(config.Path(), c); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ := run(t, "", "doctor")
+	if code != 1 || !regexp.MustCompile(`config\s+ok`).MatchString(out) || !regexp.MustCompile(`profiles\s+missing: codex config .*config.toml`).MatchString(out) {
+		t.Fatalf("code %d\n%s", code, out)
+	}
+}

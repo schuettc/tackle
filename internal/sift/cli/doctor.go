@@ -53,8 +53,10 @@ func runDoctor(args []string, out, errw io.Writer) error {
 		line("config", true, err.Error(), "")
 	default:
 		line("config", true, "", " ("+config.Path()+")")
-		profiles, _ := cfg.Enabled()
-		if len(profiles) == 0 {
+		profiles, err := cfg.Enabled()
+		if err != nil {
+			line("profiles", true, err.Error(), "")
+		} else if len(profiles) == 0 {
 			line("profiles", false, "none on: only the roots are audited", "")
 		}
 		for _, p := range profiles {

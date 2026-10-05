@@ -168,8 +168,10 @@ func (c Config) Validate() error {
 			return fmt.Errorf("profile %s: a shipped profile has that name", p.Name)
 		}
 	}
-	if _, err := c.Enabled(); err != nil {
-		return err
+	for _, name := range c.Profiles {
+		if !c.known(name) {
+			return fmt.Errorf("unknown profile %q", name)
+		}
 	}
 	for _, r := range c.Roots {
 		if !filepath.IsAbs(r.Path) {
@@ -199,20 +201,36 @@ func (c Config) Validate() error {
 func (c Config) Enabled() ([]profile.Profile, error) {
 	var out []profile.Profile
 	for _, name := range c.Profiles {
-		p, ok := c.lookup(name)
-		if !ok {
-			return nil, fmt.Errorf("unknown profile %q", name)
+		p, err := c.lookup(name)
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, nil
 }
 
-func (c Config) lookup(name string) (profile.Profile, bool) {
+func (c Config) known(name string) bool {
 	for _, p := range c.Custom {
 		if p.Name == name {
-			return p, true
+			return true
 		}
 	}
-	return profile.Builtin(name)
+	_, ok := profile.Builtin(name)
+	return ok
+}
+
+// lookup returns a config profile as written, or a builtin with its
+// harness's own settings applied.
+func (c Config) lookup(name string) (profile.Profile, error) {
+	for _, p := range c.Custom {
+		if p.Name == name {
+			return p, nil
+		}
+	}
+	p, ok := profile.Builtin(name)
+	if !ok {
+		return p, fmt.Errorf("unknown profile %q", name)
+	}
+	return p.Configured()
 }

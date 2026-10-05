@@ -145,3 +145,17 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Errorf("mode %v", st.Mode().Perm())
 	}
 }
+
+// An enabled builtin carries its harness's own settings (Codex's
+// config.toml); a config profile is taken as written.
+func TestEnabledAppliesTheHarnessConfig(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("project_doc_max_bytes = 1000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := Config{Profiles: []string{"codex"}}.Enabled()
+	if err != nil || len(ps) != 1 || ps[0].LoadLimit != 1000 {
+		t.Fatalf("%+v %v", ps, err)
+	}
+}

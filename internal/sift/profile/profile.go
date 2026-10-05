@@ -6,11 +6,16 @@
 package profile
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 // SkillFile is the file name of a skill, whatever the harness.
@@ -42,8 +47,8 @@ type Profile struct {
 
 // Builtins returns the shipped profiles, in display order. Each was checked
 // against a current install: Codex's discovery order and 32 KiB
-// project_doc_max_bytes come from its AGENTS.md guide; pi's candidate list
-// from its resource loader.
+// project_doc_max_bytes come from its AGENTS.md guide (its config.toml can
+// change both; see Configured); pi's candidate list from its resource loader.
 func Builtins() []Profile {
 	piFiles := []string{"AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"}
 	return []Profile{
@@ -77,6 +82,44 @@ func Builtins() []Profile {
 			Memory:      "memory",
 		},
 	}
+}
+
+// codexConfig is what sift reads of Codex's config.toml.
+type codexConfig struct {
+	Fallbacks []string `toml:"project_doc_fallback_filenames"`
+	MaxBytes  *int     `toml:"project_doc_max_bytes"`
+}
+
+// Configured returns the profile with its harness's own settings applied.
+// For Codex those are project_doc_fallback_filenames (more names to look for
+// in each directory, after AGENTS.override.md and AGENTS.md, in that order)
+// and project_doc_max_bytes (the load limit), from config.toml in its home;
+// unset, or no file, leaves the shipped values. Other profiles are returned
+// as they are.
+func (p Profile) Configured() (Profile, error) {
+	if p.Name != "codex" {
+		return p, nil
+	}
+	path := filepath.Join(p.HomeDir(), "config.toml")
+	var c codexConfig
+	if _, err := toml.DecodeFile(path, &c); errors.Is(err, fs.ErrNotExist) {
+		return p, nil
+	} else if err != nil {
+		return p, fmt.Errorf("codex config %s: %w", path, err)
+	}
+	if len(c.Fallbacks) > 0 {
+		files := append([]string(nil), p.RepoFiles...)
+		for _, f := range c.Fallbacks {
+			if f != "" && !strings.ContainsAny(f, `/\`) && !slices.Contains(files, f) {
+				files = append(files, f)
+			}
+		}
+		p.RepoFiles = files
+	}
+	if c.MaxBytes != nil && *c.MaxBytes > 0 {
+		p.LoadLimit = *c.MaxBytes
+	}
+	return p, nil
 }
 
 // Builtin returns the shipped profile with that name.
