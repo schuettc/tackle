@@ -40,16 +40,17 @@ hooks:
 
 # ---- tackle -----------------------------------------------------------------
 # Files the gate needs that are not committed (built before the gate, locally
-# and in CI). tackle has none: the casebook and cull page bundles are committed and embedded.
+# and in CI). tackle has none: the casebook, cull and sift page bundles are
+# committed and embedded.
 prepare:
 
 # Slow checks (a browser, a container) that CI runs as their own jobs: the
-# casebook and cull pages' browser probes (CI job `probe`).
-verify-slow: casebook-probe cull-probe
+# casebook, cull and sift pages' browser probes (CI job `probe`).
+verify-slow: casebook-probe cull-probe sift-probe
 
-# Tool-specific checks beyond the gate (CI runs this too): the casebook and
-# cull pages' TypeScript gates and their committed bundles matching web/.
-verify-extra: casebook-web casebook-bundle-fresh cull-web cull-bundle-fresh
+# Tool-specific checks beyond the gate (CI runs this too): the casebook, cull
+# and sift pages' TypeScript gates and their committed bundles matching web/.
+verify-extra: casebook-web casebook-bundle-fresh cull-web cull-bundle-fresh sift-web sift-bundle-fresh
 
 # casebook's page (internal/casebook/web) is TypeScript built by esbuild into
 # internal/casebook/serve/assets, which is COMMITTED and embedded, so node is
@@ -132,3 +133,41 @@ cull-bundle-fresh: cull-assets
 # `cd internal/cull/web && node node_modules/playwright-core/cli.js install chromium chromium-headless-shell`.
 cull-probe: _cull-web-deps
     cd {{ cull_web }} && KIT_BROWSER=required npm run --silent probe
+
+# sift's page (internal/sift/web) is TypeScript built by esbuild into
+# internal/sift/serve/assets, which is COMMITTED and embedded, so node is
+# dev-time only. Its node_modules can hold Go source (an npm package ships
+# some); the family gate already skips anything under node_modules.
+sift_web := "internal/sift/web"
+
+# Install the page's dependencies once (CI caches node_modules keyed on the
+# lockfile, so a hit skips `npm ci`); the postinstall copies the page kit's
+# types out of the tools-common module go.mod pins (kit.d.ts is generated).
+_sift-web-deps:
+    cd {{ sift_web }} && { [ -d node_modules ] || npm ci; } && npm run --silent kit-types
+
+# The page's TypeScript gate: unit tests, tsc against wire.d.ts, eslint,
+# prettier. Pass-throughs: the commands live in web/package.json.
+sift-web: _sift-web-deps
+    cd {{ sift_web }} && npm test
+    cd {{ sift_web }} && npm run --silent typecheck
+    cd {{ sift_web }} && npm run --silent lint
+    cd {{ sift_web }} && npm run --silent fmt:check
+
+# Rebuild the committed bundle (build:js + build:css only).
+sift-assets: _sift-web-deps
+    cd {{ sift_web }} && npm run --silent build:js && npm run --silent build:css
+
+# The committed bundle matches web/: nothing else notices a stale one.
+sift-bundle-fresh: sift-assets
+    git diff --exit-code -- internal/sift/serve/assets/sift.js internal/sift/serve/assets/sift.css \
+      || { echo "the committed sift bundle does not match web/: run 'just sift-assets' and commit the result"; exit 1; }
+
+# The page in a real headless chromium against a seeded sift serve (--no-open;
+# web/serve-fixture.mjs builds the sift binary and the seeder itself): the
+# views, groups, the wrapping prose view, accept / edit / reject, undo, Send,
+# and a 653-row round, asserted by visibility and geometry. KIT_BROWSER=required:
+# a probe that finds no chromium fails rather than skipping. Install one with
+# `cd internal/sift/web && node node_modules/playwright-core/cli.js install chromium chromium-headless-shell`.
+sift-probe: _sift-web-deps
+    cd {{ sift_web }} && KIT_BROWSER=required npm run --silent probe

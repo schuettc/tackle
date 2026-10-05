@@ -32,8 +32,9 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: extractions/setup-just@v4.0.0
-      # casebook's and cull's pages (internal/{casebook,cull}/web) are TypeScript:
-      # verify-extra runs their gates and the committed-bundle freshness checks.
+      # casebook's, cull's and sift's pages (internal/{casebook,cull,sift}/web) are
+      # TypeScript: verify-extra runs their gates and the committed-bundle
+      # freshness checks.
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: 24
@@ -41,6 +42,7 @@ jobs:
           cache-dependency-path: |
             internal/casebook/web/package-lock.json
             internal/cull/web/package-lock.json
+            internal/sift/web/package-lock.json
       # setup-node's `cache: npm` caches the download cache, not node_modules.
       # Keyed on each lockfile: a hit lets `_<page>-web-deps` skip `npm ci`.
       - name: Cache casebook web/node_modules
@@ -53,9 +55,14 @@ jobs:
         with:
           path: internal/cull/web/node_modules
           key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
+      - name: Cache sift web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/sift/web/node_modules
+          key: sift-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/sift/web/package-lock.json') }}
       - run: just verify-extra
 
-  # The casebook and cull pages in a real headless chromium (`just verify-slow`):
+  # The casebook, cull and sift pages in a real headless chromium (`just verify-slow`):
   # too slow for the push gate, so their own required job.
   probe:
     runs-on: macos-26
@@ -72,6 +79,7 @@ jobs:
           cache-dependency-path: |
             internal/casebook/web/package-lock.json
             internal/cull/web/package-lock.json
+            internal/sift/web/package-lock.json
       # setup-node's `cache: npm` caches the download cache, not node_modules.
       # Keyed on each lockfile: a hit lets `_<page>-web-deps` skip `npm ci`.
       - name: Cache casebook web/node_modules
@@ -84,13 +92,19 @@ jobs:
         with:
           path: internal/cull/web/node_modules
           key: cull-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/cull/web/package-lock.json') }}
+      - name: Cache sift web/node_modules
+        uses: actions/cache@v6
+        with:
+          path: internal/sift/web/node_modules
+          key: sift-web-node-modules-${{ runner.os }}-${{ hashFiles('internal/sift/web/package-lock.json') }}
       - name: Install web dependencies
         run: |
           (cd internal/casebook/web && { [ -d node_modules ] || npm ci; })
           (cd internal/cull/web && { [ -d node_modules ] || npm ci; })
+          (cd internal/sift/web && { [ -d node_modules ] || npm ci; })
       # playwright-core's own CLI (the version that launches), and the headless
       # shell, which is what chromium.launch() actually runs. One install serves
-      # both pages (the shared ms-playwright cache).
+      # every page (the shared ms-playwright cache).
       - name: Install chromium
         working-directory: internal/casebook/web
         run: node node_modules/playwright-core/cli.js install --with-deps chromium chromium-headless-shell

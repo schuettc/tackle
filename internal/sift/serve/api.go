@@ -86,7 +86,7 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	cursor := s.events.format(s.events.latest())
 	rd, rows, err := s.st.LatestRound(r.Context())
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "round": nil, "rows": []row.Row{}, "applies": []applyJSON{}})
+		writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "round": nil, "rows": []row.Row{}, "applies": []applyJSON{}, "sends": 0, "home": home()})
 		return
 	}
 	if err != nil {
@@ -103,6 +103,11 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 		aj = append(aj, applyJSON{Repo: a.Repo, Base: a.Base, Branch: a.Branch, PR: a.PR, State: a.State, Detail: a.Detail,
 			Rows: append([]string{}, a.Rows...), At: rfc(a.At)})
 	}
+	sends, err := s.st.Sends(r.Context(), rd.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	if rows == nil {
 		rows = []row.Row{}
 	}
@@ -115,7 +120,16 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 		"round":   roundJSON{ID: rd.ID, Kind: rd.Kind, At: rfc(rd.At), Summary: sum, Owner: rd.OwnerLabel},
 		"rows":    rows,
 		"applies": aj,
+		"sends":   sends,
+		"home":    home(),
 	})
+}
+
+// home is the user's home directory, so the page can show paths under it
+// as ~/….
+func home() string {
+	h, _ := os.UserHomeDir()
+	return h
 }
 
 func decode(r *http.Request, v any) error {

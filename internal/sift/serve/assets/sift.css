@@ -1,0 +1,138 @@
+/* sift.css */
+:root {
+  --tool-signal-light: #2f6f5e;
+  --tool-signal-dark: #6fbfa8;
+}
+.kit-doc .sift-lead {
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 0 22px;
+}
+.kit-doc .sift-why {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--kit-muted);
+  margin: 10px 0 14px;
+}
+.kit-doc h1 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.sift-prose {
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  padding: 10px 0;
+  margin: 0 0 16px;
+  font: 12.5px/1.6 var(--kit-mono);
+}
+.sift-ln {
+  display: grid;
+  grid-template-columns: 3.6em minmax(0, 1fr);
+}
+.sift-n {
+  color: var(--kit-muted);
+  text-align: right;
+  padding-right: 12px;
+  border-right: 1px solid var(--kit-line);
+  user-select: none;
+}
+.sift-t {
+  padding: 0 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 4;
+  min-height: 1.6em;
+}
+.sift-ln.mark .sift-t {
+  background: var(--kit-signal-soft);
+}
+.sift-ln.mark .sift-n {
+  color: var(--kit-signal);
+}
+.kit-list .kit-kicker {
+  overflow-wrap: anywhere;
+}
+.kit-row.sift-member {
+  margin-left: 18px;
+}
+.kit-row.sift-group .kit-title {
+  font-weight: 600;
+}
+.sift-edit .kit-label:first-child {
+  margin-top: 26px;
+}
+.sift-verdicts {
+  margin: 0 0 8px;
+}
+.sift-field {
+  display: block;
+  width: 100%;
+  font: 13px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+textarea.sift-field {
+  font: 12.5px/1.6 var(--kit-mono);
+  min-height: 7.5em;
+  resize: vertical;
+}
+.sift-field:focus-visible {
+  outline: 1px solid var(--kit-signal);
+  outline-offset: 0;
+}
+.sift-err {
+  color: var(--kit-danger);
+  font: 12.5px var(--kit-mono);
+  min-height: 1em;
+  margin: 8px 0;
+}
+table.sift-rows {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  overflow: hidden;
+  table-layout: fixed;
+}
+table.sift-rows th {
+  font: 10.5px var(--kit-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kit-muted);
+  text-align: left;
+  font-weight: 400;
+  padding: 10px 12px;
+}
+table.sift-rows th:first-child {
+  width: 4.5em;
+}
+table.sift-rows th:nth-child(3),
+table.sift-rows th:nth-child(4) {
+  width: 8.5em;
+}
+table.sift-rows td {
+  padding: 9px 12px;
+  border-top: 1px solid var(--kit-line);
+  vertical-align: top;
+  font-size: 14px;
+}
+table.sift-rows td.n {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  overflow-wrap: anywhere;
+}
+table.sift-rows td.p {
+  overflow-wrap: anywhere;
+}
+table.sift-rows tr:not(:first-child) {
+  cursor: pointer;
+}
+table.sift-rows tr:not(:first-child):hover td {
+  background: var(--kit-signal-soft);
+}

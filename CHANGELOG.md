@@ -14,7 +14,25 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   as rows: size, load limit, duplicate, dead path, stale status, retired
   store, misplaced content, negative rule and secret. `--json` prints them.
 - `sift doctor`: config, profiles found, roots readable, and whether `gh` is
-  there for PR and issue state.
+  there for PR and issue state; the page server and each enabled harness's
+  channel registration.
+- `sift rows add`: merges the agent's proposals (verdict, title,
+  destination, text, reason) and intake rows, as JSON lines, into the round.
+- `sift serve`: the review page. Rows in two views, needs you and applied,
+  grouped by file and check (a backlog round: issues by repo, decisions,
+  closes); accept, edit or reject a row (1–3) or a whole group; a note per
+  row; undo of a certain fix before Send; passages in a wrapping prose view.
+  Send delivers the decisions to the agent session that opened the review.
+- `sift wait`: returns when you press Send and prints what to do, for
+  sessions without the channel.
+- `sift channel`: the MCP server for an agent session, with `sift_check`,
+  `sift_review`, `sift_apply` and `sift_status`, and Send as a channel event.
+- `sift apply`: the certain fixes and approved rows (delete, rewrite, move,
+  merge) as one branch per repo, cut from the fetched base in a worktree; a
+  repo with uncommitted or unpushed work in its primary clone is held; with
+  `gh` and a GitHub remote, a pull request (`--body-file`).
+- `sift reconcile`: each apply branch against its approved rows: missing,
+  narrowed and extra hunks.
 
 ## [casebook 0.2.1] - 2026-10-01
 

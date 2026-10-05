@@ -1,0 +1,723 @@
+{
+ "kind": "on-demand",
+ "repos": [
+  "shop",
+  "tools"
+ ],
+ "files": {
+  "shop/CLAUDE.md": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n- Never skip the hooks.\n- Avoid merge commits on feature branches.\n- No secrets in the repo.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that, and a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n\n## Layout\n\nSee `docs/architecture.md` for the layout.\nThe old runbook lives in `docs/runbook-v1.md`.\n\n## Status\n\n- Waiting on the payments migration before the checkout rewrite can start.\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n\n## Style\n\n- Never use the pattern number 1 in new code; it predates the style guide.\n- Never use the pattern number 2 in new code; it predates the style guide.\n- Never use the pattern number 3 in new code; it predates the style guide.\n- Never use the pattern number 4 in new code; it predates the style guide.\n- Never use the pattern number 5 in new code; it predates the style guide.\n- Never use the pattern number 6 in new code; it predates the style guide.\n- Never use the pattern number 7 in new code; it predates the style guide.\n- Never use the pattern number 8 in new code; it predates the style guide.\n- Never use the pattern number 9 in new code; it predates the style guide.\n- Never use the pattern number 10 in new code; it predates the style guide.\n- Never use the pattern number 11 in new code; it predates the style guide.\n- Never use the pattern number 12 in new code; it predates the style guide.\n- Never use the pattern number 13 in new code; it predates the style guide.\n- Never use the pattern number 14 in new code; it predates the style guide.\n- Never use the pattern number 15 in new code; it predates the style guide.\n- Never use the pattern number 16 in new code; it predates the style guide.\n- Never use the pattern number 17 in new code; it predates the style guide.\n- Never use the pattern number 18 in new code; it predates the style guide.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+  "shop/docs/AGENTS.md": "# docs\n\n- Never edit the generated reference by hand.\n- Write in the second person.\n",
+  "tools/skills/release/SKILL.md": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\nRead `~/.notes/memory.md` before you start.\n\n- Tag from main.\n",
+  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release.\n- Prefer small commits.\n"
+ },
+ "rows": [
+  {
+   "id": "480f565dbc31f07c",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 7,
+    "end": 7
+   },
+   "passage": "- Never push directly to main.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Push to a branch and open a pull request.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "9d68f7da082d3f0b",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 8,
+    "end": 8
+   },
+   "passage": "- Don't force-push a shared branch.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Don't"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Rebase only branches nobody else has pulled.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "de5b35362646b5ec",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 9,
+    "end": 9
+   },
+   "passage": "- Do not commit generated files.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Do"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Commit sources; the build regenerates the rest.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "d17b71649f1714cc",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 10,
+    "end": 10
+   },
+   "passage": "- Never skip the hooks.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Let the hooks run; fix what they report.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "0f4f73356ea6213f",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 11,
+    "end": 11
+   },
+   "passage": "- Avoid merge commits on feature branches.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Avoid"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Rebase a feature branch on main before review.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "ee548076bcfbef18",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 12,
+    "end": 12
+   },
+   "passage": "- No secrets in the repo.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "No"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Keep secrets in the vault and read them at run time.",
+   "reason": "Says what to do instead of what to avoid."
+  },
+  {
+   "id": "5a689be8985687d8",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 16,
+    "end": 16
+   },
+   "passage": "- Never mock the database in integration tests; the fixtures exist for that, and a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Test against the real database with the shared fixtures: a mocked database has hidden real bugs in queries that only fail with real indexes and collation.",
+   "reason": "Keeps the reason, which is the useful part, and states the practice."
+  },
+  {
+   "id": "c09c8ac44e58504d",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 17,
+    "end": 17
+   },
+   "passage": "- Don't leave a skipped test without an issue number.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Don't"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "a67bc3b561f883ea",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 32,
+    "end": 32
+   },
+   "passage": "- Never use the pattern number 1 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "16d8ad0f2d6eee2d",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 33,
+    "end": 33
+   },
+   "passage": "- Never use the pattern number 2 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 2 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "bc1574cdf0664fe6",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 34,
+    "end": 34
+   },
+   "passage": "- Never use the pattern number 3 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "f57f8376ec10df40",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 35,
+    "end": 35
+   },
+   "passage": "- Never use the pattern number 4 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "9be3f2e1febfbdd5",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 36,
+    "end": 36
+   },
+   "passage": "- Never use the pattern number 5 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 5 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "a0bd7ef38cc5397d",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 37,
+    "end": 37
+   },
+   "passage": "- Never use the pattern number 6 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "1b3382f265cdccf6",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 38,
+    "end": 38
+   },
+   "passage": "- Never use the pattern number 7 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "294450af0bdcf2f7",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 39,
+    "end": 39
+   },
+   "passage": "- Never use the pattern number 8 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 8 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "bb6c362382f8a30f",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 40,
+    "end": 40
+   },
+   "passage": "- Never use the pattern number 9 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "d116f3f91fb88c5f",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 41,
+    "end": 41
+   },
+   "passage": "- Never use the pattern number 10 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "bf2dfabe1c090301",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 42,
+    "end": 42
+   },
+   "passage": "- Never use the pattern number 11 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 11 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "3de28cebbf34e0cc",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 43,
+    "end": 43
+   },
+   "passage": "- Never use the pattern number 12 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "2d734c79047e86de",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 44,
+    "end": 44
+   },
+   "passage": "- Never use the pattern number 13 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "f214edf1b271a88b",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 45,
+    "end": 45
+   },
+   "passage": "- Never use the pattern number 14 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 14 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "e57116cffa7fbc2a",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 46,
+    "end": 46
+   },
+   "passage": "- Never use the pattern number 15 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "41e0ab8bb607a490",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 47,
+    "end": 47
+   },
+   "passage": "- Never use the pattern number 16 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The linter enforces this; the rule costs context in every session."
+  },
+  {
+   "id": "7055260f68015ff6",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 48,
+    "end": 48
+   },
+   "passage": "- Never use the pattern number 17 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Use the style guide's replacement for pattern 17 in new code.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "cd4c413c44969358",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 49,
+    "end": 49
+   },
+   "passage": "- Never use the pattern number 18 in new code; it predates the style guide.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "f2bd5dd90fa29c0e",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 22,
+    "end": 22
+   },
+   "passage": "See `docs/architecture.md` for the layout.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/architecture.md"
+    },
+    {
+     "name": "certain",
+     "value": "deleted at the audited commit"
+    }
+   ],
+   "certain": true
+  },
+  {
+   "id": "ff8d0c4ae38de2ec",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 23,
+    "end": 23
+   },
+   "passage": "The old runbook lives in `docs/runbook-v1.md`.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/runbook-v1.md"
+    }
+   ],
+   "certain": false,
+   "verdict": "delete",
+   "reason": "The runbook was replaced; nothing links to it any more."
+  },
+  {
+   "id": "0a3b4551207c7805",
+   "check": "stale-status",
+   "summary": "status that may have gone stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 27,
+    "end": 27
+   },
+   "passage": "- Waiting on the payments migration before the checkout rewrite can start.",
+   "evidence": [
+    {
+     "name": "phrase",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false,
+   "verdict": "ask",
+   "reason": "Only you know whether the migration landed."
+  },
+  {
+   "id": "33d5391a08af8c44",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 28,
+    "end": 28
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "415bf8e35218b9c6",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 53,
+    "end": 53
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false,
+   "verdict": "merge:33d5391a08af8c44",
+   "reason": "Same rule twice; keep the one under Status."
+  },
+  {
+   "id": "c3141af60b8b7c71",
+   "check": "size",
+   "summary": "over its budget",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 0,
+    "end": 0
+   },
+   "passage": "",
+   "evidence": [
+    {
+     "name": "size",
+     "value": "7.1 KB"
+    },
+    {
+     "name": "budget",
+     "value": "6.0 KB (repo instruction file)"
+    }
+   ],
+   "certain": false,
+   "verdict": "keep",
+   "reason": "Shrinks below budget once the rewrites above land."
+  },
+  {
+   "id": "06bebde0ccec2f12",
+   "check": "negative-rule",
+   "summary": "a rule phrased as a prohibition",
+   "source": {
+    "rel": "shop/docs/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- Never edit the generated reference by hand.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Never"
+    }
+   ],
+   "certain": false,
+   "verdict": "rewrite",
+   "text": "- Change the generator, then regenerate the reference.",
+   "reason": "Positive form."
+  },
+  {
+   "id": "faf797b09bfb9144",
+   "check": "retired-store",
+   "summary": "a pointer to a retired memory store",
+   "source": {
+    "rel": "tools/skills/release/SKILL.md",
+    "start": 8,
+    "end": 8
+   },
+   "passage": "Read `~/.notes/memory.md` before you start.",
+   "evidence": [
+    {
+     "name": "pattern",
+     "value": "~/.notes/memory.md"
+    },
+    {
+     "name": "certain",
+     "value": "the store is retired"
+    }
+   ],
+   "certain": true
+  },
+  {
+   "id": "f3582c497c90a5db",
+   "check": "misplaced",
+   "summary": "a line about one root in the global file",
+   "source": {
+    "rel": "home/.agent/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- In shop, run the slow suite before a release.",
+   "evidence": [
+    {
+     "name": "names",
+     "value": "shop"
+    }
+   ],
+   "certain": false,
+   "verdict": "move",
+   "destination": "CLAUDE.md#Release",
+   "text": "- Run the slow suite before a release.",
+   "reason": "Only true in shop; every session elsewhere pays for it."
+  }
+ ]
+}

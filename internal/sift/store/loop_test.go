@@ -172,6 +172,9 @@ func TestSendCarriesTheAppliedRowsOnce(t *testing.T) {
 	if again, _ := s.Send(ctx, id, ""); again.ID != 0 {
 		t.Fatal("the applied rows were sent twice")
 	}
+	if n, err := s.Sends(ctx, id); n != 1 || err != nil {
+		t.Fatalf("sends %d %v", n, err)
+	}
 }
 
 func TestUndecideAndOwner(t *testing.T) {

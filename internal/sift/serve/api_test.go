@@ -65,6 +65,7 @@ func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 }
 
 type reviewOut struct {
+	Sends  int        `json:"sends"`
 	Cursor string     `json:"cursor"`
 	Round  *roundJSON `json:"round"`
 	Rows   []row.Row  `json:"rows"`
@@ -195,8 +196,8 @@ func TestSend(t *testing.T) {
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":2`) {
 		t.Fatalf("send %d %s", w.Code, w.Body)
 	}
-	if !f.review().Rows[0].Decision.Sent {
-		t.Error("the decision is not marked sent")
+	if rv := f.review(); !rv.Rows[0].Decision.Sent || rv.Sends != 1 {
+		t.Errorf("after send: sent %v, sends %d", rv.Rows[0].Decision.Sent, rv.Sends)
 	}
 	w = f.do("POST", "/api/send", fmt.Sprintf(`{"round":%d}`, f.round))
 	if !strings.Contains(w.Body.String(), `"sent":0`) {

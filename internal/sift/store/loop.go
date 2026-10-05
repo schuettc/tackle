@@ -221,6 +221,10 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 				sd.Notes = append(sd.Notes, Note{Row: where(r), Note: note.String})
 			}
 		}
+		if err := q.Err(); err != nil {
+			_ = q.Close()
+			return err
+		}
 		if err := q.Close(); err != nil {
 			return err
 		}
@@ -312,6 +316,13 @@ func (s *Store) ClaimSend(ctx context.Context, session string) (Send, bool, erro
 		return Send{}, false, err
 	}
 	return sd, found, nil
+}
+
+// Sends counts the round's sends.
+func (s *Store) Sends(ctx context.Context, roundID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM sends WHERE round_id = ?`, roundID).Scan(&n)
+	return n, err
 }
 
 // Undelivered lists the sends not yet delivered, oldest first.
