@@ -10,7 +10,8 @@ import (
 	"github.com/schuettc/tackle/internal/sift/store"
 )
 
-// seedRound records a round of two rows in the test's state and returns them.
+// seedRound records a backlog round of two rows in the test's state and
+// returns them.
 func seedRound(t *testing.T) (int64, []row.Row) {
 	t.Helper()
 	s, err := store.Open(context.Background(), store.Path())
@@ -23,7 +24,7 @@ func seedRound(t *testing.T) (int64, []row.Row) {
 			Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3}, Passage: "- Never push."},
 		{ID: row.ID("/w/a/CLAUDE.md", "size", "f"), Check: "size", Summary: "s", Source: row.Source{File: "/w/a/CLAUDE.md"}},
 	}
-	id, err := s.RecordRound(context.Background(), store.Round{Kind: "on-demand"}, rows)
+	id, err := s.RecordRound(context.Background(), store.Round{Kind: "backlog"}, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +86,16 @@ func TestRowsAddNeedsARound(t *testing.T) {
 	code, _, errw := run(t, "{\"id\":\"x\"}\n", "rows", "add")
 	if code != 2 || !strings.Contains(errw, "sift check") {
 		t.Fatalf("code %d err %q", code, errw)
+	}
+}
+
+// An audit round's findings are answered per file: rows add says so.
+func TestRowsAddPointsAnAuditRoundAtPropose(t *testing.T) {
+	home := siftEnv(t)
+	fixtureWorkspace(t, home)
+	_, _, _ = run(t, "", "check")
+	code, _, errw := run(t, jsonl(t, map[string]any{"id": "x", "verdict": "keep"}), "rows", "add")
+	if code != 2 || !strings.Contains(errw, "sift propose") {
+		t.Fatalf("%d %s", code, errw)
 	}
 }

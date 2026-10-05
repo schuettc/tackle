@@ -19,7 +19,8 @@ import (
 
 var rowsFlags = flags("rows", "sift rows add [--round N] < rows.jsonl",
 	"add: reads rows as JSON lines on stdin and merges them into the latest round (or --round N),\n"+
-		"all or nothing. A row the round has gets the agent's proposal: verdict, title,\n"+
+		"a backlog or intake round, decided per item (an audit round's findings are answered per\n"+
+		"file: sift next, sift propose), all or nothing. A row the round has gets the agent's proposal: verdict, title,\n"+
 		"destination, text and reason; what the check found stays. An intake row (check \"intake\")\n"+
 		"is added when the round lacks it. Refused: unknown fields, an unknown verdict, an id not\n"+
 		"in the round (other than an intake row), a decision (those are made on the page). A\n"+

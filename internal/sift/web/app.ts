@@ -1,10 +1,15 @@
-// app.ts — the sift review page: the bar, the list (rows in groups), the
-// reading column, the route (#/<view>[/<entry>]), the live client and every
-// decision.
+// app.ts — the sift review page: the bar, the list, the reading column, the
+// route (#/open[/<entry>]), the live client and every decision.
 //
-// State lives here; doc.ts only draws. Every decision is applied to the page
-// at once and saved as it is given; a failure rolls it back and says so in
-// the bar, a 409 reloads.
+// An audit round is decided one file at a time: the list has one entry per
+// file (linked files together), and the reading column shows the file's
+// recommendation as a diff. While the agent is still recommending, the
+// page says how far it got and takes no decision. A backlog round is
+// decided one item at a time, in groups.
+//
+// State lives here; doc.ts only draws. Every decision is applied to the
+// page at once and saved as it is given; a failure rolls it back and says
+// so in the bar, a 409 reloads.
 
 import {
   bar,
@@ -18,19 +23,30 @@ import {
   type StatusTone,
 } from '/_kit/kit.js';
 import { ApiError, client, newApi, type DecisionIn } from './api.ts';
-import { groupDoc, message, rowDoc, type Ctx } from './doc.ts';
 import {
-  checkCount,
+  fileDoc,
+  groupDoc,
+  message,
+  rowDoc,
+  type Ctx,
+  type FileCtx,
+} from './doc.ts';
+import {
+  decideLocal,
+  fileEntries,
+  fileMeta,
+  filesProgress,
+  printsFor,
+  unsentFiles,
+  type FileEntry,
+} from './files.ts';
+import {
   displayPath,
   editDecision,
   editTarget,
   entries,
-  fixDecision,
   groupTargets,
   groupsOf,
-  inView,
-  isBacklog,
-  isFix,
   markSent,
   nextOpen,
   progress,
@@ -38,31 +54,37 @@ import {
   rowTitle,
   unsent,
   type Entry,
-  type View,
 } from './model.ts';
 
 const qs = new URLSearchParams(location.search);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-function frag(view: View, key?: string | null): string {
-  return `#/${view}${key ? `/${encodeURIComponent(key)}` : ''}`;
+type Item = Entry | (FileEntry & { kind: 'file' });
+
+function frag(key?: string | null): string {
+  return `#/open${key ? `/${encodeURIComponent(key)}` : ''}`;
 }
 
-function parseRoute(hash: string): { view: View; key: string | null } {
-  const m = /^#\/(open|applied)(?:\/(.+))?$/.exec(hash);
-  if (!m) return { view: 'open', key: null };
-  let key: string | null = null;
+function parseRoute(hash: string): string | null {
+  const m = /^#\/open(?:\/(.+))?$/.exec(hash);
+  if (!m?.[1]) return null;
   try {
-    key = m[2] ? decodeURIComponent(m[2]) : null;
+    return decodeURIComponent(m[1]);
   } catch {
-    key = null;
+    return null;
   }
-  return { view: m[1] as View, key };
 }
 
 function signature(r: Review): string {
   return (
-    `${r.round?.id ?? 0}|${r.sends}|${r.applies.map((a) => a.repo + a.state).join(',')}|` +
+    `${r.round?.id ?? 0}|${r.progress?.state}|${r.sends}|${r.applies.map((a) => a.repo + a.state).join(',')}|` +
+    r.files
+      .map((f) => {
+        const d = f.decision;
+        return `${f.key}:${f.fingerprint}:${d ? `${d.action}/${d.content?.length ?? 0}/${d.note ?? ''}/${d.sent ? 1 : 0}` : ''}`;
+      })
+      .join(';') +
+    '|' +
     r.rows
       .map((x) => {
         const d = x.decision;
@@ -72,10 +94,12 @@ function signature(r: Review): string {
   );
 }
 
+const perItem = (r: Review | null) =>
+  r?.round?.kind === 'backlog' || r?.round?.kind === 'intake';
+
 export function boot(): void {
   // ---- state -----------------------------------------------------------------
   let review: Review | null = null;
-  let view: View = 'open';
   let openKey: string | null = null;
   let editing: string | null = null;
   let filter = '';
@@ -92,8 +116,10 @@ export function boot(): void {
   let statusTimer: ReturnType<typeof setTimeout> | undefined;
   let prevLive: LiveStatus = 'live';
   let loadTimer: ReturnType<typeof setTimeout> | undefined;
-  let shown: Entry[] = [];
+  let shown: Item[] = [];
   const pending = new Map<string, string>(); // notes waiting for a decision
+  // A file's audited content, read on demand (by round, file and base).
+  const bases = new Map<string, string | Error>();
 
   // ---- api -------------------------------------------------------------------
   const gated = (input: RequestInfo | URL, init?: RequestInit) =>
@@ -104,8 +130,10 @@ export function boot(): void {
 
   // ---- derived ---------------------------------------------------------------
   const home = () => review?.home ?? '';
-  const rowsOf = (v: View) => (review?.rows ?? []).filter((r) => inView(r, v));
-  const matches = (r: Finding) => {
+  const files = () => review?.files ?? [];
+  const recommending = () =>
+    !perItem(review) && review?.progress?.state === 'recommending';
+  const matchesRow = (r: Finding) => {
     if (filter && r.check !== filter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
@@ -117,19 +145,30 @@ export function boot(): void {
       r.check,
     ].some((s) => s.toLowerCase().includes(q));
   };
-  const groups = () =>
-    groupsOf(
-      rowsOf(view).filter(matches),
-      isBacklog(review?.round ?? null, review?.rows ?? []),
-      home(),
-    );
+  const items = (): Item[] => {
+    if (perItem(review))
+      return entries(
+        groupsOf((review?.rows ?? []).filter(matchesRow), true, home()),
+        openKey,
+      );
+    const q = search.toLowerCase();
+    return fileEntries(files(), home())
+      .filter(
+        (e) =>
+          !q || displayPath(e.file.source, home()).toLowerCase().includes(q),
+      )
+      .map((e) => ({ ...e, kind: 'file' as const }));
+  };
   const rowById = (id: string) => review?.rows.find((r) => r.id === id);
+  const fileByKey = (k: string) => files().find((f) => f.key === k);
   /** For an edit to merge:C, C's fingerprint as the page shows it. */
   const targetPrint = (d: Decision) => {
     const id = editTarget(d);
     return id ? rowById(id)?.fingerprint : undefined;
   };
-  const current = (): Entry | undefined => shown.find((e) => e.key === openKey);
+  const current = (): Item | undefined => shown.find((e) => e.key === openKey);
+  const baseKey = (f: FileView) =>
+    `${review?.round?.id ?? 0}:${f.key}:${f.base}`;
 
   // ---- bar -------------------------------------------------------------------
   const b = bar({
@@ -148,9 +187,14 @@ export function boot(): void {
     if (!review.round) return 'no round yet — run sift check';
     const r = review.round;
     const day = r.at ? r.at.slice(0, 10) : '';
-    const kind = r.kind === 'on-demand' ? 'audit' : `${r.kind} audit`;
+    const kind = perItem(review)
+      ? r.kind
+      : r.kind === 'on-demand'
+        ? 'audit'
+        : `${r.kind} audit`;
     const owner = r.owner ? ` · to ${r.owner}` : '';
-    return `${kind} · round ${r.id} · ${day}${owner}`;
+    const state = review.progress?.state ? ` · ${review.progress.state}` : '';
+    return `${kind} · round ${r.id} · ${day}${state}${owner}`;
   }
   function flash(text: string, tone: StatusTone = 'muted'): void {
     clearTimeout(statusTimer);
@@ -165,11 +209,16 @@ export function boot(): void {
     );
   }
   function refreshBar(): void {
-    const p = progress(review?.rows ?? []);
-    b.setCount('review', review?.round ? `${p.decided}/${p.total}` : '');
-    const n = unsent(review?.rows ?? [], review?.sends ?? 0);
+    const p = perItem(review)
+      ? progress(review?.rows ?? [])
+      : filesProgress(files());
+    b.setCount(
+      'review',
+      review?.round && !recommending() ? `${p.decided}/${p.total}` : '',
+    );
+    const n = unsent(review?.rows ?? []) + unsentFiles(files());
     b.setPrimary(
-      n && review?.round
+      n && review?.round && !recommending()
         ? { label: `Send ${n}`, run: () => void send() }
         : null,
     );
@@ -178,41 +227,42 @@ export function boot(): void {
 
   // ---- list ------------------------------------------------------------------
   const read = h('main', { class: 'kit-read' });
-  const l = list<Entry>({
-    label: 'findings',
+  const l = list<Item>({
+    label: 'files',
     views: [],
     onChip(group, id) {
-      if (group === 'view') {
-        editing = null;
-        filter = '';
-        go(frag(id === 'applied' ? 'applied' : 'open'));
-        return;
+      if (group === 'filter') {
+        filter = filter === id ? '' : id;
+        render();
       }
-      filter = filter === id ? '' : id;
-      render();
     },
     search: {
-      placeholder: 'search files and passages',
+      placeholder: 'search files',
       onInput(text) {
         search = text.trim();
         render();
       },
     },
     row(e) {
+      if (e.kind === 'file') {
+        const f = e.file;
+        return {
+          id: e.key,
+          key: displayPath(f.source, home()),
+          title:
+            f.rec?.summary.split(/(?<=\.)\s/)[0] ||
+            `${plural(f.rows.length, 'finding')}`,
+          meta: fileMeta(f),
+        };
+      }
       if (e.kind === 'group') {
         const g = e.group;
-        const done =
-          view === 'applied'
-            ? g.rows.filter((r) => r.decision?.action !== 'reject').length
-            : g.rows.filter((r) => r.decision).length;
+        const done = g.rows.filter((r) => r.decision).length;
         return {
           id: e.key,
           key: g.kicker,
           title: g.title,
-          meta:
-            done === g.rows.length && view === 'open'
-              ? '✓'
-              : `${done}/${g.rows.length}`,
+          meta: done === g.rows.length ? '✓' : `${done}/${g.rows.length}`,
         };
       }
       const r = e.row;
@@ -231,28 +281,18 @@ export function boot(): void {
     openOnMove: true,
     onOpen(e) {
       if (syncing) return;
-      go(frag(view, e.key));
+      go(frag(e.key));
     },
   });
 
   function chips(): void {
-    const all = review?.rows ?? [];
-    l.setChips('view', [
-      {
-        id: 'open',
-        label: 'needs you',
-        count: all.filter((r) => inView(r, 'open')).length,
-        on: view === 'open',
-      },
-      {
-        id: 'applied',
-        label: 'applied',
-        count: all.filter((r) => inView(r, 'applied')).length,
-        on: view === 'applied',
-      },
-    ]);
+    l.setChips('view', []);
+    if (!perItem(review)) {
+      l.setChips('filter', []);
+      return;
+    }
     const counts = new Map<string, number>();
-    for (const r of rowsOf(view))
+    for (const r of review?.rows ?? [])
       counts.set(r.check, (counts.get(r.check) ?? 0) + 1);
     const fs: Chip[] =
       counts.size > 1
@@ -266,23 +306,21 @@ export function boot(): void {
     l.setChips('filter', fs);
   }
 
-  // Members of the open group are indented under it; the kit's rows carry
-  // no class of their own, so mark them after each render.
+  // Linked files and a group's members carry a class of their own; the
+  // kit's rows take none, so mark them after each render.
   function decorate(): void {
     const els = l.el.querySelectorAll<HTMLElement>('.kit-row');
     shown.forEach((e, i) => {
       els[i]?.classList.toggle('sift-group', e.kind === 'group');
       els[i]?.classList.toggle('sift-member', e.kind === 'row' && e.member);
+      els[i]?.classList.toggle('sift-linked', e.kind === 'file' && e.linked);
     });
   }
 
-  // ---- ctx -------------------------------------------------------------------
+  // ---- reading column contexts -----------------------------------------------
   const ctx: Ctx = {
     get home() {
       return home();
-    },
-    get view() {
-      return view;
     },
     get editing() {
       return editing;
@@ -301,17 +339,74 @@ export function boot(): void {
     },
     saveEdit,
     clear,
-    undo,
-    redo,
-    open: (key) => go(frag(view, key)),
+    open: (key) => go(frag(key)),
     file: (r) => api.file(review?.round?.id ?? 0, r.id),
-    appliedIn: (r) =>
-      review?.applies.find(
-        (a) =>
-          a.repo === r.source.repo &&
-          (a.state === 'pr' || a.state === 'branch'),
-      ),
   };
+
+  const fctx: FileCtx = {
+    get home() {
+      return home();
+    },
+    get editing() {
+      return editing;
+    },
+    get files() {
+      return files();
+    },
+    rowsOf: (f) =>
+      f.rows
+        .map((id) => rowById(id))
+        .filter((r): r is Finding => !!r)
+        .sort((a, c) => (a.source.start ?? 0) - (c.source.start ?? 0)),
+    baseOf(f) {
+      const v = bases.get(baseKey(f));
+      if (v === undefined) loadBase(f);
+      return v;
+    },
+    noteOf: (f) => pending.get(`f:${f.key}`) ?? f.decision?.note ?? '',
+    setNote: setFileNote,
+    accept: (f) => putFile(f, { action: 'accept' }),
+    reject: (f) => putFile(f, { action: 'reject' }),
+    startEdit(f) {
+      editing = f.key;
+      render();
+    },
+    cancelEdit() {
+      editing = null;
+      render();
+    },
+    saveEdit(f, content) {
+      if (!content.trim())
+        return 'the file is empty: reject it to leave it as it is';
+      const was =
+        f.decision?.action === 'edit' ? f.decision.content : f.rec?.content;
+      if (content === was)
+        return 'nothing changed: accept the recommendation instead';
+      putFile(f, { action: 'edit', content });
+      return null;
+    },
+    clear: clearFile,
+  };
+
+  const loadingBases = new Set<string>();
+  function loadBase(f: FileView): void {
+    const k = baseKey(f);
+    const round = review?.round?.id;
+    if (!round || loadingBases.has(k)) return;
+    loadingBases.add(k);
+    api.base(round, f.key).then(
+      (out) => {
+        bases.set(k, out.content);
+        loadingBases.delete(k);
+        render();
+      },
+      (err: Error) => {
+        bases.set(k, err);
+        loadingBases.delete(k);
+        render();
+      },
+    );
+  }
 
   // ---- rendering -------------------------------------------------------------
   function render(): void {
@@ -330,21 +425,32 @@ export function boot(): void {
       );
       return;
     }
-    const gs = groups();
-    shown = entries(gs, openKey);
+    if (recommending()) {
+      shown = [];
+      l.setItems([]);
+      const p = review.progress;
+      read.replaceChildren(
+        message(
+          'recommending',
+          `The agent is recommending: ${p.recommended} of ${plural(p.files, 'file')}`,
+          'Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in.',
+        ),
+      );
+      return;
+    }
+    shown = items();
     if (openKey && !shown.some((e) => e.key === openKey)) {
-      // The open row left this view or the search: forget it.
+      // The open entry left the list or the search: forget it.
       openKey = null;
-      shown = entries(gs, null);
+      shown = items();
     }
     l.setItems(shown);
     decorate();
-    const vkey = `${view}/${openKey ?? ''}/${editing ?? ''}`;
+    const vkey = `${openKey ?? ''}/${editing ?? ''}`;
     const e = current();
     if (e) {
-      const idx = shown.indexOf(e);
       syncing = true;
-      l.open(idx);
+      l.open(shown.indexOf(e));
       syncing = false;
       decorate();
       // A half-typed note or edit survives a re-render (another tab, a reload).
@@ -352,12 +458,21 @@ export function boot(): void {
       const oldEdit = read.querySelector<HTMLFormElement>('.sift-edit');
       const focus = document.activeElement;
       const doc =
-        e.kind === 'group' ? groupDoc(ctx, e.group) : rowDoc(ctx, e.row);
+        e.kind === 'file'
+          ? fileDoc(fctx, e.file)
+          : e.kind === 'group'
+            ? groupDoc(ctx, e.group)
+            : rowDoc(ctx, e.row);
+      const noteNow =
+        e.kind === 'file'
+          ? fctx.noteOf(e.file)
+          : e.kind === 'row'
+            ? ctx.noteOf(e.row)
+            : '';
       if (
         oldNote &&
         lastView === vkey &&
-        (focus === oldNote ||
-          (e.kind === 'row' && oldNote.value !== ctx.noteOf(e.row)))
+        (focus === oldNote || oldNote.value !== noteNow)
       )
         doc.querySelector('.kit-note')?.replaceWith(oldNote);
       if (oldEdit && lastView === vkey)
@@ -365,40 +480,41 @@ export function boot(): void {
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
     } else {
-      read.replaceChildren(overview(gs));
+      read.replaceChildren(overview());
     }
     if (vkey !== lastView) read.scrollTop = 0;
     lastView = vkey;
   }
 
-  function overview(gs: ReturnType<typeof groups>): HTMLElement {
-    const rows = gs.flatMap((g) => g.rows);
-    if (view === 'applied')
+  function overview(): HTMLElement {
+    if (perItem(review)) {
+      const p = progress(review?.rows ?? []);
+      if (!review?.rows.length)
+        return message(
+          'needs you',
+          'Nothing here',
+          'This round has nothing to decide.',
+        );
       return message(
-        'applied',
-        rows.length
-          ? `${plural(rows.length, 'certain fix')}`
-          : 'No certain fixes',
-        rows.length
-          ? 'sift applies these itself when the round is applied. Open one to read it, and undo any you want left as it is; it holds until you send.'
-          : 'This round has nothing sift can fix on its own.',
+        'needs you',
+        `${p.total - p.decided} of ${plural(p.total, 'item')} to decide`,
+        'Open a group (↵) to decide it whole, or an item to decide it alone: 1 accept, 2 edit, 3 reject. Send returns your decisions to the agent.',
       );
-    const p = progress(review?.rows ?? []);
-    if (!rows.length)
+    }
+    const p = filesProgress(files());
+    if (!p.total)
       return message(
         'needs you',
         'Nothing here',
-        filter || search
-          ? 'Nothing matches the filter.'
-          : 'This round has nothing to judge.',
+        search
+          ? 'Nothing matches the search.'
+          : 'This round found nothing to change.',
       );
-    const checks = [...new Set(rows.map((r) => r.check))]
-      .map((c) => checkCount(c, rows.filter((r) => r.check === c).length))
-      .join(', ');
+    const linked = shown.filter((e) => e.kind === 'file' && e.linked).length;
     return message(
       'needs you',
-      `${p.total - p.decided} of ${plural(p.total, 'row')} to decide, in ${plural(gs.length, 'group')}`,
-      `${checks}. Open a group (↵) to decide it whole, or a row to decide it alone: 1 accept, 2 edit, 3 reject. Send returns your decisions to the agent.`,
+      `${p.total - p.decided} of ${plural(p.total, 'file')} to decide`,
+      `Each file has one recommendation covering all its findings. Open one (↵) to read its diff, then 1 accept, 2 edit (the whole file), 3 reject.${linked ? ' Linked files move text between them and are decided together.' : ''} Send returns your decisions to the agent.`,
     );
   }
 
@@ -406,14 +522,9 @@ export function boot(): void {
   function go(f: string): void {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
-    const r = parseRoute(f);
-    if (r.view !== view) {
-      filter = '';
-      editing = null;
-    }
-    if (r.key !== openKey) editing = null;
-    view = r.view;
-    openKey = r.key;
+    const key = parseRoute(f);
+    if (key !== openKey) editing = null;
+    openKey = key;
     render();
   }
 
@@ -430,9 +541,7 @@ export function boot(): void {
       const r = await api.review();
       loadAttempt = 0;
       review = r;
-      const route = parseRoute(location.hash);
-      view = route.view;
-      openKey = route.key;
+      openKey = parseRoute(location.hash);
       lastFrag = location.hash;
       render();
       startLive(r.cursor);
@@ -541,7 +650,97 @@ export function boot(): void {
       });
   }
 
-  /** Apply decisions locally, save them, and move on from a single row. */
+  /** The next file with no decision after key, else the next file. */
+  function nextFile(key: string): string {
+    const i = shown.findIndex((e) => e.key === key);
+    for (let j = i + 1; j < shown.length; j++) {
+      const e = shown[j];
+      if (e.kind === 'file' && !e.file.decision) return e.key;
+    }
+    return shown[i + 1]?.key ?? key;
+  }
+
+  /** A file decision: applied to the page (with its linked files), saved
+   * with the prints the page shows, and the page moves to the next file. */
+  function putFile(f: FileView, d: FileDecision): void {
+    const round = review?.round?.id;
+    if (!round) return;
+    const fs = files();
+    const prints = printsFor(fs, f.key);
+    const group = f.group
+      .map((k) => fileByKey(k))
+      .filter((x): x is FileView => !!x);
+    const prev = group.map((m) => ({ m, d: m.decision, after: m.after }));
+    const pendingNote = pending.get(`f:${f.key}`);
+    const note = pendingNote ?? f.decision?.note ?? '';
+    pending.delete(`f:${f.key}`);
+    const full: FileDecision = { ...d, note };
+    decideLocal(fs, f.key, full);
+    editing = null;
+    if (openKey === `f:${f.key}` && d.action !== 'edit')
+      go(frag(nextFile(openKey)));
+    else render();
+    persist(
+      () => api.decideFile(round, f.key, full, prints),
+      () => {
+        for (const p of prev) {
+          p.m.decision = p.d;
+          p.m.after = p.after;
+        }
+        if (pendingNote !== undefined) pending.set(`f:${f.key}`, pendingNote);
+      },
+    );
+  }
+
+  function clearFile(f: FileView): void {
+    const round = review?.round?.id;
+    if (!round || !f.decision) return;
+    const group = f.group
+      .map((k) => fileByKey(k))
+      .filter((x): x is FileView => !!x);
+    const prev = group.map((m) => ({ m, d: m.decision, after: m.after }));
+    decideLocal(files(), f.key, null);
+    render();
+    persist(
+      () => api.clearFile(round, f.key),
+      () => {
+        for (const p of prev) {
+          p.m.decision = p.d;
+          p.m.after = p.after;
+        }
+      },
+    );
+  }
+
+  function setFileNote(f: FileView, text: string): void {
+    const d = f.decision;
+    if (!d) {
+      if (text) pending.set(`f:${f.key}`, text);
+      else pending.delete(`f:${f.key}`);
+      return;
+    }
+    if ((d.note ?? '') === text) return;
+    const round = review?.round?.id;
+    if (!round) return;
+    const old = d.note;
+    d.note = text;
+    d.sent = false;
+    persist(
+      () =>
+        api.decideFile(
+          round,
+          f.key,
+          { action: d.action, content: d.content, note: text },
+          printsFor(files(), f.key),
+        ),
+      () => {
+        d.note = old;
+      },
+    );
+    refreshBar();
+  }
+
+  /** Apply row decisions locally, save them, and move on from a single row. */
   function put(rows: Finding[], make: (r: Finding) => Decision): void {
     const round = review?.round?.id;
     if (!round || !rows.length) return;
@@ -566,7 +765,7 @@ export function boot(): void {
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
     editing = null;
-    if (single) go(frag(view, nextOpen(shown, openKey!)));
+    if (single) go(frag(nextOpen(shown as Entry[], openKey!)));
     else render();
     persist(
       () => api.decide(round, body),
@@ -614,39 +813,6 @@ export function boot(): void {
     );
   }
 
-  // Undo and redo store a decision on a certain fix (reject, accept), sent
-  // like any other: a redo is never a deletion.
-  function fixOp(rows: Finding[], op: 'undo' | 'redo'): void {
-    const round = review?.round?.id;
-    const live = rows.filter(
-      (r) => isFix(r) && (r.decision?.action === 'reject') === (op === 'redo'),
-    );
-    if (!round || !live.length) return;
-    for (const r of live) {
-      const prev = r.decision;
-      const note = pending.get(r.id) ?? '';
-      pending.delete(r.id);
-      r.decision = fixDecision(op, note);
-      persist(
-        () =>
-          op === 'undo' ? api.undo(round, r, note) : api.redo(round, r, note),
-        () => {
-          if (prev) r.decision = prev;
-          else delete r.decision;
-        },
-      );
-    }
-    render();
-  }
-
-  function undo(rows: Finding[]): void {
-    fixOp(rows, 'undo');
-  }
-
-  function redo(rows: Finding[]): void {
-    fixOp(rows, 'redo');
-  }
-
   function setNote(shownRow: Finding, text: string): void {
     const r = rowById(shownRow.id) ?? shownRow;
     const d = r.decision;
@@ -662,23 +828,19 @@ export function boot(): void {
     d.sent = false;
     persist(
       () =>
-        isFix(r) && d.action === 'reject'
-          ? api.undo(round, r, text)
-          : isFix(r) && d.action === 'accept'
-            ? api.redo(round, r, text)
-            : api.decide(round, [
-                {
-                  id: r.id,
-                  action: d.action,
-                  verdict: d.verdict,
-                  title: d.title,
-                  text: d.text,
-                  cleared: d.cleared,
-                  note: text,
-                  fingerprint: r.fingerprint,
-                  target_fingerprint: targetPrint(d),
-                },
-              ]),
+        api.decide(round, [
+          {
+            id: r.id,
+            action: d.action,
+            verdict: d.verdict,
+            title: d.title,
+            text: d.text,
+            cleared: d.cleared,
+            note: text,
+            fingerprint: r.fingerprint,
+            target_fingerprint: targetPrint(d),
+          },
+        ]),
       () => {
         d.note = old;
       },
@@ -693,6 +855,7 @@ export function boot(): void {
       const { sent, to } = await api.send(round);
       if (review) {
         markSent(review.rows);
+        for (const f of review.files) if (f.decision) f.decision.sent = true;
         if (sent) review.sends++;
       }
       refreshBar();
@@ -712,51 +875,57 @@ export function boot(): void {
   // ---- keys ------------------------------------------------------------------
   const keys = createKeys({ list: l });
   const group = 'decide';
-  const onRow =
-    (fn: (r: Finding) => void, onGroup?: (rows: Finding[]) => void) => () => {
+  const on =
+    (
+      onFile: (f: FileView) => void,
+      onRow: (r: Finding) => void,
+      onGroup?: (rows: Finding[]) => void,
+    ) =>
+    () => {
       const e = current();
       if (!e) return;
-      if (e.kind === 'row') fn(e.row);
+      if (e.kind === 'file') onFile(e.file);
+      else if (e.kind === 'row') onRow(e.row);
       else onGroup?.(e.group.rows);
     };
   keys.register({
     keys: '1',
-    label: 'accept (a group: every undecided row)',
+    label: 'accept (a group: every undecided item)',
     group,
-    run: onRow(
-      (r) => !isFix(r) && decide([r], 'accept'),
-      (rows) =>
-        view === 'open' && decide(groupTargets(rows, 'accept'), 'accept'),
+    run: on(
+      (f) => fctx.accept(f),
+      (r) => decide([r], 'accept'),
+      (rows) => decide(groupTargets(rows, 'accept'), 'accept'),
     ),
   });
   keys.register({
     keys: '2',
-    label: 'edit the proposal',
+    label: 'edit (a file: the whole file)',
     group,
-    run: onRow(
-      (r) => !isFix(r) && ctx.startEdit(r),
+    run: on(
+      (f) => fctx.startEdit(f),
+      (r) => ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`),
     ),
   });
   keys.register({
     keys: '3',
-    label: 'reject (a group: every undecided row)',
+    label: 'reject (a group: every undecided item)',
     group,
-    run: onRow(
-      (r) => !isFix(r) && decide([r], 'reject'),
-      (rows) =>
-        view === 'open' && decide(groupTargets(rows, 'reject'), 'reject'),
+    run: on(
+      (f) => fctx.reject(f),
+      (r) => decide([r], 'reject'),
+      (rows) => decide(groupTargets(rows, 'reject'), 'reject'),
     ),
   });
   keys.register({
     keys: 'u',
-    label: 'clear a decision; undo or redo a certain fix',
+    label: 'clear a decision',
     group,
-    run: onRow((r) => {
-      if (!isFix(r)) clear(r);
-      else if (r.decision?.action === 'reject') redo([r]);
-      else undo([r]);
-    }),
+    run: on(
+      (f) => clearFile(f),
+      (r) => clear(r),
+    ),
   });
   keys.register({
     keys: 'n',
@@ -784,8 +953,7 @@ export function boot(): void {
   app.append(b.el, l.el, read);
   b.setLive('polling');
   window.addEventListener('hashchange', onHash);
-  if (!/^#\/(open|applied)/.test(location.hash))
-    history.replaceState(null, '', frag('open'));
+  if (!/^#\/open/.test(location.hash)) history.replaceState(null, '', frag());
   void load();
 }
 

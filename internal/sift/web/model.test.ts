@@ -5,16 +5,11 @@ import {
   editDecision,
   entries,
   fieldOf,
-  fixDecision,
   groupTargets,
   groupsOf,
-  inView,
   isBacklog,
-  isFix,
-  markSent,
   nextOpen,
   progress,
-  rowMeta,
   rowTitle,
   editTarget,
   unsent,
@@ -95,58 +90,6 @@ test('displayPath: repo name and path, else ~ for home', () => {
     displayPath({ file: '', entry: 'MEMORY.md#3' }, HOME),
     'MEMORY.md#3',
   );
-});
-
-test('views: certain rows are applied, the rest need you', () => {
-  const a = mk('a', '/f', 'negative-rule', 1);
-  const b = mk('b', '/f', 'dead-path', 2, { certain: true });
-  assert.ok(inView(a, 'open') && !inView(a, 'applied'));
-  assert.ok(inView(b, 'applied') && !inView(b, 'open'));
-});
-
-test('a proposal that replaces a certain fix makes the row a judgment (row.FixOnly)', () => {
-  const fix = mk('f', '/f', 'dead-path', 1, { certain: true, fix: 'delete' });
-  const same = mk('s', '/f', 'dead-path', 2, {
-    certain: true,
-    fix: 'delete',
-    verdict: 'delete',
-  });
-  const proposed = mk('p', '/f', 'dead-path', 3, {
-    certain: true,
-    fix: 'delete',
-    verdict: 'rewrite',
-    text: 'x',
-  });
-  const text = mk('t', '/f', 'dead-path', 4, {
-    certain: true,
-    verdict: 'delete',
-    text: 'x',
-  });
-  assert.ok(isFix(fix) && isFix(same));
-  assert.ok(!isFix(proposed) && !isFix(text));
-  assert.ok(inView(proposed, 'open') && !inView(proposed, 'applied'));
-  assert.deepEqual(progress([fix, proposed]), { decided: 0, total: 1 });
-  // The first send carries the fix, not the proposal.
-  assert.equal(unsent([fix, proposed], 0), 1);
-});
-
-test('undo, Send, redo, Send: the redo is a decision the second Send carries', () => {
-  const r = mk('d', '/f', 'dead-path', 4, { certain: true, fix: 'delete' });
-  const rows = [r];
-  assert.equal(rowMeta(r), 'applied');
-  r.decision = fixDecision('undo', '');
-  assert.equal(rowMeta(r), 'undone');
-  assert.equal(unsent(rows, 0), 1);
-  markSent(rows);
-  assert.equal(unsent(rows, 1), 0);
-  r.decision = fixDecision('redo', 'gone after all');
-  assert.deepEqual(r.decision, { action: 'accept', note: 'gone after all' });
-  assert.equal(rowMeta(r), 'redone');
-  assert.ok(inView(r, 'applied'));
-  assert.equal(unsent(rows, 1), 1);
-  markSent(rows);
-  assert.equal(unsent(rows, 2), 0);
-  assert.equal(rowMeta(r), 'applied');
 });
 
 test('audit groups: by file, then check in the spec order, rows by line', () => {
@@ -256,10 +199,9 @@ test('progress and unsent', () => {
       decision: { action: 'reject' },
     }),
   ];
-  assert.deepEqual(progress(rows), { decided: 2, total: 3 });
-  // b and the undo on e are unsent; the applied row d goes with the first send.
-  assert.equal(unsent(rows, 0), 3);
-  assert.equal(unsent(rows, 1), 2);
+  // A certain row is decided like any other.
+  assert.deepEqual(progress(rows), { decided: 3, total: 5 });
+  assert.equal(unsent(rows), 2);
 });
 
 test('groupTargets: accept takes undecided rows with a proposal; reject every undecided row', () => {

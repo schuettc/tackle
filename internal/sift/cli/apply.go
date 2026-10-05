@@ -18,15 +18,17 @@ import (
 var ghRunner apply.Runner = apply.Gh
 
 var applyFlags = flags("apply", "sift apply [--round N] [--dry-run] [--json]",
-	"Applies the round: the certain fixes and the rows accepted or edited and sent from the review\n"+
-		"page (delete, rewrite, move, merge), as one branch per repo (sift/round-N) cut from the fetched\n"+
-		"base in a worktree, so the primary clone's checkout is left alone. A repo whose primary\n"+
-		"clone has uncommitted or unpushed work, or an untracked instruction file, is held, with\n"+
-		"the reason. Paths are confined to the repo: no .., no .git, no symlinks, and every write\n"+
-		"goes through an os.Root on the worktree. With gh and a GitHub\n"+
-		"remote the branch is pushed and a pull request opened (gh pr create --body-file);\n"+
-		"otherwise the committed branch is left. Prints what it did per repo, and the approved rows\n"+
-		"it leaves to you. Exit 0 all applied, 1 something was held, skipped or failed, 2 error.",
+	"Applies the round: each file accepted or edited and sent from the review page is written\n"+
+		"whole (the recommendation, or your edit), as one branch per repo (sift/round-N) cut from the\n"+
+		"fetched base in a worktree, so the primary clone's checkout is left alone. A file whose base\n"+
+		"changed since the audit is held, and so are the files linked to it. A repo whose primary\n"+
+		"clone has uncommitted or unpushed work, or an untracked instruction file, is held, with the\n"+
+		"reason. Paths are confined to the repo: no .., no .git, no symlinks, and every write goes\n"+
+		"through an os.Root on the worktree. With gh and a GitHub remote the branch is pushed and a\n"+
+		"pull request opened (gh pr create --body-file); otherwise the committed branch is left. A\n"+
+		"file outside any repo is left to you, its approved content saved under sift's state; a\n"+
+		"backlog round's approved rows are left to the agent. Exit 0 all applied, 1 something was\n"+
+		"held, skipped or failed, 2 error.",
 	func(fs *flag.FlagSet) {
 		fs.Int64("round", 0, "the round to apply (default: the latest)")
 		fs.Bool("dry-run", false, "work out what would change and touch nothing")
@@ -79,7 +81,7 @@ func runApply(args []string, out, errw io.Writer) error {
 		trouble += len(r.Skipped)
 	}
 	if trouble > 0 {
-		return tools.Exitf(1, "%d repo(s) or row(s) need you", trouble)
+		return tools.Exitf(1, "%d repo(s) or file(s) need you", trouble)
 	}
 	return nil
 }
@@ -102,19 +104,22 @@ func writeApply(w io.Writer, res apply.Result) {
 			_, _ = fmt.Fprintf(w, "  %s\n", r.Detail)
 		}
 		for _, it := range r.Applied {
-			_, _ = fmt.Fprintf(w, "  applied  %-16s %-14s %s\n", it.Row, it.Verdict, it.Where)
+			_, _ = fmt.Fprintf(w, "  written  %-6s %s\n", it.Action, it.Where)
 		}
 		for _, it := range r.Skipped {
-			_, _ = fmt.Fprintf(w, "  skipped  %-16s %-14s %s: %s\n", it.Row, it.Verdict, it.Where, it.Why)
+			_, _ = fmt.Fprintf(w, "  held     %-6s %s: %s\n", it.Action, it.Where, it.Why)
 		}
 	}
 	if res.Unsent > 0 {
-		_, _ = fmt.Fprintf(w, "\n%d decided row(s) not sent yet: press Send on the page to include them\n", res.Unsent)
+		_, _ = fmt.Fprintf(w, "\n%d decision(s) not sent yet: press Send on the page to include them\n", res.Unsent)
 	}
 	if len(res.Left) > 0 {
 		_, _ = fmt.Fprintln(w, "\nleft for you:")
 		for _, it := range res.Left {
-			_, _ = fmt.Fprintf(w, "  %-16s %-14s %s: %s\n", it.Row, it.Verdict, it.Where, it.Why)
+			_, _ = fmt.Fprintf(w, "  %-12s %s: %s\n", it.Action, it.Where, it.Why)
+			if it.Approved != "" {
+				_, _ = fmt.Fprintf(w, "               approved content: %s\n", it.Approved)
+			}
 		}
 	}
 }

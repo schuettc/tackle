@@ -14,12 +14,10 @@ import (
 )
 
 var reconcileFlags = flags("reconcile", "sift reconcile [--round N] [--json]",
-	"Holds each branch sift apply wrote for the round against the rows approved for its repo,\n"+
-		"by content: a row whose change is missing from the branch, a row narrowed (its approved\n"+
-		"text not added by the branch verbatim, as one run at its place in the file, or its passage\n"+
-		"only partly removed), and hunks no approved\n"+
-		"row accounts for (extra). Run it after a writer or reviewer changed a branch.\n"+
-		"Exit 0 everything matches, 1 something does not, 2 error.",
+	"Holds each branch sift apply wrote for the round against the files approved for its repo:\n"+
+		"each file apply wrote must be on the branch exactly as approved (changed or missing\n"+
+		"otherwise), and any other file the branch changes is extra. Run it after a writer or\n"+
+		"reviewer changed a branch. Exit 0 everything matches, 1 something does not, 2 error.",
 	func(fs *flag.FlagSet) {
 		fs.Int64("round", 0, "the round (default: the latest)")
 		fs.Bool("json", false, "print the reports as JSON")
@@ -63,17 +61,14 @@ func runReconcile(args []string, out, errw io.Writer) error {
 			_, _ = fmt.Fprintf(out, "round %d: no branch to reconcile (run sift apply)\n", round)
 		}
 		for _, r := range reps {
-			_, _ = fmt.Fprintf(out, "%s %s (from %s): %d row(s), %d problem(s)\n", r.Repo, r.Branch, r.Base, len(r.Rows), r.Problems())
-			for _, x := range r.Rows {
+			_, _ = fmt.Fprintf(out, "%s %s (from %s): %d file(s), %d problem(s)\n", r.Repo, r.Branch, r.Base, len(r.Files), r.Problems())
+			for _, x := range r.Files {
 				if x.State != "ok" {
-					_, _ = fmt.Fprintf(out, "  %-9s %-16s %-12s %s: %s\n", x.State, x.Row, x.Verdict, x.Where, x.Detail)
+					_, _ = fmt.Fprintf(out, "  %-8s %s: %s\n", x.State, x.Path, x.Detail)
 				}
 			}
-			for _, x := range r.Extra {
-				_, _ = fmt.Fprintf(out, "  extra     %s %s\n", x.File, x.Header)
-				for _, l := range x.Lines {
-					_, _ = fmt.Fprintf(out, "            %s\n", l)
-				}
+			for _, p := range r.Extra {
+				_, _ = fmt.Fprintf(out, "  extra    %s: changed on the branch, approved nowhere\n", p)
 			}
 		}
 	}

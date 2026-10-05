@@ -166,42 +166,30 @@ func TestNthTellsRepeatsApart(t *testing.T) {
 	}
 }
 
-// Effective is what apply does with a row: the proposal, an edit's changes
-// over it, nothing when it is rejected or undecided. A certain row's own fix
-// (Fix, delete when unset) is applied unless it was undone; an agent's
-// proposal that replaces it makes the row a judgment, applied only once
-// accepted or edited.
+// Effective is what the user approved of a row: the proposal, an edit's
+// changes over it, nothing when it is rejected or undecided. A certain row
+// is no exception: it is decided like any other.
 func TestEffective(t *testing.T) {
 	base := Row{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}
 	with := func(r Row, d *Decision) Row { r.Decision = d; return r }
-	certain := Row{Certain: true}
 	for name, c := range map[string]struct {
 		r    Row
 		want Change
 		ok   bool
 	}{
-		"undecided":                  {base, Change{}, false},
-		"accepted":                   {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
-		"edited text":                {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
-		"edited verdict":             {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
-		"rejected":                   {with(base, &Decision{Action: "reject"}), Change{}, false},
-		"accepted, no verdict":       {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
-		"certain":                    {certain, Change{Verdict: "delete"}, true},
-		"certain, its own fix":       {Row{Certain: true, Fix: "delete", Verdict: "delete"}, Change{Verdict: "delete"}, true},
-		"certain, proposed":          {Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, Change{}, false},
-		"certain, proposed text":     {Row{Certain: true, Fix: "delete", Verdict: "delete", Text: "x"}, Change{}, false},
-		"certain, proposal accepted": {with(Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Text: "x"}, true},
-		"certain, proposal rejected": {with(Row{Certain: true, Fix: "delete", Verdict: "rewrite", Text: "x"}, &Decision{Action: "reject"}), Change{}, false},
-		"certain, undone":            {with(certain, &Decision{Action: "reject"}), Change{}, false},
-		"certain, redone (accept)":   {with(certain, &Decision{Action: "accept"}), Change{Verdict: "delete"}, true},
+		"undecided":            {base, Change{}, false},
+		"accepted":             {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"edited text":          {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
+		"edited verdict":       {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"rejected":             {with(base, &Decision{Action: "reject"}), Change{}, false},
+		"accepted, no verdict": {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
+		"certain, undecided":   {Row{Certain: true, Verdict: "delete"}, Change{}, false},
+		"certain, accepted":    {with(Row{Certain: true, Verdict: "delete"}, &Decision{Action: "accept"}), Change{Verdict: "delete"}, true},
 	} {
 		got, ok := c.r.Effective()
 		if ok != c.ok || got != c.want {
 			t.Errorf("%s: %+v %v, want %+v %v", name, got, ok, c.want, c.ok)
 		}
-	}
-	if !certain.FixOnly() || (Row{Certain: true, Fix: "delete", Verdict: "rewrite"}).FixOnly() || (Row{Verdict: "delete"}).FixOnly() {
-		t.Error("FixOnly")
 	}
 }
 
@@ -220,8 +208,6 @@ func TestPrint(t *testing.T) {
 		"path":           func(r, _ *Row) { r.Source.Path = "z.md" },
 		"lines":          func(r, _ *Row) { r.Source.Start = 9 },
 		"passage":        func(r, _ *Row) { r.Passage = "p2" },
-		"fix":            func(r, _ *Row) { r.Fix = "delete" },
-		"certain":        func(r, _ *Row) { r.Certain = true },
 		"target path":    func(_, t *Row) { t.Source.Path = "w.md" },
 		"target passage": func(_, t *Row) { t.Passage = "q2" },
 	} {

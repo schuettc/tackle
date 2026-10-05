@@ -74,9 +74,9 @@ func TestMigrateAPopulatedV1Database(t *testing.T) {
 	if as, err := s.Applies(ctx, 1); err != nil || len(as) != 0 {
 		t.Errorf("applies %+v %v", as, err)
 	}
-	// The upgraded database works: the old undo is sent with the first Send.
+	// The upgraded database works: the old decisions go with the first Send.
 	sd, err := s.Send(ctx, 1, "")
-	if err != nil || sd.Counts != (Counts{Edit: 1, Undone: 1}) {
+	if err != nil || sd.Counts != (Counts{Edit: 1, Reject: 1}) {
 		t.Fatalf("send %+v %v", sd, err)
 	}
 }

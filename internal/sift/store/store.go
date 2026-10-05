@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	tools "github.com/schuettc/tools-common"
 	"github.com/schuettc/tools-common/sqlitedb"
@@ -102,6 +103,7 @@ var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
 	sqlitedb.SQL(schemaV2),
 	sqlitedb.SQL(schemaV3),
+	sqlitedb.SQL(schemaV4),
 }
 
 // ErrStale is returned when a decision names a row that is not in the round
@@ -146,8 +148,13 @@ type Round struct {
 
 // RecordRound stores a round and its rows in one transaction, then prunes
 // to the latest keepRounds rounds. When the transaction rolls back the round
-// is not stored and its id is 0.
+// is not stored and its id is 0. An audit round's files go in with
+// RecordAudit.
 func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64, error) {
+	return s.record(ctx, r, rows, nil)
+}
+
+func (s *Store) record(ctx context.Context, r Round, rows []row.Row, files []rec.File) (int64, error) {
 	if r.At.IsZero() {
 		r.At = time.Now()
 	}
@@ -171,13 +178,6 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 			if rw.Source.FromDisk() {
 				rw.Source.Canon = row.Resolve(rw.Source.File)
 			}
-			if rw.Certain && rw.Fix == "" {
-				// The check's own fix, kept apart from any later proposal.
-				rw.Fix = rw.Verdict
-				if rw.Fix == "" {
-					rw.Fix = rw.CertainFix()
-				}
-			}
 			rw.Decision, rw.Fingerprint = nil, ""
 			body, err := json.Marshal(rw)
 			if err != nil {
@@ -188,9 +188,25 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 				return fmt.Errorf("row %s: %w", rw.ID, err)
 			}
 		}
-		old := `SELECT id FROM rounds ORDER BY id DESC LIMIT -1 OFFSET ?`
-		if _, err := tx.ExecContext(ctx, `DELETE FROM rows WHERE round_id IN (`+old+`)`, keepRounds); err != nil {
-			return err
+		for i, f := range files {
+			f.Content = "" // never stored: it is read back at its source
+			body, err := json.Marshal(f)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO files(round_id, seq, key, body) VALUES (?,?,?,?)`, id, i, f.Key, string(body)); err != nil {
+				return fmt.Errorf("file %s: %w", f.Source.File, err)
+			}
+		}
+		const old = `SELECT id FROM rounds ORDER BY id DESC LIMIT -1 OFFSET ?`
+		for _, q := range []string{
+			`DELETE FROM rows WHERE round_id IN (` + old + `)`,
+			`DELETE FROM files WHERE round_id IN (` + old + `)`,
+			`DELETE FROM recs WHERE round_id IN (` + old + `)`,
+		} {
+			if _, err := tx.ExecContext(ctx, q, keepRounds); err != nil {
+				return err
+			}
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM rounds WHERE id IN (`+old+`)`, keepRounds)
 		return err

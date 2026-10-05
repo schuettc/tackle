@@ -22,9 +22,11 @@ var checkFlags = flags("check", "sift check [--json]",
 		"instruction file and skill under the configured roots, with repos read at their fetched\n"+
 		"base (origin/<base>, else origin/HEAD, else HEAD), not the working tree. Runs the checks\n"+
 		"(size, load-limit, duplicate, dead-path, stale-status, retired-store, misplaced,\n"+
-		"negative-rule, secret), leaves out rows you muted, records the round, and prints its rows.\n"+
-		"With gh on PATH, PR and issue references are looked up. Exit 0 with no findings, 1 with\n"+
-		"findings, 2 on error.",
+		"negative-rule, secret), leaves out rows you muted, records the round and its files, and\n"+
+		"prints its rows. Forks and vendor-managed skill directories are skipped unless the config's\n"+
+		"[include] turns them on. The round then waits for a recommendation per file (sift next,\n"+
+		"sift propose). With gh on PATH, PR and issue references are looked up. Exit 0 with no\n"+
+		"findings, 1 with findings, 2 on error.",
 	func(fs *flag.FlagSet) {
 		fs.Bool("json", false, "print the round as JSON")
 	})
@@ -89,12 +91,20 @@ func writeTable(w io.Writer, rep audit.Report) {
 	sort.Strings(checks)
 	_, _ = fmt.Fprintf(w, "\n%d file(s) in %d repo(s), %d installed cop(ies) counted at their source, %d muted\n",
 		rep.Files, rep.Repos, len(rep.Copies), rep.Muted)
+	if len(rep.Skipped) > 0 {
+		n := map[string]int{}
+		for _, s := range rep.Skipped {
+			n[s.Why]++
+		}
+		_, _ = fmt.Fprintf(w, "skipped as another project's: %d fork(s), %d vendor-managed skill(s) (config [include] audits them)\n",
+			n["fork"], n["vendor"])
+	}
 	for _, c := range checks {
 		_, _ = fmt.Fprintf(w, "  %-14s %d\n", c, rep.Summary[c])
 	}
 	if len(rep.Rows) == 0 {
 		_, _ = fmt.Fprintln(w, "no findings")
 	} else {
-		_, _ = fmt.Fprintln(w, "  (! = certain: sift applies these itself)")
+		_, _ = fmt.Fprintln(w, "  (! = certain: the file's recommendation must fix it)\nnext: recommend each file (sift next, sift propose), then sift serve")
 	}
 }

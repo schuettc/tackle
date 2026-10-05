@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/apply"
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/reconcile"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/serve"
@@ -18,8 +19,9 @@ import (
 )
 
 // Once the commit exists the repo is at least "branch": a failure after it
-// (here, writing the pull request's body) goes into the detail. Undo then
-// answers "already applied", and reconcile checks the branch.
+// (here, writing the pull request's body) goes into the detail. A new
+// decision on the file then answers "already applied", and reconcile checks
+// the branch.
 func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 	ctx := context.Background()
 	st.Env(t)
@@ -33,10 +35,20 @@ func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	round, err := s.RecordRound(ctx, store.Round{Kind: "on-demand"}, []row.Row{{ID: "dead", Check: "dead-path", Certain: true,
-		Source:  row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "origin/main", Path: "CLAUDE.md", Start: 3, End: 3},
-		Passage: "See `docs/gone.md`."}})
+	body := "# App\n\nSee `docs/gone.md`.\n- Never force-push.\n"
+	f := rec.NewFile(row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "origin/main", Path: "CLAUDE.md"}, "repo", 6000, body)
+	f.Commit = st.Git(t, repo, "rev-parse", "origin/main")
+	f.Rows = []string{"dead"}
+	round, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, []row.Row{{ID: "dead", Check: "dead-path", Certain: true,
+		Source: f.Source, Passage: "See `docs/gone.md`."}}, []rec.File{f})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Propose(ctx, round, []rec.Rec{{File: f.Key, Base: f.Base, Content: "# App\n\n- Push to a branch.\n", Summary: "s",
+		Findings: []rec.Account{{Row: "dead", Did: "fixed", How: "removed"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideFile(ctx, round, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: printOf(t, s, round, f.Key)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(ctx, round, ""); err != nil {
@@ -64,9 +76,10 @@ func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 		t.Fatalf("applies %+v %v", as, err)
 	}
 	w := httptest.NewRecorder()
-	serve.New(s).Handler().ServeHTTP(w, httptest.NewRequest("POST", "/api/undo", strings.NewReader(fmt.Sprintf(`{"round":%d,"id":"dead","fingerprint":%q}`, round, printOf(t, s, round, "dead")))))
+	serve.New(s).Handler().ServeHTTP(w, httptest.NewRequest("PUT", "/api/files", strings.NewReader(fmt.Sprintf(`{"round":%d,"file":%q,"action":"reject","prints":{%q:%q}}`,
+		round, f.Key, f.Key, printOf(t, s, round, f.Key)))))
 	if w.Code != 409 || !strings.Contains(w.Body.String(), "already applied") {
-		t.Fatalf("undo: %d %s", w.Code, w.Body)
+		t.Fatalf("a decision after apply: %d %s", w.Code, w.Body)
 	}
 	_, reps, err := reconcile.Run(ctx, s, round)
 	if err != nil || len(reps) != 1 || reps[0].Branch != apply.Branch(round) || reps[0].Problems() != 0 {
@@ -74,18 +87,18 @@ func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 	}
 }
 
-// printOf is a row's fingerprint, as the page shows it.
-func printOf(t *testing.T, s *store.Store, round int64, id string) string {
+// printOf is a file's fingerprint, as the page shows it.
+func printOf(t *testing.T, s *store.Store, round int64, key string) string {
 	t.Helper()
-	_, rows, err := s.Round(context.Background(), round)
+	items, err := s.Files(context.Background(), round)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, r := range rows {
-		if r.ID == id {
-			return r.Fingerprint
+	for _, it := range items {
+		if it.Key == key {
+			return it.Fingerprint
 		}
 	}
-	t.Fatalf("no row %s", id)
+	t.Fatalf("no file %s", key)
 	return ""
 }

@@ -22,7 +22,9 @@ type AddResult struct {
 	Cleared int // decisions dropped because the proposal they answered changed
 }
 
-// AddRows merges the agent's rows into a round, all or nothing. A row the
+// AddRows merges the agent's rows into a backlog or intake round (PerItem),
+// all or nothing; an audit round's findings are answered per file
+// (Propose). A row the
 // round has gets its proposal (verdict, title, destination, text, reason)
 // replaced; everything a check found stays as it was. An intake row the
 // round lacks is added after the others, never certain. Anything else is an
@@ -35,12 +37,14 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 	var res AddResult
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		res = AddResult{}
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rounds WHERE id = ?`, roundID).Scan(&n); err != nil {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM rounds WHERE id = ?`, roundID).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("no round %d", roundID)
+		} else if err != nil {
 			return err
 		}
-		if n == 0 {
-			return fmt.Errorf("no round %d", roundID)
+		if !PerItem(kind) {
+			return fmt.Errorf("round %d is an audit round: its findings are answered one file at a time, with sift propose (sift next gives the file)", roundID)
 		}
 		var seq int
 		if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(seq), -1) + 1 FROM rows WHERE round_id = ?`, roundID).Scan(&seq); err != nil {
@@ -211,20 +215,14 @@ type Counts struct {
 	Accept int `json:"accept"`
 	Edit   int `json:"edit"`
 	Reject int `json:"reject"`
-	// Undone counts certain fixes the user undid, Redone those put back
-	// after a sent undo; Applied the certain fixes left to apply (first send
-	// of a round only).
-	Undone  int `json:"undone"`
-	Redone  int `json:"redone"`
-	Applied int `json:"applied"`
 }
 
 // Total is every answer counted.
-func (c Counts) Total() int { return c.Accept + c.Edit + c.Reject + c.Undone + c.Redone + c.Applied }
+func (c Counts) Total() int { return c.Accept + c.Edit + c.Reject }
 
-// Note is the user's note on one row, with where the row is.
+// Note is the user's note on one row or file, with where it is.
 type Note struct {
-	Row  string `json:"row"` // file:line · check
+	Row  string `json:"row"` // file:line · check, or the file
 	Note string `json:"note"`
 }
 
@@ -241,34 +239,50 @@ type Send struct {
 	DeliveredAt time.Time
 }
 
-// Send marks the round's unsent decisions sent and records one send for
-// them, in one transaction. The round's first send also carries its certain
-// fixes nobody undid, so a round with nothing to judge can still be sent.
-// With nothing new it returns a zero Send and records nothing.
+// Send marks the round's unsent decisions sent, on files and on rows, and
+// records one send for them, in one transaction. With nothing new it
+// returns a zero Send and records nothing.
 func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, error) {
 	now := time.Now()
 	sd := Send{Round: roundID, CreatedAt: now, Owner: owner}
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
-		var sends int
 		// The first statement is a write (the main connection begins deferred).
 		if _, err := tx.ExecContext(ctx, `UPDATE rounds SET rev = rev WHERE id = ?`, roundID); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sends WHERE round_id = ?`, roundID).Scan(&sends); err != nil {
-			return err
+		count := func(action string) {
+			switch action {
+			case "accept":
+				sd.Counts.Accept++
+			case "edit":
+				sd.Counts.Edit++
+			case "reject":
+				sd.Counts.Reject++
+			}
 		}
-		q, err := tx.QueryContext(ctx, `SELECT r.body, d.action, d.note, d.sent_at FROM rows r
-			LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
-			WHERE r.round_id = ? ORDER BY r.seq`, roundID)
+		items, err := filesIn(ctx, tx, roundID)
 		if err != nil {
 			return err
 		}
-		var unsent []string
+		n := 0
+		for _, it := range items {
+			if d := it.Decision; d != nil && !d.Sent {
+				n++
+				count(d.Action)
+				if d.Note != "" {
+					sd.Notes = append(sd.Notes, Note{Row: it.Source.File, Note: d.Note})
+				}
+			}
+		}
+		q, err := tx.QueryContext(ctx, `SELECT r.body, d.action, d.note FROM rows r
+			JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
+			WHERE r.round_id = ? AND d.sent_at = 0 ORDER BY r.seq`, roundID)
+		if err != nil {
+			return err
+		}
 		for q.Next() {
-			var body string
-			var action, note sql.NullString
-			var sent sql.NullInt64
-			if err := q.Scan(&body, &action, &note, &sent); err != nil {
+			var body, action, note string
+			if err := q.Scan(&body, &action, &note); err != nil {
 				_ = q.Close()
 				return err
 			}
@@ -277,30 +291,10 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 				_ = q.Close()
 				return err
 			}
-			if !action.Valid {
-				if r.FixOnly() && sends == 0 {
-					sd.Counts.Applied++
-				}
-				continue
-			}
-			if sent.Int64 != 0 {
-				continue
-			}
-			unsent = append(unsent, r.ID)
-			switch {
-			case r.FixOnly() && action.String == "reject":
-				sd.Counts.Undone++
-			case r.FixOnly() && action.String == "accept":
-				sd.Counts.Redone++
-			case action.String == "accept":
-				sd.Counts.Accept++
-			case action.String == "edit":
-				sd.Counts.Edit++
-			case action.String == "reject":
-				sd.Counts.Reject++
-			}
-			if note.String != "" {
-				sd.Notes = append(sd.Notes, Note{Row: where(r), Note: note.String})
+			n++
+			count(action)
+			if note != "" {
+				sd.Notes = append(sd.Notes, Note{Row: where(r), Note: note})
 			}
 		}
 		if err := q.Err(); err != nil {
@@ -310,12 +304,15 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 		if err := q.Close(); err != nil {
 			return err
 		}
-		if len(unsent) == 0 && sd.Counts.Applied == 0 {
-			sd.Counts = Counts{}
+		if n == 0 {
+			sd.Counts, sd.Notes = Counts{}, nil
 			return nil
 		}
-		for _, id := range unsent {
-			if _, err := tx.ExecContext(ctx, `UPDATE decisions SET sent_at = ? WHERE round_id = ? AND row_id = ?`, now.UnixMilli(), roundID, id); err != nil {
+		for _, q := range []string{
+			`UPDATE decisions SET sent_at = ? WHERE round_id = ? AND sent_at = 0`,
+			`UPDATE file_decisions SET sent_at = ? WHERE round_id = ? AND sent_at = 0`,
+		} {
+			if _, err := tx.ExecContext(ctx, q, now.UnixMilli(), roundID); err != nil {
 				return err
 			}
 		}

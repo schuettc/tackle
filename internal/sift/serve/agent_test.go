@@ -40,7 +40,7 @@ func TestReviewMakesTheCallerTheOwner(t *testing.T) {
 		Open  int   `json:"open"`
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
-	if w.Code != 200 || got.Round != f.round || got.Open != 2 {
+	if w.Code != 200 || got.Round != f.round || got.Open != 3 {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	if f.review().Round.Owner != "pi · a" {
@@ -101,17 +101,17 @@ func TestStatus(t *testing.T) {
 	w := f.do("GET", "/api/agent/status", "")
 	var got map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &got)
-	if got["open"] != float64(1) || got["decided"] != float64(1) || got["applied"] != float64(1) || got["round"] != float64(f.round) {
+	if got["open"] != float64(2) || got["decided"] != float64(1) || got["state"] != "ready" || got["round"] != float64(f.round) {
 		t.Fatalf("%s", w.Body)
 	}
 }
 
 func TestSendTextFormat(t *testing.T) {
-	got := SendText(store.Send{Round: 4, Counts: store.Counts{Accept: 2, Edit: 1, Reject: 3, Applied: 1, Undone: 1, Redone: 1},
-		Notes: []store.Note{{Row: "/w/a/CLAUDE.md:3 · negative-rule", Note: "shorter"}}})
-	want := "The user sent their decisions for sift round 4: 2 accepted, 1 edited, 3 rejected; 1 certain fix(es) to apply, 1 undone, 1 redone.\n" +
-		"Notes:\n- /w/a/CLAUDE.md:3 · negative-rule: shorter\n" +
-		"Next: run sift_apply (or `sift apply`): a branch per repo with the accepted and edited rows and the certain fixes. Then run `sift reconcile` and review each branch before it merges."
+	got := SendText(store.Send{Round: 4, Counts: store.Counts{Accept: 2, Edit: 1, Reject: 3},
+		Notes: []store.Note{{Row: "/w/a/CLAUDE.md", Note: "shorter"}}})
+	want := "The user sent their decisions for sift round 4: 2 accepted, 1 edited, 3 rejected.\n" +
+		"Notes:\n- /w/a/CLAUDE.md: shorter\n" +
+		"Next: run sift_apply (or `sift apply`): it writes each accepted or edited file whole, on a branch per repo, and lists what it leaves to you. Then run `sift reconcile` and review each branch before it merges."
 	if got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}

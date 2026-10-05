@@ -45,11 +45,11 @@ func (f *fixture) record() {
 	f.rows = []row.Row{
 		{ID: "r-neg", Check: "negative-rule", Summary: "a rule phrased as a prohibition", Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3},
 			Passage: "- Never push.", Verdict: "rewrite", Text: "- Push to a branch."},
-		{ID: "r-size", Check: "size", Summary: "over budget", Source: row.Source{File: "/w/a/CLAUDE.md"}},
+		{ID: "r-size", Check: "size", Summary: "over budget", Source: row.Source{File: "/w/a/CLAUDE.md"}, Verdict: "keep"},
 		{ID: "r-dead", Check: "dead-path", Summary: "a path that is gone", Source: row.Source{File: "/w/b/AGENTS.md", Repo: "/w/b", Start: 5, End: 5},
-			Passage: "see `gone.md`", Certain: true},
+			Passage: "see `gone.md`", Certain: true, Verdict: "delete"},
 	}
-	id, err := f.st.RecordRound(context.Background(), store.Round{Kind: "on-demand", Summary: map[string]int{"size": 1}}, f.rows)
+	id, err := f.st.RecordRound(context.Background(), store.Round{Kind: "backlog", Summary: map[string]int{"size": 1}}, f.rows)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 // current one, as the page sends what it shows. A test about fingerprints
 // sets the key itself.
 func (f *fixture) withPrints(method, path, body string) string {
-	if method == "GET" || (path != "/api/decisions" && path != "/api/undo" && path != "/api/redo") {
+	if method == "GET" || path != "/api/decisions" {
 		return body
 	}
 	var m map[string]any
@@ -151,7 +151,7 @@ func (f *fixture) events(since string) []wireEvent {
 func TestReviewShape(t *testing.T) {
 	f := newFixture(t)
 	m := f.review()
-	if m.Round == nil || m.Round.ID != f.round || m.Round.Kind != "on-demand" || m.Round.Summary["size"] != 1 {
+	if m.Round == nil || m.Round.ID != f.round || m.Round.Kind != "backlog" || m.Round.Summary["size"] != 1 {
 		t.Fatalf("round %+v", m.Round)
 	}
 	if len(m.Rows) != 3 || m.Rows[0].ID != "r-neg" || m.Rows[0].Text != "- Push to a branch." || !m.Rows[2].Certain {
@@ -214,37 +214,11 @@ func TestPutStaleAndInvalid(t *testing.T) {
 	}
 }
 
-func TestUndoAndRedo(t *testing.T) {
-	f := newFixture(t)
-	if w := f.do("POST", "/api/undo", fmt.Sprintf(`{"round":%d,"id":"r-neg"}`, f.round)); w.Code != 400 {
-		t.Fatalf("undo of a judgment: %d", w.Code)
-	}
-	if w := f.do("POST", "/api/undo", fmt.Sprintf(`{"round":%d,"id":"r-dead","note":"keep the hint"}`, f.round)); w.Code != 204 {
-		t.Fatalf("undo: %d %s", w.Code, w.Body)
-	}
-	if d := f.review().Rows[2].Decision; d == nil || d.Action != "reject" || d.Note != "keep the hint" {
-		t.Fatalf("undo stored %+v", d)
-	}
-	if w := f.do("POST", "/api/redo", fmt.Sprintf(`{"round":%d,"id":"r-dead"}`, f.round)); w.Code != 204 {
-		t.Fatalf("redo: %d", w.Code)
-	}
-	if d := f.review().Rows[2].Decision; d == nil || d.Action != "accept" {
-		t.Fatalf("redo stored %+v", d)
-	}
-	// Once apply wrote the row's repo, the page can't change it.
-	if err := f.st.RecordApply(context.Background(), store.Apply{Round: f.round, Repo: "/w/b", State: "branch", Branch: "sift/round-1"}); err != nil {
-		t.Fatal(err)
-	}
-	if w := f.do("POST", "/api/undo", fmt.Sprintf(`{"round":%d,"id":"r-dead"}`, f.round)); w.Code != 409 || !strings.Contains(w.Body.String(), "already applied") {
-		t.Fatalf("undo after apply: %d %s", w.Code, w.Body)
-	}
-}
-
 func TestSend(t *testing.T) {
 	f := newFixture(t)
 	f.decide("r-neg", "accept", "")
 	w := f.do("POST", "/api/send", fmt.Sprintf(`{"round":%d}`, f.round))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":2`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":1`) {
 		t.Fatalf("send %d %s", w.Code, w.Body)
 	}
 	if rv := f.review(); !rv.Rows[0].Decision.Sent || rv.Sends != 1 {

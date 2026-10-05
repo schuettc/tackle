@@ -8,8 +8,8 @@ import (
 	"github.com/schuettc/tackle/internal/sift/row"
 )
 
-// round records a round of three rows: a judgment, a second judgment and a
-// certain one.
+// round records a round decided per item, of three rows: a judgment, a
+// second judgment and a certain one.
 func round(t *testing.T, s *Store) (int64, []row.Row) {
 	t.Helper()
 	rows := []row.Row{
@@ -18,11 +18,29 @@ func round(t *testing.T, s *Store) (int64, []row.Row) {
 		finding("/w/b/AGENTS.md", "dead-path", "see `gone.md`"),
 	}
 	rows[2].Certain = true
-	id, err := s.RecordRound(ctx, Round{Kind: "on-demand"}, rows)
+	id, err := s.RecordRound(ctx, Round{Kind: "backlog"}, rows)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return id, rows
+}
+
+// An audit round's findings are answered by a file's recommendation, not
+// by a proposal per row: rows add refuses them and says so.
+func TestAddRowsRefusesAnAuditRoundsFindings(t *testing.T) {
+	s, _ := open(t)
+	r := finding("/w/a/CLAUDE.md", "negative-rule", "- Never push.")
+	id, err := s.RecordRound(ctx, Round{Kind: "on-demand"}, []row.Row{r})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.AddRows(ctx, id, []row.Row{{ID: r.ID, Verdict: "rewrite", Text: "- Push to a branch."}})
+	if err == nil || !strings.Contains(err.Error(), "sift propose") {
+		t.Fatalf("got %v", err)
+	}
+	if _, rows, _ := s.Round(ctx, id); rows[0].Verdict != "" {
+		t.Fatalf("stored %+v", rows[0])
+	}
 }
 
 func TestAddRowsMergesProposals(t *testing.T) {
@@ -122,7 +140,7 @@ func TestSendCountsAndClaims(t *testing.T) {
 	if err != nil || sd.ID == 0 {
 		t.Fatalf("%+v %v", sd, err)
 	}
-	if sd.Counts != (Counts{Edit: 1, Reject: 1, Applied: 1}) || sd.Round != id || sd.Owner != "sess-1" {
+	if sd.Counts != (Counts{Edit: 1, Reject: 1}) || sd.Round != id || sd.Owner != "sess-1" {
 		t.Errorf("counts %+v", sd)
 	}
 	if len(sd.Notes) != 1 || sd.Notes[0].Note != "shorter" || !strings.Contains(sd.Notes[0].Row, "CLAUDE.md:1") {
@@ -132,12 +150,12 @@ func TestSendCountsAndClaims(t *testing.T) {
 	if again, err := s.Send(ctx, id, ""); err != nil || again.ID != 0 {
 		t.Fatalf("an empty send was recorded: %+v %v", again, err)
 	}
-	// Undoing the certain row is a new answer.
+	// A decision on the certain row is a new answer.
 	if err := s.Decide(ctx, id, rows[2].ID, row.Decision{Action: "reject"}); err != nil {
 		t.Fatal(err)
 	}
 	two, _ := s.Send(ctx, id, "")
-	if two.Counts != (Counts{Undone: 1}) {
+	if two.Counts != (Counts{Reject: 1}) {
 		t.Errorf("second send %+v", two.Counts)
 	}
 	if und, _ := s.Undelivered(ctx); len(und) != 2 {
@@ -161,22 +179,6 @@ func TestSendCountsAndClaims(t *testing.T) {
 	_, rs, _ := s.Round(ctx, id)
 	if !rs[0].Decision.Sent || !rs[2].Decision.Sent {
 		t.Errorf("sent flags %+v %+v", rs[0].Decision, rs[2].Decision)
-	}
-}
-
-// A round whose certain fixes nobody touched is still worth one send.
-func TestSendCarriesTheAppliedRowsOnce(t *testing.T) {
-	s, _ := open(t)
-	id, _ := round(t, s)
-	sd, err := s.Send(ctx, id, "")
-	if err != nil || sd.ID == 0 || sd.Counts != (Counts{Applied: 1}) {
-		t.Fatalf("%+v %v", sd, err)
-	}
-	if again, _ := s.Send(ctx, id, ""); again.ID != 0 {
-		t.Fatal("the applied rows were sent twice")
-	}
-	if n, err := s.Sends(ctx, id); n != 1 || err != nil {
-		t.Fatalf("sends %d %v", n, err)
 	}
 }
 

@@ -1,11 +1,10 @@
-// model.ts — the page's logic, no DOM: views, groups, the list's entries,
-// progress, what Send carries, group decisions and edits. Tested with
+// model.ts — the per-item page's logic (a backlog round's rows), no DOM:
+// groups, the list's entries, progress, what Send carries, group decisions
+// and edits. An audit round's files are in files.ts. Tested with
 // node --test (model.test.ts).
 
-export type View = 'open' | 'applied';
-
-/** A group of rows decided together: by file and check in an audit round,
- * by kind in a backlog round. */
+/** A group of rows decided together: by kind in a backlog round (by file
+ * and check for other rows). */
 export interface Group {
   key: string;
   kicker: string;
@@ -77,11 +76,6 @@ export function displayPath(src: Source, home: string): string {
   return src.file;
 }
 
-/** A certain row's own fix: the check's verdict, delete when unset. */
-export function fixOf(r: Finding): string {
-  return r.fix || 'delete';
-}
-
 /** The row an edit chooses to merge into ('' for any other decision): the
  * page sends that row's fingerprint with the edit (target_fingerprint). */
 export function editTarget(d: Decision): string {
@@ -89,34 +83,9 @@ export function editTarget(d: Decision): string {
   return d.verdict.slice('merge:'.length);
 }
 
-/** A certain row still carrying only its own fix (row.FixOnly): no
- * proposal, or one that repeats the fix. Any other row is a judgment. */
-export function isFix(r: Finding): boolean {
-  return (
-    r.certain &&
-    (!r.verdict || r.verdict === fixOf(r)) &&
-    !r.title &&
-    !r.destination &&
-    !r.text
-  );
-}
-
-/** The decision an undo or redo stores on a certain fix: reject (leave the
- * file) or accept (apply the fix). Both are sent like any decision. */
-export function fixDecision(
-  op: 'undo' | 'redo',
-  note: string,
-): { action: 'accept' | 'reject'; note: string } {
-  return { action: op === 'undo' ? 'reject' : 'accept', note };
-}
-
 /** After a Send: every decision is sent. */
 export function markSent(rows: Finding[]): void {
   for (const r of rows) if (r.decision) r.decision.sent = true;
-}
-
-export function inView(r: Finding, v: View): boolean {
-  return v === 'applied' ? isFix(r) : !isFix(r);
 }
 
 /** A backlog round groups by kind: its kind says so, or every row is intake. */
@@ -244,18 +213,14 @@ export function nextOpen(es: Entry[], key: string): string {
   return es[i + 1]?.key ?? key;
 }
 
-/** Decided of the rows that need you. */
+/** Decided of the rows. */
 export function progress(rows: Finding[]): { decided: number; total: number } {
-  const open = rows.filter((r) => !isFix(r));
-  return { decided: open.filter((r) => r.decision).length, total: open.length };
+  return { decided: rows.filter((r) => r.decision).length, total: rows.length };
 }
 
-/** What Send carries: unsent decisions (an undo or redo is one), and on
- * the round's first send the certain fixes nobody undid. */
-export function unsent(rows: Finding[], sends: number): number {
-  let n = rows.filter((r) => r.decision && !r.decision.sent).length;
-  if (sends === 0) n += rows.filter((r) => isFix(r) && !r.decision).length;
-  return n;
+/** What Send carries: the unsent decisions. */
+export function unsent(rows: Finding[]): number {
+  return rows.filter((r) => r.decision && !r.decision.sent).length;
 }
 
 /** The rows a group decision touches: never one already decided, and
@@ -322,10 +287,6 @@ export function rowTitle(r: Finding): string {
 
 /** The list's right-hand word for a row. */
 export function rowMeta(r: Finding): string {
-  if (isFix(r)) {
-    if (r.decision?.action === 'reject') return 'undone';
-    return r.decision && !r.decision.sent ? 'redone' : 'applied';
-  }
   if (!r.decision) return '·';
   if (r.decision.action === 'edit') return `edited · ${verdictOf(r)}`;
   if (r.decision.action === 'accept') return `accepted · ${r.verdict ?? ''}`;

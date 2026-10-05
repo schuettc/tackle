@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/config"
+	"github.com/schuettc/tackle/internal/sift/content"
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
@@ -237,5 +239,57 @@ func TestCheckNeverShowsASecret(t *testing.T) {
 	b, _ := json.Marshal(rows)
 	if !strings.Contains(string(b), "hunt… (14 chars)") || strings.Contains(string(b), "hunter2hunter2") {
 		t.Fatalf("stored rows: %s", b)
+	}
+}
+
+// A check records each audited file for recommending: where it is, the
+// commit a repo file was read at, the hash and size of its content, and
+// its findings; never the content itself, which reads back to that hash.
+// The round waits for recommendations.
+func TestCheckRecordsTheFilesToRecommend(t *testing.T) {
+	home := siftEnv(t)
+	ws := fixtureWorkspace(t, home)
+	if code, out, errw := run(t, "", "check"); code != 1 {
+		t.Fatalf("code %d\n%s\n%s", code, out, errw)
+	}
+	ctx := context.Background()
+	s, err := store.Open(ctx, store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	r, rows, _ := s.LatestRound(ctx)
+	files, err := s.Files(ctx, r.ID)
+	if err != nil || len(files) != 2 {
+		t.Fatalf("%d files %v", len(files), err)
+	}
+	per := map[string]int{}
+	for _, rw := range rows {
+		per[rw.Source.File]++
+	}
+	repo := filepath.Join(ws, "webapp")
+	for _, f := range files {
+		if f.Content != "" || len(f.Rows) != per[f.Source.File] || len(f.Rows) == 0 {
+			t.Errorf("%s: content %d bytes stored, %d rows (want %d)", f.Source.File, len(f.Content), len(f.Rows), per[f.Source.File])
+		}
+		body, err := content.Read(ctx, f.File)
+		if err != nil || rec.Hash(body) != f.Base || len(body) != f.Size {
+			t.Errorf("%s: read back %d bytes, %v", f.Source.File, len(body), err)
+		}
+		switch f.Class {
+		case "repo":
+			if f.Source.Repo != repo || f.Commit != st.Git(t, repo, "rev-parse", "origin/main") || f.Budget != 6000 {
+				t.Errorf("repo file %+v", f.File)
+			}
+		case "global":
+			if f.Commit != "" || f.Source.Canon == "" || f.Budget != 8000 {
+				t.Errorf("global file %+v", f.File)
+			}
+		default:
+			t.Errorf("class %s", f.Class)
+		}
+	}
+	if p, _ := s.State(ctx, r.ID); p.State != store.Recommending || p.Files != 2 {
+		t.Fatalf("%+v", p)
 	}
 }

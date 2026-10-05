@@ -25,6 +25,53 @@ interface Decision {
   sent?: boolean;
 }
 
+interface Account {
+  row: string;
+  did: 'fixed' | 'kept';
+  how: string;
+}
+
+/** A file's recommendation (internal/sift/rec.Rec). */
+interface Recommendation {
+  file: string;
+  base: string;
+  content: string;
+  findings: Account[];
+  links?: string[];
+  summary: string;
+}
+
+interface FileDecision {
+  action: 'accept' | 'edit' | 'reject';
+  content?: string;
+  note?: string;
+  sent?: boolean;
+}
+
+/** One of an audit round's files (internal/sift/serve fileJSON). */
+interface FileView {
+  key: string;
+  path: string;
+  source: Source;
+  commit?: string;
+  class: string;
+  budget: number;
+  base: string;
+  size: number;
+  after: number;
+  rows: string[];
+  rec: Recommendation | null;
+  decision: FileDecision | null;
+  fingerprint: string;
+  group: string[];
+}
+
+interface Progress {
+  state: '' | 'checking' | 'recommending' | 'ready' | 'sent' | 'applied';
+  files: number;
+  recommended: number;
+}
+
 interface Finding {
   id: string;
   check: string;
@@ -38,7 +85,6 @@ interface Finding {
   text?: string;
   reason?: string;
   certain: boolean;
-  fix?: string;
   decision?: Decision;
   /** The proposal's fingerprint; every decision on the row sends it back. */
   fingerprint: string;
@@ -68,7 +114,9 @@ interface ApplyRecord {
 interface Review {
   cursor: string;
   round: ReviewRound | null;
+  progress: Progress;
   rows: Finding[];
+  files: FileView[];
   applies: ApplyRecord[];
   sends: number;
   home: string;

@@ -29,16 +29,17 @@ export interface Client {
   review(): Promise<Review>;
   decide(round: number, ds: DecisionIn[]): Promise<void>;
   clear(round: number, id: string): Promise<void>;
-  undo(
+  /** A decision on an audit round's file (and the files linked to it),
+   * with the prints of every file in its group as the page shows them. */
+  decideFile(
     round: number,
-    r: Pick<Finding, 'id' | 'fingerprint'>,
-    note: string,
+    file: string,
+    d: FileDecision,
+    prints: Record<string, string>,
   ): Promise<void>;
-  redo(
-    round: number,
-    r: Pick<Finding, 'id' | 'fingerprint'>,
-    note: string,
-  ): Promise<void>;
+  clearFile(round: number, file: string): Promise<void>;
+  /** A file's content at the audit. */
+  base(round: number, file: string): Promise<{ content: string }>;
   send(round: number): Promise<{ sent: number; to: string }>;
   file(round: number, id: string): Promise<FileOut>;
 }
@@ -54,22 +55,22 @@ export function client(api: Api): Client {
       const q = new URLSearchParams({ round: String(round), id });
       await api.del(`/decisions?${q.toString()}`);
     },
-    async undo(round, r, note) {
-      await api.post('/undo', {
+    async decideFile(round, file, d, prints) {
+      await api.put('/files', {
         round,
-        id: r.id,
-        note,
-        fingerprint: r.fingerprint,
+        file,
+        action: d.action,
+        content: d.content ?? '',
+        note: d.note ?? '',
+        prints,
       });
     },
-    async redo(round, r, note) {
-      await api.post('/redo', {
-        round,
-        id: r.id,
-        note,
-        fingerprint: r.fingerprint,
-      });
+    async clearFile(round, file) {
+      const q = new URLSearchParams({ round: String(round), file });
+      await api.del(`/files?${q.toString()}`);
     },
+    base: (round, file) =>
+      api.get<{ content: string }>('/base', { round: String(round), file }),
     async send(round) {
       const r = await api.post<{ sent: number; to?: string }>('/send', {
         round,

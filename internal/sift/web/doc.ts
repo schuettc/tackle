@@ -1,6 +1,10 @@
-// doc.ts — the reading column: one row (facts, the passage, the proposal,
-// accept / edit / reject, the note, the whole file) or one group (its rows
-// and the decisions that take them all). It only draws; app.ts holds state.
+// doc.ts — the reading column. An audit round's file: the summary, the
+// diff from the audited file to the recommendation (wrapping, certain
+// fixes marked), accept / edit / reject, the findings with what the
+// rewrite did, the note. A backlog round's row (facts, the passage, the
+// proposal, accept / edit / reject, the note, the whole file) or group
+// (its rows and the decisions that take them all). It only draws; app.ts
+// holds state.
 
 import {
   buttons,
@@ -15,22 +19,19 @@ import {
   PLAIN_VERDICTS,
   displayPath,
   fieldOf,
-  fixOf,
   groupTargets,
-  isFix,
   rowMeta,
   rowTitle,
   verdictOf,
   type EditForm,
   type Group,
-  type View,
 } from './model.ts';
+import { certainLines, diffLines, hunks, splitLines } from './files.ts';
 import { prose } from './prose.ts';
 import type { FileOut } from './api.ts';
 
 export interface Ctx {
   home: string;
-  view: View;
   /** The row being edited, if any. */
   editing: string | null;
   noteOf(r: Finding): string;
@@ -41,15 +42,9 @@ export interface Ctx {
   cancelEdit(): void;
   saveEdit(r: Finding, f: EditForm): string | null;
   clear(r: Finding): void;
-  undo(rows: Finding[]): void;
-  redo(rows: Finding[]): void;
   open(key: string): void;
   file(r: Finding): Promise<FileOut>;
-  /** The apply that already wrote this row's repo, if any. */
-  appliedIn(r: Finding): ApplyRecord | undefined;
 }
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 const where = (r: Finding, home: string) => {
   const p = displayPath(r.source, home);
@@ -186,7 +181,7 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
   if (ev.length) parts.push(facts(ev));
   if (r.passage)
     parts.push(
-      h('div', { class: 'kit-label' }, isFix(r) ? 'the passage' : 'now'),
+      h('div', { class: 'kit-label' }, 'now'),
       prose(r.passage, { start: r.source.start || 1 }),
     );
   const v = verdictOf(r);
@@ -203,33 +198,7 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
       prose(text, { start: r.source.start || 1 }),
     );
 
-  if (isFix(r)) {
-    const done = ctx.appliedIn(r);
-    const undone = r.decision?.action === 'reject';
-    parts.push(
-      card({
-        edge: 'wait',
-        head: undone
-          ? 'undone · stays as it is'
-          : `applied · certain · ${fixOf(r)}`,
-        body: undone
-          ? 'You took this fix out of the round: sift leaves the passage alone.'
-          : `${cap(r.summary)}. sift is certain of this one, so it ${fixOf(r) === 'rewrite' ? 'rewrites' : 'removes'} the passage when it applies the round, unless you undo it.`,
-      }),
-      h('div', { class: 'kit-label' }, 'change'),
-      done
-        ? h(
-            'p',
-            { class: 'sift-why' },
-            `already applied on ${done.branch}: change it on the branch`,
-          )
-        : buttons([
-            undone
-              ? { label: 'redo (u)', run: () => ctx.redo([r]) }
-              : { label: 'undo (u)', danger: true, run: () => ctx.undo([r]) },
-          ]),
-    );
-  } else {
+  {
     const head = r.verdict
       ? `proposes · ${r.verdict}${r.destination ? ` → ${r.destination}` : ''}`
       : 'no proposal yet';
@@ -287,38 +256,7 @@ export function groupDoc(ctx: Ctx, g: Group): HTMLElement {
     h('div', { class: 'kit-kick' }, g.kicker),
     h('h1', { class: 'kit-h1' }, g.title),
   ];
-  if (ctx.view === 'applied') {
-    const live = rows.filter(
-      (r) => isFix(r) && r.decision?.action !== 'reject',
-    );
-    const undone = rows.filter(
-      (r) => isFix(r) && r.decision?.action === 'reject',
-    );
-    parts.push(
-      facts([
-        ['applied', String(live.length)],
-        ['undone', String(undone.length)],
-      ]),
-      card({
-        edge: 'wait',
-        head: 'certain fixes',
-        body: 'sift applies these itself. Undo any you want left as they are; it holds until you send.',
-        actions: [
-          {
-            label: `undo ${live.length}`,
-            danger: true,
-            disabled: !live.length,
-            run: () => ctx.undo(live),
-          },
-          {
-            label: `redo ${undone.length}`,
-            disabled: !undone.length,
-            run: () => ctx.redo(undone),
-          },
-        ],
-      }),
-    );
-  } else {
+  {
     const acc = groupTargets(rows, 'accept');
     const rej = groupTargets(rows, 'reject');
     parts.push(
@@ -397,4 +335,264 @@ export function message(
     h('h1', { class: 'kit-h1' }, title),
     h('p', { class: 'sift-lead' }, body),
   );
+}
+
+// ---- an audit round's file --------------------------------------------------
+
+/** What the file view needs from app.ts. */
+export interface FileCtx {
+  home: string;
+  /** The file being edited, if any. */
+  editing: string | null;
+  /** The round's files (for linked files' paths). */
+  files: FileView[];
+  /** The file's findings, in line order. */
+  rowsOf(f: FileView): Finding[];
+  /** The audited content: a string once loaded, an Error if it could not
+   * be, undefined while it loads. */
+  baseOf(f: FileView): string | Error | undefined;
+  noteOf(f: FileView): string;
+  setNote(f: FileView, v: string): void;
+  accept(f: FileView): void;
+  reject(f: FileView): void;
+  startEdit(f: FileView): void;
+  cancelEdit(): void;
+  /** Saves the edit; an error message, or null when saved. */
+  saveEdit(f: FileView, content: string): string | null;
+  clear(f: FileView): void;
+}
+
+const kb = (n: number) => `${(n / 1000).toFixed(1)} KB`;
+const word: Record<string, string> = {
+  accept: 'accepted',
+  edit: 'edited',
+  reject: 'rejected',
+};
+
+/** The diff from the audited file to what would be written, wrapping, with
+ * the lines of certain findings marked. */
+export function diffView(
+  base: string,
+  after: string,
+  certain: Set<number>,
+): HTMLElement {
+  const hs = hunks(diffLines(base, after), 3);
+  if (!hs.length)
+    return h('p', { class: 'sift-why' }, 'No change: the file stays as it is.');
+  return h(
+    'div',
+    { class: 'sift-diff' },
+    hs.flatMap((hk) => [
+      h('div', { class: 'sift-hunk' }, hk.header),
+      ...hk.lines.map((l) => {
+        const cert =
+          l.kind === '-' && l.old !== undefined && certain.has(l.old);
+        const cls = l.kind === '-' ? 'del' : l.kind === '+' ? 'add' : 'ctx';
+        return h(
+          'div',
+          {
+            class: `sift-dl ${cls}${cert ? ' cert' : ''}`,
+            title: cert
+              ? 'a certain finding: the rewrite must fix it'
+              : undefined,
+          },
+          h(
+            'span',
+            { class: 'sift-n', 'aria-hidden': 'true' },
+            l.old ? String(l.old) : '',
+          ),
+          h(
+            'span',
+            { class: 'sift-n', 'aria-hidden': 'true' },
+            l.new ? String(l.new) : '',
+          ),
+          h(
+            'span',
+            { class: 'sift-sign', 'aria-hidden': 'true' },
+            cert ? '!' : l.kind,
+          ),
+          h('span', { class: 'sift-t' }, l.text),
+        );
+      }),
+    ]),
+  );
+}
+
+function fileEdit(ctx: FileCtx, f: FileView): HTMLElement {
+  const d = f.decision?.action === 'edit' ? f.decision : undefined;
+  const text = h('textarea', {
+    class: 'sift-field sift-text sift-whole',
+    'aria-label': 'the whole recommended file',
+    spellcheck: false,
+  }) as HTMLTextAreaElement;
+  text.value = d?.content ?? f.rec?.content ?? '';
+  text.rows = Math.min(40, Math.max(12, splitLines(text.value).length + 2));
+  const err = h('p', { class: 'sift-err', role: 'alert' });
+  const save = () => {
+    err.textContent = ctx.saveEdit(f, text.value) ?? '';
+  };
+  queueMicrotask(() => text.focus());
+  return h(
+    'form',
+    {
+      class: 'sift-edit',
+      onsubmit: (e: Event) => {
+        e.preventDefault();
+        save();
+      },
+    },
+    h(
+      'div',
+      { class: 'kit-label' },
+      'edit · the whole file as it will be written',
+    ),
+    text,
+    err,
+    buttons([
+      { label: 'save edit (⌘↵)', fill: true, run: save },
+      { label: 'cancel', run: () => ctx.cancelEdit() },
+    ]),
+  );
+}
+
+function findingsTable(f: FileView, rows: Finding[]): HTMLElement {
+  const did = new Map((f.rec?.findings ?? []).map((a) => [a.row, a]));
+  return h(
+    'table',
+    { class: 'sift-rows sift-findings' },
+    h(
+      'tr',
+      null,
+      h('th', null, 'line'),
+      h('th', null, 'finding'),
+      h('th', null, 'what the rewrite did'),
+    ),
+    rows.map((r) => {
+      const a = did.get(r.id);
+      return h(
+        'tr',
+        { class: r.certain ? 'cert' : '' },
+        h(
+          'td',
+          { class: 'n' },
+          r.source.start ? String(r.source.start) : 'file',
+        ),
+        h(
+          'td',
+          { class: 'p' },
+          h(
+            'div',
+            { class: 'sift-check' },
+            r.certain ? `${r.check} · certain` : r.check,
+          ),
+          rowTitle(r),
+        ),
+        h(
+          'td',
+          { class: 'p' },
+          a
+            ? [h('span', { class: `sift-did ${a.did}` }, a.did), ' ', a.how]
+            : '—',
+        ),
+      );
+    }),
+  );
+}
+
+/** The open file. */
+export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
+  const rows = ctx.rowsOf(f);
+  const certain = rows.filter((r) => r.certain).length;
+  const others = f.group
+    .filter((k) => k !== f.key)
+    .map((k) => ctx.files.find((x) => x.key === k))
+    .filter((x): x is FileView => !!x);
+  const where = displayPath(f.source, ctx.home);
+  const ev: [string, string][] = [
+    ['size', `${kb(f.size)} → ${kb(f.after)} · budget ${kb(f.budget)}`],
+    [
+      'findings',
+      certain ? `${rows.length}, ${certain} certain` : String(rows.length),
+    ],
+  ];
+  if (others.length)
+    ev.push([
+      'linked',
+      others.map((o) => displayPath(o.source, ctx.home)).join(', '),
+    ]);
+  if (f.source.ref)
+    ev.push([
+      'read at',
+      f.commit ? `${f.source.ref} (${f.commit.slice(0, 10)})` : f.source.ref,
+    ]);
+  const parts: (HTMLElement | string)[] = [
+    h('div', { class: 'kit-kick' }, `${f.class} file · ${where}`),
+    h('h1', { class: 'kit-h1' }, where),
+    h('p', { class: 'sift-lead sift-summary' }, f.rec?.summary ?? ''),
+    facts(ev),
+  ];
+  const edited = f.decision?.action === 'edit';
+  const after = edited ? (f.decision?.content ?? '') : (f.rec?.content ?? '');
+  const base = ctx.baseOf(f);
+  parts.push(
+    h(
+      'div',
+      { class: 'kit-label' },
+      edited ? 'the change · your edit' : 'the change',
+    ),
+  );
+  if (base instanceof Error)
+    parts.push(
+      h(
+        'p',
+        { class: 'sift-err' },
+        `could not load the audited file: ${base.message}`,
+      ),
+    );
+  else if (base === undefined)
+    parts.push(h('p', { class: 'kit-muted sift-loading' }, 'loading…'));
+  else parts.push(diffView(base, after, certainLines(rows)));
+
+  const a = f.decision?.action;
+  const bs: Button[] = [
+    { label: '1 accept', fill: a === 'accept', run: () => ctx.accept(f) },
+    { label: '2 edit', fill: a === 'edit', run: () => ctx.startEdit(f) },
+    {
+      label: '3 reject',
+      fill: a === 'reject',
+      danger: true,
+      run: () => ctx.reject(f),
+    },
+  ];
+  if (f.decision) bs.push({ label: 'clear (u)', run: () => ctx.clear(f) });
+  const decide = buttons(bs);
+  decide.classList.add('sift-decide');
+  parts.push(decide);
+  const said: string[] = [];
+  if (f.decision)
+    said.push(
+      `your decision: ${word[f.decision.action]}${f.decision.sent ? ' · sent' : ''}`,
+    );
+  if (others.length)
+    said.push(
+      `decided together with ${others.map((o) => displayPath(o.source, ctx.home)).join(', ')}: the recommendation moves text between them`,
+    );
+  if (said.length)
+    parts.push(h('p', { class: 'sift-why' }, said.join('. ') + '.'));
+  if (ctx.editing === f.key) parts.push(fileEdit(ctx, f));
+
+  parts.push(
+    h('div', { class: 'kit-label' }, 'findings'),
+    findingsTable(f, rows),
+  );
+  const field = noteField({
+    value: ctx.noteOf(f),
+    placeholder: 'why (n)',
+    onCommit: (v) => ctx.setNote(f, v),
+  });
+  field.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.isComposing) field.blur();
+  });
+  parts.push(h('div', { class: 'kit-label' }, 'note'), field);
+  return h('div', { class: 'kit-doc sift-file' }, ...parts);
 }

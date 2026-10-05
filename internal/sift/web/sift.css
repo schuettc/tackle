@@ -152,3 +152,115 @@ table.sift-rows tr:not(:first-child) {
 table.sift-rows tr:not(:first-child):hover td {
   background: var(--kit-signal-soft);
 }
+
+/* an audit round's file */
+.kit-doc .sift-summary {
+  margin: 0 0 14px;
+}
+.sift-decide {
+  margin: 4px 0 8px;
+}
+
+/* the diff: the audited file against what would be written, one grid row
+   per line (old number, new number, sign, text), wrapping in the column.
+   Tints are mixed from the kit's own colours. */
+.sift-diff {
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  padding: 0 0 6px;
+  margin: 0 0 16px;
+  font: 12.5px/1.6 var(--kit-mono);
+  overflow: hidden;
+}
+.sift-hunk {
+  color: var(--kit-muted);
+  font-size: 11.5px;
+  padding: 6px 14px 4px;
+  border-top: 1px solid var(--kit-line);
+}
+.sift-hunk:first-child {
+  border-top: 0;
+}
+.sift-dl {
+  display: grid;
+  grid-template-columns: 3.2em 3.2em 1.8em minmax(0, 1fr);
+}
+.sift-dl .sift-n {
+  border-right: 0;
+  padding-right: 8px;
+}
+.sift-dl .sift-t {
+  padding: 0 14px 0 0;
+}
+.sift-sign {
+  color: var(--kit-muted);
+  text-align: center;
+  user-select: none;
+}
+.sift-dl.add {
+  background: color-mix(in srgb, var(--kit-ok) 13%, transparent);
+}
+.sift-dl.add .sift-sign {
+  color: var(--kit-ok);
+}
+.sift-dl.del {
+  background: color-mix(in srgb, var(--kit-danger) 11%, transparent);
+}
+.sift-dl.del .sift-sign {
+  color: var(--kit-danger);
+}
+/* a certain finding's line: the rewrite must fix it */
+.sift-dl.cert {
+  background: color-mix(in srgb, var(--kit-danger) 22%, transparent);
+  box-shadow: inset 3px 0 0 var(--kit-danger);
+}
+.sift-dl.cert .sift-sign {
+  font-weight: 700;
+}
+
+/* linked files sit together in the list, marked at the edge */
+.kit-row.sift-linked {
+  box-shadow: inset 3px 0 0 var(--kit-agent);
+}
+
+/* the findings, with what the rewrite did */
+.sift-check {
+  font: 11px var(--kit-mono);
+  color: var(--kit-muted);
+  margin-bottom: 2px;
+}
+tr.cert .sift-check {
+  color: var(--kit-danger);
+}
+.sift-did {
+  font: 10.5px var(--kit-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sift-did.fixed {
+  color: var(--kit-ok);
+}
+.sift-did.kept {
+  color: var(--kit-wait);
+}
+table.sift-findings th:nth-child(3) {
+  width: auto;
+}
+table.sift-findings th:nth-child(2) {
+  width: 45%;
+}
+table.sift-findings th:first-child {
+  width: 5.5em;
+}
+table.sift-findings tr:not(:first-child) {
+  cursor: default;
+}
+table.sift-findings tr:not(:first-child):hover td {
+  background: none;
+}
+
+/* edit: the whole file */
+textarea.sift-whole {
+  min-height: 24em;
+}

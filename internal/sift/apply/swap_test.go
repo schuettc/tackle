@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/schuettc/tackle/internal/sift/rec"
 )
 
 // swapAt replaces dir, once, with a symlink to to, the moment apply has
@@ -30,58 +30,33 @@ func swapAt(t *testing.T, base, to string) {
 }
 
 // A checked parent swapped for a symlink to an outside directory between
-// the check and the write: creating, writing and deleting a file under it
-// each fail the repo, and nothing outside the worktree changes.
+// the check and the write: writing the file under it fails the repo, and
+// nothing outside the worktree changes.
 func TestApplyRefusesAParentSwappedMidWrite(t *testing.T) {
-	for name, mk := range map[string]func(g *rig) row.Row{
-		"create": func(g *rig) row.Row {
-			r := g.at("mv", "misplaced", 5, "- Never push to main.")
-			r.Verdict, r.Destination = "move", "docs/new.md#Notes"
-			return r
-		},
-		"write": func(g *rig) row.Row {
-			r := g.at("mv", "misplaced", 5, "- Never push to main.")
-			r.Verdict, r.Destination = "move", "docs/other.md#Notes"
-			return r
-		},
-		"delete": func(g *rig) row.Row {
-			r := g.at("rm", "size", 0, "")
-			r.Source.File, r.Source.Path, r.Source.Start, r.Source.End = filepath.Join(g.repo, "docs", "other.md"), "docs/other.md", 0, 0
-			r.Verdict = "delete"
-			return r
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			g := newRig(t)
-			out := t.TempDir()
-			outFile := filepath.Join(out, "other.md")
-			if err := os.WriteFile(outFile, []byte("outside\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			r := mk(g)
-			verdict, dest := r.Verdict, r.Destination
-			r.Verdict, r.Destination = "", ""
-			g.record(r)
-			if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: r.ID, Verdict: verdict, Destination: dest}}); err != nil {
-				t.Fatal(err)
-			}
-			g.decide(r.ID, row.Decision{Action: "accept"})
-			before := g.primary()
-			swapAt(t, "docs", out)
-			res := g.run(Options{}).Repos[0]
-			if res.State != "failed" {
-				t.Errorf("state %q (%s), want failed", res.State, res.Detail)
-			}
-			if b, err := os.ReadFile(outFile); err != nil || string(b) != "outside\n" {
-				t.Errorf("the outside file changed: %q %v", b, err)
-			}
-			if files := tree(t, out); len(files) != 1 {
-				t.Errorf("files outside: %v", files)
-			}
-			if g.primary() != before {
-				t.Error("the primary clone's working tree or index changed")
-			}
-		})
+	g := newRig(t)
+	out := t.TempDir()
+	outFile := filepath.Join(out, "other.md")
+	if err := os.WriteFile(outFile, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o := g.in(g.repo, "docs/other.md")
+	g.audit(o)
+	g.propose(g.rec(o, "# Other\n\n- rewritten\n"))
+	g.decide(o, rec.Decision{Action: "accept"})
+	before := g.primary()
+	swapAt(t, "docs", out)
+	res := one(t, g.run(Options{}))
+	if res.State != "failed" {
+		t.Errorf("state %q (%s), want failed", res.State, res.Detail)
+	}
+	if b, err := os.ReadFile(outFile); err != nil || string(b) != "outside\n" {
+		t.Errorf("the outside file changed: %q %v", b, err)
+	}
+	if files := tree(t, out); len(files) != 1 {
+		t.Errorf("files outside: %v", files)
+	}
+	if g.primary() != before {
+		t.Error("the primary clone's working tree or index changed")
 	}
 }
 
@@ -103,9 +78,6 @@ func TestAParentIntoGitIsRefused(t *testing.T) {
 	}
 	if err := writeAt(root, "meta/config", "x\n"); err == nil {
 		t.Error("meta/config: written into .git")
-	}
-	if err := removeAt(root, "meta/config"); err == nil {
-		t.Error("meta/config: removed from .git")
 	}
 	swapAt(t, "docs", ".git")
 	if err := writeAt(root, "docs/config", "x\n"); err == nil {

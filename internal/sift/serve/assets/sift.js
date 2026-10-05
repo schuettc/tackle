@@ -20,22 +20,21 @@ function client(api) {
       const q = new URLSearchParams({ round: String(round), id });
       await api.del(`/decisions?${q.toString()}`);
     },
-    async undo(round, r, note) {
-      await api.post("/undo", {
+    async decideFile(round, file, d, prints) {
+      await api.put("/files", {
         round,
-        id: r.id,
-        note,
-        fingerprint: r.fingerprint
+        file,
+        action: d.action,
+        content: d.content ?? "",
+        note: d.note ?? "",
+        prints
       });
     },
-    async redo(round, r, note) {
-      await api.post("/redo", {
-        round,
-        id: r.id,
-        note,
-        fingerprint: r.fingerprint
-      });
+    async clearFile(round, file) {
+      const q = new URLSearchParams({ round: String(round), file });
+      await api.del(`/files?${q.toString()}`);
     },
+    base: (round, file) => api.get("/base", { round: String(round), file }),
     async send(round) {
       const r = await api.post("/send", {
         round
@@ -111,28 +110,12 @@ function displayPath(src, home) {
     return "~" + src.file.slice(home.length);
   return src.file;
 }
-function fixOf(r) {
-  return r.fix || "delete";
-}
 function editTarget(d) {
   if (d.action !== "edit" || !d.verdict?.startsWith("merge:")) return "";
   return d.verdict.slice("merge:".length);
 }
-function isFix(r) {
-  return r.certain && (!r.verdict || r.verdict === fixOf(r)) && !r.title && !r.destination && !r.text;
-}
-function fixDecision(op, note) {
-  return { action: op === "undo" ? "reject" : "accept", note };
-}
 function markSent(rows) {
   for (const r of rows) if (r.decision) r.decision.sent = true;
-}
-function inView(r, v) {
-  return v === "applied" ? isFix(r) : !isFix(r);
-}
-function isBacklog(round, rows) {
-  if (round?.kind === "backlog") return true;
-  return rows.length > 0 && rows.every((r) => r.check === "intake");
 }
 function verdictOf(r) {
   return r.decision?.action === "edit" && r.decision.verdict || r.verdict || "";
@@ -146,13 +129,13 @@ function fieldOf(r, k) {
 var plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 function groupsOf(rows, backlog, home) {
   const by = /* @__PURE__ */ new Map();
-  const order = [];
+  const order2 = [];
   const add = (key, kicker, r) => {
     let g = by.get(key);
     if (!g) {
       g = { key, kicker, title: "", rows: [] };
       by.set(key, g);
-      order.push(key);
+      order2.push(key);
     }
     g.rows.push(r);
   };
@@ -165,8 +148,8 @@ function groupsOf(rows, backlog, home) {
       else add("decisions", "decisions", r);
     }
     const rank = (k) => k.startsWith("issue:") ? 0 : k === "decisions" ? 1 : 2;
-    order.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
-    return order.map((k) => {
+    order2.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+    return order2.map((k) => {
       const g = by.get(k);
       const n = g.rows.length;
       g.title = k.startsWith("issue:") ? `${k.slice("issue:".length) || "no repo"} · ${plural(n, "issue", "issues")}` : k === "closes" ? `${n} to close` : `${n} to decide`;
@@ -177,7 +160,7 @@ function groupsOf(rows, backlog, home) {
     const p = displayPath(r.source, home);
     add(`${p}|${r.check}`, p, r);
   }
-  const groups = order.map((k) => by.get(k));
+  const groups = order2.map((k) => by.get(k));
   groups.sort(
     (a, b) => (a.kicker < b.kicker ? -1 : a.kicker > b.kicker ? 1 : 0) || checkOrder(a.rows[0].check) - checkOrder(b.rows[0].check)
   );
@@ -226,13 +209,10 @@ function nextOpen(es, key) {
   return es[i + 1]?.key ?? key;
 }
 function progress(rows) {
-  const open = rows.filter((r) => !isFix(r));
-  return { decided: open.filter((r) => r.decision).length, total: open.length };
+  return { decided: rows.filter((r) => r.decision).length, total: rows.length };
 }
-function unsent(rows, sends) {
-  let n = rows.filter((r) => r.decision && !r.decision.sent).length;
-  if (sends === 0) n += rows.filter((r) => isFix(r) && !r.decision).length;
-  return n;
+function unsent(rows) {
+  return rows.filter((r) => r.decision && !r.decision.sent).length;
 }
 function groupTargets(rows, action) {
   return rows.filter(
@@ -264,14 +244,205 @@ function rowTitle(r) {
   return first || r.summary;
 }
 function rowMeta(r) {
-  if (isFix(r)) {
-    if (r.decision?.action === "reject") return "undone";
-    return r.decision && !r.decision.sent ? "redone" : "applied";
-  }
   if (!r.decision) return "·";
   if (r.decision.action === "edit") return `edited · ${verdictOf(r)}`;
   if (r.decision.action === "accept") return `accepted · ${r.verdict ?? ""}`;
   return "rejected";
+}
+
+// files.ts
+function splitLines(s) {
+  if (s === "") return [];
+  const ls = s.split("\n");
+  if (ls[ls.length - 1] === "") ls.pop();
+  return ls;
+}
+var LIMIT = 4e3;
+function diffLines(a, b) {
+  const A = splitLines(a);
+  const B = splitLines(b);
+  let pre = 0;
+  while (pre < A.length && pre < B.length && A[pre] === B[pre]) pre++;
+  let suf = 0;
+  while (suf < A.length - pre && suf < B.length - pre && A[A.length - 1 - suf] === B[B.length - 1 - suf])
+    suf++;
+  const script = myers(
+    A.slice(pre, A.length - suf),
+    B.slice(pre, B.length - suf)
+  );
+  const out = [];
+  let i = 0;
+  let j = 0;
+  const keep = () => {
+    out.push({ kind: " ", old: i + 1, new: j + 1, text: A[i] });
+    i++;
+    j++;
+  };
+  while (i < pre) keep();
+  for (const s of script) {
+    if (s === "=") keep();
+    else if (s === "-") out.push({ kind: "-", old: ++i, text: A[i - 1] });
+    else out.push({ kind: "+", new: ++j, text: B[j - 1] });
+  }
+  while (i < A.length) keep();
+  return out;
+}
+function myers(a, b) {
+  const n = a.length;
+  const m = b.length;
+  const max = n + m;
+  if (max === 0) return [];
+  if (max > LIMIT)
+    return [...a.map(() => "-"), ...b.map(() => "+")];
+  const off = max;
+  const v = new Int32Array(2 * max + 2);
+  const trace = [];
+  let done = false;
+  for (let d = 0; d <= max && !done; d++) {
+    for (let k = -d; k <= d; k += 2) {
+      let x2 = k === -d || k !== d && v[off + k - 1] < v[off + k + 1] ? v[off + k + 1] : v[off + k - 1] + 1;
+      let y2 = x2 - k;
+      while (x2 < n && y2 < m && a[x2] === b[y2]) {
+        x2++;
+        y2++;
+      }
+      v[off + k] = x2;
+      if (x2 >= n && y2 >= m) done = true;
+    }
+    trace.push(v.slice(off - d, off + d + 1));
+  }
+  const out = [];
+  let x = n;
+  let y = m;
+  for (let d = trace.length - 1; d > 0; d--) {
+    const prev = trace[d - 1];
+    const at = (k2) => prev[k2 + d - 1];
+    const k = x - y;
+    const down = k === -d || k !== d && at(k - 1) < at(k + 1);
+    const pk = down ? k + 1 : k - 1;
+    const px = at(pk);
+    const x0 = down ? px : px + 1;
+    while (x > x0 && y > x0 - k) {
+      out.push("=");
+      x--;
+      y--;
+    }
+    out.push(down ? "+" : "-");
+    x = px;
+    y = px - pk;
+  }
+  while (x > 0 && y > 0) {
+    out.push("=");
+    x--;
+    y--;
+  }
+  return out.reverse();
+}
+function hunks(ops, ctx) {
+  const changed = ops.flatMap((o, i) => o.kind === " " ? [] : [i]);
+  const out = [];
+  let k = 0;
+  while (k < changed.length) {
+    let last = k;
+    while (last + 1 < changed.length && changed[last + 1] - changed[last] <= 2 * ctx + 1)
+      last++;
+    const from = Math.max(0, changed[k] - ctx);
+    const to = Math.min(ops.length - 1, changed[last] + ctx);
+    const lines = ops.slice(from, to + 1);
+    const olds = lines.filter((l) => l.old !== void 0);
+    const news = lines.filter((l) => l.new !== void 0);
+    const start = (ls, f) => ls.length ? ls[0][f] : 0;
+    out.push({
+      header: `@@ -${start(olds, "old")},${olds.length} +${start(news, "new")},${news.length} @@`,
+      lines
+    });
+    k = last + 1;
+  }
+  return out;
+}
+function certainLines(rows) {
+  const out = /* @__PURE__ */ new Set();
+  for (const r of rows) {
+    if (!r.certain || !r.source.start) continue;
+    for (let n = r.source.start; n <= (r.source.end || r.source.start); n++)
+      out.add(n);
+  }
+  return out;
+}
+var classRank = { global: 0, repo: 1, skill: 2 };
+var order = (f, home) => [
+  classRank[f.class] ?? 3,
+  displayPath(f.source, home)
+];
+var before = (a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
+function fileEntries(files, home) {
+  const shown = files.filter((f) => f.rows.length > 0 || f.rec);
+  const by = new Map(shown.map((f) => [f.key, f]));
+  const groups = /* @__PURE__ */ new Map();
+  for (const f of shown) {
+    const members = f.group.filter((k) => by.has(k));
+    const id = members.length ? [...members].sort()[0] : f.key;
+    if (!groups.has(id))
+      groups.set(
+        id,
+        members.map((k) => by.get(k))
+      );
+  }
+  const sorted = [...groups.values()].map(
+    (g) => [...g].sort((a, b) => before(order(a, home), order(b, home)))
+  );
+  sorted.sort((a, b) => before(order(a[0], home), order(b[0], home)));
+  return sorted.flatMap(
+    (g) => g.map((f) => ({ key: `f:${f.key}`, file: f, linked: g.length > 1 }))
+  );
+}
+var kb = (n) => (n / 1e3).toFixed(1);
+var word = {
+  accept: "accepted",
+  edit: "edited",
+  reject: "rejected"
+};
+function fileMeta(f) {
+  const d = f.decision ? word[f.decision.action] : "·";
+  return `${kb(f.size)} → ${kb(f.after)} KB · ${f.rows.length} · ${d}`.replace(
+    / · ·$/,
+    " ·"
+  );
+}
+function printsFor(files, key) {
+  const f = files.find((x) => x.key === key);
+  const out = {};
+  for (const k of f?.group ?? [key]) {
+    const m = files.find((x) => x.key === k);
+    if (m) out[k] = m.fingerprint;
+  }
+  return out;
+}
+function decideLocal(files, key, d) {
+  const f = files.find((x) => x.key === key);
+  if (!f) return;
+  for (const k of f.group) {
+    const m = files.find((x) => x.key === k);
+    if (!m) continue;
+    const cur = m.decision;
+    if (d === null) m.decision = null;
+    else if (k === key) m.decision = { ...d, sent: false };
+    else if (d.action === "reject")
+      m.decision = { action: "reject", note: cur?.note ?? "", sent: false };
+    else if (cur && (cur.action === "edit" || cur.action === "accept"))
+      continue;
+    else m.decision = { action: "accept", note: cur?.note ?? "", sent: false };
+  }
+  if (d?.action === "edit" && d.content !== void 0)
+    f.after = d.content.length;
+  else if (f.rec && d?.action !== "edit") f.after = f.rec.content.length;
+}
+function filesProgress(files) {
+  const open = files.filter((f) => f.rec);
+  return { decided: open.filter((f) => f.decision).length, total: open.length };
+}
+function unsentFiles(files) {
+  return files.filter((f) => f.decision && !f.decision.sent).length;
 }
 
 // prose.ts
@@ -297,7 +468,6 @@ function prose(src, o = {}) {
 }
 
 // doc.ts
-var cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 var where = (r, home) => {
   const p = displayPath(r.source, home);
   return r.source.start ? `${p}:${r.source.start}` : p;
@@ -420,7 +590,7 @@ function rowDoc(ctx, r) {
   if (ev.length) parts.push(facts(ev));
   if (r.passage)
     parts.push(
-      h2("div", { class: "kit-label" }, isFix(r) ? "the passage" : "now"),
+      h2("div", { class: "kit-label" }, "now"),
       prose(r.passage, { start: r.source.start || 1 })
     );
   const v = verdictOf(r);
@@ -434,25 +604,7 @@ function rowDoc(ctx, r) {
       ),
       prose(text, { start: r.source.start || 1 })
     );
-  if (isFix(r)) {
-    const done = ctx.appliedIn(r);
-    const undone = r.decision?.action === "reject";
-    parts.push(
-      card({
-        edge: "wait",
-        head: undone ? "undone · stays as it is" : `applied · certain · ${fixOf(r)}`,
-        body: undone ? "You took this fix out of the round: sift leaves the passage alone." : `${cap(r.summary)}. sift is certain of this one, so it ${fixOf(r) === "rewrite" ? "rewrites" : "removes"} the passage when it applies the round, unless you undo it.`
-      }),
-      h2("div", { class: "kit-label" }, "change"),
-      done ? h2(
-        "p",
-        { class: "sift-why" },
-        `already applied on ${done.branch}: change it on the branch`
-      ) : buttons([
-        undone ? { label: "redo (u)", run: () => ctx.redo([r]) } : { label: "undo (u)", danger: true, run: () => ctx.undo([r]) }
-      ])
-    );
-  } else {
+  {
     const head = r.verdict ? `proposes · ${r.verdict}${r.destination ? ` → ${r.destination}` : ""}` : "no proposal yet";
     parts.push(
       card({
@@ -502,38 +654,7 @@ function groupDoc(ctx, g) {
     h2("div", { class: "kit-kick" }, g.kicker),
     h2("h1", { class: "kit-h1" }, g.title)
   ];
-  if (ctx.view === "applied") {
-    const live2 = rows.filter(
-      (r) => isFix(r) && r.decision?.action !== "reject"
-    );
-    const undone = rows.filter(
-      (r) => isFix(r) && r.decision?.action === "reject"
-    );
-    parts.push(
-      facts([
-        ["applied", String(live2.length)],
-        ["undone", String(undone.length)]
-      ]),
-      card({
-        edge: "wait",
-        head: "certain fixes",
-        body: "sift applies these itself. Undo any you want left as they are; it holds until you send.",
-        actions: [
-          {
-            label: `undo ${live2.length}`,
-            danger: true,
-            disabled: !live2.length,
-            run: () => ctx.undo(live2)
-          },
-          {
-            label: `redo ${undone.length}`,
-            disabled: !undone.length,
-            run: () => ctx.redo(undone)
-          }
-        ]
-      })
-    );
-  } else {
+  {
     const acc = groupTargets(rows, "accept");
     const rej = groupTargets(rows, "reject");
     parts.push(
@@ -607,33 +728,247 @@ function message(kick, title, body) {
     h2("p", { class: "sift-lead" }, body)
   );
 }
+var kb2 = (n) => `${(n / 1e3).toFixed(1)} KB`;
+var word2 = {
+  accept: "accepted",
+  edit: "edited",
+  reject: "rejected"
+};
+function diffView(base, after, certain) {
+  const hs = hunks(diffLines(base, after), 3);
+  if (!hs.length)
+    return h2("p", { class: "sift-why" }, "No change: the file stays as it is.");
+  return h2(
+    "div",
+    { class: "sift-diff" },
+    hs.flatMap((hk) => [
+      h2("div", { class: "sift-hunk" }, hk.header),
+      ...hk.lines.map((l) => {
+        const cert = l.kind === "-" && l.old !== void 0 && certain.has(l.old);
+        const cls = l.kind === "-" ? "del" : l.kind === "+" ? "add" : "ctx";
+        return h2(
+          "div",
+          {
+            class: `sift-dl ${cls}${cert ? " cert" : ""}`,
+            title: cert ? "a certain finding: the rewrite must fix it" : void 0
+          },
+          h2(
+            "span",
+            { class: "sift-n", "aria-hidden": "true" },
+            l.old ? String(l.old) : ""
+          ),
+          h2(
+            "span",
+            { class: "sift-n", "aria-hidden": "true" },
+            l.new ? String(l.new) : ""
+          ),
+          h2(
+            "span",
+            { class: "sift-sign", "aria-hidden": "true" },
+            cert ? "!" : l.kind
+          ),
+          h2("span", { class: "sift-t" }, l.text)
+        );
+      })
+    ])
+  );
+}
+function fileEdit(ctx, f) {
+  const d = f.decision?.action === "edit" ? f.decision : void 0;
+  const text = h2("textarea", {
+    class: "sift-field sift-text sift-whole",
+    "aria-label": "the whole recommended file",
+    spellcheck: false
+  });
+  text.value = d?.content ?? f.rec?.content ?? "";
+  text.rows = Math.min(40, Math.max(12, splitLines(text.value).length + 2));
+  const err = h2("p", { class: "sift-err", role: "alert" });
+  const save = () => {
+    err.textContent = ctx.saveEdit(f, text.value) ?? "";
+  };
+  queueMicrotask(() => text.focus());
+  return h2(
+    "form",
+    {
+      class: "sift-edit",
+      onsubmit: (e) => {
+        e.preventDefault();
+        save();
+      }
+    },
+    h2(
+      "div",
+      { class: "kit-label" },
+      "edit · the whole file as it will be written"
+    ),
+    text,
+    err,
+    buttons([
+      { label: "save edit (⌘↵)", fill: true, run: save },
+      { label: "cancel", run: () => ctx.cancelEdit() }
+    ])
+  );
+}
+function findingsTable(f, rows) {
+  const did = new Map((f.rec?.findings ?? []).map((a) => [a.row, a]));
+  return h2(
+    "table",
+    { class: "sift-rows sift-findings" },
+    h2(
+      "tr",
+      null,
+      h2("th", null, "line"),
+      h2("th", null, "finding"),
+      h2("th", null, "what the rewrite did")
+    ),
+    rows.map((r) => {
+      const a = did.get(r.id);
+      return h2(
+        "tr",
+        { class: r.certain ? "cert" : "" },
+        h2(
+          "td",
+          { class: "n" },
+          r.source.start ? String(r.source.start) : "file"
+        ),
+        h2(
+          "td",
+          { class: "p" },
+          h2(
+            "div",
+            { class: "sift-check" },
+            r.certain ? `${r.check} · certain` : r.check
+          ),
+          rowTitle(r)
+        ),
+        h2(
+          "td",
+          { class: "p" },
+          a ? [h2("span", { class: `sift-did ${a.did}` }, a.did), " ", a.how] : "—"
+        )
+      );
+    })
+  );
+}
+function fileDoc(ctx, f) {
+  const rows = ctx.rowsOf(f);
+  const certain = rows.filter((r) => r.certain).length;
+  const others = f.group.filter((k) => k !== f.key).map((k) => ctx.files.find((x) => x.key === k)).filter((x) => !!x);
+  const where2 = displayPath(f.source, ctx.home);
+  const ev = [
+    ["size", `${kb2(f.size)} → ${kb2(f.after)} · budget ${kb2(f.budget)}`],
+    [
+      "findings",
+      certain ? `${rows.length}, ${certain} certain` : String(rows.length)
+    ]
+  ];
+  if (others.length)
+    ev.push([
+      "linked",
+      others.map((o) => displayPath(o.source, ctx.home)).join(", ")
+    ]);
+  if (f.source.ref)
+    ev.push([
+      "read at",
+      f.commit ? `${f.source.ref} (${f.commit.slice(0, 10)})` : f.source.ref
+    ]);
+  const parts = [
+    h2("div", { class: "kit-kick" }, `${f.class} file · ${where2}`),
+    h2("h1", { class: "kit-h1" }, where2),
+    h2("p", { class: "sift-lead sift-summary" }, f.rec?.summary ?? ""),
+    facts(ev)
+  ];
+  const edited = f.decision?.action === "edit";
+  const after = edited ? f.decision?.content ?? "" : f.rec?.content ?? "";
+  const base = ctx.baseOf(f);
+  parts.push(
+    h2(
+      "div",
+      { class: "kit-label" },
+      edited ? "the change · your edit" : "the change"
+    )
+  );
+  if (base instanceof Error)
+    parts.push(
+      h2(
+        "p",
+        { class: "sift-err" },
+        `could not load the audited file: ${base.message}`
+      )
+    );
+  else if (base === void 0)
+    parts.push(h2("p", { class: "kit-muted sift-loading" }, "loading…"));
+  else parts.push(diffView(base, after, certainLines(rows)));
+  const a = f.decision?.action;
+  const bs = [
+    { label: "1 accept", fill: a === "accept", run: () => ctx.accept(f) },
+    { label: "2 edit", fill: a === "edit", run: () => ctx.startEdit(f) },
+    {
+      label: "3 reject",
+      fill: a === "reject",
+      danger: true,
+      run: () => ctx.reject(f)
+    }
+  ];
+  if (f.decision) bs.push({ label: "clear (u)", run: () => ctx.clear(f) });
+  const decide = buttons(bs);
+  decide.classList.add("sift-decide");
+  parts.push(decide);
+  const said = [];
+  if (f.decision)
+    said.push(
+      `your decision: ${word2[f.decision.action]}${f.decision.sent ? " · sent" : ""}`
+    );
+  if (others.length)
+    said.push(
+      `decided together with ${others.map((o) => displayPath(o.source, ctx.home)).join(", ")}: the recommendation moves text between them`
+    );
+  if (said.length)
+    parts.push(h2("p", { class: "sift-why" }, said.join(". ") + "."));
+  if (ctx.editing === f.key) parts.push(fileEdit(ctx, f));
+  parts.push(
+    h2("div", { class: "kit-label" }, "findings"),
+    findingsTable(f, rows)
+  );
+  const field = noteField({
+    value: ctx.noteOf(f),
+    placeholder: "why (n)",
+    onCommit: (v) => ctx.setNote(f, v)
+  });
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) field.blur();
+  });
+  parts.push(h2("div", { class: "kit-label" }, "note"), field);
+  return h2("div", { class: "kit-doc sift-file" }, ...parts);
+}
 
 // app.ts
 var qs = new URLSearchParams(location.search);
 var plural2 = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
-function frag(view, key) {
-  return `#/${view}${key ? `/${encodeURIComponent(key)}` : ""}`;
+function frag(key) {
+  return `#/open${key ? `/${encodeURIComponent(key)}` : ""}`;
 }
 function parseRoute(hash) {
-  const m = /^#\/(open|applied)(?:\/(.+))?$/.exec(hash);
-  if (!m) return { view: "open", key: null };
-  let key = null;
+  const m = /^#\/open(?:\/(.+))?$/.exec(hash);
+  if (!m?.[1]) return null;
   try {
-    key = m[2] ? decodeURIComponent(m[2]) : null;
+    return decodeURIComponent(m[1]);
   } catch {
-    key = null;
+    return null;
   }
-  return { view: m[1], key };
 }
 function signature(r) {
-  return `${r.round?.id ?? 0}|${r.sends}|${r.applies.map((a) => a.repo + a.state).join(",")}|` + r.rows.map((x) => {
+  return `${r.round?.id ?? 0}|${r.progress?.state}|${r.sends}|${r.applies.map((a) => a.repo + a.state).join(",")}|` + r.files.map((f) => {
+    const d = f.decision;
+    return `${f.key}:${f.fingerprint}:${d ? `${d.action}/${d.content?.length ?? 0}/${d.note ?? ""}/${d.sent ? 1 : 0}` : ""}`;
+  }).join(";") + "|" + r.rows.map((x) => {
     const d = x.decision;
     return `${x.id}:${x.verdict ?? ""}:${x.text ?? ""}:${d ? `${d.action}/${d.verdict ?? ""}/${d.text ?? ""}/${d.title ?? ""}/${d.note ?? ""}/${d.sent ? 1 : 0}` : ""}`;
   }).join(";");
 }
+var perItem = (r) => r?.round?.kind === "backlog" || r?.round?.kind === "intake";
 function boot() {
   let review = null;
-  let view = "open";
   let openKey = null;
   let editing = null;
   let filter = "";
@@ -652,11 +987,13 @@ function boot() {
   let loadTimer;
   let shown = [];
   const pending = /* @__PURE__ */ new Map();
+  const bases = /* @__PURE__ */ new Map();
   const gated = (input, init) => stale ? Promise.reject(new Error("sift serve restarted: this tab has stopped")) : fetch(input, init);
   const api = client(newApi({ fetch: gated, onStale: () => goStale() }));
   const home = () => review?.home ?? "";
-  const rowsOf = (v) => (review?.rows ?? []).filter((r) => inView(r, v));
-  const matches = (r) => {
+  const files = () => review?.files ?? [];
+  const recommending = () => !perItem(review) && review?.progress?.state === "recommending";
+  const matchesRow = (r) => {
     if (filter && r.check !== filter) return false;
     if (!search) return true;
     const q = search.toLowerCase();
@@ -668,17 +1005,25 @@ function boot() {
       r.check
     ].some((s) => s.toLowerCase().includes(q));
   };
-  const groups = () => groupsOf(
-    rowsOf(view).filter(matches),
-    isBacklog(review?.round ?? null, review?.rows ?? []),
-    home()
-  );
+  const items = () => {
+    if (perItem(review))
+      return entries(
+        groupsOf((review?.rows ?? []).filter(matchesRow), true, home()),
+        openKey
+      );
+    const q = search.toLowerCase();
+    return fileEntries(files(), home()).filter(
+      (e) => !q || displayPath(e.file.source, home()).toLowerCase().includes(q)
+    ).map((e) => ({ ...e, kind: "file" }));
+  };
   const rowById = (id) => review?.rows.find((r) => r.id === id);
+  const fileByKey = (k) => files().find((f) => f.key === k);
   const targetPrint = (d) => {
     const id = editTarget(d);
     return id ? rowById(id)?.fingerprint : void 0;
   };
   const current = () => shown.find((e) => e.key === openKey);
+  const baseKey = (f) => `${review?.round?.id ?? 0}:${f.key}:${f.base}`;
   const b = bar({
     brand: { name: "sift" },
     sections: [{ id: "review", label: "review", count: "" }],
@@ -694,9 +1039,10 @@ function boot() {
     if (!review.round) return "no round yet — run sift check";
     const r = review.round;
     const day = r.at ? r.at.slice(0, 10) : "";
-    const kind = r.kind === "on-demand" ? "audit" : `${r.kind} audit`;
+    const kind = perItem(review) ? r.kind : r.kind === "on-demand" ? "audit" : `${r.kind} audit`;
     const owner = r.owner ? ` · to ${r.owner}` : "";
-    return `${kind} · round ${r.id} · ${day}${owner}`;
+    const state = review.progress?.state ? ` · ${review.progress.state}` : "";
+    return `${kind} · round ${r.id} · ${day}${state}${owner}`;
   }
   function flash(text, tone = "muted") {
     clearTimeout(statusTimer);
@@ -711,44 +1057,52 @@ function boot() {
     );
   }
   function refreshBar() {
-    const p = progress(review?.rows ?? []);
-    b.setCount("review", review?.round ? `${p.decided}/${p.total}` : "");
-    const n = unsent(review?.rows ?? [], review?.sends ?? 0);
+    const p = perItem(review) ? progress(review?.rows ?? []) : filesProgress(files());
+    b.setCount(
+      "review",
+      review?.round && !recommending() ? `${p.decided}/${p.total}` : ""
+    );
+    const n = unsent(review?.rows ?? []) + unsentFiles(files());
     b.setPrimary(
-      n && review?.round ? { label: `Send ${n}`, run: () => void send() } : null
+      n && review?.round && !recommending() ? { label: `Send ${n}`, run: () => void send() } : null
     );
     if (!flashing) b.setStatus(baseStatus());
   }
   const read = h3("main", { class: "kit-read" });
   const l = list({
-    label: "findings",
+    label: "files",
     views: [],
     onChip(group2, id) {
-      if (group2 === "view") {
-        editing = null;
-        filter = "";
-        go(frag(id === "applied" ? "applied" : "open"));
-        return;
+      if (group2 === "filter") {
+        filter = filter === id ? "" : id;
+        render();
       }
-      filter = filter === id ? "" : id;
-      render();
     },
     search: {
-      placeholder: "search files and passages",
+      placeholder: "search files",
       onInput(text) {
         search = text.trim();
         render();
       }
     },
     row(e) {
+      if (e.kind === "file") {
+        const f = e.file;
+        return {
+          id: e.key,
+          key: displayPath(f.source, home()),
+          title: f.rec?.summary.split(/(?<=\.)\s/)[0] || `${plural2(f.rows.length, "finding")}`,
+          meta: fileMeta(f)
+        };
+      }
       if (e.kind === "group") {
         const g = e.group;
-        const done = view === "applied" ? g.rows.filter((r2) => r2.decision?.action !== "reject").length : g.rows.filter((r2) => r2.decision).length;
+        const done = g.rows.filter((r2) => r2.decision).length;
         return {
           id: e.key,
           key: g.kicker,
           title: g.title,
-          meta: done === g.rows.length && view === "open" ? "✓" : `${done}/${g.rows.length}`
+          meta: done === g.rows.length ? "✓" : `${done}/${g.rows.length}`
         };
       }
       const r = e.row;
@@ -763,27 +1117,17 @@ function boot() {
     openOnMove: true,
     onOpen(e) {
       if (syncing) return;
-      go(frag(view, e.key));
+      go(frag(e.key));
     }
   });
   function chips() {
-    const all = review?.rows ?? [];
-    l.setChips("view", [
-      {
-        id: "open",
-        label: "needs you",
-        count: all.filter((r) => inView(r, "open")).length,
-        on: view === "open"
-      },
-      {
-        id: "applied",
-        label: "applied",
-        count: all.filter((r) => inView(r, "applied")).length,
-        on: view === "applied"
-      }
-    ]);
+    l.setChips("view", []);
+    if (!perItem(review)) {
+      l.setChips("filter", []);
+      return;
+    }
     const counts = /* @__PURE__ */ new Map();
-    for (const r of rowsOf(view))
+    for (const r of review?.rows ?? [])
       counts.set(r.check, (counts.get(r.check) ?? 0) + 1);
     const fs = counts.size > 1 ? [...counts.entries()].map(([c, n]) => ({
       id: c,
@@ -798,14 +1142,12 @@ function boot() {
     shown.forEach((e, i) => {
       els[i]?.classList.toggle("sift-group", e.kind === "group");
       els[i]?.classList.toggle("sift-member", e.kind === "row" && e.member);
+      els[i]?.classList.toggle("sift-linked", e.kind === "file" && e.linked);
     });
   }
   const ctx = {
     get home() {
       return home();
-    },
-    get view() {
-      return view;
     },
     get editing() {
       return editing;
@@ -824,14 +1166,67 @@ function boot() {
     },
     saveEdit,
     clear,
-    undo,
-    redo,
-    open: (key) => go(frag(view, key)),
-    file: (r) => api.file(review?.round?.id ?? 0, r.id),
-    appliedIn: (r) => review?.applies.find(
-      (a) => a.repo === r.source.repo && (a.state === "pr" || a.state === "branch")
-    )
+    open: (key) => go(frag(key)),
+    file: (r) => api.file(review?.round?.id ?? 0, r.id)
   };
+  const fctx = {
+    get home() {
+      return home();
+    },
+    get editing() {
+      return editing;
+    },
+    get files() {
+      return files();
+    },
+    rowsOf: (f) => f.rows.map((id) => rowById(id)).filter((r) => !!r).sort((a, c) => (a.source.start ?? 0) - (c.source.start ?? 0)),
+    baseOf(f) {
+      const v = bases.get(baseKey(f));
+      if (v === void 0) loadBase(f);
+      return v;
+    },
+    noteOf: (f) => pending.get(`f:${f.key}`) ?? f.decision?.note ?? "",
+    setNote: setFileNote,
+    accept: (f) => putFile(f, { action: "accept" }),
+    reject: (f) => putFile(f, { action: "reject" }),
+    startEdit(f) {
+      editing = f.key;
+      render();
+    },
+    cancelEdit() {
+      editing = null;
+      render();
+    },
+    saveEdit(f, content) {
+      if (!content.trim())
+        return "the file is empty: reject it to leave it as it is";
+      const was = f.decision?.action === "edit" ? f.decision.content : f.rec?.content;
+      if (content === was)
+        return "nothing changed: accept the recommendation instead";
+      putFile(f, { action: "edit", content });
+      return null;
+    },
+    clear: clearFile
+  };
+  const loadingBases = /* @__PURE__ */ new Set();
+  function loadBase(f) {
+    const k = baseKey(f);
+    const round = review?.round?.id;
+    if (!round || loadingBases.has(k)) return;
+    loadingBases.add(k);
+    api.base(round, f.key).then(
+      (out) => {
+        bases.set(k, out.content);
+        loadingBases.delete(k);
+        render();
+      },
+      (err) => {
+        bases.set(k, err);
+        loadingBases.delete(k);
+        render();
+      }
+    );
+  }
   function render() {
     refreshBar();
     chips();
@@ -848,71 +1243,85 @@ function boot() {
       );
       return;
     }
-    const gs = groups();
-    shown = entries(gs, openKey);
+    if (recommending()) {
+      shown = [];
+      l.setItems([]);
+      const p = review.progress;
+      read.replaceChildren(
+        message(
+          "recommending",
+          `The agent is recommending: ${p.recommended} of ${plural2(p.files, "file")}`,
+          "Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in."
+        )
+      );
+      return;
+    }
+    shown = items();
     if (openKey && !shown.some((e2) => e2.key === openKey)) {
       openKey = null;
-      shown = entries(gs, null);
+      shown = items();
     }
     l.setItems(shown);
     decorate();
-    const vkey = `${view}/${openKey ?? ""}/${editing ?? ""}`;
+    const vkey = `${openKey ?? ""}/${editing ?? ""}`;
     const e = current();
     if (e) {
-      const idx = shown.indexOf(e);
       syncing = true;
-      l.open(idx);
+      l.open(shown.indexOf(e));
       syncing = false;
       decorate();
       const oldNote = read.querySelector(".kit-note");
       const oldEdit = read.querySelector(".sift-edit");
       const focus = document.activeElement;
-      const doc = e.kind === "group" ? groupDoc(ctx, e.group) : rowDoc(ctx, e.row);
-      if (oldNote && lastView === vkey && (focus === oldNote || e.kind === "row" && oldNote.value !== ctx.noteOf(e.row)))
+      const doc = e.kind === "file" ? fileDoc(fctx, e.file) : e.kind === "group" ? groupDoc(ctx, e.group) : rowDoc(ctx, e.row);
+      const noteNow = e.kind === "file" ? fctx.noteOf(e.file) : e.kind === "row" ? ctx.noteOf(e.row) : "";
+      if (oldNote && lastView === vkey && (focus === oldNote || oldNote.value !== noteNow))
         doc.querySelector(".kit-note")?.replaceWith(oldNote);
       if (oldEdit && lastView === vkey)
         doc.querySelector(".sift-edit")?.replaceWith(oldEdit);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
     } else {
-      read.replaceChildren(overview(gs));
+      read.replaceChildren(overview());
     }
     if (vkey !== lastView) read.scrollTop = 0;
     lastView = vkey;
   }
-  function overview(gs) {
-    const rows = gs.flatMap((g) => g.rows);
-    if (view === "applied")
+  function overview() {
+    if (perItem(review)) {
+      const p2 = progress(review?.rows ?? []);
+      if (!review?.rows.length)
+        return message(
+          "needs you",
+          "Nothing here",
+          "This round has nothing to decide."
+        );
       return message(
-        "applied",
-        rows.length ? `${plural2(rows.length, "certain fix")}` : "No certain fixes",
-        rows.length ? "sift applies these itself when the round is applied. Open one to read it, and undo any you want left as it is; it holds until you send." : "This round has nothing sift can fix on its own."
+        "needs you",
+        `${p2.total - p2.decided} of ${plural2(p2.total, "item")} to decide`,
+        "Open a group (↵) to decide it whole, or an item to decide it alone: 1 accept, 2 edit, 3 reject. Send returns your decisions to the agent."
       );
-    const p = progress(review?.rows ?? []);
-    if (!rows.length)
+    }
+    const p = filesProgress(files());
+    if (!p.total)
       return message(
         "needs you",
         "Nothing here",
-        filter || search ? "Nothing matches the filter." : "This round has nothing to judge."
+        search ? "Nothing matches the search." : "This round found nothing to change."
       );
-    const checks = [...new Set(rows.map((r) => r.check))].map((c) => checkCount(c, rows.filter((r) => r.check === c).length)).join(", ");
+    const linked = shown.filter((e) => e.kind === "file" && e.linked).length;
     return message(
       "needs you",
-      `${p.total - p.decided} of ${plural2(p.total, "row")} to decide, in ${plural2(gs.length, "group")}`,
-      `${checks}. Open a group (↵) to decide it whole, or a row to decide it alone: 1 accept, 2 edit, 3 reject. Send returns your decisions to the agent.`
+      `${p.total - p.decided} of ${plural2(p.total, "file")} to decide`,
+      `Each file has one recommendation covering all its findings. Open one (↵) to read its diff, then 1 accept, 2 edit (the whole file), 3 reject.${linked ? " Linked files move text between them and are decided together." : ""} Send returns your decisions to the agent.`
     );
   }
   function go(f) {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
-    const r = parseRoute(f);
-    if (r.view !== view) {
-      filter = "";
-      editing = null;
-    }
-    if (r.key !== openKey) editing = null;
-    view = r.view;
-    openKey = r.key;
+    const key = parseRoute(f);
+    if (key !== openKey) editing = null;
+    openKey = key;
     render();
   }
   function onHash() {
@@ -926,9 +1335,7 @@ function boot() {
       const r = await api.review();
       loadAttempt = 0;
       review = r;
-      const route = parseRoute(location.hash);
-      view = route.view;
-      openKey = route.key;
+      openKey = parseRoute(location.hash);
       lastFrag = location.hash;
       render();
       startLive(r.cursor);
@@ -1029,6 +1436,84 @@ function boot() {
       if (inflight === 0 && dirty) void reload();
     });
   }
+  function nextFile(key) {
+    const i = shown.findIndex((e) => e.key === key);
+    for (let j = i + 1; j < shown.length; j++) {
+      const e = shown[j];
+      if (e.kind === "file" && !e.file.decision) return e.key;
+    }
+    return shown[i + 1]?.key ?? key;
+  }
+  function putFile(f, d) {
+    const round = review?.round?.id;
+    if (!round) return;
+    const fs = files();
+    const prints = printsFor(fs, f.key);
+    const group2 = f.group.map((k) => fileByKey(k)).filter((x) => !!x);
+    const prev = group2.map((m) => ({ m, d: m.decision, after: m.after }));
+    const pendingNote = pending.get(`f:${f.key}`);
+    const note = pendingNote ?? f.decision?.note ?? "";
+    pending.delete(`f:${f.key}`);
+    const full = { ...d, note };
+    decideLocal(fs, f.key, full);
+    editing = null;
+    if (openKey === `f:${f.key}` && d.action !== "edit")
+      go(frag(nextFile(openKey)));
+    else render();
+    persist(
+      () => api.decideFile(round, f.key, full, prints),
+      () => {
+        for (const p of prev) {
+          p.m.decision = p.d;
+          p.m.after = p.after;
+        }
+        if (pendingNote !== void 0) pending.set(`f:${f.key}`, pendingNote);
+      }
+    );
+  }
+  function clearFile(f) {
+    const round = review?.round?.id;
+    if (!round || !f.decision) return;
+    const group2 = f.group.map((k) => fileByKey(k)).filter((x) => !!x);
+    const prev = group2.map((m) => ({ m, d: m.decision, after: m.after }));
+    decideLocal(files(), f.key, null);
+    render();
+    persist(
+      () => api.clearFile(round, f.key),
+      () => {
+        for (const p of prev) {
+          p.m.decision = p.d;
+          p.m.after = p.after;
+        }
+      }
+    );
+  }
+  function setFileNote(f, text) {
+    const d = f.decision;
+    if (!d) {
+      if (text) pending.set(`f:${f.key}`, text);
+      else pending.delete(`f:${f.key}`);
+      return;
+    }
+    if ((d.note ?? "") === text) return;
+    const round = review?.round?.id;
+    if (!round) return;
+    const old = d.note;
+    d.note = text;
+    d.sent = false;
+    persist(
+      () => api.decideFile(
+        round,
+        f.key,
+        { action: d.action, content: d.content, note: text },
+        printsFor(files(), f.key)
+      ),
+      () => {
+        d.note = old;
+      }
+    );
+    refreshBar();
+  }
   function put(rows, make) {
     const round = review?.round?.id;
     if (!round || !rows.length) return;
@@ -1053,7 +1538,7 @@ function boot() {
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
     editing = null;
-    if (single) go(frag(view, nextOpen(shown, openKey)));
+    if (single) go(frag(nextOpen(shown, openKey)));
     else render();
     persist(
       () => api.decide(round, body),
@@ -1093,33 +1578,6 @@ function boot() {
       }
     );
   }
-  function fixOp(rows, op) {
-    const round = review?.round?.id;
-    const live2 = rows.filter(
-      (r) => isFix(r) && r.decision?.action === "reject" === (op === "redo")
-    );
-    if (!round || !live2.length) return;
-    for (const r of live2) {
-      const prev = r.decision;
-      const note = pending.get(r.id) ?? "";
-      pending.delete(r.id);
-      r.decision = fixDecision(op, note);
-      persist(
-        () => op === "undo" ? api.undo(round, r, note) : api.redo(round, r, note),
-        () => {
-          if (prev) r.decision = prev;
-          else delete r.decision;
-        }
-      );
-    }
-    render();
-  }
-  function undo(rows) {
-    fixOp(rows, "undo");
-  }
-  function redo(rows) {
-    fixOp(rows, "redo");
-  }
   function setNote(shownRow, text) {
     const r = rowById(shownRow.id) ?? shownRow;
     const d = r.decision;
@@ -1134,7 +1592,7 @@ function boot() {
     d.note = text;
     d.sent = false;
     persist(
-      () => isFix(r) && d.action === "reject" ? api.undo(round, r, text) : isFix(r) && d.action === "accept" ? api.redo(round, r, text) : api.decide(round, [
+      () => api.decide(round, [
         {
           id: r.id,
           action: d.action,
@@ -1160,6 +1618,7 @@ function boot() {
       const { sent, to } = await api.send(round);
       if (review) {
         markSent(review.rows);
+        for (const f of review.files) if (f.decision) f.decision.sent = true;
         if (sent) review.sends++;
       }
       refreshBar();
@@ -1173,48 +1632,51 @@ function boot() {
   }
   const keys = createKeys({ list: l });
   const group = "decide";
-  const onRow = (fn, onGroup) => () => {
+  const on = (onFile, onRow, onGroup) => () => {
     const e = current();
     if (!e) return;
-    if (e.kind === "row") fn(e.row);
+    if (e.kind === "file") onFile(e.file);
+    else if (e.kind === "row") onRow(e.row);
     else onGroup?.(e.group.rows);
   };
   keys.register({
     keys: "1",
-    label: "accept (a group: every undecided row)",
+    label: "accept (a group: every undecided item)",
     group,
-    run: onRow(
-      (r) => !isFix(r) && decide([r], "accept"),
-      (rows) => view === "open" && decide(groupTargets(rows, "accept"), "accept")
+    run: on(
+      (f) => fctx.accept(f),
+      (r) => decide([r], "accept"),
+      (rows) => decide(groupTargets(rows, "accept"), "accept")
     )
   });
   keys.register({
     keys: "2",
-    label: "edit the proposal",
+    label: "edit (a file: the whole file)",
     group,
-    run: onRow(
-      (r) => !isFix(r) && ctx.startEdit(r),
+    run: on(
+      (f) => fctx.startEdit(f),
+      (r) => ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`)
     )
   });
   keys.register({
     keys: "3",
-    label: "reject (a group: every undecided row)",
+    label: "reject (a group: every undecided item)",
     group,
-    run: onRow(
-      (r) => !isFix(r) && decide([r], "reject"),
-      (rows) => view === "open" && decide(groupTargets(rows, "reject"), "reject")
+    run: on(
+      (f) => fctx.reject(f),
+      (r) => decide([r], "reject"),
+      (rows) => decide(groupTargets(rows, "reject"), "reject")
     )
   });
   keys.register({
     keys: "u",
-    label: "clear a decision; undo or redo a certain fix",
+    label: "clear a decision",
     group,
-    run: onRow((r) => {
-      if (!isFix(r)) clear(r);
-      else if (r.decision?.action === "reject") redo([r]);
-      else undo([r]);
-    })
+    run: on(
+      (f) => clearFile(f),
+      (r) => clear(r)
+    )
   });
   keys.register({
     keys: "n",
@@ -1240,8 +1702,7 @@ function boot() {
   app.append(b.el, l.el, read);
   b.setLive("polling");
   window.addEventListener("hashchange", onHash);
-  if (!/^#\/(open|applied)/.test(location.hash))
-    history.replaceState(null, "", frag("open"));
+  if (!/^#\/open/.test(location.hash)) history.replaceState(null, "", frag());
   void load();
 }
 boot();

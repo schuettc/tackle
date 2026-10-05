@@ -25,8 +25,18 @@ func commands(stdin io.Reader) []tools.Command {
 		},
 		{
 			Name: "rows", Group: "audit", Synopsis: "add [--round N] < rows.jsonl", Subcommands: []string{"add"},
-			Summary:  "merge the agent's proposals and intake rows (JSON lines on stdin) into the round",
+			Summary:  "merge the agent's backlog and intake rows (JSON lines on stdin) into their round",
 			NewFlags: rowsFlags, Run: runRows(stdin),
+		},
+		{
+			Name: "next", Group: "audit", Synopsis: "[--round N] [--json]",
+			Summary:  "the next file to recommend: its content at the audit, its findings and the guidance",
+			NewFlags: nextFlags, Run: runNext,
+		},
+		{
+			Name: "propose", Group: "audit", Synopsis: "[--round N] < recommendation.json",
+			Summary:  "store file recommendations (JSON on stdin), checked all or nothing",
+			NewFlags: proposeFlags, Run: runPropose(stdin),
 		},
 		{
 			Name: "serve", Group: "review", Synopsis: "[--no-open] [--port N] [--stop]",
@@ -40,17 +50,17 @@ func commands(stdin io.Reader) []tools.Command {
 		},
 		{
 			Name: "channel", Group: "review", Synopsis: "",
-			Summary:  "MCP server for an agent session: check, review, apply, status, and the user's decisions as events",
+			Summary:  "MCP server for an agent session: check, next, propose, review, apply, status, and Send as events",
 			NewFlags: channelFlags, Run: runChannel(stdin),
 		},
 		{
 			Name: "apply", Group: "review", Synopsis: "[--round N] [--dry-run] [--json]",
-			Summary:  "write the certain fixes and approved rows as a branch per repo; a pull request with gh",
+			Summary:  "write each approved file whole, a branch per repo; a pull request with gh",
 			NewFlags: applyFlags, Run: runApply,
 		},
 		{
 			Name: "reconcile", Group: "review", Synopsis: "[--round N] [--json]",
-			Summary:  "check each apply branch against its approved rows: missing, narrowed, extra hunks",
+			Summary:  "check each apply branch: every file as approved, nothing else changed",
 			NewFlags: reconcileFlags, Run: runReconcile,
 		},
 	}

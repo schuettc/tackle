@@ -1,615 +1,137 @@
 // Package reconcile is `sift reconcile`: it holds each repo's apply branch
-// against the rows approved for it and reports, by content, a row whose
-// change is missing, a row whose approved text is not in the diff verbatim
-// or whose passage is only partly removed (narrowed), and hunks no approved
-// row accounts for (extra). A writer or reviewer may have changed the branch
-// after apply; this is how the approved meaning is checked to have survived.
+// against the files approved for it. Each file apply wrote must be on the
+// branch exactly as approved (the recommendation the user accepted, or
+// their edit); a file the branch changes that no approval covers is extra.
+// A writer or reviewer may have changed the branch after apply; this is how
+// the approved content is checked to have survived.
 package reconcile
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/schuettc/tackle/internal/sift/apply"
 	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/store"
 )
 
-// Hunk is one hunk of a unified diff (-U0): the lines it removes and adds,
-// and the line in the new file where its added lines start.
-type Hunk struct {
-	Header   string
-	NewStart int
-	Removed  []string
-	Added    []string
-}
-
-// File is one file of a diff.
-type File struct {
-	Path    string
-	Deleted bool
-	Hunks   []Hunk
-}
-
-// Parse reads a unified diff made with a/ and b/ prefixes.
-func Parse(diff string) []File {
-	var out []File
-	var cur *File
-	var h *Hunk
-	sc := bufio.NewScanner(strings.NewReader(diff))
-	sc.Buffer(make([]byte, 0, 64<<10), 16<<20)
-	for sc.Scan() {
-		l := sc.Text()
-		switch {
-		case strings.HasPrefix(l, "diff --git "):
-			out = append(out, File{})
-			cur, h = &out[len(out)-1], nil
-			if _, b, ok := strings.Cut(l, " b/"); ok {
-				cur.Path = b
-			}
-		case cur == nil:
-		case strings.HasPrefix(l, "deleted file mode"):
-			cur.Deleted = true
-		case strings.HasPrefix(l, "--- "), strings.HasPrefix(l, "+++ ") && h == nil:
-			if p, ok := strings.CutPrefix(l, "+++ b/"); ok {
-				cur.Path = p
-			}
-		case strings.HasPrefix(l, "@@"):
-			cur.Hunks = append(cur.Hunks, Hunk{Header: hunkHeader(l), NewStart: newStart(l)})
-			h = &cur.Hunks[len(cur.Hunks)-1]
-		case h == nil:
-		case strings.HasPrefix(l, "-"):
-			h.Removed = append(h.Removed, l[1:])
-		case strings.HasPrefix(l, "+"):
-			h.Added = append(h.Added, l[1:])
-		}
-	}
-	return out
-}
-
-// hunkHeader keeps "@@ -a,b +c,d @@" without the function context.
-func hunkHeader(l string) string {
-	if i := strings.Index(l[2:], "@@"); i >= 0 {
-		return l[:i+4]
-	}
-	return l
-}
-
-// newStart is c in "@@ -a,b +c,d @@" (0 when it can't be read).
-func newStart(l string) int {
-	_, rest, ok := strings.Cut(l, " +")
-	if !ok {
-		return 0
-	}
-	n := 0
-	for _, c := range rest {
-		if c < '0' || c > '9' {
-			break
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n
-}
-
-// RowResult is one approved row against the diff.
-type RowResult struct {
-	Row     string `json:"row"`
-	Verdict string `json:"verdict"`
-	Where   string `json:"where"`
-	// State is ok, missing or narrowed.
+// FileResult is one approved file against the branch.
+type FileResult struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
+	// State is ok, changed (not the approved content) or missing (not on
+	// the branch).
 	State  string `json:"state"`
 	Detail string `json:"detail,omitempty"`
 }
 
-// Extra is a hunk (or its part) no approved row accounts for.
-type Extra struct {
-	File   string   `json:"file"`
-	Header string   `json:"header"`
-	Lines  []string `json:"lines"` // the unaccounted lines, "-" or "+" first
-}
-
 // Report is one repo's comparison.
 type Report struct {
-	Repo   string      `json:"repo"`
-	Branch string      `json:"branch"`
-	Base   string      `json:"base"`
-	Rows   []RowResult `json:"rows"`
-	Extra  []Extra     `json:"extra"`
+	Repo   string       `json:"repo"`
+	Branch string       `json:"branch"`
+	Base   string       `json:"base"`
+	Files  []FileResult `json:"files"`
+	// Extra are the paths the branch changes that no approved file covers.
+	Extra []string `json:"extra"`
 }
 
-// Problems counts missing and narrowed rows and extra hunks.
+// Problems counts changed and missing files and extra paths.
 func (r Report) Problems() int {
 	n := len(r.Extra)
-	for _, x := range r.Rows {
-		if x.State != "ok" {
+	for _, f := range r.Files {
+		if f.State != "ok" {
 			n++
 		}
 	}
 	return n
 }
 
-// block is approved text a row adds to a file: it must be verbatim and
-// contiguous in the file at the branch.
-type block struct {
-	path  string
-	lines []string // exactly as approved
-	// anchored: the text replaces the row's passage in path (a rewrite, or
-	// a merge's text over its target), so it owns the replacement span in
-	// the hunks that removed the passage.
-	anchored bool
-	// heading is a section heading apply adds with the text when the file
-	// lacks the section; the row owns it if it is there.
-	heading string
-}
-
-// expect is what an approved row should have done to the branch.
-type expect struct {
-	r         row.Row
-	verdict   string
-	removed   map[string][]string // path → passage lines (non-blank)
-	blocks    []block
-	wholeGone string // a file the row deletes whole
-	problems  []string
-}
-
-func nonBlank(lines []string) []string {
-	var out []string
-	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
-// textLines splits approved text into its lines, as apply writes them.
-func textLines(s string) []string {
-	if s == "" {
-		return nil
-	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
-}
-
-// expectations works out each approved row's change, with apply's own
-// selection (apply.Select: certain fixes and sent decisions only) and path
-// rules. Rows apply does not write (keep, issue, …) are left out.
-func expectations(rows []row.Row) []expect {
-	byID := map[string]row.Row{}
-	for _, r := range rows {
-		byID[r.ID] = r
-	}
-	sel := apply.Select(rows)
-	repos := make([]string, 0, len(sel.ByRepo))
-	for p := range sel.ByRepo {
-		repos = append(repos, p)
-	}
-	sort.Strings(repos)
-	var out []expect
-	for _, repo := range repos {
-		for _, p := range sel.ByRepo[repo] {
-			if e, ok := expectation(repo, p, byID); ok {
-				out = append(out, e)
-			}
-		}
-	}
-	return out
-}
-
-func expectation(repo string, p apply.Plan, byID map[string]row.Row) (expect, bool) {
-	r, c := p.Row, p.Change
-	e := expect{r: r, verdict: c.Verdict, removed: map[string][]string{}}
-	src, err := apply.RepoPath(r.Source.Path)
-	if err != nil {
-		e.problems = append(e.problems, err.Error())
-		return e, true
-	}
-	whole := r.Source.Start == 0 && r.Passage == ""
-	passage := nonBlank(textLines(r.Passage))
-	switch {
-	case c.Verdict == "delete":
-		if whole {
-			e.wholeGone = src
-		} else {
-			e.removed[src] = passage
-		}
-	case c.Verdict == "rewrite":
-		if !whole {
-			e.removed[src] = passage
-		}
-		e.blocks = append(e.blocks, block{path: src, lines: textLines(c.Text), anchored: !whole})
-	case c.Verdict == "move":
-		e.removed[src] = passage
-		dp, section := apply.ParseDestination(c.Destination)
-		dest, err := apply.Destination(repo, dp)
-		if err != nil {
-			e.problems = append(e.problems, err.Error())
-			return e, true
-		}
-		text := c.Text
-		if text == "" {
-			text = r.Passage
-		}
-		b := block{path: dest, lines: textLines(text)}
-		if section != "" {
-			b.heading = apply.SectionHeading(section)
-		}
-		e.blocks = append(e.blocks, b)
-	case strings.HasPrefix(c.Verdict, "merge:"):
-		e.removed[src] = passage
-		t, ok := byID[strings.TrimPrefix(c.Verdict, "merge:")]
-		if ok && c.Text != "" && t.Source.Path != "" {
-			tp, err := apply.RepoPath(t.Source.Path)
-			if err != nil {
-				e.problems = append(e.problems, err.Error())
-				return e, true
-			}
-			e.removed[tp] = append(e.removed[tp], nonBlank(textLines(t.Passage))...)
-			e.blocks = append(e.blocks, block{path: tp, lines: textLines(c.Text), anchored: true})
-		}
-	default:
-		return e, false
-	}
-	return e, true
-}
-
-// line is one removed or added line of the diff; each is consumed by at
-// most one row. at is an added line's line number in the new file.
-type line struct {
-	text string
-	used bool
-	at   int
-}
-
-type hunkLines struct {
-	header         string
-	removed, added []*line
-}
-
-// diffLines indexes a diff's non-blank lines by file and hunk. Blank lines
-// are layout: apply adds and removes them around a passage, and no row owns
-// them.
-func diffLines(diff []File) map[string][]*hunkLines {
-	out := map[string][]*hunkLines{}
-	for _, f := range diff {
-		for _, h := range f.Hunks {
-			hl := &hunkLines{header: h.Header}
-			for _, l := range nonBlank(h.Removed) {
-				hl.removed = append(hl.removed, &line{text: l})
-			}
-			for i, l := range h.Added {
-				if strings.TrimSpace(l) != "" {
-					hl.added = append(hl.added, &line{text: l, at: h.NewStart + i})
-				}
-			}
-			out[f.Path] = append(out[f.Path], hl)
-		}
-	}
-	return out
-}
-
-// Compare holds one repo's approved rows (as apply.Select chooses them)
-// against its branch: the diff's lines, each occurrence consumed by at most
-// one row, and read, the files at the branch. Approved text must come from
-// lines the diff adds: a run of one hunk's added lines, whose span in the
-// file at the branch is the text verbatim. Text that is in the file but
-// was not added (unchanged, elsewhere) does not count.
-func Compare(rows []row.Row, diff []File, read func(path string) (string, bool)) Report {
-	deleted := map[string]bool{}
-	for _, f := range diff {
-		if f.Deleted {
-			deleted[f.Path] = true
-		}
-	}
-	hunks := diffLines(diff)
-	exps := expectations(rows)
-	got := make([]int, len(exps))  // diff lines each row accounts for
-	want := make([]int, len(exps)) // lines each row should account for
-	anchors := make([]map[*hunkLines]bool, len(exps))
-
-	// 1. What each row removes: the first unused occurrence of each line.
-	for i := range exps {
-		e := &exps[i]
-		anchors[i] = map[*hunkLines]bool{}
-		if e.wholeGone != "" {
-			want[i]++
-			if deleted[e.wholeGone] {
-				got[i]++
-				for _, h := range hunks[e.wholeGone] {
-					for _, l := range h.removed {
-						l.used = true
-					}
-				}
-			} else {
-				e.problems = append(e.problems, e.wholeGone+" is not deleted")
-			}
-		}
-		paths := make([]string, 0, len(e.removed))
-		for p := range e.removed {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		for _, path := range paths {
-			n := 0
-			for _, w := range e.removed[path] {
-				if h := take(hunks[path], w); h != nil {
-					anchors[i][h] = true
-					n++
-				}
-			}
-			want[i] += len(e.removed[path])
-			got[i] += n
-			if n < len(e.removed[path]) {
-				e.problems = append(e.problems, fmt.Sprintf("%d of %d passage line(s) removed in %s", n, len(e.removed[path]), path))
-			}
-		}
-	}
-	// 2. Approved text found verbatim as a run of one hunk's added lines,
-	// before any row takes lines one by one.
-	found := make([][]bool, len(exps))
-	spans := make([][][2]int, len(exps)) // each found block's first and last line at the branch
-	for i := range exps {
-		e := &exps[i]
-		found[i] = make([]bool, len(e.blocks))
-		spans[i] = make([][2]int, len(e.blocks))
-		for j, b := range e.blocks {
-			nb := nonBlank(b.lines)
-			want[i] += len(nb)
-			if first, last, ok := takeRun(hunks[b.path], anchors[i], b.anchored, nb); ok {
-				found[i][j] = true
-				spans[i][j] = [2]int{first, last}
-				got[i] += len(nb)
-			}
-		}
-	}
-	// 3. The rest: lines taken one by one, then, for text that replaces a
-	// passage, the replacement span: as many of the passage's hunk's added
-	// lines as the approved text has, so a reworded line is narrowed once,
-	// not also extra. A heading apply adds is the row's when it is there.
-	for i := range exps {
-		e := &exps[i]
-		for j, b := range e.blocks {
-			if b.heading != "" {
-				take(addedOf(hunks[b.path]), b.heading)
-			}
-			if found[i][j] {
-				continue
-			}
-			nb := nonBlank(b.lines)
-			n := 0
-			for _, w := range nb {
-				if take(addedOf(hunks[b.path]), w) != nil {
-					n++
-				}
-			}
-			got[i] += n
-			if b.anchored {
-				for _, h := range hunks[b.path] {
-					if !anchors[i][h] {
-						continue
-					}
-					for _, l := range h.added {
-						if n < len(nb) && !l.used {
-							l.used = true
-							n++
-						}
-					}
-				}
-			}
-		}
-		// The approved text: added by the diff as one run, and verbatim
-		// at that run's place in the file at the branch.
-		for j, b := range e.blocks {
-			if !found[i][j] {
-				e.problems = append(e.problems, "the approved text is not verbatim among the lines the branch adds to "+b.path)
-				continue
-			}
-			content, ok := read(b.path)
-			if !ok || !spanIs(textLines(content), spans[i][j], trimBlank(b.lines)) {
-				e.problems = append(e.problems, "the approved text is not verbatim and contiguous in "+b.path+" at the branch")
-			}
-		}
-	}
-	rep := Report{Rows: []RowResult{}, Extra: []Extra{}}
-	for i, e := range exps {
-		res := RowResult{Row: e.r.ID, Verdict: e.verdict, Where: where(e.r), State: "ok"}
-		switch {
-		case got[i] == 0 && (want[i] > 0 || len(e.problems) > 0):
-			res.State, res.Detail = "missing", "nothing of this row's change is on the branch"
-			if len(e.problems) > 0 && want[i] == 0 {
-				res.Detail = strings.Join(e.problems, "; ")
-			}
-		case len(e.problems) > 0:
-			res.State, res.Detail = "narrowed", strings.Join(e.problems, "; ")
-		}
-		rep.Rows = append(rep.Rows, res)
-	}
-	for _, f := range diff {
-		for _, h := range hunks[f.Path] {
-			var loose []string
-			for _, l := range h.removed {
-				if !l.used {
-					loose = append(loose, "-"+l.text)
-				}
-			}
-			for _, l := range h.added {
-				if !l.used {
-					loose = append(loose, "+"+l.text)
-				}
-			}
-			if len(loose) > 0 {
-				rep.Extra = append(rep.Extra, Extra{File: f.Path, Header: h.header, Lines: loose})
-			}
-		}
-		delete(hunks, f.Path) // a path listed twice is reported once
-	}
-	sort.SliceStable(rep.Extra, func(i, j int) bool { return rep.Extra[i].File < rep.Extra[j].File })
-	return rep
-}
-
-// take marks the first unused removed line equal to w and returns its hunk
-// (nil: none).
-func take(hs []*hunkLines, w string) *hunkLines {
-	for _, h := range hs {
-		for _, l := range h.removed {
-			if !l.used && l.text == w {
-				l.used = true
-				return h
-			}
-		}
-	}
-	return nil
-}
-
-// addedOf presents hunks' added lines as removed ones, so take can consume
-// them.
-func addedOf(hs []*hunkLines) []*hunkLines {
-	out := make([]*hunkLines, len(hs))
-	for i, h := range hs {
-		out[i] = &hunkLines{header: h.header, removed: h.added}
-	}
-	return out
-}
-
-// takeRun marks the first run of unused added lines equal to want inside
-// one hunk, trying the row's anchor hunks first when anchored, and returns
-// the run's first and last line in the new file.
-func takeRun(hs []*hunkLines, anchors map[*hunkLines]bool, anchored bool, want []string) (int, int, bool) {
-	if len(want) == 0 {
-		return 0, 0, true
-	}
-	try := func(h *hunkLines) (int, int, bool) {
-		for i := 0; i+len(want) <= len(h.added); i++ {
-			ok := true
-			for j, w := range want {
-				if l := h.added[i+j]; l.used || l.text != w {
-					ok = false
-					break
-				}
-			}
-			if ok {
-				for j := range want {
-					h.added[i+j].used = true
-				}
-				return h.added[i].at, h.added[i+len(want)-1].at, true
-			}
-		}
-		return 0, 0, false
-	}
-	if anchored {
-		for _, h := range hs {
-			if !anchors[h] {
-				continue
-			}
-			if first, last, ok := try(h); ok {
-				return first, last, true
-			}
-		}
-	}
-	for _, h := range hs {
-		if first, last, ok := try(h); ok {
-			return first, last, true
-		}
-	}
-	return 0, 0, false
-}
-
-// trimBlank drops leading and trailing blank lines.
-func trimBlank(lines []string) []string {
-	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
-		lines = lines[1:]
-	}
-	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
-		lines = lines[:len(lines)-1]
-	}
-	return lines
-}
-
-// spanIs reports whether have's lines span[0]..span[1] (1-based) are want
-// exactly. An empty want has no span and is there.
-func spanIs(have []string, span [2]int, want []string) bool {
-	if len(want) == 0 {
-		return true
-	}
-	first, last := span[0], span[1]
-	if first < 1 || last > len(have) || last-first+1 != len(want) {
-		return false
-	}
-	for i, w := range want {
-		if have[first-1+i] != w {
-			return false
-		}
-	}
-	return true
-}
-
-func where(r row.Row) string {
-	if r.Source.Start > 0 {
-		return fmt.Sprintf("%s:%d", r.Source.Path, r.Source.Start)
-	}
-	return r.Source.Path
-}
-
-// Diff is the branch's diff against its merge base with base, as Parse reads
-// it: no external diff driver, no renames, a/ and b/ prefixes whatever the
-// user's config says.
-func Diff(ctx context.Context, repo, base, branch string) (string, error) {
-	cmd := discover.Git(ctx, repo, "-c", "core.quotepath=off", "diff", "--no-ext-diff", "--no-color", "--no-renames", "-U0",
-		"--src-prefix=a/", "--dst-prefix=b/", base+"..."+branch)
-	var errb bytes.Buffer
-	cmd.Stderr = &errb
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git diff %s...%s: %w: %s", base, branch, err, strings.TrimSpace(errb.String()))
-	}
-	return string(out), nil
-}
-
 // Run reconciles every branch apply wrote for the round (0: the latest).
 func Run(ctx context.Context, st *store.Store, round int64) (int64, []Report, error) {
-	var rows []row.Row
-	var err error
 	if round == 0 {
-		var rd store.Round
-		rd, rows, err = st.LatestRound(ctx)
-		round = rd.ID
-	} else {
-		_, rows, err = st.Round(ctx, round)
+		id, _, err := st.Latest(ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		round = id
 	}
+	if _, _, err := st.Round(ctx, round); err != nil {
+		return round, nil, err
+	}
+	items, err := st.Files(ctx, round)
 	if err != nil {
 		return round, nil, err
+	}
+	approved := map[string]apply.Approved{}
+	for _, a := range apply.Select(items).Files {
+		approved[a.Key] = a
 	}
 	applies, err := st.Applies(ctx, round)
 	if err != nil {
 		return round, nil, err
 	}
-	var out []Report
+	out := []Report{}
 	for _, a := range applies {
 		if !a.Succeeded() {
 			continue
 		}
-		var mine []row.Row
-		for _, r := range rows {
-			if r.Source.Repo == a.Repo {
-				mine = append(mine, r)
+		rep := Report{Repo: a.Repo, Branch: a.Branch, Base: a.Base, Files: []FileResult{}, Extra: []string{}}
+		var paths []string
+		for _, key := range a.Rows {
+			f, ok := approved[key]
+			if !ok {
+				rep.Files = append(rep.Files, FileResult{Key: key, State: "changed", Detail: "apply wrote it, but it is no longer approved and sent"})
+				continue
+			}
+			paths = append(paths, f.Source.Path)
+			rep.Files = append(rep.Files, compare(ctx, a.Repo, a.Branch, f))
+		}
+		changed, err := discover.Git(ctx, a.Repo, "-c", "core.quotepath=off", "diff", "--no-ext-diff", "--no-renames", "--name-only", "-z",
+			a.Base+"..."+a.Branch).Output()
+		if err != nil {
+			return round, out, fmt.Errorf("%s: git diff %s...%s: %w", a.Repo, a.Base, a.Branch, err)
+		}
+		for _, p := range strings.Split(string(changed), "\x00") {
+			if p != "" && !slices.Contains(paths, p) {
+				rep.Extra = append(rep.Extra, p)
 			}
 		}
-		d, err := Diff(ctx, a.Repo, a.Base, a.Branch)
-		if err != nil {
-			return round, out, err
-		}
-		branch := a.Branch
-		read := func(path string) (string, bool) {
-			out, err := discover.Git(ctx, a.Repo, "show", branch+":"+path).Output()
-			return string(out), err == nil
-		}
-		rep := Compare(mine, Parse(d), read)
-		rep.Repo, rep.Branch, rep.Base = a.Repo, a.Branch, a.Base
 		out = append(out, rep)
 	}
 	return round, out, nil
+}
+
+// compare is one file at the branch against its approved content.
+func compare(ctx context.Context, repo, branch string, f apply.Approved) FileResult {
+	r := FileResult{Key: f.Key, Path: f.Source.Path, State: "ok"}
+	got, err := discover.Git(ctx, repo, "show", branch+":"+f.Source.Path).Output()
+	if err != nil {
+		r.State, r.Detail = "missing", "not on the branch"
+		return r
+	}
+	if string(got) == f.Content {
+		return r
+	}
+	r.State, r.Detail = "changed", firstDiff(f.Content, string(got))
+	return r
+}
+
+// firstDiff says where two contents first differ, by line.
+func firstDiff(want, got string) string {
+	w, g := strings.Split(want, "\n"), strings.Split(got, "\n")
+	for i := 0; i < max(len(w), len(g)); i++ {
+		var a, b string
+		if i < len(w) {
+			a = w[i]
+		}
+		if i < len(g) {
+			b = g[i]
+		}
+		if a != b || i >= len(w) || i >= len(g) {
+			return fmt.Sprintf("line %d is %q on the branch, approved %q", i+1, b, a)
+		}
+	}
+	return "the line endings differ"
 }

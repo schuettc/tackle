@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/apply"
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/serve"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
@@ -184,7 +185,8 @@ func TestWaitBadTimeoutIsUsage(t *testing.T) {
 
 // ---- apply and reconcile ------------------------------------------------------
 
-// applyRig is a published repo with a round of one accepted rewrite.
+// applyRig is a published repo with a round of one file, its
+// recommendation accepted and sent.
 func applyRig(t *testing.T) string {
 	t.Helper()
 	siftEnv(t)
@@ -195,13 +197,20 @@ func applyRig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	r := row.Row{ID: "neg", Check: "negative-rule", Passage: "- Never push to main.", Verdict: "rewrite", Text: "- Push to a branch.",
-		Source: row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "origin/main", Path: "CLAUDE.md", Start: 3, End: 3}}
-	id, err := s.RecordRound(context.Background(), store.Round{Kind: "on-demand"}, []row.Row{r})
+	ctx := context.Background()
+	f := rec.NewFile(row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "origin/main", Path: "CLAUDE.md"}, "repo", 6000, "# App\n\n- Never push to main.\n")
+	f.Commit, f.Rows = st.Git(t, repo, "rev-parse", "origin/main"), []string{"neg"}
+	r := row.Row{ID: "neg", Check: "negative-rule", Passage: "- Never push to main.", Source: row.Source{File: f.Source.File, Start: 3, End: 3}}
+	id, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, []row.Row{r}, []rec.File{f})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Decide(context.Background(), id, "neg", row.Decision{Action: "accept"}); err != nil {
+	if _, err := s.Propose(ctx, id, []rec.Rec{{File: f.Key, Base: f.Base, Content: "# App\n\n- Push to a branch.\n", Summary: "Guidance.",
+		Findings: []rec.Account{{Row: "neg", Did: "fixed", How: "guidance"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	items, _ := s.Files(ctx, id)
+	if err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: items[0].Fingerprint}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Send(context.Background(), id, ""); err != nil {
@@ -213,14 +222,14 @@ func applyRig(t *testing.T) string {
 func TestApplyWithoutGhLeavesTheBranch(t *testing.T) {
 	repo := applyRig(t)
 	code, out, errw := run(t, "", "apply")
-	if code != 0 || !strings.Contains(out, "branch sift/round-1 (1 applied, 0 skipped)") || !strings.Contains(out, "no gh") {
+	if code != 0 || !strings.Contains(out, "branch sift/round-1 (1 applied, 0 skipped)") || !strings.Contains(out, "no gh") || !strings.Contains(out, "written  accept") {
 		t.Fatalf("code %d out %q err %q", code, out, errw)
 	}
 	if got := st.Git(t, repo, "show", "sift/round-1:CLAUDE.md"); got != "# App\n\n- Push to a branch." {
 		t.Errorf("branch content %q", got)
 	}
 	code, out, _ = run(t, "", "reconcile")
-	if code != 0 || !strings.Contains(out, "1 row(s), 0 problem(s)") {
+	if code != 0 || !strings.Contains(out, "1 file(s), 0 problem(s)") {
 		t.Fatalf("reconcile %d %q", code, out)
 	}
 	// Again: the branch exists, so the repo is held (exit 1).

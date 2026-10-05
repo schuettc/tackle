@@ -37,14 +37,9 @@ type Row struct {
 	Text string `json:"text,omitempty"`
 	// Reason is why the agent proposes the verdict, shown with the proposal.
 	Reason string `json:"reason,omitempty"`
-	// Certain is true only for findings that cannot be wrong; sift applies
-	// those itself.
-	Certain bool `json:"certain"`
-	// Fix is a certain row's own fix, the check's verdict (delete when it had
-	// none), set when the round is recorded. Only this fix applies with no
-	// decision: an agent's proposal that replaces it makes the row a
-	// judgment (see FixOnly).
-	Fix      string    `json:"fix,omitempty"`
+	// Certain is true only for findings that cannot be wrong: a file's
+	// recommendation must fix them.
+	Certain  bool      `json:"certain"`
 	Decision *Decision `json:"decision,omitempty"`
 	// Fingerprint is Print's hash of the proposal as the store holds it
 	// now, filled when a round is read (never stored). The page sends it
@@ -130,8 +125,8 @@ func MergeTarget(verdict string) string {
 }
 
 // Print hashes every field that says what applying r does: the verdict,
-// title, destination, text, the whole source, the passage, the certain fix,
-// and, for a merge, its target's source and passage (target is that row;
+// title, destination, text, the whole source, the passage, whether it is
+// certain, and, for a merge, its target's source and passage (target is that row;
 // nil for any other verdict or a target not in the round). A decision
 // answers one print: when it changes, the decision answered another row.
 func (r Row) Print(target *Row) string {
@@ -142,10 +137,10 @@ func (r Row) Print(target *Row) string {
 	v := struct {
 		Verdict, Title, Destination, Text string
 		Source                            Source
-		Passage, Fix                      string
+		Passage                           string
 		Certain                           bool
 		Target                            *about
-	}{r.Verdict, r.Title, r.Destination, r.Text, r.Source, r.Passage, r.Fix, r.Certain, nil}
+	}{r.Verdict, r.Title, r.Destination, r.Text, r.Source, r.Passage, r.Certain, nil}
 	if target != nil {
 		v.Target = &about{target.Source, target.Passage}
 	}
@@ -154,33 +149,10 @@ func (r Row) Print(target *Row) string {
 	return hex.EncodeToString(h[:8])
 }
 
-// CertainFix is a certain row's own fix: Fix, or delete when unset.
-func (r Row) CertainFix() string {
-	if r.Fix != "" {
-		return r.Fix
-	}
-	return "delete"
-}
-
-// FixOnly reports whether r is a certain row still carrying only its own
-// fix: no proposal, or one that repeats the fix. Such a row is applied with
-// no decision unless undone; any other row is a judgment.
-func (r Row) FixOnly() bool {
-	return r.Certain && (r.Verdict == "" || r.Verdict == r.CertainFix()) && r.Title == "" && r.Destination == "" && r.Text == ""
-}
-
 // Effective is the change the user approved. ok is false when there is none:
-// the row is undecided, rejected, or accepted with no verdict. A certain row
-// carrying only its own fix (FixOnly) needs no decision: the fix applies
-// unless it was undone (a reject); a redo is an accept of the fix.
+// the row is undecided, rejected, or accepted with no verdict.
 func (r Row) Effective() (Change, bool) {
 	d := r.Decision
-	if r.FixOnly() && (d == nil || d.Action != "edit") {
-		if d != nil && d.Action == "reject" {
-			return Change{}, false
-		}
-		return Change{Verdict: r.CertainFix()}, true
-	}
 	c := Change{Verdict: r.Verdict, Title: r.Title, Destination: r.Destination, Text: r.Text}
 	switch {
 	case d == nil, d.Action == "reject":

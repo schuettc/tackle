@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schuettc/tackle/internal/sift/content"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/store"
 )
@@ -96,13 +97,13 @@ func TestFileParentSwappedBeforeTheOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	beforeOpen = func() {
+	content.BeforeOpen = func() {
 		if err := os.Rename(filepath.Join(dir, "one"), filepath.Join(dir, "one.moved")); err != nil {
 			t.Error(err)
 		}
 		retarget(t, filepath.Join(dir, "one"), filepath.Join(dir, "two"))
 	}
-	t.Cleanup(func() { beforeOpen = nil })
+	t.Cleanup(func() { content.BeforeOpen = nil })
 	w := f.do("GET", fmt.Sprintf("/api/file?round=%d&id=f", id), "")
 	if w.Code == 200 || strings.Contains(w.Body.String(), "secret") {
 		t.Fatalf("%d %s", w.Code, w.Body)

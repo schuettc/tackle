@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/serve"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
@@ -236,10 +235,12 @@ func (c *client) toolJSON(name string, args any, out any) {
 // The tool schemas are the contract with every agent: pin them.
 func TestToolSchemasArePinned(t *testing.T) {
 	want := map[string]string{
-		"sift_check":  `{"type":"object","properties":{}}`,
-		"sift_review": `{"type":"object","properties":{}}`,
-		"sift_apply":  `{"type":"object","properties":{"round":{"type":"integer","description":"the round to apply (default: the latest)"},"dry_run":{"type":"boolean","description":"work out what would change and touch nothing"}}}`,
-		"sift_status": `{"type":"object","properties":{}}`,
+		"sift_check":   `{"type":"object","properties":{}}`,
+		"sift_next":    `{"type":"object","properties":{"round":{"type":"integer","description":"the round (default: the latest)"}}}`,
+		"sift_propose": wantPropose,
+		"sift_review":  `{"type":"object","properties":{}}`,
+		"sift_apply":   `{"type":"object","properties":{"round":{"type":"integer","description":"the round to apply (default: the latest)"},"dry_run":{"type":"boolean","description":"work out what would change and touch nothing"}}}`,
+		"sift_status":  `{"type":"object","properties":{}}`,
 	}
 	var names []string
 	for _, tl := range Tools() {
@@ -251,10 +252,20 @@ func TestToolSchemasArePinned(t *testing.T) {
 			t.Errorf("%s: invalid", tl.Name)
 		}
 	}
-	if strings.Join(names, ",") != "sift_check,sift_review,sift_apply,sift_status" {
+	if strings.Join(names, ",") != "sift_check,sift_next,sift_propose,sift_review,sift_apply,sift_status" {
 		t.Fatalf("tools %v", names)
 	}
 }
+
+const wantPropose = `{"type":"object","properties":{"round":{"type":"integer","description":"the round (default: the latest)"},` +
+	`"recommendations":{"type":"array","description":"one per file; linked files in the same call","items":{"type":"object","properties":{` +
+	`"file":{"type":"string","description":"the file's key from sift_next, or its path"},` +
+	`"base":{"type":"string","description":"the base hash sift_next gave"},` +
+	`"content":{"type":"string","description":"the whole recommended file"},` +
+	`"findings":{"type":"array","items":{"type":"object","properties":{"row":{"type":"string"},"did":{"type":"string","enum":["fixed","kept"]},"how":{"type":"string","description":"fixed: how, in one line; kept: why, in one line"}},"required":["row","did","how"]}},` +
+	`"links":{"type":"array","items":{"type":"string"},"description":"the files this one moves text to or from; each names the other"},` +
+	`"summary":{"type":"string","description":"two or three sentences on what changed and why"}},` +
+	`"required":["file","base","content","findings","summary"]}}},"required":["recommendations"]}`
 
 // The guidance is written as guidance: no "never" or "don't".
 func TestInstructionsAreGuidance(t *testing.T) {
@@ -274,23 +285,54 @@ func TestInitializeListsTheTools(t *testing.T) {
 		Tools []struct{ Name string } `json:"tools"`
 	}
 	_ = json.Unmarshal(m.Result, &r)
-	if len(r.Tools) != 4 {
+	if len(r.Tools) != 6 {
 		t.Fatalf("%s", m.Result)
 	}
 }
 
-func TestCheckReviewSendApply(t *testing.T) {
+func TestCheckRecommendReviewSendApply(t *testing.T) {
 	e := newEnv(t)
 	c := e.connect("s1")
 	var chk struct {
 		Round   int64          `json:"round"`
 		Rows    int            `json:"rows"`
-		ToJudge int            `json:"to_judge"`
+		Files   int            `json:"files_to_recommend"`
 		Summary map[string]int `json:"summary"`
+		Next    string         `json:"next"`
 	}
 	c.toolJSON("sift_check", map[string]any{}, &chk)
-	if chk.Round == 0 || chk.Summary["negative-rule"] != 1 || chk.Summary["misplaced"] != 1 || chk.ToJudge != chk.Rows {
+	if chk.Round == 0 || chk.Summary["negative-rule"] != 1 || chk.Summary["misplaced"] != 1 || chk.Files != 2 || !strings.Contains(chk.Next, "sift_next") {
 		t.Fatalf("check %+v", chk)
+	}
+
+	// The page waits for the recommendations.
+	if text, isErr := c.tool("sift_review", map[string]any{}); !isErr || !strings.Contains(text, "0 of 2") || !strings.Contains(text, "sift_next") {
+		t.Fatalf("review while recommending: %v %s", isErr, text)
+	}
+	for range 2 {
+		var n struct {
+			File, Base, Path, Guidance string
+			Findings                   []struct{ Row string }
+		}
+		c.toolJSON("sift_next", map[string]any{}, &n)
+		if n.File == "" || n.Guidance == "" || len(n.Findings) != 1 {
+			t.Fatalf("next %+v", n)
+		}
+		var res struct{ Stored, Left int }
+		c.toolJSON("sift_propose", map[string]any{"recommendations": []map[string]any{{"file": n.File, "base": n.Base,
+			"content": "# Rewritten\n\n- Push to a branch.\n", "summary": "Guidance.",
+			"findings": []map[string]string{{"row": n.Findings[0].Row, "did": "fixed", "how": "guidance"}}}}}, &res)
+		if res.Stored != 1 {
+			t.Fatalf("propose %+v", res)
+		}
+	}
+	if text, isErr := c.tool("sift_propose", map[string]any{"recommendations": []map[string]any{{"file": "nope"}}}); !isErr || !strings.Contains(text, "not in the round") {
+		t.Fatalf("a bad recommendation: %v %s", isErr, text)
+	}
+	var done struct{ Done bool }
+	c.toolJSON("sift_next", map[string]any{}, &done)
+	if !done.Done {
+		t.Fatal("not done")
 	}
 
 	var rv struct {
@@ -299,7 +341,7 @@ func TestCheckReviewSendApply(t *testing.T) {
 		Opened bool   `json:"opened"`
 	}
 	c.toolJSON("sift_review", map[string]any{}, &rv)
-	if rv.Open != chk.Rows || !rv.Opened || !strings.Contains(rv.URL, "t=") {
+	if rv.Open != 2 || !rv.Opened || !strings.Contains(rv.URL, "t=") {
 		t.Fatalf("review %+v", rv)
 	}
 	select {
@@ -312,31 +354,21 @@ func TestCheckReviewSendApply(t *testing.T) {
 	}
 	var stat map[string]any
 	c.toolJSON("sift_status", map[string]any{}, &stat)
-	if stat["owner"] != "claude · s1" || stat["open"] != float64(chk.Rows) {
+	if stat["owner"] != "claude · s1" || stat["open"] != float64(2) || stat["state"] != "ready" {
 		t.Fatalf("status %v", stat)
 	}
 
-	// The agent proposes, the user decides and sends; the event reaches
-	// this session.
-	_, rows, _ := e.st.LatestRound(context.Background())
-	var neg string
-	for _, r := range rows {
-		if r.Check == "negative-rule" {
-			neg = r.ID
+	// The user decides and sends; the event reaches this session.
+	items, _ := e.st.Files(context.Background(), chk.Round)
+	for _, it := range items {
+		action := "reject"
+		if it.Source.Repo != "" {
+			action = "accept"
 		}
-	}
-	if _, err := e.st.AddRows(context.Background(), chk.Round, rowsIn(neg)); err != nil {
-		t.Fatal(err)
-	}
-	_, rows, _ = e.st.LatestRound(context.Background())
-	var print string
-	for _, r := range rows {
-		if r.ID == neg {
-			print = r.Fingerprint
+		body := fmt.Sprintf(`{"round":%d,"file":%q,"action":%q,"note":"yes","prints":{%q:%q}}`, chk.Round, it.Key, action, it.Key, it.Fingerprint)
+		if code, out := e.api("PUT", "/api/files", body); code != 204 {
+			t.Fatalf("decide %d %s", code, out)
 		}
-	}
-	if code, body := e.api("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":%q,"action":"accept","note":"yes","fingerprint":%q}]}`, chk.Round, neg, print)); code != 204 {
-		t.Fatalf("decide %d %s", code, body)
 	}
 	if code, body := e.api("POST", "/api/send", fmt.Sprintf(`{"round":%d}`, chk.Round)); code != 200 || !strings.Contains(body, `"to":"claude · s1"`) {
 		t.Fatalf("send %d %s", code, body)
@@ -379,8 +411,4 @@ func TestCheckWithoutConfigSaysWhatToRun(t *testing.T) {
 	if !isErr || !strings.Contains(text, "sift init") {
 		t.Fatalf("%v %s", isErr, text)
 	}
-}
-
-func rowsIn(id string) []row.Row {
-	return []row.Row{{ID: id, Verdict: "rewrite", Text: "- Push to a branch and open a pull request.", Reason: "guidance"}}
 }

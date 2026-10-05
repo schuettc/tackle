@@ -1,7 +1,7 @@
 package apply
 
-// Confinement: every path apply reads or writes (a row's source, a merge
-// target, a move's destination) is checked by RepoPath, and every write goes
+// Confinement: every path apply writes (a file's repo path) is checked by
+// RepoPath, and every write goes
 // through an os.Root on the worktree, one directory at a time: each
 // component is Lstat'd and refused when it is a symlink, then opened as a
 // root of its own and checked to be the directory that was Lstat'd. The
@@ -193,30 +193,6 @@ func createTemp(dir *os.Root, leaf string) (string, *os.File, error) {
 		return name, f, err
 	}
 	return "", nil, fmt.Errorf("no free temporary name beside %s", leaf)
-}
-
-// removeFile removes rel (checked by RepoPath) under root; gone already is
-// fine. Unlinking never follows a symlink, and a symlink leaf is refused.
-func removeFile(root *os.Root, rel string) error {
-	clean, err := RepoPath(rel)
-	if err != nil {
-		return err
-	}
-	dir, leaf, done, err := parentDir(root, clean, false)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer done()
-	if fi, err := leafInfo(dir, leaf, clean); err != nil || fi == nil {
-		return err
-	}
-	if err := dir.Remove(leaf); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return nil
 }
 
 // ReadNoLink reads up to n bytes of rel under root by the same walk: no

@@ -21,6 +21,7 @@ func TestBuiltinsArePinned(t *testing.T) {
 			Global:      []string{"CLAUDE.md"},
 			RepoFiles:   []string{"CLAUDE.md"},
 			Skills:      []string{"skills"},
+			Vendor:      []string{"skills/synced"},
 			Transcripts: []string{"projects/*/*.jsonl"},
 			Memory:      "projects/*/memory",
 		},

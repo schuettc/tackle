@@ -33,6 +33,17 @@ type Config struct {
 	Negative Negative  `toml:"negative"`
 	Stale    Stale     `toml:"stale"`
 	Retired  []Retired `toml:"retired,omitempty"`
+	// Include brings in what is not the user's by default: forks and
+	// vendor-managed skill directories.
+	Include Include `toml:"include"`
+}
+
+// Include turns on files sift leaves out by default, because they are
+// another project's to change: forks (a repo with an upstream remote) and
+// the skill directories a profile names as vendor-managed.
+type Include struct {
+	Forks  bool `toml:"forks"`
+	Vendor bool `toml:"vendor"`
 }
 
 // Root is a directory to audit: one repo, or a directory holding repos at

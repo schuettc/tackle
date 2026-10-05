@@ -1,0 +1,322 @@
+package store
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/schuettc/tackle/internal/sift/rec"
+	"github.com/schuettc/tackle/internal/sift/row"
+)
+
+// audit records an audit round of three files: g (two findings, one
+// certain), m (one) and q (one), and returns the round and the files by
+// name.
+func audit(t *testing.T, s *Store) (int64, map[string]rec.File) {
+	t.Helper()
+	g := rec.NewFile(row.Source{File: "/h/AGENTS.md"}, "global", 8000, "# G\n\n- Never do x.\n- See `gone.md`.\n")
+	m := rec.NewFile(row.Source{File: "/w/m/AGENTS.md", Repo: "/w/m", Ref: "origin/main", Path: "AGENTS.md"}, "repo", 6000, "# M\n\n- Don't skip z.\n")
+	q := rec.NewFile(row.Source{File: "/w/q/AGENTS.md", Repo: "/w/q", Ref: "HEAD", Path: "AGENTS.md"}, "repo", 6000, "# Q\n\n- No y.\n")
+	rows := []row.Row{
+		{ID: "neg", Check: "negative-rule", Source: g.Source},
+		{ID: "dead", Check: "dead-path", Source: g.Source, Certain: true},
+		{ID: "neg2", Check: "negative-rule", Source: m.Source},
+		{ID: "neg3", Check: "negative-rule", Source: q.Source},
+	}
+	g.Rows, m.Rows, q.Rows = []string{"neg", "dead"}, []string{"neg2"}, []string{"neg3"}
+	id, err := s.RecordAudit(ctx, Round{Kind: "on-demand"}, rows, []rec.File{g, m, q})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, map[string]rec.File{"g": g, "m": m, "q": q}
+}
+
+func recG(f map[string]rec.File, links ...string) rec.Rec {
+	return rec.Rec{File: f["g"].Key, Base: f["g"].Base, Content: "# G\n\n- Do x safely.\n",
+		Findings: []rec.Account{{Row: "neg", Did: "fixed", How: "guidance"}, {Row: "dead", Did: "fixed", How: "removed"}},
+		Links:    links, Summary: "Guidance, and a dead path gone."}
+}
+
+func recM(f map[string]rec.File, links ...string) rec.Rec {
+	return rec.Rec{File: f["m"].Key, Base: f["m"].Base, Content: "# M\n\n- Run z.\n- Do x safely here.\n",
+		Findings: []rec.Account{{Row: "neg2", Did: "fixed", How: "guidance"}}, Links: links, Summary: "Guidance."}
+}
+
+func recQ(f map[string]rec.File) rec.Rec {
+	return rec.Rec{File: f["q"].Key, Base: f["q"].Base, Content: "# Q\n\n- Use z instead of y.\n",
+		Findings: []rec.Account{{Row: "neg3", Did: "fixed", How: "guidance"}}, Summary: "Guidance."}
+}
+
+func items(t *testing.T, s *Store, id int64) map[string]FileItem {
+	t.Helper()
+	fs, err := s.Files(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]FileItem{}
+	for _, f := range fs {
+		out[f.Key] = f
+	}
+	return out
+}
+
+func printsOf(t *testing.T, s *Store, id int64, keys ...string) map[string]string {
+	t.Helper()
+	its := items(t, s, id)
+	out := map[string]string{}
+	for _, k := range keys {
+		out[k] = its[k].Fingerprint
+	}
+	return out
+}
+
+// The round is recommending until every file with findings has a
+// recommendation; next hands out the files without one, in order.
+func TestNextAndProposeMakeTheRoundReady(t *testing.T) {
+	s, _ := open(t)
+	id, f := audit(t, s)
+	st, err := s.State(ctx, id)
+	if err != nil || st.State != Recommending || st.Files != 3 || st.Recommended != 0 {
+		t.Fatalf("%+v %v", st, err)
+	}
+	next, err := s.Next(ctx, id)
+	// The store keeps the base's hash and size, never the content (a file
+	// may hold a secret): the caller reads it back at its source.
+	if err != nil || next == nil || next.Key != f["g"].Key || next.Base != f["g"].Base || next.Size != len(f["g"].Content) || next.Content != "" {
+		t.Fatalf("next %+v %v", next, err)
+	}
+	// Linked files go in together, by path or key.
+	g, m := recG(f, f["m"].Source.File), recM(f, f["g"].Key)
+	g.File = f["g"].Source.File
+	res, err := s.Propose(ctx, id, []rec.Rec{g, m})
+	if err != nil || res.Stored != 2 || res.Left != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	its := items(t, s, id)
+	if r := its[f["g"].Key].Rec; r == nil || r.File != f["g"].Key || r.Links[0] != f["m"].Key {
+		t.Fatalf("stored %+v", r)
+	}
+	if got := its[f["g"].Key].Group; strings.Join(got, ",") != strings.Join(rec.Group(map[string]rec.Rec{f["g"].Key: recG(f, f["m"].Key), f["m"].Key: recM(f, f["g"].Key)}, f["g"].Key), ",") {
+		t.Errorf("group %v", got)
+	}
+	if next, _ := s.Next(ctx, id); next == nil || next.Key != f["q"].Key {
+		t.Fatalf("next after two: %+v", next)
+	}
+	if _, err := s.Propose(ctx, id, []rec.Rec{recQ(f)}); err != nil {
+		t.Fatal(err)
+	}
+	if next, _ := s.Next(ctx, id); next != nil {
+		t.Fatalf("next when done: %+v", next)
+	}
+	if st, _ := s.State(ctx, id); st.State != Ready || st.Recommended != 3 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+// A batch with one bad recommendation stores nothing.
+func TestProposeIsAllOrNothing(t *testing.T) {
+	s, _ := open(t)
+	id, f := audit(t, s)
+	bad := recQ(f)
+	bad.Findings = nil
+	if _, err := s.Propose(ctx, id, []rec.Rec{recG(f), bad}); err == nil || !strings.Contains(err.Error(), "neg3") {
+		t.Fatalf("got %v", err)
+	}
+	for _, it := range items(t, s, id) {
+		if it.Rec != nil {
+			t.Fatalf("stored %s", it.Key)
+		}
+	}
+	// A certain finding kept is refused too.
+	g := recG(f)
+	g.Findings[1] = rec.Account{Row: "dead", Did: "kept", How: "fine"}
+	if _, err := s.Propose(ctx, id, []rec.Rec{g}); err == nil || !strings.Contains(err.Error(), "certain") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func ready(t *testing.T, s *Store) (int64, map[string]rec.File) {
+	t.Helper()
+	id, f := audit(t, s)
+	if _, err := s.Propose(ctx, id, []rec.Rec{recG(f, f["m"].Key), recM(f, f["g"].Key), recQ(f)}); err != nil {
+		t.Fatal(err)
+	}
+	return id, f
+}
+
+func decisions(t *testing.T, s *Store, id int64) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for k, it := range items(t, s, id) {
+		if it.Decision != nil {
+			out[k] = it.Decision.Action
+		}
+	}
+	return out
+}
+
+// Linked files are decided together: accepting or rejecting one sets the
+// other, and an edit to either keeps the link (the other is accepted, and
+// a later accept keeps the edit).
+func TestLinkedFilesAreDecidedTogether(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept", Note: "good"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisions(t, s, id); d[g] != "accept" || d[m] != "accept" || len(d) != 2 {
+		t.Fatalf("accept: %v", d)
+	}
+	if n := items(t, s, id)[m].Decision.Note; n != "" {
+		t.Errorf("the note went to the other file too: %q", n)
+	}
+	if err := s.DecideFile(ctx, id, m, rec.Decision{Action: "reject"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisions(t, s, id); d[g] != "reject" || d[m] != "reject" {
+		t.Fatalf("reject: %v", d)
+	}
+	if err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# M\n\n- Mine.\n- Do x safely here.\n"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisions(t, s, id); d[g] != "accept" || d[m] != "edit" {
+		t.Fatalf("edit: %v", d)
+	}
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	its := items(t, s, id)
+	if its[m].Decision.Action != "edit" || !strings.Contains(its[m].Decision.Content, "Mine.") {
+		t.Fatalf("an accept of the other side dropped the edit: %+v", its[m].Decision)
+	}
+	if err := s.UndecideFile(ctx, id, m); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisions(t, s, id); len(d) != 0 {
+		t.Fatalf("clear: %v", d)
+	}
+	// A file with no links is decided alone.
+	q := f["q"].Key
+	if err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+		t.Fatal(err)
+	}
+	if d := decisions(t, s, id); len(d) != 1 || d[q] != "reject" {
+		t.Fatalf("alone: %v", d)
+	}
+}
+
+// A decision carries the print of every file in its group as the page
+// showed it; a missing or old one is refused and nothing is stored.
+func TestDecideNeedsEveryPrint(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	ps := printsOf(t, s, id, g, m)
+	only := map[string]string{g: ps[g]}
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, only); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a missing print: %v", err)
+	}
+	old := map[string]string{g: ps[g], m: "0000000000000000"}
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); !errors.Is(err, ErrChanged) {
+		t.Fatalf("an old print: %v", err)
+	}
+	if d := decisions(t, s, id); len(d) != 0 {
+		t.Fatalf("stored %v", d)
+	}
+	if err := s.DecideFile(ctx, id, "nope", rec.Decision{Action: "accept"}, ps); !errors.Is(err, ErrStale) {
+		t.Fatalf("no such file: %v", err)
+	}
+}
+
+// A new recommendation for a file drops the decisions on its group, sent
+// or not, and changes the prints the page holds.
+func TestReproposingDropsTheGroupsDecisions(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	old := printsOf(t, s, id, g, m)
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Send(ctx, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	m2 := recM(f, g)
+	m2.Content += "- More.\n"
+	res, err := s.Propose(ctx, id, []rec.Rec{m2})
+	if err != nil || res.Cleared != 2 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if d := decisions(t, s, id); len(d) != 0 {
+		t.Fatalf("kept %v", d)
+	}
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); !errors.Is(err, ErrChanged) {
+		t.Fatalf("an old page: %v", err)
+	}
+}
+
+// Nothing is decided while the agent is still recommending.
+func TestNoDecisionBeforeReady(t *testing.T) {
+	s, _ := open(t)
+	id, f := audit(t, s)
+	if _, err := s.Propose(ctx, id, []rec.Rec{recQ(f)}); err != nil {
+		t.Fatal(err)
+	}
+	q := f["q"].Key
+	if err := s.DecideFile(ctx, id, q, rec.Decision{Action: "accept"}, printsOf(t, s, id, q)); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// A backlog round is decided per item: no file recommendations.
+func TestABacklogRoundTakesNoRecommendations(t *testing.T) {
+	s, _ := open(t)
+	id, err := s.RecordRound(ctx, Round{Kind: "backlog"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Propose(ctx, id, []rec.Rec{{File: "x"}}); err == nil || !strings.Contains(err.Error(), "per item") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := s.AddRows(ctx, id, []row.Row{{ID: "i1", Check: "intake", Verdict: "issue", Source: row.Source{Entry: "1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.State(ctx, id); st.State != Ready || st.Files != 0 {
+		t.Fatalf("%+v", st)
+	}
+}
+
+// Send carries the file decisions, with their notes; the round is then
+// sent, and applied once a repo's branch is written.
+func TestSendCarriesFileDecisions(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m, q := f["g"].Key, f["m"].Key, f["q"].Key
+	if err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept", Note: "nice"}, printsOf(t, s, id, g, m)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, id, "")
+	if err != nil || sd.Counts.Accept != 2 || sd.Counts.Reject != 1 || len(sd.Notes) != 1 || !strings.Contains(sd.Notes[0].Row, "/h/AGENTS.md") {
+		t.Fatalf("%+v %v", sd, err)
+	}
+	for _, it := range items(t, s, id) {
+		if !it.Decision.Sent {
+			t.Errorf("%s not sent", it.Key)
+		}
+	}
+	if st, _ := s.State(ctx, id); st.State != Sent {
+		t.Fatalf("%+v", st)
+	}
+	if err := s.RecordApply(ctx, Apply{Round: id, Repo: "/w/m", State: "branch", Branch: "sift/round-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := s.State(ctx, id); st.State != Applied {
+		t.Fatalf("%+v", st)
+	}
+}

@@ -9,13 +9,11 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/discover"
+	"github.com/schuettc/tackle/internal/sift/content"
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	"github.com/schuettc/tackle/internal/sift/store"
 )
@@ -26,8 +24,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/review", s.review)
 	mux.HandleFunc("PUT /api/decisions", s.putDecisions)
 	mux.HandleFunc("DELETE /api/decisions", s.deleteDecision)
-	mux.HandleFunc("POST /api/undo", s.undo)
-	mux.HandleFunc("POST /api/redo", s.redo)
+	mux.HandleFunc("PUT /api/files", s.putFile)
+	mux.HandleFunc("DELETE /api/files", s.deleteFile)
+	mux.HandleFunc("GET /api/base", s.base)
 	mux.HandleFunc("POST /api/send", s.send)
 	mux.HandleFunc("GET /api/file", s.file)
 	mux.HandleFunc("POST /api/agent/presence", s.agentPresence)
@@ -94,7 +93,8 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	cursor := s.events.format(s.events.latest())
 	rd, rows, err := s.st.LatestRound(r.Context())
 	if errors.Is(err, sql.ErrNoRows) {
-		writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "round": nil, "rows": []row.Row{}, "applies": []applyJSON{}, "sends": 0, "home": home()})
+		writeJSON(w, http.StatusOK, map[string]any{"cursor": cursor, "round": nil, "rows": []row.Row{}, "files": []fileJSON{},
+			"progress": store.Progress{}, "applies": []applyJSON{}, "sends": 0, "home": home()})
 		return
 	}
 	if err != nil {
@@ -123,14 +123,65 @@ func (s *Server) review(w http.ResponseWriter, r *http.Request) {
 	if sum == nil {
 		sum = map[string]int{}
 	}
+	prog, err := s.st.State(r.Context(), rd.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items, err := s.st.Files(r.Context(), rd.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	files := make([]fileJSON, 0, len(items))
+	for _, it := range items {
+		files = append(files, fileOf(it))
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"cursor":  cursor,
-		"round":   roundJSON{ID: rd.ID, Kind: rd.Kind, At: rfc(rd.At), Summary: sum, Owner: rd.OwnerLabel},
-		"rows":    rows,
-		"applies": aj,
-		"sends":   sends,
-		"home":    home(),
+		"cursor":   cursor,
+		"round":    roundJSON{ID: rd.ID, Kind: rd.Kind, At: rfc(rd.At), Summary: sum, Owner: rd.OwnerLabel},
+		"progress": prog,
+		"rows":     rows,
+		"files":    files,
+		"applies":  aj,
+		"sends":    sends,
+		"home":     home(),
 	})
+}
+
+// fileJSON is one of an audit round's files on the page: where it is, its
+// size before (Size) and after (After: the recommendation, or the user's
+// edit), its findings, the recommendation, the decision, the fingerprint a
+// decision answers and the files decided with it. The audited content
+// itself is read on demand (GET /api/base).
+type fileJSON struct {
+	Key         string        `json:"key"`
+	Path        string        `json:"path"`
+	Source      row.Source    `json:"source"`
+	Commit      string        `json:"commit,omitempty"`
+	Class       string        `json:"class"`
+	Budget      int           `json:"budget"`
+	Base        string        `json:"base"`
+	Size        int           `json:"size"`
+	After       int           `json:"after"`
+	Rows        []string      `json:"rows"`
+	Rec         *rec.Rec      `json:"rec"`
+	Decision    *rec.Decision `json:"decision"`
+	Fingerprint string        `json:"fingerprint"`
+	Group       []string      `json:"group"`
+}
+
+func fileOf(it store.FileItem) fileJSON {
+	f := fileJSON{Key: it.Key, Path: it.Source.File, Source: it.Source, Commit: it.Commit, Class: it.Class, Budget: it.Budget,
+		Base: it.Base, Size: it.Size, After: it.Size, Rows: append([]string{}, it.Rows...), Rec: it.Rec, Decision: it.Decision,
+		Fingerprint: it.Fingerprint, Group: append([]string{}, it.Group...)}
+	if it.Rec != nil {
+		f.After = len(it.Rec.Content)
+		if d := it.Decision; d != nil && d.Action == "edit" {
+			f.After = len(d.Content)
+		}
+	}
+	return f
 }
 
 // home is the user's home directory, so the page can show paths under it
@@ -218,6 +269,9 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !s.perItem(w, r.Context(), b.Round) {
+		return
+	}
 	as := make([]store.Answer, 0, len(b.Decisions))
 	for _, d := range b.Decisions {
 		if _, ok := rows[d.ID]; !ok {
@@ -249,19 +303,20 @@ func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64,
 	return err == nil
 }
 
-// applied reports whether apply already wrote rw's repo for the round: an
-// undo or redo can no longer change that branch.
-func (s *Server) applied(ctx context.Context, round int64, rw row.Row) (bool, error) {
-	as, err := s.st.Applies(ctx, round)
+// perItem checks the round is decided per item (backlog, intake); an audit
+// round's rows are evidence, and its files are decided. ok is false after
+// writing the error.
+func (s *Server) perItem(w http.ResponseWriter, ctx context.Context, round int64) bool {
+	rd, _, err := s.st.Round(ctx, round)
 	if err != nil {
-		return false, err
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return false
 	}
-	for _, a := range as {
-		if a.Repo == rw.Source.Repo && a.Succeeded() {
-			return true, nil
-		}
+	if !store.PerItem(rd.Kind) {
+		writeErr(w, http.StatusBadRequest, "an audit round is decided per file, not per row: PUT /api/files")
+		return false
 	}
-	return false, nil
+	return true
 }
 
 func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
@@ -276,8 +331,7 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "stale")
 		return
 	}
-	if rw.FixOnly() {
-		writeErr(w, http.StatusBadRequest, "a certain fix is undone or redone, not cleared")
+	if !s.perItem(w, r.Context(), round) {
 		return
 	}
 	if err := s.st.Undecide(r.Context(), round, rw.ID); err != nil {
@@ -288,55 +342,135 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// undo takes a certain fix out of what sift applies: a reject on it.
-func (s *Server) undo(w http.ResponseWriter, r *http.Request) { s.fixDecision(w, r, "reject") }
+// fileApplied names the first file of key's group whose repo apply has
+// already written for the round ("" when none): its decision is on the
+// branch now, and changing it here would change nothing.
+func (s *Server) fileApplied(ctx context.Context, round int64, key string) (string, error) {
+	items, err := s.st.Files(ctx, round)
+	if err != nil {
+		return "", err
+	}
+	as, err := s.st.Applies(ctx, round)
+	if err != nil {
+		return "", err
+	}
+	by := map[string]store.FileItem{}
+	for _, it := range items {
+		by[it.Key] = it
+	}
+	for _, k := range by[key].Group {
+		for _, a := range as {
+			if src := by[k].Source; src.Repo != "" && a.Repo == src.Repo && a.Succeeded() {
+				return src.File, nil
+			}
+		}
+	}
+	return "", nil
+}
 
-// redo puts an undone certain fix back: an accept of the fix, a decision
-// the next Send carries like any other.
-func (s *Server) redo(w http.ResponseWriter, r *http.Request) { s.fixDecision(w, r, "accept") }
+// fileErr writes a file decision's error: 409 when the page is stale (the
+// round moved on, a print changed, the agent is still recommending), 400
+// for a bad decision.
+func fileErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrStale):
+		writeErr(w, http.StatusConflict, "stale")
+	case errors.Is(err, store.ErrChanged):
+		writeErr(w, http.StatusConflict, "changed: the agent changed this file's recommendation since the page showed it; look again")
+	case errors.Is(err, store.ErrNotReady):
+		writeErr(w, http.StatusConflict, "the agent is still recommending: decisions open once every file has a recommendation")
+	default:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+	}
+}
 
-// fixDecision stores action on a certain row that carries only its own fix
-// (row.FixOnly), until apply has written the row's repo.
-func (s *Server) fixDecision(w http.ResponseWriter, r *http.Request, action string) {
+func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Round       int64  `json:"round"`
-		ID          string `json:"id"`
-		Note        string `json:"note"`
-		Fingerprint string `json:"fingerprint"`
+		Round   int64             `json:"round"`
+		File    string            `json:"file"`
+		Action  string            `json:"action"`
+		Content string            `json:"content"`
+		Note    string            `json:"note"`
+		Prints  map[string]string `json:"prints"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if b.Fingerprint == "" {
-		writeErr(w, http.StatusBadRequest, "an undo or redo carries the fingerprint of the row it answers")
+	d := rec.Decision{Action: b.Action, Content: b.Content, Note: b.Note}
+	if err := d.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	rows, ok := s.current(w, r.Context(), b.Round)
-	if !ok {
+	if len(b.Prints) == 0 {
+		writeErr(w, http.StatusBadRequest, "a decision carries the fingerprints of the files it answers (prints)")
 		return
 	}
-	rw, ok := rows[b.ID]
-	if !ok {
-		writeErr(w, http.StatusConflict, "stale")
+	if _, ok := s.current(w, r.Context(), b.Round); !ok {
 		return
 	}
-	if !rw.FixOnly() {
-		writeErr(w, http.StatusBadRequest, "only a certain fix can be undone or redone; accept or reject a proposal instead")
-		return
-	}
-	if done, err := s.applied(r.Context(), b.Round, rw); err != nil {
+	if done, err := s.fileApplied(r.Context(), b.Round, b.File); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
-	} else if done {
-		writeErr(w, http.StatusConflict, "already applied: change it on the branch")
+	} else if done != "" {
+		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	if !s.answer(w, r.Context(), b.Round, []store.Answer{{Row: b.ID, Fingerprint: b.Fingerprint, Decision: row.Decision{Action: action, Note: b.Note}}}) {
+	if err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints); err != nil {
+		fileErr(w, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	round, _ := strconv.ParseInt(q.Get("round"), 10, 64)
+	if _, ok := s.current(w, r.Context(), round); !ok {
+		return
+	}
+	if done, err := s.fileApplied(r.Context(), round, q.Get("file")); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	} else if done != "" {
+		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
+		return
+	}
+	if err := s.st.UndecideFile(r.Context(), round, q.Get("file")); err != nil {
+		fileErr(w, err)
+		return
+	}
+	s.events.emit("decisions", map[string]int64{"round": round})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// base returns a round file's content at the audit, read back at its
+// source and checked against its base hash.
+func (s *Server) base(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	round, _ := strconv.ParseInt(q.Get("round"), 10, 64)
+	if _, ok := s.current(w, r.Context(), round); !ok {
+		return
+	}
+	items, err := s.st.Files(r.Context(), round)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, it := range items {
+		if it.Key != q.Get("file") {
+			continue
+		}
+		body, err := content.Read(r.Context(), it.File)
+		if err != nil {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"file": it.Key, "content": body})
+		return
+	}
+	writeErr(w, http.StatusNotFound, "no such file in the round")
 }
 
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
@@ -375,47 +509,6 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	}{n, to})
 }
 
-// beforeOpen, when set (tests), runs after a row's file is validated and
-// before it is opened.
-var beforeOpen func()
-
-// maxFile caps what /api/file returns.
-const maxFile = 2 << 20
-
-// moved says why a row's file on disk can't be read as audited: its path
-// is not clean and absolute, or it resolves somewhere other than it did then
-// (a symlink, the leaf or a parent, retargeted). "" when it can be read.
-func moved(src row.Source) string {
-	if src.Canon == "" {
-		return "sift did not record where " + src.File + " resolved: run sift check again"
-	}
-	if now := row.Resolve(src.File); now != src.Canon {
-		return src.File + " resolves somewhere else since the audit: run sift check again"
-	}
-	return ""
-}
-
-// readCanon reads up to n bytes of canon (clean, absolute, resolved at the
-// audit) through an os.Root at the filesystem root, by apply's walk: every
-// component is checked not to be a symlink and opened by descriptor, so a
-// parent swapped after moved's check can't redirect the read.
-func readCanon(canon string, n int64) ([]byte, error) {
-	if !filepath.IsAbs(canon) || filepath.Clean(canon) != canon {
-		return nil, fmt.Errorf("%s is not a clean absolute path", canon)
-	}
-	top := filepath.VolumeName(canon) + string(filepath.Separator)
-	root, err := os.OpenRoot(top)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = root.Close() }()
-	if beforeOpen != nil {
-		beforeOpen()
-	}
-	rel := filepath.ToSlash(strings.TrimPrefix(canon, top))
-	return apply.ReadNoLink(root, rel, n)
-}
-
 // file returns the whole file a row is about, as it was audited: a repo
 // file at the ref it was read at, any other file from disk where it
 // resolved at the audit (see moved). Only a row's own file can be read.
@@ -432,28 +525,24 @@ func (s *Server) file(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	src := rw.Source
-	var b []byte
-	var err error
-	switch {
-	case src.Repo != "" && src.Ref != "" && src.Path != "":
-		b, err = discover.Git(r.Context(), src.Repo, "show", src.Ref+":"+src.Path).Output()
-	case src.File != "":
-		if why := moved(src); why != "" {
-			writeErr(w, http.StatusForbidden, why)
-			return
-		}
-		b, err = readCanon(src.Canon, maxFile+1)
-	default:
+	if src.File == "" && (src.Repo == "" || src.Path == "") {
 		writeErr(w, http.StatusNotFound, "this row has no file")
 		return
 	}
+	if src.FromDisk() {
+		if why := content.Moved(src); why != "" {
+			writeErr(w, http.StatusForbidden, why)
+			return
+		}
+	}
+	b, err := content.Raw(r.Context(), src, "")
 	if err != nil {
 		writeErr(w, http.StatusNotFound, fmt.Sprintf("can't read %s: %v", src.File, err))
 		return
 	}
-	truncated := len(b) > maxFile
+	truncated := len(b) > content.Max
 	if truncated {
-		b = b[:maxFile]
+		b = b[:content.Max]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"file": src.File, "ref": src.Ref, "content": string(b), "truncated": truncated})
 }

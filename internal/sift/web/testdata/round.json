@@ -27,10 +27,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Push to a branch and open a pull request.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "9d68f7da082d3f0b",
@@ -48,10 +45,7 @@
      "value": "Don't"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Rebase only branches nobody else has pulled.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "de5b35362646b5ec",
@@ -69,10 +63,7 @@
      "value": "Do"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Commit sources; the build regenerates the rest.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "d17b71649f1714cc",
@@ -90,10 +81,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Let the hooks run; fix what they report.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "0f4f73356ea6213f",
@@ -111,10 +99,7 @@
      "value": "Avoid"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Rebase a feature branch on main before review.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "ee548076bcfbef18",
@@ -132,10 +117,7 @@
      "value": "No"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Keep secrets in the vault and read them at run time.",
-   "reason": "Says what to do instead of what to avoid."
+   "certain": false
   },
   {
    "id": "5a689be8985687d8",
@@ -153,10 +135,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Test against the real database with the shared fixtures: a mocked database has hidden real bugs in queries that only fail with real indexes and collation.",
-   "reason": "Keeps the reason, which is the useful part, and states the practice."
+   "certain": false
   },
   {
    "id": "c09c8ac44e58504d",
@@ -192,9 +171,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "16d8ad0f2d6eee2d",
@@ -212,10 +189,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 2 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "bc1574cdf0664fe6",
@@ -251,9 +225,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "9be3f2e1febfbdd5",
@@ -271,10 +243,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 5 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "a0bd7ef38cc5397d",
@@ -310,9 +279,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "294450af0bdcf2f7",
@@ -330,10 +297,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 8 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "bb6c362382f8a30f",
@@ -369,9 +333,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "bf2dfabe1c090301",
@@ -389,10 +351,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 11 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "3de28cebbf34e0cc",
@@ -428,9 +387,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "f214edf1b271a88b",
@@ -448,10 +405,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 14 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "e57116cffa7fbc2a",
@@ -487,9 +441,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The linter enforces this; the rule costs context in every session."
+   "certain": false
   },
   {
    "id": "7055260f68015ff6",
@@ -507,10 +459,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Use the style guide's replacement for pattern 17 in new code.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "cd4c413c44969358",
@@ -568,9 +517,7 @@
      "value": "docs/runbook-v1.md"
     }
    ],
-   "certain": false,
-   "verdict": "delete",
-   "reason": "The runbook was replaced; nothing links to it any more."
+   "certain": false
   },
   {
    "id": "0a3b4551207c7805",
@@ -588,9 +535,7 @@
      "value": "Waiting on"
     }
    ],
-   "certain": false,
-   "verdict": "ask",
-   "reason": "Only you know whether the migration landed."
+   "certain": false
   },
   {
    "id": "33d5391a08af8c44",
@@ -626,9 +571,7 @@
      "value": "lines 28, 53"
     }
    ],
-   "certain": false,
-   "verdict": "merge:33d5391a08af8c44",
-   "reason": "Same rule twice; keep the one under Status."
+   "certain": false
   },
   {
    "id": "c3141af60b8b7c71",
@@ -650,9 +593,7 @@
      "value": "6.0 KB (repo instruction file)"
     }
    ],
-   "certain": false,
-   "verdict": "keep",
-   "reason": "Shrinks below budget once the rewrites above land."
+   "certain": false
   },
   {
    "id": "06bebde0ccec2f12",
@@ -670,10 +611,7 @@
      "value": "Never"
     }
    ],
-   "certain": false,
-   "verdict": "rewrite",
-   "text": "- Change the generator, then regenerate the reference.",
-   "reason": "Positive form."
+   "certain": false
   },
   {
    "id": "faf797b09bfb9144",
@@ -713,11 +651,46 @@
      "value": "shop"
     }
    ],
-   "certain": false,
-   "verdict": "move",
-   "destination": "CLAUDE.md#Release",
-   "text": "- Run the slow suite before a release.",
-   "reason": "Only true in shop; every session elsewhere pays for it."
+   "certain": false
   }
- ]
+ ],
+ "recs": {
+  "shop/CLAUDE.md": {
+   "summary": "Rewrites the Git and test prohibitions as the practice each protects, folds eighteen pattern bans into one line, and drops the dead layout paths and the stale status. It takes the slow-suite rule from the global file, and keeps one rule the team asked for word for word.",
+   "content": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Push to a branch and open a pull request; main takes merges only.\n- Rebase your own branch freely, and add commits on top of a shared one.\n- Leave generated files out of commits: the build makes them.\n- Let the hooks run on every commit.\n- Rebase feature branches onto main to keep their history linear.\n- Keep secrets in the vault and read them from the environment.\n\n## Tests\n\n- Run integration tests against the real database with the fixtures in `testdata/`: a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules, so the real engine is the test that counts.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n- Run the slow suite before a release.\n\n## Style\n\n- Write new code in the current style guide's patterns; patterns 1 to 18 predate it, and the linter lists them.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+   "links": [
+    "home/.agent/AGENTS.md"
+   ],
+   "fixed": "rewritten as guidance",
+   "how": {
+    "f2bd5dd90fa29c0e": "the Layout section is gone: both paths are dead",
+    "ff8d0c4ae38de2ec": "removed with the Layout section",
+    "0a3b4551207c7805": "the Status section is gone: the migration shipped",
+    "33d5391a08af8c44": "merged into Release, its one place",
+    "415bf8e35218b9c6": "kept in Release, the copy in Status removed",
+    "c3141af60b8b7c71": "4.2 KB down to 1.6 KB, under the 6 KB budget"
+   },
+   "kept": {
+    "c09c8ac44e58504d": "the team wants this one word for word; it is short and has no positive form that says more"
+   }
+  },
+  "home/.agent/AGENTS.md": {
+   "summary": "Moves a shop-only rule to shop/CLAUDE.md, where only shop sessions load it.",
+   "content": "# Global\n\n- Prefer small commits.\n",
+   "links": [
+    "shop/CLAUDE.md"
+   ],
+   "fixed": "moved to shop/CLAUDE.md, under Tests"
+  },
+  "shop/docs/AGENTS.md": {
+   "summary": "Says how to change the generated reference instead of forbidding hand edits.",
+   "content": "# docs\n\n- Change the generated reference through its generator (`make docs`).\n- Write in the second person.\n",
+   "fixed": "rewritten as guidance"
+  },
+  "tools/skills/release/SKILL.md": {
+   "summary": "Drops the pointer to a memory store that has been retired.",
+   "content": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\n- Tag from main.\n",
+   "fixed": "the pointer to the retired store is removed"
+  }
+ }
 }

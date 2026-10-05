@@ -6,6 +6,7 @@ package serve
 // sift has one review per machine, the latest round, so there is no project.
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -168,24 +169,52 @@ func (s *Server) agentReview(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	prog, err := s.st.State(r.Context(), rd.ID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if prog.State == store.Recommending {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("round %d is still being recommended: %d of %d file(s) have a recommendation; recommend the rest (sift_next, sift_propose), then review",
+			rd.ID, prog.Recommended, prog.Files))
+		return
+	}
+	open, err := s.open(r.Context(), rd, rows)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	s.touch(b.Session, "", "")
 	if err := s.st.SetOwner(r.Context(), rd.ID, b.Session, s.labelOf(b.Session)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.wakeAll()
-	writeJSON(w, http.StatusOK, map[string]any{"round": rd.ID, "url": s.pageURL, "open": openRows(rows)})
+	writeJSON(w, http.StatusOK, map[string]any{"round": rd.ID, "url": s.pageURL, "open": open})
 }
 
-// openRows counts the rows that wait for the user: judgments not decided.
-func openRows(rows []row.Row) int {
+// open counts what waits for the user: in an audit round the files with a
+// recommendation and no decision, in a backlog round the rows with none.
+func (s *Server) open(ctx context.Context, rd store.Round, rows []row.Row) (int, error) {
 	n := 0
-	for _, rw := range rows {
-		if !rw.FixOnly() && rw.Decision == nil {
+	if store.PerItem(rd.Kind) {
+		for _, rw := range rows {
+			if rw.Decision == nil {
+				n++
+			}
+		}
+		return n, nil
+	}
+	items, err := s.st.Files(ctx, rd.ID)
+	if err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if it.Rec != nil && it.Decision == nil {
 			n++
 		}
 	}
-	return n
+	return n, nil
 }
 
 func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +262,7 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"round": 0, "open": 0, "decided": 0, "sent": 0, "applied": 0, "undone": 0, "owner": "", "owner_present": false}
+	out := map[string]any{"round": 0, "state": "", "files": 0, "recommended": 0, "open": 0, "decided": 0, "sent": 0, "owner": "", "owner_present": false}
 	rd, rows, err := s.st.LatestRound(r.Context())
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -241,20 +270,41 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	default:
-		decided, sent, applied, undone := 0, 0, 0, 0
-		for _, rw := range rows {
+		prog, err := s.st.State(r.Context(), rd.ID)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		open, err := s.open(r.Context(), rd, rows)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		decided, sent := 0, 0
+		count := func(made, wasSent bool) {
 			switch {
-			case rw.FixOnly() && (rw.Decision == nil || rw.Decision.Action == "accept"):
-				applied++
-			case rw.FixOnly() && rw.Decision.Action == "reject":
-				undone++
-			case rw.Decision != nil && rw.Decision.Sent:
+			case made && wasSent:
 				sent++
-			case rw.Decision != nil:
+			case made:
 				decided++
 			}
 		}
-		out["round"], out["open"], out["decided"], out["sent"], out["applied"], out["undone"] = rd.ID, openRows(rows), decided, sent, applied, undone
+		if store.PerItem(rd.Kind) {
+			for _, rw := range rows {
+				count(rw.Decision != nil, rw.Decision != nil && rw.Decision.Sent)
+			}
+		} else {
+			items, err := s.st.Files(r.Context(), rd.ID)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			for _, it := range items {
+				count(it.Decision != nil, it.Decision != nil && it.Decision.Sent)
+			}
+		}
+		out["round"], out["state"], out["files"], out["recommended"] = rd.ID, prog.State, prog.Files, prog.Recommended
+		out["open"], out["decided"], out["sent"] = open, decided, sent
 		out["owner"], out["owner_present"] = rd.OwnerLabel, rd.OwnerSession != "" && s.present(rd.OwnerSession)
 	}
 	pend, err := s.st.Undelivered(r.Context())
@@ -276,14 +326,14 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 func SendText(sd store.Send) string {
 	c := sd.Counts
 	var b strings.Builder
-	fmt.Fprintf(&b, "The user sent their decisions for sift round %d: %d accepted, %d edited, %d rejected; %d certain fix(es) to apply, %d undone, %d redone.\n",
-		sd.Round, c.Accept, c.Edit, c.Reject, c.Applied, c.Undone, c.Redone)
+	fmt.Fprintf(&b, "The user sent their decisions for sift round %d: %d accepted, %d edited, %d rejected.\n",
+		sd.Round, c.Accept, c.Edit, c.Reject)
 	if len(sd.Notes) > 0 {
 		b.WriteString("Notes:\n")
 		for _, n := range sd.Notes {
 			fmt.Fprintf(&b, "- %s: %s\n", n.Row, n.Note)
 		}
 	}
-	b.WriteString("Next: run sift_apply (or `sift apply`): a branch per repo with the accepted and edited rows and the certain fixes. Then run `sift reconcile` and review each branch before it merges.")
+	b.WriteString("Next: run sift_apply (or `sift apply`): it writes each accepted or edited file whole, on a branch per repo, and lists what it leaves to you. Then run `sift reconcile` and review each branch before it merges.")
 	return b.String()
 }

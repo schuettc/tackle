@@ -1,13 +1,16 @@
 // probe.mjs — the build-time browser check for the sift review page.
 //
-// Seeds a real sift serve (serve-fixture.mjs) from testdata/round.json, opens
-// the page in headless Chromium (playwright-core) and checks what the page
-// promises, by what is visible and where it is, not only by what exists:
-// the views and groups, a group expanding under its header, a long passage
-// wrapping inside the reading column, accept / edit / reject on 1–3, a group
-// decided whole, notes, undo of an applied row, Send, the whole file, light
-// and dark, and a round the size of a real one (653 rows). Screenshots go to
-// $PROBE_OUT (default a temp dir).
+// Seeds a real sift serve (serve-fixture.mjs) from testdata/round.json, an
+// audit round with a recommendation for each file, opens the page in
+// headless Chromium (playwright-core) and checks what the page promises, by
+// what is visible and where it is, not only by what exists: one list entry
+// per file with its sizes, findings and decision, linked files together; a
+// file's summary, a wrapping diff with the certain fix marked, accept /
+// edit / reject on 1–3 (edit opens the whole file), the findings with what
+// the rewrite did, the note; linked files decided together; a stale page
+// refused; Send; light and dark. Then a round still being recommended (the
+// page waits), a backlog round (decided per item), and a round the size of
+// a real one (653 rows). Screenshots go to $PROBE_OUT (default a temp dir).
 //
 // Chromium is required with KIT_BROWSER=required; otherwise a missing browser
 // skips the probe. BROWSER SAFETY: the serve is started with --no-open by
@@ -17,8 +20,12 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import pkg from 'playwright-core';
-import { startServe, cleanupBuild, FIXTURE } from './serve-fixture.mjs';
-import { entries, groupsOf } from './model.ts';
+import {
+  startServe,
+  cleanupBuild,
+  FIXTURE,
+  BACKLOG,
+} from './serve-fixture.mjs';
 
 const { chromium } = pkg;
 const required = process.env.KIT_BROWSER === 'required';
@@ -72,12 +79,31 @@ process.on('SIGINT', () => cleanup().finally(() => process.exit(130)));
 process.on('SIGTERM', () => cleanup().finally(() => process.exit(143)));
 
 const fixture = JSON.parse(readFileSync(FIXTURE, 'utf8'));
-// The kit draws a count in its own span: "needs you" + "33".
+// The kit draws a count in its own span: "review" + "0/4".
 const norm = (s) =>
   s
     .replace(/\s+/g, ' ')
     .replace(/([^\d\s/])([\d/]+)$/, '$1 $2')
     .trim();
+
+/** A seeded serve's API, as the page calls it. */
+function apiOf(serve) {
+  const api = async (path, init = {}) => {
+    const res = await fetch(serve.base + path, {
+      ...init,
+      headers: {
+        'X-Local-Token': serve.token,
+        'Content-Type': 'application/json',
+      },
+    });
+    const body = res.status === 204 ? null : await res.json();
+    return { status: res.status, body };
+  };
+  return {
+    api,
+    review: async () => (await api('/api/review')).body,
+  };
+}
 
 async function main() {
   try {
@@ -92,39 +118,27 @@ async function main() {
   }
   const serve = await startServe();
   serves.push(serve);
+  const { api, review } = apiOf(serve);
   const out =
     process.env.PROBE_OUT ||
     mkdtempSync(join(realpathSync(tmpdir()), 'sift-probe-shots-'));
   mkdirSync(out, { recursive: true });
 
-  const pageUrl = (q = {}, frag = '#/open') => {
-    const u = new URL(serve.url);
+  const pageUrl = (s, q = {}, frag = '#/open') => {
+    const u = new URL(s.url);
     for (const [k, v] of Object.entries(q)) u.searchParams.set(k, v);
     u.hash = frag;
     return u.toString();
   };
-  const api = async (path, init = {}) => {
-    const res = await fetch(serve.base + path, {
-      ...init,
-      headers: {
-        'X-Local-Token': serve.token,
-        'Content-Type': 'application/json',
-      },
-    });
-    return res.status === 204 ? null : res.json();
-  };
-  const review = () => api('/api/review');
-  const rowOf = async (id) => (await review()).rows.find((r) => r.id === id);
-
   const ctx = await browser.newContext({
     viewport: { width: 1400, height: 900 },
   });
   const errors = [];
-  const open = async (url) => {
+  const open = async (url, ready = '.kit-row') => {
     const p = await ctx.newPage();
     p.on('pageerror', (e) => errors.push(String(e)));
     await p.goto(url);
-    await p.waitForSelector('.kit-row', { timeout: 8000 });
+    await p.waitForSelector(ready, { timeout: 8000 });
     return p;
   };
   const box = (loc) => loc.boundingBox();
@@ -136,36 +150,45 @@ async function main() {
   };
 
   const rv0 = await review();
-  const groups = groupsOf(
-    rv0.rows.filter((r) => !r.certain),
-    false,
-    rv0.home,
+  const byRel = (rel) => rv0.files.find((f) => f.path === join(serve.dir, rel));
+  const shop = byRel('shop/CLAUDE.md');
+  const global = byRel('home/.agent/AGENTS.md');
+  const docs = byRel('shop/docs/AGENTS.md');
+  const skill = byRel('tools/skills/release/SKILL.md');
+  const fileOf = async (f) =>
+    (await review()).files.find((x) => x.key === f.key);
+  const certain = fixture.rows.filter(
+    (r) => r.certain && r.source.rel === 'shop/CLAUDE.md',
   );
-  const big = groups.reduce((a, g) => (g.rows.length > a.rows.length ? g : a));
-  const longRow = fixture.rows.find((r) =>
-    r.passage.startsWith('- Never mock'),
-  );
-  const nextAfterLong =
-    big.rows[big.rows.findIndex((r) => r.id === longRow.id) + 1];
 
-  // ---- 1. the list: views, groups, geometry
+  // ---- 1. the list: one entry per file, linked files together
   console.log('list');
-  const page = await open(pageUrl());
-  const chips = (
-    await page
-      .locator('.kit-chips[data-group="view"] .kit-chip')
-      .allInnerTexts()
-  ).map(norm);
-  check(
-    'view chips: needs you 33, applied 2',
-    chips.join('|') === 'needs you 33|applied 2',
-    chips.join('|'),
-  );
+  const page = await open(pageUrl(serve));
   const rowsShown = await page.locator('.kit-row').count();
   check(
-    `the list shows one entry per group (${entries(groups, null).length}), not 33 rows`,
-    rowsShown === entries(groups, null).length,
+    'the list shows one entry per file (4)',
+    rowsShown === 4,
     String(rowsShown),
+  );
+  const keys = await page
+    .locator('.kit-row')
+    .evaluateAll((els) => els.map((e) => e.dataset.id ?? ''));
+  const linked = await page.locator('.kit-row.sift-linked').count();
+  const firstTwo = await page
+    .locator('.kit-row')
+    .evaluateAll((els) =>
+      els.slice(0, 2).map((e) => e.classList.contains('sift-linked')),
+    );
+  check(
+    'the two linked files sit together, first (the global file leads)',
+    linked === 2 && firstTwo.every(Boolean),
+    `${linked} ${JSON.stringify(firstTwo)} ${keys.join(',')}`,
+  );
+  const meta = await page.locator('.kit-row .kit-meta').first().innerText();
+  check(
+    'a list entry shows the size before and after, the findings and the decision',
+    /^\d+\.\d → \d+\.\d KB · \d+ ·$/.test(meta),
+    meta,
   );
   const listBox = await box(page.locator('.kit-list'));
   const readBox = await box(page.locator('main.kit-read'));
@@ -183,15 +206,13 @@ async function main() {
     }),
   );
   check(
-    'every list row is inside the list, with height',
+    'every list entry is inside the list, with height',
     rowBoxes.every(
       ([l, r, h]) =>
         l >= listBox.x && r <= listBox.x + listBox.width + 0.5 && h > 30,
     ),
     JSON.stringify(rowBoxes),
   );
-  // A kicker never ellipsizes, so text wider than its box spills out of
-  // the row (a title ellipsizes by design).
   const spill = await page
     .locator('.kit-row .kit-kicker')
     .evaluateAll((els) =>
@@ -205,345 +226,328 @@ async function main() {
     spill.join(' | '),
   );
   const send = page.locator('.kit-primary');
+  check('nothing to send yet: no Send button', !(await send.isVisible()));
   check(
-    'Send shows what it carries (the 2 applied fixes)',
-    (await send.isVisible()) && norm(await send.innerText()) === 'Send 2',
+    'the bar shows progress 0/4',
+    norm(await page.locator('.kit-ctl').first().innerText()) === 'review 0/4',
   );
   check(
-    'the bar shows progress 0/33',
-    norm(await page.locator('.kit-ctl').first().innerText()) === 'review 0/33',
+    'the overview counts the files to decide',
+    (await page.locator('.kit-doc h1').innerText()) ===
+      '4 of 4 files to decide',
   );
-  check(
-    'the overview counts what needs you',
-    (await page.locator('.kit-doc h1').innerText()).startsWith(
-      '33 of 33 rows to decide',
-    ),
-  );
-  await shoot(page, 'list-dark');
+  await shoot(page, 'list');
 
-  // ---- 2. a group opens and expands under its header
-  console.log('group');
-  const header = page.locator('.kit-row.sift-group', { hasText: big.title });
-  await header.click();
-  await until(
-    async () =>
-      (await page.locator('.kit-row.sift-member').count()) === big.rows.length,
-  );
-  const members = page.locator('.kit-row.sift-member');
+  // ---- 2. a file: summary, diff, decisions, findings, note, in that order
+  console.log('file');
+  const openFile = async (f) => {
+    await page.evaluate((h) => (location.hash = h), `#/open/f:${f.key}`);
+    await page.waitForFunction(
+      (p) =>
+        document.querySelector('.kit-doc .kit-kick')?.textContent?.endsWith(p),
+      f.path.split('/').slice(-2).join('/'),
+    );
+    await page.waitForSelector('.sift-diff');
+  };
+  await openFile(shop);
+  const ys = {};
+  for (const [name, sel] of Object.entries({
+    summary: '.sift-summary',
+    diff: '.sift-diff',
+    decide: '.sift-decide',
+    findings: 'table.sift-findings',
+    note: '.kit-doc .kit-note',
+  })) {
+    const loc = page.locator(sel).first();
+    ys[name] = (await loc.isVisible()) ? (await box(loc)).y : -1;
+  }
   check(
-    `the group expands to its ${big.rows.length} rows`,
-    (await members.count()) === big.rows.length,
-  );
-  const hb = await box(header);
-  const mb = await box(members.first());
-  check(
-    'its rows sit below the header, indented',
-    mb.y > hb.y && mb.x - hb.x >= 12,
-    JSON.stringify([hb, mb]),
+    'the reading column runs summary, diff, accept / edit / reject, findings, note',
+    ys.summary > 0 &&
+      ys.summary < ys.diff &&
+      ys.diff < ys.decide &&
+      ys.decide < ys.findings &&
+      ys.findings < ys.note,
+    JSON.stringify(ys),
   );
   check(
-    'the reading column shows the group',
-    norm(await page.locator('.kit-doc h1').innerText()) === big.title,
+    "the summary is the recommendation's",
+    (await page.locator('.sift-summary').innerText()) ===
+      fixture.recs['shop/CLAUDE.md'].summary,
   );
-  const accept = page.locator('.kit-card .kit-btn', { hasText: /^1 accept/ });
-  const proposed = big.rows.filter((r) => r.verdict).length;
+  const diff = page.locator('.sift-diff');
+  const dbx = await box(diff);
+  const docBox = await box(page.locator('.kit-doc'));
   check(
-    `group accept takes the ${proposed} rows with a proposal`,
-    norm(await accept.innerText()) === `1 accept ${proposed}`,
+    'the diff stays inside the column',
+    dbx.x >= docBox.x && dbx.x + dbx.width <= docBox.x + docBox.width + 0.5,
+    JSON.stringify([dbx, docBox]),
   );
-  const table = await box(page.locator('table.sift-rows'));
-  const doc = await box(page.locator('.kit-doc'));
-  check(
-    'the group table fits the reading column',
-    table.x >= doc.x && table.x + table.width <= doc.x + doc.width + 0.5,
-    JSON.stringify([table, doc]),
-  );
-  await shoot(page, 'group-dark');
-
-  // ---- 3. a long passage wraps in the prose view
-  console.log('row');
-  await page.evaluate((f) => (location.hash = f), `#/open/r:${longRow.id}`);
-  await page.waitForSelector('.sift-prose');
-  const prose = page.locator('.sift-prose').first();
-  const pb = await box(prose);
-  const db = await box(page.locator('.kit-doc'));
-  check(
-    'the passage box stays inside the column',
-    pb.x >= db.x && pb.x + pb.width <= db.x + db.width + 0.5,
-    JSON.stringify([pb, db]),
-  );
-  const wrap = await prose
+  const wide = await diff
     .locator('.sift-t')
-    .first()
-    .evaluate((el) => ({
-      sw: el.scrollWidth,
-      cw: el.clientWidth,
-      h: el.getBoundingClientRect().height,
-      lh: parseFloat(getComputedStyle(el).lineHeight),
-    }));
+    .evaluateAll(
+      (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length,
+    );
+  check('no diff line scrolls sideways', wide === 0, String(wide));
+  const longLine = diff.locator('.sift-dl.add', {
+    hasText: 'Run integration tests against the real database',
+  });
+  const wrap = await longLine.locator('.sift-t').evaluate((el) => ({
+    h: el.getBoundingClientRect().height,
+    lh: parseFloat(getComputedStyle(el).lineHeight),
+  }));
   check(
-    'the long line wraps (no sideways scroll, several lines tall)',
-    wrap.sw <= wrap.cw && wrap.h >= 3 * wrap.lh,
+    'the long added line wraps, several lines tall',
+    wrap.h >= 3 * wrap.lh,
     JSON.stringify(wrap),
   );
-  const gut = await prose
-    .locator('.sift-n')
+  const cert = diff.locator('.sift-dl.cert');
+  check(
+    `the certain fix is marked in the diff (${certain.length} line)`,
+    (await cert.count()) === certain.length &&
+      (await cert.locator('.sift-t').first().innerText()) ===
+        certain[0].passage &&
+      (await cert.locator('.sift-sign').first().innerText()) === '!',
+  );
+  const del = await diff.locator('.sift-dl.del').count();
+  const add = await diff.locator('.sift-dl.add').count();
+  check(
+    'the diff shows removed and added lines',
+    del > 10 && add > 5,
+    `${del} ${add}`,
+  );
+  const gut = await diff
+    .locator('.sift-dl.cert .sift-n')
     .first()
     .evaluate((el) => [el.textContent, el.getBoundingClientRect().left]);
   check(
-    'the gutter shows the passage line number at the left',
-    gut[0] === String(longRow.source.start) && gut[1] < pb.x + 60,
+    'the gutter shows the audited line number at the left',
+    gut[0] === String(certain[0].source.start) && gut[1] < dbx.x + 60,
     JSON.stringify(gut),
   );
-  check(
-    'the card shows the proposal and its reason',
-    /proposes · rewrite/i.test(
-      await page.locator('.kit-card-head').first().innerText(),
-    ) &&
-      (await page.locator('.kit-card-body').first().innerText()).includes(
-        'Keeps the reason',
-      ),
-  );
   for (const label of ['1 accept', '2 edit', '3 reject']) {
-    const btn = page.locator('.kit-doc .kit-btn', { hasText: label });
+    const btn = page.locator('.sift-decide .kit-btn', { hasText: label });
     check(`"${label}" is visible`, await btn.isVisible());
   }
-  await shoot(page, 'row-dark');
+  const findingRows = page.locator('table.sift-findings tr');
+  check(
+    `the findings list each of the file's ${shop.rows.length} findings with what was done`,
+    (await findingRows.count()) === shop.rows.length + 1 &&
+      (await page.locator('table.sift-findings .sift-did.kept').count()) ===
+        1 &&
+      (await page.locator('table.sift-findings tr.cert').count()) ===
+        certain.length,
+  );
+  const tb = await box(page.locator('table.sift-findings'));
+  check(
+    'the findings table fits the column',
+    tb.x >= docBox.x && tb.x + tb.width <= docBox.x + docBox.width + 0.5,
+    JSON.stringify([tb, docBox]),
+  );
+  check(
+    'the linked file is named',
+    (await page.locator('.kit-doc').innerText()).includes(
+      'decided together with',
+    ),
+  );
+  await shoot(page, 'file');
 
-  // ---- 4. edit: 2 opens text, title and verdict; ⌘↵ saves only what changed
+  // ---- 3. edit: 2 opens the whole recommended file; ⌘↵ stores it
   console.log('edit');
   await page.keyboard.press('2');
-  const ta = page.locator('textarea.sift-text');
+  const ta = page.locator('textarea.sift-whole');
   await ta.waitFor();
   check(
-    'edit opens the proposed text',
-    (await ta.inputValue()) === longRow.text,
+    'edit opens the whole recommended file',
+    (await ta.inputValue()) === fixture.recs['shop/CLAUDE.md'].content,
   );
-  check(
-    'edit opens the verdict',
-    (await page.locator('input.sift-verdict').inputValue()) === 'rewrite',
-  );
-  check(
-    'edit opens the title',
-    await page.locator('input.sift-title').isVisible(),
-  );
-  const tb = await box(ta);
+  const tab = await box(ta);
   const db2 = await box(page.locator('.kit-doc'));
   check(
-    'the text field fits the column and is tall enough to edit',
-    tb.x >= db2.x &&
-      tb.x + tb.width <= db2.x + db2.width + 0.5 &&
-      tb.height >= 100,
-    JSON.stringify([tb, db2]),
+    'the edit field fits the column and is tall enough for a whole file',
+    tab.x >= db2.x &&
+      tab.x + tab.width <= db2.x + db2.width + 0.5 &&
+      tab.height >= 300,
+    JSON.stringify([tab, db2]),
   );
   check(
-    'the text field has focus',
+    'the edit field has focus',
     await ta.evaluate((el) => document.activeElement === el),
   );
-  await shoot(page, 'edit-dark');
-  await page.locator('input.sift-verdict').fill('cut');
-  await page.locator('.sift-edit .kit-btn', { hasText: 'save edit' }).click();
-  check(
-    'a bad verdict is refused on the page',
-    (await page.locator('.sift-err').innerText()).includes('not a verdict'),
-  );
-  await page.locator('input.sift-verdict').fill('rewrite');
-  await ta.fill('- Test against the real database.');
+  await shoot(page, 'edit');
+  const mine =
+    fixture.recs['shop/CLAUDE.md'].content +
+    '\n## Owners\n\n- Ask the shop team.\n';
+  await ta.fill(mine);
   await page.keyboard.press('Meta+Enter');
   check(
-    'the edit is stored with only the text changed',
+    'the edit is stored with the whole file',
     await until(async () => {
-      const d = (await rowOf(longRow.id)).decision;
-      return (
-        d &&
-        d.action === 'edit' &&
-        d.text === '- Test against the real database.' &&
-        !d.verdict
-      );
+      const d = (await fileOf(shop)).decision;
+      return d?.action === 'edit' && d.content === mine;
     }),
   );
   check(
-    'the page moves on to the next undecided row',
+    'an edit to one linked file accepts the other',
+    await until(
+      async () => (await fileOf(global)).decision?.action === 'accept',
+    ),
+  );
+  check(
+    'the diff now shows your edit',
+    await until(
+      async () =>
+        (await page
+          .locator('.sift-dl.add', { hasText: 'Ask the shop team.' })
+          .count()) === 1,
+    ),
+  );
+
+  // ---- 4. 1 accepts, 3 rejects, n notes; linked files decided together
+  console.log('keys');
+  await openFile(docs);
+  await page.keyboard.press('1');
+  check(
+    '1 accepts',
+    await until(async () => (await fileOf(docs)).decision?.action === 'accept'),
+  );
+  check(
+    'the page moves on to the next undecided file',
     await until(
       async () =>
         decodeURIComponent(await page.evaluate(() => location.hash)) ===
-        `#/open/r:${nextAfterLong.id}`,
+        `#/open/f:${skill.key}`,
     ),
     await page.evaluate(() => location.hash),
   );
-
-  // ---- 5. 1 accepts, 3 rejects, n notes
-  console.log('keys');
-  const onKey = async (key, id) => {
-    await page.evaluate((f) => (location.hash = f), `#/open/r:${id}`);
-    await page.waitForFunction(
-      (t) => document.querySelector('.kit-kick')?.textContent?.includes(t),
-      `:${fixture.rows.find((r) => r.id === id).source.start}`,
-    );
-    await page.keyboard.press(key);
-  };
-  const withVerdict = big.rows.filter((r) => r.verdict && r.id !== longRow.id);
-  await onKey('1', withVerdict[0].id);
-  check(
-    '1 accepts',
-    await until(
-      async () =>
-        (await rowOf(withVerdict[0].id)).decision?.action === 'accept',
-    ),
-  );
-  await onKey('3', withVerdict[1].id);
+  await openFile(skill);
+  await page.keyboard.press('3');
   check(
     '3 rejects',
     await until(
-      async () =>
-        (await rowOf(withVerdict[1].id)).decision?.action === 'reject',
+      async () => (await fileOf(skill)).decision?.action === 'reject',
     ),
   );
-  await page.evaluate(
-    (f) => (location.hash = f),
-    `#/open/r:${withVerdict[1].id}`,
-  );
-  await page.waitForSelector('.kit-note');
+  await openFile(skill);
   await page.keyboard.press('n');
-  await page.keyboard.type('the linter covers it');
+  await page.keyboard.type('the skill is going away');
   await page.keyboard.press('Enter');
   check(
     'n then Enter stores a note on the decision',
     await until(
       async () =>
-        (await rowOf(withVerdict[1].id)).decision?.note ===
-        'the linter covers it',
+        (await fileOf(skill)).decision?.note === 'the skill is going away',
     ),
   );
   check(
     'the list says what was decided',
-    await until(
-      async () =>
-        (await page.locator('.kit-row.open .kit-meta').innerText()) ===
-        'rejected',
-    ),
-  );
-
-  // ---- 6. the group decided whole leaves single decisions alone
-  console.log('group decision');
-  const bigKey = `g:${big.key}`;
-  await page.evaluate(
-    (f) => (location.hash = f),
-    `#/open/${encodeURIComponent(bigKey)}`,
-  );
-  await page.waitForFunction(
-    (t) => document.querySelector('.kit-doc h1')?.textContent === t,
-    big.title,
-  );
-  await page.keyboard.press('1');
-  const want = big.rows
-    .filter(
-      (r) =>
-        r.verdict &&
-        ![longRow.id, withVerdict[0].id, withVerdict[1].id].includes(r.id),
-    )
-    .map((r) => r.id);
-  check(
-    `1 on the group accepts its ${want.length} other proposals`,
-    await until(async () => {
-      const rv = await review();
-      const by = new Map(rv.rows.map((r) => [r.id, r]));
-      return want.every((id) => by.get(id).decision?.action === 'accept');
-    }),
-  );
-  const after = new Map((await review()).rows.map((r) => [r.id, r]));
-  check(
-    'rows decided one at a time keep their decision',
-    after.get(longRow.id).decision.action === 'edit' &&
-      after.get(withVerdict[1].id).decision.action === 'reject',
-  );
-  check(
-    'rows with no proposal stay undecided',
-    big.rows.filter((r) => !r.verdict).every((r) => !after.get(r.id).decision),
-  );
-  check(
-    "the header shows the group's progress",
     await until(async () =>
-      /^\d+\/\d+$/.test(
-        await page
-          .locator('.kit-row.sift-group', { hasText: big.title })
-          .locator('.kit-meta')
-          .innerText(),
+      (await page.locator('.kit-row.open .kit-meta').innerText()).endsWith(
+        '· rejected',
       ),
     ),
   );
-
-  // ---- 7. applied rows: undo, redo
-  console.log('applied');
-  await page
-    .locator('.kit-chips[data-group="view"] .kit-chip', { hasText: 'applied' })
-    .click();
-  await until(async () => (await page.locator('.kit-row').count()) === 2);
-  const certain = fixture.rows.filter((r) => r.certain);
-  await page.locator('.kit-row').first().click();
-  await page.waitForSelector('.kit-doc .kit-btn');
-  await page.keyboard.press('u');
+  await openFile(global);
+  await page.keyboard.press('3');
   check(
-    'u undoes an applied row',
-    await until(
-      async () => (await rowOf(certain[0].id)).decision?.action === 'reject',
-    ),
-  );
-  check(
-    'the list says undone',
+    '3 on a linked file rejects both',
     await until(
       async () =>
-        (await page.locator('.kit-row.open .kit-meta').innerText()) ===
-        'undone',
+        (await fileOf(global)).decision?.action === 'reject' &&
+        (await fileOf(shop)).decision?.action === 'reject',
     ),
   );
+  await openFile(global);
+  await page.keyboard.press('1');
+  check(
+    '1 on a linked file accepts both',
+    await until(
+      async () =>
+        (await fileOf(global)).decision?.action === 'accept' &&
+        (await fileOf(shop)).decision?.action === 'accept',
+    ),
+  );
+  await openFile(global);
   await page.keyboard.press('u');
   check(
-    'u again redoes it: a decision Send carries, not a deletion',
+    'u clears both',
     await until(
-      async () => (await rowOf(certain[0].id)).decision?.action === 'accept',
+      async () =>
+        !(await fileOf(global)).decision && !(await fileOf(shop)).decision,
     ),
   );
-  await page.keyboard.press('u');
-  await until(
-    async () => (await rowOf(certain[0].id)).decision?.action === 'reject',
-  );
-  await shoot(page, 'applied-dark');
+  await page.keyboard.press('1');
+  await until(async () => (await fileOf(shop)).decision?.action === 'accept');
 
-  // ---- 8. the whole file, folded, with the passage marked
-  console.log('whole file');
-  await page.evaluate((f) => (location.hash = f), `#/open/r:${longRow.id}`);
-  await page.waitForSelector('.kit-fold');
-  await page.locator('.kit-fold summary').click();
+  // ---- 5. a recommendation changed under the page: an old page is refused
+  console.log('stale');
+  const old = await fileOf(docs);
+  const again = {
+    file: old.key,
+    base: old.base,
+    content:
+      '# docs\n\n- Regenerate the reference with `make docs`.\n- Write in the second person.\n',
+    findings: old.rec.findings,
+    summary: 'Says how to regenerate the reference.',
+  };
+  serve.sift(['propose'], JSON.stringify(again));
+  const put = await api('/api/files', {
+    method: 'PUT',
+    body: JSON.stringify({
+      round: serve.round,
+      file: old.key,
+      action: 'accept',
+      prints: { [old.key]: old.fingerprint },
+    }),
+  });
   check(
-    'the whole file loads with the passage marked',
-    await until(
-      async () => (await page.locator('.kit-fold .sift-ln.mark').count()) === 1,
+    'a decision against the old recommendation gets 409',
+    put.status === 409,
+    String(put.status),
+  );
+  check(
+    'the new recommendation drops the old decision, and the page shows it',
+    await until(async () =>
+      (
+        await page
+          .locator('.kit-row', { hasText: 'shop/docs/AGENTS.md' })
+          .locator('.kit-meta')
+          .innerText()
+      ).endsWith(' ·'),
     ),
   );
+  await openFile(docs);
   check(
-    'the marked line is the passage',
-    (await page.locator('.kit-fold .sift-ln.mark .sift-t').innerText()) ===
-      longRow.passage,
+    'the open file shows the new recommendation',
+    await until(
+      async () =>
+        (await page
+          .locator('.sift-dl.add', { hasText: 'Regenerate the reference' })
+          .count()) === 1,
+    ),
   );
+  await page.keyboard.press('1');
+  await until(async () => (await fileOf(docs)).decision?.action === 'accept');
 
-  // ---- 9. Send
+  // ---- 6. Send
   console.log('send');
-  const before = norm(await send.innerText());
+  check(
+    'Send shows what it carries',
+    await until(async () => norm(await send.innerText()) === 'Send 4'),
+  );
   await send.click();
   check(
     'Send says where the decisions went',
     await until(async () =>
       (await page.locator('.kit-status').innerText()).startsWith('Sent '),
     ),
-    before,
   );
   check(
     'the decisions are marked sent',
     await until(async () =>
-      (await review()).rows
-        .filter((r) => r.decision)
-        .every((r) => r.decision.sent),
+      (await review()).files
+        .filter((f) => f.decision)
+        .every((f) => f.decision.sent),
     ),
   );
   check(
@@ -551,13 +555,17 @@ async function main() {
     await until(async () => !(await send.isVisible())),
   );
 
-  // ---- 10. light and dark
+  // ---- 7. light and dark
   console.log('themes');
   for (const theme of ['light', 'dark']) {
     const p = await open(
-      pageUrl({ theme }, `#/open/${encodeURIComponent(bigKey)}`),
+      pageUrl(
+        serve,
+        { theme },
+        `#/open/${encodeURIComponent(`f:${shop.key}`)}`,
+      ),
     );
-    await p.waitForSelector('.sift-rows');
+    await p.waitForSelector('.sift-diff');
     const bg = await p.evaluate(
       () => getComputedStyle(document.body).backgroundColor,
     );
@@ -568,14 +576,70 @@ async function main() {
         : bg === 'rgb(20, 22, 29)',
       bg,
     );
-    await shoot(p, `theme-${theme}-group`);
-    await p.evaluate((f) => (location.hash = f), `#/open/r:${longRow.id}`);
-    await p.waitForSelector('.sift-prose');
-    await shoot(p, `theme-${theme}-row`);
+    const tint = await p
+      .locator('.sift-dl.add')
+      .first()
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    check(
+      `${theme}: added lines are tinted`,
+      tint !== 'rgba(0, 0, 0, 0)' && tint !== 'transparent',
+      tint,
+    );
+    await shoot(p, `theme-${theme}-file`);
     await p.close();
   }
 
-  // ---- 11. a round the size of a real one
+  // ---- 8. a round still being recommended: the page waits
+  console.log('recommending');
+  const recServe = await startServe({ recommending: true });
+  serves.push(recServe);
+  const rp = await open(pageUrl(recServe), '.kit-doc h1');
+  check(
+    'the page says the agent is still recommending, and how far it got',
+    (await rp.locator('.kit-doc h1').innerText()) ===
+      'The agent is recommending: 3 of 4 files',
+  );
+  check(
+    'no file is listed, and nothing can be sent',
+    (await rp.locator('.kit-row').count()) === 0 &&
+      !(await rp.locator('.kit-primary').isVisible()),
+  );
+  await shoot(rp, 'recommending');
+  await rp.close();
+
+  // ---- 9. a backlog round: decided per item
+  console.log('backlog');
+  const blServe = await startServe({ fixture: BACKLOG });
+  serves.push(blServe);
+  const bl = apiOf(blServe);
+  const bp0 = await open(pageUrl(blServe));
+  const groupsShown = (await bp0.locator('.kit-row').allInnerTexts()).map(norm);
+  // A group of one shows as its item: issues to file (acme/shop, then
+  // acme/tools), then the decision, then the close.
+  check(
+    'issues to file (by repo), then decisions, then closes',
+    groupsShown.length === 4 &&
+      groupsShown[0].includes('release: the script skips the changelog') &&
+      groupsShown[1].includes('probe: flaky under load') &&
+      groupsShown[2].includes('decide on the new layout') &&
+      groupsShown[3].includes('rename the config key'),
+    groupsShown.join(' | '),
+  );
+  await bp0.locator('.kit-row').first().click();
+  await bp0.waitForSelector('.kit-card');
+  await bp0.keyboard.press('1');
+  check(
+    '1 accepts an item',
+    await until(
+      async () =>
+        (await bl.review()).rows.find((r) => r.id === 'b1')?.decision
+          ?.action === 'accept',
+    ),
+  );
+  await shoot(bp0, 'backlog');
+  await bp0.close();
+
+  // ---- 10. a round the size of a real one
   console.log('scale');
   const bigServe = await startServe({ scale: 653 });
   serves.push(bigServe);
@@ -587,23 +651,23 @@ async function main() {
   const loadMs = Date.now() - t0;
   const n = await bp.locator('.kit-row').count();
   check(`653 rows load in under 3 s (${loadMs} ms)`, loadMs < 3000);
-  check(
-    `and list as ${n} groups and rows, not 653`,
-    n > 0 && n <= 60,
-    String(n),
-  );
+  check(`and list as ${n} files, not 653 rows`, n > 0 && n <= 60, String(n));
   const t1 = Date.now();
   for (let i = 0; i < 30; i++) await bp.keyboard.press('j');
   await bp.waitForTimeout(50);
   check(
-    `30 j presses through expanding groups take under 3 s (${Date.now() - t1} ms)`,
+    `30 j presses through the files take under 3 s (${Date.now() - t1} ms)`,
     Date.now() - t1 < 3000,
   );
   check(
     'the cursor row is on screen',
     await bp.locator('.kit-row.open').isVisible(),
   );
-  await shoot(bp, 'scale-dark');
+  check(
+    'the open file shows its diff',
+    await until(async () => (await bp.locator('.sift-diff').count()) === 1),
+  );
+  await shoot(bp, 'scale');
   await bp.close();
 
   check('no page errors', errors.length === 0, errors.join('; '));

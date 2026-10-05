@@ -67,15 +67,22 @@ function waitForAdvert(path, timeoutMs = 15000) {
   });
 }
 
-/** Start a seeded serve. opts.scale pads the round to that many rows. */
+export const BACKLOG = join(here, 'testdata', 'backlog.json');
+
+/** Start a seeded serve. opts.scale pads the round to that many rows;
+ * opts.recommending leaves one file without a recommendation; opts.fixture
+ * seeds another fixture. */
 export async function startServe(opts = {}) {
   const { bin, seed } = build();
   const home = mkdtempSync(join(realpathSync(tmpdir()), 'sift-probe-home-'));
   const base = mkdtempSync(join(realpathSync(tmpdir()), 'sift-probe-base-'));
   const args = opts.scale ? ['-scale', String(opts.scale)] : [];
+  if (opts.recommending) args.push('-recommending');
   const env = { ...process.env, SIFT_HOME: home };
   const first = JSON.parse(
-    execFileSync(seed, [...args, home, FIXTURE, base], { env }).toString(),
+    execFileSync(seed, [...args, home, opts.fixture ?? FIXTURE, base], {
+      env,
+    }).toString(),
   );
   let stderr = '';
   const proc = spawn(bin, SERVE_ARGS, { env, stdio: 'pipe' });
@@ -96,6 +103,10 @@ export async function startServe(opts = {}) {
     home,
     dir: base,
     round: first.round,
+    /** Runs the seeded sift with args and stdin, as the agent would. */
+    sift(args, input = '') {
+      return execFileSync(bin, args, { env, input }).toString();
+    },
     async stop() {
       if (proc.exitCode === null) {
         proc.kill('SIGTERM');

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 )
@@ -35,54 +36,39 @@ func tree(t *testing.T, dir string) []string {
 	return out
 }
 
-// A move's destination, a source path and a merge target are each confined
-// to the repo: no "..", nothing under .git, nothing absolute outside it.
-// Each such row is skipped with the reason, and nothing outside the
-// worktree is written.
+// A file's path is confined to its repo: no "..", nothing under .git. A
+// round file whose path climbs out (a corrupt or crafted record) is skipped
+// with the reason, and nothing outside the worktree is written.
 func TestApplyRefusesPathsOutsideTheRepo(t *testing.T) {
 	g := newRig(t)
 	outside := filepath.Join(filepath.Dir(g.repo), "outside.md")
-	if err := os.WriteFile(outside, []byte("# Outside\n\n## Notes\n"), 0o644); err != nil {
+	if err := os.WriteFile(outside, []byte("# Outside\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	src := g.at("src", "intake", 1, "x")
-	src.Source.Path = "../outside.md"
-	merged := g.at("mtarget", "duplicate", 15, "- Keep the changelog current.")
-	merged.Source.Path = "../../elsewhere.md"
-	g.record(
-		g.at("up", "misplaced", 5, "- Never push to main."),
-		g.at("deep", "misplaced", 6, "- Never force-push."),
-		g.at("gitdir", "misplaced", 10, "- Run the slow suite before a release."),
-		src, merged,
-		g.at("dup2", "duplicate", 16, "- Keep the changelog up to date."),
-		g.at("ok", "dead-path", 14, "See `docs/gone.md` for the layout."),
-	)
-	if _, err := g.s.AddRows(ctx, g.round, []row.Row{
-		{ID: "up", Verdict: "move", Destination: "../outside.md#Notes"},
-		{ID: "deep", Verdict: "move", Destination: "docs/../../../deep.md#Notes"},
-		{ID: "gitdir", Verdict: "move", Destination: ".git/config#core"},
-		{ID: "src", Verdict: "delete"},
-		{ID: "dup2", Verdict: "merge:mtarget", Text: "- Keep the changelog current with every change."},
-		{ID: "ok", Verdict: "delete"},
-	}); err != nil {
-		t.Fatal(err)
+	crafted := func(rel string) rec.File {
+		f := rec.NewFile(row.Source{File: filepath.Join(g.repo, rel), Repo: g.repo, Ref: "origin/main", Path: rel}, "repo", 6000, "x\n")
+		return f
 	}
-	for _, id := range []string{"up", "deep", "gitdir", "src", "dup2", "ok"} {
-		g.decide(id, row.Decision{Action: "accept"})
+	up, deep, gitdir, ok := crafted("../outside.md"), crafted("docs/../../../deep.md"), crafted(".git/config"), g.in(g.repo, "CLAUDE.md")
+	g.audit(up, deep, gitdir, ok)
+	for _, f := range []rec.File{up, deep, gitdir, ok} {
+		g.propose(g.rec(f, "# written\n"))
+	}
+	for _, f := range []rec.File{up, deep, gitdir, ok} {
+		g.decide(f, rec.Decision{Action: "accept"})
 	}
 	before := g.primary()
 	wtDir := t.TempDir()
-	res := g.run(Options{WorktreeDir: wtDir})
-	r := res.Repos[0]
-	if r.State != "branch" || len(r.Applied) != 1 || r.Applied[0].Row != "ok" || len(r.Skipped) != 5 {
+	r := one(t, g.run(Options{WorktreeDir: wtDir}))
+	if r.State != "branch" || len(r.Applied) != 1 || r.Applied[0].Key != ok.Key || len(r.Skipped) != 3 {
 		t.Fatalf("%+v", r)
 	}
 	for _, it := range r.Skipped {
 		if !strings.Contains(it.Why, "outside the repo") && !strings.Contains(it.Why, ".git") {
-			t.Errorf("%s skipped for %q, want a path refusal", it.Row, it.Why)
+			t.Errorf("%s skipped for %q, want a path refusal", it.Where, it.Why)
 		}
 	}
-	if b, _ := os.ReadFile(outside); string(b) != "# Outside\n\n## Notes\n" {
+	if b, _ := os.ReadFile(outside); string(b) != "# Outside\n" {
 		t.Errorf("the outside file changed:\n%s", b)
 	}
 	if files := tree(t, wtDir); len(files) != 0 {
@@ -94,19 +80,19 @@ func TestApplyRefusesPathsOutsideTheRepo(t *testing.T) {
 	if g.primary() != before {
 		t.Error("the primary clone's working tree or index changed")
 	}
-	if got := st.Git(t, g.repo, "ls-tree", "-r", "--name-only", r.Branch); got != "CLAUDE.md\ndocs/other.md" {
-		t.Errorf("branch tree:\n%s", got)
+	if got := st.Git(t, g.repo, "diff", "--name-only", "origin/main", r.Branch); got != "CLAUDE.md" {
+		t.Errorf("branch changes:\n%s", got)
 	}
 }
 
-// A tracked symlink at the destination, or a tracked symlinked directory on
-// the way to it, that points outside the repo is refused: the outside file
-// is not written through it.
+// A file that is a tracked symlink at the base, or under a tracked
+// symlinked directory, that points outside the repo is refused: the
+// outside file is not written through it.
 func TestApplyRefusesSymlinksOutOfTheRepo(t *testing.T) {
 	g := newRig(t)
 	out := t.TempDir()
 	target := filepath.Join(out, "target.md")
-	if err := os.WriteFile(target, []byte("# Target\n\n## Notes\n"), 0o644); err != nil {
+	if err := os.WriteFile(target, []byte("# Target\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, filepath.Join(g.repo, "docs", "link.md")); err != nil {
@@ -118,29 +104,23 @@ func TestApplyRefusesSymlinksOutOfTheRepo(t *testing.T) {
 	st.Git(t, g.repo, "add", "docs/link.md", "ext")
 	st.Git(t, g.repo, "commit", "-q", "-m", "links")
 	st.Git(t, g.repo, "push", "-q", "origin", "main")
-	g.record(
-		g.at("leaf", "misplaced", 5, "- Never push to main."),
-		g.at("parent", "misplaced", 6, "- Never force-push."),
-	)
-	if _, err := g.s.AddRows(ctx, g.round, []row.Row{
-		{ID: "leaf", Verdict: "move", Destination: "docs/link.md#Notes"},
-		{ID: "parent", Verdict: "move", Destination: "ext/notes.md#Notes"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	g.decide("leaf", row.Decision{Action: "accept"})
-	g.decide("parent", row.Decision{Action: "accept"})
+	leaf := g.in(g.repo, "docs/link.md")
+	parent := rec.NewFile(row.Source{File: filepath.Join(g.repo, "ext/target.md"), Repo: g.repo, Ref: "origin/main", Path: "ext/target.md"}, "repo", 6000, "# Target\n")
+	g.audit(leaf, parent)
+	g.propose(g.rec(leaf, "# written through\n"), g.rec(parent, "# written through\n"))
+	g.decide(leaf, rec.Decision{Action: "accept"})
+	g.decide(parent, rec.Decision{Action: "accept"})
 	before := g.primary()
-	r := g.run(Options{}).Repos[0]
+	r := one(t, g.run(Options{}))
 	if r.State != "nothing" || len(r.Skipped) != 2 {
 		t.Fatalf("%+v", r)
 	}
 	for _, it := range r.Skipped {
 		if !strings.Contains(it.Why, "symlink") {
-			t.Errorf("%s skipped for %q, want a symlink refusal", it.Row, it.Why)
+			t.Errorf("%s skipped for %q, want a symlink refusal", it.Where, it.Why)
 		}
 	}
-	if b, _ := os.ReadFile(target); string(b) != "# Target\n\n## Notes\n" {
+	if b, _ := os.ReadFile(target); string(b) != "# Target\n" {
 		t.Errorf("written through the symlink:\n%s", b)
 	}
 	if files := tree(t, out); len(files) != 1 {
@@ -177,9 +157,6 @@ func TestWriteFile(t *testing.T) {
 		if err := writeAt(root, rel, "x\n"); err == nil {
 			t.Errorf("%s: written", rel)
 		}
-		if err := removeAt(root, rel); err == nil && (rel == "leaf.md" || rel == "alias/inside.md") {
-			t.Errorf("%s: removed through a symlink", rel)
-		}
 	}
 	if b, _ := os.ReadFile(target); string(b) != "outside\n" {
 		t.Errorf("target changed: %q", b)
@@ -198,12 +175,6 @@ func TestWriteFile(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(filepath.Join(root, "new", "dir", "file.md")); string(b) != "again\n" {
 		t.Errorf("file.md %q", b)
-	}
-	if err := removeAt(root, "new/dir/file.md"); err != nil {
-		t.Errorf("remove: %v", err)
-	}
-	if err := removeAt(root, "gone/file.md"); err != nil {
-		t.Errorf("remove a missing file: %v", err)
 	}
 }
 
@@ -266,21 +237,19 @@ func TestApplyReplacesAHardLinkedDestination(t *testing.T) {
 			if err := os.WriteFile(outFile, []byte(want), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			r := g.at("mv", "misplaced", 5, "- Never push to main.")
-			g.record(r)
-			if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: "mv", Verdict: "move", Destination: "docs/other.md#Notes"}}); err != nil {
-				t.Fatal(err)
-			}
-			g.decide("mv", row.Decision{Action: "accept"})
+			o := g.in(g.repo, "docs/other.md")
+			g.audit(o)
+			g.propose(g.rec(o, other+"- Never push to main, moved here.\n"))
+			g.decide(o, rec.Decision{Action: "accept"})
 			linkAt(t, "docs", "other.md", outFile)
-			res := g.run(Options{}).Repos[0]
+			res := one(t, g.run(Options{}))
 			if res.State != "branch" {
 				t.Fatalf("state %q (%s)", res.State, res.Detail)
 			}
 			if b, err := os.ReadFile(outFile); err != nil || string(b) != want {
 				t.Errorf("the outside file changed: %q %v", b, err)
 			}
-			if got := g.show(res.Branch, "docs/other.md"); !strings.Contains(got, "- Never push to main.") {
+			if got := g.show(g.repo, res.Branch, "docs/other.md"); !strings.Contains(got, "moved here") {
 				t.Errorf("docs/other.md on the branch:\n%s", got)
 			}
 		})

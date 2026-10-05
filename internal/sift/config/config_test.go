@@ -164,3 +164,16 @@ func TestEnabledAppliesTheHarnessConfig(t *testing.T) {
 		t.Fatalf("%+v %v", ps, err)
 	}
 }
+
+// Forks and vendor-managed skills are left out unless the config includes
+// them.
+func TestInclude(t *testing.T) {
+	c, err := Load(write(t, "profiles = [\"pi\"]\n"))
+	if err != nil || c.Include != (Include{}) {
+		t.Fatalf("%+v %v", c.Include, err)
+	}
+	c, err = Load(write(t, "profiles = [\"pi\"]\n[include]\nforks = true\nvendor = true\n"))
+	if err != nil || c.Include != (Include{Forks: true, Vendor: true}) {
+		t.Fatalf("%+v %v", c.Include, err)
+	}
+}

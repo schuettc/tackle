@@ -30,12 +30,12 @@ import (
 )
 
 // Instructions are the standing guidance the agent gets with the channel.
-const Instructions = `sift audits the instruction files coding agents read (global files, repo files, skills) and puts its findings on a review page, where the user decides each one.
-- Run sift_check when the user asks for an audit, or when sift due says one is due. It records a round of rows; certain rows are fixed by sift itself.
-- For each row that needs judgment, propose a verdict with a reason, and write any proposed text as guidance: say what to do. Add the proposals with ` + "`sift rows add`" + ` (one JSON row per line on stdin: id, verdict, text, title, destination, reason).
-- Then run sift_review once to open the page for the user, tell them how many rows wait, and carry on with other work. The user decides on the page; ask about rows there.
-- The user's decisions arrive as a channel event from sift. Follow its steps: sift_apply writes a branch per repo; then run ` + "`sift reconcile`" + ` and review each branch against its rows.
-- sift_status tells you what is open, decided and sent.
+const Instructions = `sift audits the instruction files coding agents read (global files, repo files, skills). For each file with findings you recommend one revised version, and the user accepts, edits or rejects each file on a review page.
+- Run sift_check when the user asks for an audit, or when sift due says one is due. It records a round and says how many files need a recommendation.
+- Recommend every file: sift_next gives one file with its content, findings and the guidance for the rewrite; sift_propose stores the whole revised file. Repeat until sift_next says done. Recommend files that move text between them in one sift_propose call, each linking the other.
+- Then run sift_review once to open the page for the user, tell them how many files wait, and carry on with other work. The page opens only once every file has a recommendation.
+- The user's decisions arrive as a channel event from sift. Follow its steps: sift_apply writes a branch per repo; then run ` + "`sift reconcile`" + ` and review each branch.
+- sift_status tells you the round's state and what is open, decided and sent.
 - When sift reports an error, say what failed and leave the files as they are.`
 
 // Identity is the session this channel serves.

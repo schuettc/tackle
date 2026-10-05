@@ -42,7 +42,7 @@ func (f *fixture) decisionOf(id string) *row.Decision {
 
 // An approval binds to the proposal the page showed: an old page accepting
 // after a same-round `rows add` changed the proposal gets 409, with nothing
-// stored. Undo and redo carry the fingerprint too.
+// stored.
 func TestAnOldPageCannotAcceptAChangedProposal(t *testing.T) {
 	f := newFixture(t)
 	old := f.printOf("r-neg")
@@ -64,24 +64,6 @@ func TestAnOldPageCannotAcceptAChangedProposal(t *testing.T) {
 	if c := put(f.printOf("r-neg")); c != 204 {
 		t.Errorf("accept with the current fingerprint: %d", c)
 	}
-	fix := func(op, print string) int {
-		return f.do("POST", "/api/"+op, fmt.Sprintf(`{"round":%d,"id":"r-dead","fingerprint":%q}`, f.round, print)).Code
-	}
-	if c := fix("undo", "0000"); c != 409 {
-		t.Errorf("undo with another fingerprint: %d", c)
-	}
-	if c := fix("undo", ""); c != 400 {
-		t.Errorf("undo with no fingerprint: %d", c)
-	}
-	if d := f.decisionOf("r-dead"); d != nil {
-		t.Fatalf("stored %+v", d)
-	}
-	if c := fix("undo", f.printOf("r-dead")); c != 204 {
-		t.Errorf("undo: %d", c)
-	}
-	if c := fix("redo", "0000"); c != 409 {
-		t.Errorf("redo with another fingerprint: %d", c)
-	}
 }
 
 // An edit to merge:C binds to C as the page showed it: C changed since gets
@@ -89,15 +71,12 @@ func TestAnOldPageCannotAcceptAChangedProposal(t *testing.T) {
 func TestAnOldPageCannotMergeIntoAChangedTarget(t *testing.T) {
 	f := newFixture(t)
 	old := f.printOf("r-size")
-	if _, err := f.st.AddRows(context.Background(), f.round, []row.Row{{ID: "r-size", Verdict: "keep"}}); err != nil {
+	if _, err := f.st.AddRows(context.Background(), f.round, []row.Row{{ID: "r-size", Verdict: "ask"}}); err != nil {
 		t.Fatal(err)
 	}
 	put := func(target string) int {
 		return f.do("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":"r-dead","action":"reject"},
 			{"id":"r-neg","action":"edit","verdict":"merge:r-size","text":"both","target_fingerprint":%q}]}`, f.round, target)).Code
-	}
-	if w := f.do("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":"r-dead","action":"reject"},{"id":"r-neg","action":"edit","verdict":"merge:r-size","text":"both","target_fingerprint":%q}]}`, f.round, old)); true {
-		t.Log(w.Code, w.Body.String())
 	}
 	if c := put(old); c != 409 {
 		t.Errorf("edit with the target's old fingerprint: %d", c)

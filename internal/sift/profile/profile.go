@@ -35,9 +35,13 @@ type Profile struct {
 	// RepoFiles are the instruction file names loaded per directory in a repo,
 	// in precedence order. With FirstOnly the harness loads only the first
 	// one present in each directory (and only the first global candidate).
-	RepoFiles   []string `toml:"repo_files" json:"repo_files"`
-	FirstOnly   bool     `toml:"first_only,omitempty" json:"first_only,omitempty"`
-	Skills      []string `toml:"skills,omitempty" json:"skills,omitempty"`
+	RepoFiles []string `toml:"repo_files" json:"repo_files"`
+	FirstOnly bool     `toml:"first_only,omitempty" json:"first_only,omitempty"`
+	Skills    []string `toml:"skills,omitempty" json:"skills,omitempty"`
+	// Vendor lists skill directories a tool keeps in sync from elsewhere
+	// (relative to the home, like Skills): not the user's to rewrite, so
+	// skipped unless the config includes them.
+	Vendor      []string `toml:"vendor,omitempty" json:"vendor,omitempty"`
 	Transcripts []string `toml:"transcripts,omitempty" json:"transcripts,omitempty"`
 	Memory      string   `toml:"memory,omitempty" json:"memory,omitempty"`
 	// LoadLimit is the combined size in bytes past which the harness stops
@@ -58,6 +62,7 @@ func Builtins() []Profile {
 			Global:      []string{"CLAUDE.md"},
 			RepoFiles:   []string{"CLAUDE.md"},
 			Skills:      []string{"skills"},
+			Vendor:      []string{"skills/synced"},
 			Transcripts: []string{"projects/*/*.jsonl"},
 			Memory:      "projects/*/memory",
 		},
