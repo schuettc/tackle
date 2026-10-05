@@ -36,21 +36,48 @@ const (
 	ClassSkill  Class = "skill"  // when the skill is used
 )
 
-// File is one audited file.
+// File is one physical file, one per real path, however many ways it is
+// loaded (see Load).
 type File struct {
-	// Path is where the file was found: under the repo root for a repo file,
-	// or the path a profile names (a symlink, perhaps) for a global or skill.
-	Path  string
-	Class Class
-	// Profiles names the enabled harnesses that load the file (none for a
-	// skill in a repo: which harness loads it depends on where it is
-	// installed).
+	// Path is where the file was found first: under the repo root for a repo
+	// file, or the path a profile names (a symlink, perhaps) for a global or
+	// skill.
+	Path string
+	// Class and Profiles are derived from the file's loads: global when some
+	// harness loads it as its global file, else skill or repo by name; and
+	// the harnesses that load it in any way (none for a skill in a repo:
+	// which harness loads it depends on where it is installed).
+	Class    Class
 	Profiles []string
 	Repo     *Repo  // nil outside a repo
 	Rel      string // repo-relative, '/'-separated
 	Content  string
 	// Also lists other paths that reach the same file (symlinks).
 	Also []string
+	// Context marks a file read only for chains: an instruction file above a
+	// root inside a repo, which a harness loads but sift does not audit. It
+	// gets no rows and is not in Result.Files.
+	Context bool
+}
+
+// Role is how a harness loads a file.
+type Role string
+
+// The roles.
+const (
+	RoleGlobal Role = "global" // the harness's global file
+	RoleRepo   Role = "repo"   // the file it picks in a directory
+	RoleSkill  Role = "skill"  // a skill in its skill directories
+)
+
+// Load is one way a harness loads a file, as discovery found it. A global
+// that links into a repo has two: the global's harness loads it as its
+// global, and a harness that picks it there loads it as a repo file.
+type Load struct {
+	Profile string
+	Role    Role
+	Dir     string // repo-relative directory of a repo load; "" is the root
+	File    *File
 }
 
 // Repo is one git repository under a root.
@@ -72,8 +99,9 @@ func (r *Repo) Has(rel string) bool { return r.Tree[strings.TrimSuffix(path.Clea
 type Copy struct{ Path, Of string }
 
 // Chain is what a load-limited harness loads in one directory of a repo: its
-// global file, then the file it picks in each directory from the repo root
-// down. Only the deepest chains are listed.
+// global file, then the files it picks in each directory from the repo root
+// down. A file loaded both ways is in it twice. Only the deepest chains are
+// listed, and each ends at an audited file.
 type Chain struct {
 	Profile string
 	Repo    *Repo
@@ -85,7 +113,8 @@ type Chain struct {
 
 // Result is everything Run found.
 type Result struct {
-	Files    []*File
+	Files    []*File // audited files
+	Loads    []Load  // every load, context files' included, in discovery order
 	Repos    []*Repo
 	Copies   []Copy
 	Chains   []Chain
@@ -108,23 +137,18 @@ type finder struct {
 	res   Result
 	real  map[string]*File     // realpath → file, so a file reached twice is one
 	repos map[string]*repoTree // root → repo
-	// context holds, by realpath, instruction files above a root inside a
-	// repo: in chains, never audited.
-	context map[string]*File
-	// picks holds the profiles that load each repo file as a repo file (a
-	// global that links into a repo has other profiles too).
-	picks map[*File][]string
 }
 
 // Run discovers the files.
 func Run(ctx context.Context, opt Options) (Result, error) {
-	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}, context: map[string]*File{}, picks: map[*File][]string{}}
+	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}}
 	f.globals()
 	for _, root := range opt.Roots {
 		f.root(ctx, root)
 	}
 	f.skillDirs()
 	f.collapseCopies()
+	f.derive()
 	f.chains()
 	rank := map[Class]int{ClassGlobal: 0, ClassRepo: 1, ClassSkill: 2}
 	sort.SliceStable(f.res.Files, func(i, j int) bool {
@@ -142,33 +166,63 @@ func (f *finder) warn(format string, a ...any) {
 }
 
 // add records a disk file, or merges it into the file already reached by
-// another path. It returns the file.
-func (f *finder) add(p string, class Class, prof string) *File {
+// another path, and records prof's load of it in role (none without a
+// profile). It returns the file.
+func (f *finder) add(p string, class Class, role Role, prof string) *File {
 	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		real = p
 	}
-	if have, ok := f.real[real]; ok {
-		if prof != "" && !contains(have.Profiles, prof) {
-			have.Profiles = append(have.Profiles, prof)
+	file, ok := f.real[real]
+	if ok {
+		if p != file.Path && !contains(file.Also, p) {
+			file.Also = append(file.Also, p)
 		}
-		if p != have.Path && !contains(have.Also, p) {
-			have.Also = append(have.Also, p)
+	} else {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			f.warn("%s: %v", p, err)
+			return nil
 		}
-		return have
+		file = &File{Path: p, Class: class, Content: string(b)}
+		f.real[real] = file
+		f.res.Files = append(f.res.Files, file)
 	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		f.warn("%s: %v", p, err)
-		return nil
-	}
-	file := &File{Path: p, Class: class, Content: string(b)}
 	if prof != "" {
-		file.Profiles = []string{prof}
+		f.load(prof, role, "", file)
 	}
-	f.real[real] = file
-	f.res.Files = append(f.res.Files, file)
 	return file
+}
+
+// load records that prof loads file in role, once.
+func (f *finder) load(prof string, role Role, dir string, file *File) {
+	for _, l := range f.res.Loads {
+		if l.Profile == prof && l.Role == role && l.Dir == dir && l.File == file {
+			return
+		}
+	}
+	f.res.Loads = append(f.res.Loads, Load{Profile: prof, Role: role, Dir: dir, File: file})
+}
+
+// derive sets each file's class and profiles from its loads.
+func (f *finder) derive() {
+	for _, file := range f.real {
+		file.Profiles = nil
+		switch {
+		case file.Class == ClassSkill || path.Base(filepath.ToSlash(file.Path)) == profile.SkillFile:
+			file.Class = ClassSkill
+		default:
+			file.Class = ClassRepo
+		}
+	}
+	for _, l := range f.res.Loads {
+		if l.Role == RoleGlobal {
+			l.File.Class = ClassGlobal
+		}
+		if !contains(l.File.Profiles, l.Profile) {
+			l.File.Profiles = append(l.File.Profiles, l.Profile)
+		}
+	}
 }
 
 // globals adds each profile's global file: the first candidate present
@@ -180,7 +234,7 @@ func (f *finder) globals() {
 			if st, err := os.Stat(gp); err != nil || !st.Mode().IsRegular() {
 				continue
 			}
-			f.add(gp, ClassGlobal, p.Name)
+			f.add(gp, ClassGlobal, RoleGlobal, p.Name)
 			if p.FirstOnly {
 				break
 			}
@@ -229,7 +283,7 @@ func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
 				f.walkSkills(fp, prof, seen)
 			}
 		case regular && e.Name() == profile.SkillFile:
-			f.add(fp, ClassSkill, prof)
+			f.add(fp, ClassSkill, RoleSkill, prof)
 		}
 	}
 }
@@ -312,12 +366,10 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 			if name == profile.SkillFile {
 				class = ClassSkill
 			}
-			file := f.add(filepath.Join(dir, name), class, "")
+			file := f.add(filepath.Join(dir, name), class, RoleRepo, "")
 			if file != nil {
 				for _, pn := range profs {
-					if !contains(file.Profiles, pn) {
-						file.Profiles = append(file.Profiles, pn)
-					}
+					f.load(pn, RoleRepo, "", file)
 				}
 			}
 		}
@@ -440,50 +492,42 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 	return nil
 }
 
-// repoFile reads one file of r at its base. A file already audited from the
-// repo is left alone; one a profile reached on disk (a global that links into
-// the repo) becomes the repo's file too: read at the base, with the repo's
-// profiles and path. A context file is kept for chains only, never audited.
+// repoFile reads one file of r at its base, once per real path, and records
+// the loads of the profiles that pick it there. A file a profile reached on
+// disk (a global that links into the repo) becomes the repo's file too: read
+// at the base, with the repo's path in Also. A context file is read for
+// chains only, until a root that audits it comes along.
 func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel string, profs []string, onlyContext bool) {
 	key := filepath.Join(realRoot, filepath.FromSlash(rel))
-	have := f.real[key]
-	if have != nil && have.Repo != nil {
-		return
-	}
-	if have == nil && onlyContext && f.context[key] != nil {
-		return
-	}
-	body, err := git(ctx, dir, "show", r.Ref+":"+rel)
-	if err != nil {
-		f.warn("%s: %v", filepath.Join(dir, rel), err)
-		return
-	}
 	p := filepath.Join(dir, filepath.FromSlash(rel))
-	if have != nil {
-		have.Repo, have.Rel, have.Content = r.Repo, rel, string(body)
-		for _, pn := range profs {
-			if !contains(have.Profiles, pn) {
-				have.Profiles = append(have.Profiles, pn)
+	file := f.real[key]
+	if file == nil || file.Repo == nil {
+		body, err := git(ctx, dir, "show", r.Ref+":"+rel)
+		if err != nil {
+			f.warn("%s: %v", p, err)
+			return
+		}
+		if file == nil {
+			class := ClassRepo
+			if path.Base(rel) == profile.SkillFile {
+				class = ClassSkill
 			}
+			file = &File{Path: p, Class: class, Context: onlyContext}
+			f.real[key] = file
+			if !onlyContext {
+				f.res.Files = append(f.res.Files, file)
+			}
+		} else if p != file.Path && !contains(file.Also, p) {
+			file.Also = append(file.Also, p)
 		}
-		if p != have.Path && !contains(have.Also, p) {
-			have.Also = append(have.Also, p)
-		}
-		f.picks[have] = profs
-		return
+		file.Repo, file.Rel, file.Content = r.Repo, rel, string(body)
+	} else if file.Context && !onlyContext {
+		file.Context = false
+		f.res.Files = append(f.res.Files, file)
 	}
-	class := ClassRepo
-	if path.Base(rel) == profile.SkillFile {
-		class = ClassSkill
+	for _, pn := range profs {
+		f.load(pn, RoleRepo, dirOf(rel), file)
 	}
-	file := &File{Path: p, Class: class, Profiles: profs, Repo: r.Repo, Rel: rel, Content: string(body)}
-	f.picks[file] = profs
-	if onlyContext {
-		f.context[key] = file
-		return
-	}
-	f.real[key] = file
-	f.res.Files = append(f.res.Files, file)
 }
 
 // readRepo reads a repo's tree at its base, once.
@@ -651,6 +695,22 @@ func (f *finder) collapseCopies() {
 		kept = append(kept, file)
 	}
 	f.res.Files = kept
+	dropped := map[*File]bool{}
+	for _, c := range f.res.Copies {
+		for real, file := range f.real {
+			if file.Path == c.Path {
+				dropped[file] = true
+				delete(f.real, real)
+			}
+		}
+	}
+	loads := f.res.Loads[:0]
+	for _, l := range f.res.Loads {
+		if !dropped[l.File] {
+			loads = append(loads, l)
+		}
+	}
+	f.res.Loads = loads
 }
 
 func firstSimilar(file *File, cands []*File) *File {
@@ -694,41 +754,37 @@ func lines(s string) []string {
 	return out
 }
 
-// chains builds, for each profile with a load limit, the deepest chain in
-// each repo: its global file and the file it picks in every directory from
-// the repo root down. Chains end at an audited file; the directories above
-// may hold context files (above a root inside the repo).
+// chains builds, from the loads alone, each load-limited profile's deepest
+// chains in each repo: for every deepest directory holding an audited file
+// it loads there, its global load, then its repo loads from the repo root
+// down to that directory, in load order. A file loaded both as the global
+// and as a repo file is in the chain twice, and counts twice.
 func (f *finder) chains() {
 	for _, p := range f.opt.Profiles {
 		if p.LoadLimit <= 0 {
 			continue
 		}
 		var global *File
-		for _, file := range f.res.Files {
-			if file.Class == ClassGlobal && contains(file.Profiles, p.Name) {
-				global = file
+		for _, l := range f.res.Loads {
+			if l.Profile == p.Name && l.Role == RoleGlobal {
+				global = l.File
 				break
 			}
 		}
-		loads := func(file *File, r *Repo) bool {
-			return file.Repo == r && path.Base(file.Rel) != profile.SkillFile && contains(f.picks[file], p.Name)
-		}
 		for _, r := range f.res.Repos {
-			byDir, above := map[string]*File{}, map[string]*File{}
-			for _, file := range f.res.Files {
-				if loads(file, r) {
-					byDir[dirOf(file.Rel)] = file
-				}
-			}
-			for _, file := range f.context {
-				if loads(file, r) {
-					above[dirOf(file.Rel)] = file
+			byDir, audited := map[string][]*File{}, map[string]bool{}
+			for _, l := range f.res.Loads {
+				if l.Profile == p.Name && l.Role == RoleRepo && l.File.Repo == r {
+					byDir[l.Dir] = append(byDir[l.Dir], l.File)
+					if !l.File.Context {
+						audited[l.Dir] = true
+					}
 				}
 			}
 			var dirs []string
-			for d := range byDir {
+			for d := range audited {
 				deepest := true
-				for o := range byDir {
+				for o := range audited {
 					if o != d && (d == "" || strings.HasPrefix(o, d+"/")) {
 						deepest = false
 						break
@@ -745,13 +801,7 @@ func (f *finder) chains() {
 					c.Files = append(c.Files, global)
 				}
 				for _, a := range ancestors(d) {
-					file := byDir[a]
-					if file == nil {
-						file = above[a]
-					}
-					if file != nil && file != global {
-						c.Files = append(c.Files, file)
-					}
+					c.Files = append(c.Files, byDir[a]...)
 				}
 				for _, file := range c.Files {
 					c.Bytes += len(file.Content)

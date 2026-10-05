@@ -460,3 +460,75 @@ func TestGlobalLinkedIntoARepo(t *testing.T) {
 		t.Fatalf("chains %+v", res.Chains)
 	}
 }
+
+// A global that links into one repo is that harness's global and, for the
+// harness that picks it there, a file of that repo only: it does not become
+// the other harness's global, so other repos' chains start with their own.
+func TestGlobalLinkedIntoARepoIsNotAnotherHarnesssGlobal(t *testing.T) {
+	st.Env(t)
+	home := st.Home(t)
+	ws := t.TempDir()
+	a := st.Repo(t, filepath.Join(ws, "a"), map[string]string{"AGENTS.md": "a agents\n", "CLAUDE.md": "a claude\n"})
+	st.Repo(t, filepath.Join(ws, "b"), map[string]string{"AGENTS.md": "b agents\n", "CLAUDE.md": "b claude\n"})
+	codexGlobal := st.Write(t, home, ".codex/AGENTS.md", "codex global\n")
+	claudeGlobal := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeGlobal), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(a, "AGENTS.md"), claudeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	profs := profiles(t, "claude-code", "codex")
+	profs[0].LoadLimit = 1 << 20 // so Claude has chains to look at too
+
+	res := run(t, Options{Profiles: profs, Roots: []config.Root{{Path: ws}}})
+	chains := map[string][]string{}
+	for _, c := range res.Chains {
+		var paths []string
+		for _, f := range c.Files {
+			p := f.Path
+			if f.Repo != nil {
+				p = filepath.Base(f.Repo.Root) + ":" + f.Rel
+			}
+			paths = append(paths, p)
+		}
+		chains[c.Profile+" "+filepath.Base(c.Repo.Root)+" "+c.Dir] = paths
+	}
+	want := map[string][]string{
+		"codex a ":       {codexGlobal, "a:AGENTS.md"},
+		"codex b ":       {codexGlobal, "b:AGENTS.md"},
+		"claude-code a ": {"a:AGENTS.md", "a:CLAUDE.md"},
+		"claude-code b ": {"a:AGENTS.md", "b:CLAUDE.md"},
+	}
+	if !reflect.DeepEqual(chains, want) {
+		t.Fatalf("chains\n got %q\nwant %q", chains, want)
+	}
+	var loads []string
+	for _, l := range res.Loads {
+		if l.File.Rel == "AGENTS.md" && filepath.Base(l.File.Repo.Root) == "a" {
+			loads = append(loads, fmt.Sprintf("%s %s %q", l.Profile, l.Role, l.Dir))
+		}
+	}
+	if w := []string{`claude-code global ""`, `codex repo ""`}; !reflect.DeepEqual(loads, w) {
+		t.Fatalf("loads of a:AGENTS.md %q, want %q", loads, w)
+	}
+}
+
+// A file read as context for a subtree root and audited by a whole-repo
+// root is one file, audited, whichever root comes first.
+func TestContextFileAuditedByAnotherRoot(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{"AGENTS.md": "top\n", "svc/AGENTS.md": "svc\n"})
+	sub, whole := config.Root{Path: filepath.Join(repo, "svc")}, config.Root{Path: repo}
+	for _, roots := range [][]config.Root{{sub, whole}, {whole, sub}} {
+		res := run(t, Options{Profiles: profiles(t, "codex"), Roots: roots})
+		m := byRel(res)
+		if k := strings.Join(keys(m), " "); k != "app:AGENTS.md app:svc/AGENTS.md" || m["app:AGENTS.md"].Context {
+			t.Fatalf("files %s", k)
+		}
+		if len(res.Chains) != 1 || len(res.Chains[0].Files) != 2 || res.Chains[0].Files[0] != m["app:AGENTS.md"] {
+			t.Fatalf("chains %+v", res.Chains)
+		}
+	}
+}

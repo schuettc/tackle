@@ -4,16 +4,24 @@ import (
 	"context"
 	"strings"
 
+	"github.com/schuettc/tackle/internal/sift/discover"
 	"github.com/schuettc/tackle/internal/sift/row"
 )
 
 // loadLimit flags a harness's chain (its global file plus every file from
 // the repo root down to a directory) past that harness's own limit: the
-// harness silently drops what comes after. The row is on the deepest file.
+// harness silently drops what comes after. The row is on the chain's
+// endpoint, the deepest audited file, never on a context file above a root.
 func loadLimit(_ context.Context, in *Input) []row.Row {
 	var rows []row.Row
 	for _, c := range in.Chains {
-		if c.Bytes <= c.Limit || len(c.Files) == 0 {
+		var leaf *discover.File
+		for _, f := range c.Files {
+			if !f.Context {
+				leaf = f
+			}
+		}
+		if c.Bytes <= c.Limit || leaf == nil {
 			continue
 		}
 		var ev []row.Fact
@@ -31,7 +39,6 @@ func loadLimit(_ context.Context, in *Input) []row.Row {
 		for _, d := range dropped {
 			ev = append(ev, fact("dropped", "%s", d))
 		}
-		leaf := c.Files[len(c.Files)-1]
 		dir := c.Dir
 		if dir == "" {
 			dir = "the repo root"

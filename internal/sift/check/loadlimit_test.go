@@ -1,6 +1,7 @@
 package check
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,52 @@ func TestLoadLimitOnASubtreeRoot(t *testing.T) {
 	}
 	for _, r := range Run(ctx, in) {
 		if r.Source.File == top {
+			t.Errorf("the ancestor has a row: %+v", r)
+		}
+	}
+}
+
+// A global that links to an audited subtree leaf is loaded twice, as the
+// global and as the leaf: the chain counts it twice, and the row is on it,
+// never on the unaudited ancestor between.
+func TestLoadLimitOnAGlobalThatIsTheLeaf(t *testing.T) {
+	st.Env(t)
+	home := st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "repo"), map[string]string{
+		"AGENTS.md":     strings.Repeat("a", 12000),
+		"svc/AGENTS.md": strings.Repeat("s", 12000),
+	})
+	global := filepath.Join(home, ".codex", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(global), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(repo, "svc", "AGENTS.md"), global); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := profile.Builtin("codex")
+	res, err := discover.Run(ctx, discover.Options{Profiles: []profile.Profile{p}, Roots: []config.Root{{Path: filepath.Join(repo, "svc")}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 1 || res.Files[0].Rel != "svc/AGENTS.md" {
+		t.Fatalf("files %+v", res.Files)
+	}
+	leaf := res.Files[0]
+	if len(res.Chains) != 1 {
+		t.Fatalf("chains %+v", res.Chains)
+	}
+	c := res.Chains[0]
+	if len(c.Files) != 3 || c.Files[0] != leaf || c.Files[1].Rel != "AGENTS.md" || c.Files[2] != leaf || c.Bytes != 36000 {
+		t.Fatalf("chain %+v", c)
+	}
+	in := input(res.Files...)
+	in.Chains = res.Chains
+	rows := only(t, "load-limit", in)
+	if len(rows) != 1 || rows[0].Source.File != leaf.Path {
+		t.Fatalf("%+v", rows)
+	}
+	for _, r := range Run(ctx, in) {
+		if r.Source.File == filepath.Join(repo, "AGENTS.md") {
 			t.Errorf("the ancestor has a row: %+v", r)
 		}
 	}
