@@ -9,9 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/schuettc/tackle/internal/sift/gitenv"
 )
 
-// Env isolates git for the rest of the test.
+// Env isolates git for the rest of the test, clearing the variables sift's
+// own git calls drop (gitenv.Selectors).
 func Env(t testing.TB) {
 	t.Helper()
 	dir := t.TempDir()
@@ -27,7 +30,7 @@ func Env(t testing.TB) {
 	} {
 		t.Setenv(k, v)
 	}
-	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+	for _, k := range gitenv.Selectors {
 		t.Setenv(k, "")
 		_ = os.Unsetenv(k)
 	}

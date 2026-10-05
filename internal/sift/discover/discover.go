@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/schuettc/tackle/internal/sift/config"
+	"github.com/schuettc/tackle/internal/sift/gitenv"
 	"github.com/schuettc/tackle/internal/sift/profile"
 )
 
@@ -562,28 +563,9 @@ func resolveRef(ctx context.Context, dir, base string) string {
 	return ""
 }
 
-// repoSelectors are the variables that point git at a repository other than
-// the one -C names (git rev-parse --local-env-vars, less the config ones,
-// plus the namespace and a receive hook's quarantine). A git hook exports
-// some of them, so sift run from a hook would read the hook's repo.
-var repoSelectors = map[string]bool{
-	"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_IMPLICIT_WORK_TREE": true, "GIT_INDEX_FILE": true,
-	"GIT_COMMON_DIR": true, "GIT_OBJECT_DIRECTORY": true, "GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
-	"GIT_GRAFT_FILE": true, "GIT_SHALLOW_FILE": true, "GIT_NO_REPLACE_OBJECTS": true,
-	"GIT_REPLACE_REF_BASE": true, "GIT_PREFIX": true, "GIT_NAMESPACE": true, "GIT_QUARANTINE_PATH": true,
-}
-
 // GitEnv returns env without the variables that select a repository, for
 // every git command sift runs.
-func GitEnv(env []string) []string {
-	out := make([]string, 0, len(env))
-	for _, kv := range env {
-		if k, _, _ := strings.Cut(kv, "="); !repoSelectors[k] {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
+func GitEnv(env []string) []string { return gitenv.Clean(env) }
 
 // Git runs git in dir with the repository-selecting variables cleared.
 func Git(ctx context.Context, dir string, args ...string) *exec.Cmd {
