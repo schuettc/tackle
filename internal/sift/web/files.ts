@@ -1,8 +1,8 @@
 // files.ts — an audit round's files on the page, no DOM: the list's
 // entries (linked files together), each file's sizes and decision, the
 // line diff between the audited file and its recommendation, and the
-// decisions a group of linked files takes together (as the store takes
-// them). Tested with node --test (files.test.ts).
+// server's snapshots of a group's files after a decision. Tested with node
+// --test (files.test.ts).
 
 import { displayPath } from './model.ts';
 
@@ -234,48 +234,13 @@ export function printsFor(
   return out;
 }
 
-/** The prints a decision or clear returned: the group's content as it now
- * stands (an edit counts), which the page's next decision answers. */
-export function holdPrints(
-  files: FileView[],
-  prints: Record<string, string> | undefined,
-): void {
-  for (const [k, p] of Object.entries(prints ?? {})) {
-    const f = files.find((x) => x.key === k);
-    if (f) f.fingerprint = p;
+/** A decision's snapshot, shown: each file the server returned replaces
+ * the page's, content and print together. */
+export function holdFiles(files: FileView[], snap: FileView[]): void {
+  for (const f of snap) {
+    const i = files.findIndex((x) => x.key === f.key);
+    if (i >= 0) files[i] = f;
   }
-}
-
-/** A decision on key as the store takes it, applied to the page's files:
- * accept or reject sets every linked file (an accept keeps any edit, key's
- * own included, and another file's accept); an edit is key's, and accepts
- * the others not decided that way; null clears them all. The note is key's
- * alone. */
-export function decideLocal(
-  files: FileView[],
-  key: string,
-  d: FileDecision | null,
-): void {
-  const f = files.find((x) => x.key === key);
-  if (!f) return;
-  for (const k of f.group) {
-    const m = files.find((x) => x.key === k);
-    if (!m) continue;
-    const cur = m.decision;
-    if (d === null) m.decision = null;
-    else if (k === key && d.action === 'accept' && cur?.action === 'edit')
-      m.decision = { ...cur, note: d.note ?? '', sent: false };
-    else if (k === key) m.decision = { ...d, sent: false };
-    else if (d.action === 'reject')
-      m.decision = { action: 'reject', note: cur?.note ?? '', sent: false };
-    else if (cur && (cur.action === 'edit' || cur.action === 'accept'))
-      continue;
-    else m.decision = { action: 'accept', note: cur?.note ?? '', sent: false };
-  }
-  // The edit's own size shows in the list.
-  if (f.decision?.action === 'edit' && f.decision.content !== undefined)
-    f.after = f.decision.content.length;
-  else if (f.rec) f.after = f.rec.content.length;
 }
 
 /** Decided of the files with a recommendation. */

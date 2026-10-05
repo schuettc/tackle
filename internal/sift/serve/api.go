@@ -25,7 +25,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/decisions", s.putDecisions)
 	mux.HandleFunc("DELETE /api/decisions", s.deleteDecision)
 	mux.HandleFunc("PUT /api/files", s.putFile)
-	mux.HandleFunc("DELETE /api/files", s.deleteFile)
+	mux.HandleFunc("POST /api/files/clear", s.clearFile)
+	mux.HandleFunc("PUT /api/notes", s.putNote)
 	mux.HandleFunc("GET /api/base", s.base)
 	mux.HandleFunc("POST /api/send", s.send)
 	mux.HandleFunc("GET /api/file", s.file)
@@ -280,19 +281,21 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, TargetFingerprint: d.TargetFingerprint, Decision: d.decision()})
 	}
-	if !s.answer(w, r.Context(), b.Round, as) {
+	after, err := s.st.Answer(r.Context(), b.Round, as)
+	if err != nil {
+		s.rowErr(w, r.Context(), b.Round, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
-	w.WriteHeader(http.StatusNoContent)
+	// The answered rows as they now are: the page shows them, and its next
+	// decision answers their fingerprints.
+	writeJSON(w, http.StatusOK, map[string]any{"rows": after})
 }
 
-// answer stores the decisions (store.Answer) and writes the error when it
-// can't: 409 when the round moved on, a row changed since the page showed
-// it, or the agent is still answering the items. ok is false after writing
-// the error.
-func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64, as []store.Answer) bool {
-	err := s.st.Answer(ctx, round, as)
+// rowErr writes a row decision's error: 409 when the round moved on, a row
+// changed since the page showed it, or the agent is still answering the
+// items.
+func (s *Server) rowErr(w http.ResponseWriter, ctx context.Context, round int64, err error) {
 	switch {
 	case errors.Is(err, store.ErrStale):
 		writeErr(w, http.StatusConflict, "stale")
@@ -301,10 +304,9 @@ func (s *Server) answer(w http.ResponseWriter, ctx context.Context, round int64,
 	case errors.Is(err, store.ErrNotReady):
 		p, _ := s.st.State(ctx, round)
 		writeErr(w, http.StatusConflict, fmt.Sprintf("the agent is still recommending: %d of %d items have its verdict; decisions open once every one has", p.Recommended, p.Files))
-	case err != nil:
+	default:
 		writeErr(w, http.StatusInternalServerError, err.Error())
 	}
-	return err == nil
 }
 
 // perItem checks the round is decided per item (backlog, intake); an audit
@@ -335,15 +337,20 @@ func (s *Server) deleteDecision(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "stale")
 		return
 	}
+	if q.Get("fingerprint") == "" {
+		writeErr(w, http.StatusBadRequest, "a clear carries the fingerprint of the row it answers")
+		return
+	}
 	if !s.perItem(w, r.Context(), round) {
 		return
 	}
-	if err := s.st.Undecide(r.Context(), round, rw.ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+	after, err := s.st.Undecide(r.Context(), round, rw.ID, q.Get("fingerprint"))
+	if err != nil {
+		s.rowErr(w, r.Context(), round, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": round})
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"rows": []row.Row{after}})
 }
 
 // fileApplied names the first file of key's group whose repo apply has
@@ -420,36 +427,112 @@ func (s *Server) putFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	prints, err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints)
+	after, err := s.st.DecideFile(r.Context(), b.Round, b.File, d, b.Prints)
 	if err != nil {
 		fileErr(w, err)
 		return
 	}
 	s.events.emit("decisions", map[string]int64{"round": b.Round})
-	// The group's prints now: the page holds them for its next decision.
-	writeJSON(w, http.StatusOK, map[string]any{"prints": prints})
+	writeJSON(w, http.StatusOK, map[string]any{"files": filesOf(after)})
 }
 
-func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	round, _ := strconv.ParseInt(q.Get("round"), 10, 64)
-	if _, ok := s.current(w, r.Context(), round); !ok {
+// filesOf is a decision's snapshot on the wire: the group's files as they
+// now are. The page shows them, and its next decision answers their prints.
+func filesOf(items []store.FileItem) []fileJSON {
+	out := make([]fileJSON, 0, len(items))
+	for _, it := range items {
+		out = append(out, fileOf(it))
+	}
+	return out
+}
+
+// clearFile clears a file's group (an edited file goes back to the
+// recommendation), against the prints the page showed, as putFile decides.
+func (s *Server) clearFile(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Round  int64             `json:"round"`
+		File   string            `json:"file"`
+		Prints map[string]string `json:"prints"`
+	}
+	if err := decode(r, &b); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if done, err := s.fileApplied(r.Context(), round, q.Get("file")); err != nil {
+	if len(b.Prints) == 0 {
+		writeErr(w, http.StatusBadRequest, "a clear carries the fingerprints of the files it answers (prints)")
+		return
+	}
+	if _, ok := s.current(w, r.Context(), b.Round); !ok {
+		return
+	}
+	if done, err := s.fileApplied(r.Context(), b.Round, b.File); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	} else if done != "" {
 		writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
 		return
 	}
-	prints, err := s.st.UndecideFile(r.Context(), round, q.Get("file"))
+	after, err := s.st.UndecideFile(r.Context(), b.Round, b.File, b.Prints)
 	if err != nil {
 		fileErr(w, err)
 		return
 	}
-	s.events.emit("decisions", map[string]int64{"round": round})
-	writeJSON(w, http.StatusOK, map[string]any{"prints": prints})
+	s.events.emit("decisions", map[string]int64{"round": b.Round})
+	writeJSON(w, http.StatusOK, map[string]any{"files": filesOf(after)})
+}
+
+// putNote sets the note on a file's decision (file) or a backlog row's
+// (id), and nothing else: it approves nothing, so it carries no print.
+func (s *Server) putNote(w http.ResponseWriter, r *http.Request) {
+	var b struct {
+		Round int64  `json:"round"`
+		File  string `json:"file"`
+		ID    string `json:"id"`
+		Note  string `json:"note"`
+	}
+	if err := decode(r, &b); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if (b.File == "") == (b.ID == "") {
+		writeErr(w, http.StatusBadRequest, "a note is on one file or one row")
+		return
+	}
+	if _, ok := s.current(w, r.Context(), b.Round); !ok {
+		return
+	}
+	var err error
+	if b.File != "" {
+		if done, err := s.fileApplied(r.Context(), b.Round, b.File); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		} else if done != "" {
+			writeErr(w, http.StatusConflict, "already applied: "+done+" is on its branch; change it there")
+			return
+		}
+		err = s.st.NoteFile(r.Context(), b.Round, b.File, b.Note)
+	} else {
+		if !s.perItem(w, r.Context(), b.Round) {
+			return
+		}
+		err = s.st.Note(r.Context(), b.Round, b.ID, b.Note)
+	}
+	switch {
+	case errors.Is(err, store.ErrStale):
+		writeErr(w, http.StatusConflict, "stale")
+		return
+	case errors.Is(err, store.ErrChanged):
+		writeErr(w, http.StatusConflict, "changed: the decision this note was on is gone; look again")
+		return
+	case errors.Is(err, store.ErrNotReady):
+		writeErr(w, http.StatusConflict, "the agent is still recommending")
+		return
+	case err != nil:
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.events.emit("decisions", map[string]int64{"round": b.Round})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // base returns a round file's content at the audit, read back at its

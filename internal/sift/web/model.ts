@@ -87,6 +87,15 @@ export function markSent(rows: Finding[]): void {
   for (const r of rows) if (r.decision) r.decision.sent = true;
 }
 
+/** A decision's snapshot, shown: each row the server returned replaces the
+ * page's, its decision and fingerprint together. */
+export function holdRows(rows: Finding[], snap: Finding[]): void {
+  for (const r of snap) {
+    const i = rows.findIndex((x) => x.id === r.id);
+    if (i >= 0) rows[i] = r;
+  }
+}
+
 /** A backlog round groups by kind: its kind says so, or every row is intake. */
 export function isBacklog(round: ReviewRound | null, rows: Finding[]): boolean {
   if (round?.kind === 'backlog') return true;

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -249,11 +250,26 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	if err := json.Unmarshal([]byte(sum), &r.Summary); err != nil {
 		return r, nil, err
 	}
-	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.cleared, d.note, d.sent_at FROM rows r
-		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
-		WHERE r.round_id = ? ORDER BY r.seq`, r.ID)
+	rows, err := rowsOf(ctx, s.db, r.ID)
 	if err != nil {
 		return r, nil, err
+	}
+	return r, rows, nil
+}
+
+// querier is a database or a transaction.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// rowsOf is a round's rows in the order they were recorded, each with its
+// decision and its fingerprint.
+func rowsOf(ctx context.Context, db querier, roundID int64) ([]row.Row, error) {
+	q, err := db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.cleared, d.note, d.sent_at FROM rows r
+		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
+		WHERE r.round_id = ? ORDER BY r.seq`, roundID)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = q.Close() }()
 	var rows []row.Row
@@ -262,11 +278,11 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 		var action, verdict, title, text, cleared, note sql.NullString
 		var sent sql.NullInt64
 		if err := q.Scan(&body, &action, &verdict, &title, &text, &cleared, &note, &sent); err != nil {
-			return r, nil, err
+			return nil, err
 		}
 		var rw row.Row
 		if err := json.Unmarshal([]byte(body), &rw); err != nil {
-			return r, nil, err
+			return nil, err
 		}
 		rw.Decision = nil
 		if action.Valid {
@@ -279,7 +295,7 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 		rows = append(rows, rw)
 	}
 	if err := q.Err(); err != nil {
-		return r, nil, err
+		return nil, err
 	}
 	byID := make(map[string]*row.Row, len(rows))
 	for i := range rows {
@@ -288,7 +304,7 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	for i := range rows {
 		rows[i].Fingerprint = rows[i].Print(byID[row.MergeTarget(rows[i].Verdict)])
 	}
-	return r, rows, nil
+	return rows, nil
 }
 
 // ErrChanged is returned when a decision answers a fingerprint the row no
@@ -310,7 +326,8 @@ type Answer struct {
 // review page's decisions go through Answer, which checks the fingerprint.
 // Both refuse to approve a merge into a row the round lacks (ErrChanged).
 func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.Decision) error {
-	return s.answer(ctx, roundID, []Answer{{Row: rowID, Decision: d}}, false)
+	_, err := s.answer(ctx, roundID, []Answer{{Row: rowID, Decision: d}}, false)
+	return err
 }
 
 // Answer records decisions on a round's rows, all or nothing, each only if
@@ -318,18 +335,21 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 // one given, and, for an edit to merge:C, C's is still TargetFingerprint:
 // ErrChanged when either is not, ErrStale when the row is not in the
 // round, ErrNotReady while a round decided per item still waits for the
-// agent's verdicts. The check and the write are one transaction.
-func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) error {
+// agent's verdicts. The check and the write are one transaction, which
+// also reads back the answered rows: the snapshot the page shows next, each
+// with its decision and fingerprint.
+func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) ([]row.Row, error) {
 	return s.answer(ctx, roundID, as, true)
 }
 
-func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bool) error {
+func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bool) ([]row.Row, error) {
 	for _, a := range as {
 		if err := a.Decision.Validate(); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+	var after []row.Row
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		// The first statement is a write (the main connection begins deferred).
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
@@ -396,8 +416,34 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 				return err
 			}
 		}
-		return nil
+		ids := make([]string, len(as))
+		for i, a := range as {
+			ids[i] = a.Row
+		}
+		var err error
+		after, err = rowsNow(ctx, tx, roundID, ids)
+		return err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return after, nil
+}
+
+// rowsNow is the round's rows named by ids as they are now, in the round's
+// order.
+func rowsNow(ctx context.Context, tx *sql.Tx, roundID int64, ids []string) ([]row.Row, error) {
+	rows, err := rowsOf(ctx, tx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	var out []row.Row
+	for _, r := range rows {
+		if slices.Contains(ids, r.ID) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
 }
 
 // chosen is the verdict a decision on cur approves: the proposal's for an
@@ -439,20 +485,64 @@ func rowIn(ctx context.Context, tx *sql.Tx, roundID int64, rowID string) (row.Ro
 	return r, err
 }
 
-// Undecide removes the answer to one row (for a certain row: redoes it).
-func (s *Store) Undecide(ctx context.Context, roundID int64, rowID string) error {
-	return s.db.Tx(ctx, func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&n); err != nil {
+// Undecide removes the answer to one row (for a certain row: redoes it),
+// if the row's fingerprint is still the one the page showed: ErrChanged
+// when it is not, ErrStale when the row is not in the round. It returns
+// the row as it is after, read in the same transaction.
+func (s *Store) Undecide(ctx context.Context, roundID int64, rowID, fingerprint string) (row.Row, error) {
+	var after row.Row
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		if n == 0 {
+		cur, err := rowIn(ctx, tx, roundID, rowID)
+		if errors.Is(err, sql.ErrNoRows) {
 			return ErrStale
+		} else if err != nil {
+			return err
+		}
+		p, err := printIn(ctx, tx, roundID, cur)
+		if err != nil {
+			return err
+		}
+		if fingerprint == "" || p != fingerprint {
+			return fmt.Errorf("%w: %s", ErrChanged, rowID)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM decisions WHERE round_id = ? AND row_id = ?`, roundID, rowID); err != nil {
 			return err
 		}
-		return bump(ctx, tx, roundID)
+		rows, err := rowsNow(ctx, tx, roundID, []string{rowID})
+		if err != nil {
+			return err
+		}
+		after = rows[0]
+		return nil
+	})
+	return after, err
+}
+
+// Note sets the note on a row's answer, and nothing else: it approves
+// nothing, so it carries no fingerprint. The answer is unsent again.
+// ErrChanged when the row has no answer (cleared since the page showed it),
+// ErrStale when it is not in the round.
+func (s *Store) Note(ctx context.Context, roundID int64, rowID, note string) error {
+	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if err := bump(ctx, tx, roundID); err != nil {
+			return err
+		}
+		if _, err := rowIn(ctx, tx, roundID, rowID); errors.Is(err, sql.ErrNoRows) {
+			return ErrStale
+		} else if err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE decisions SET note = ?, sent_at = 0 WHERE round_id = ? AND row_id = ?`, note, roundID, rowID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: %s has no decision", ErrChanged, rowID)
+		}
+		return nil
 	})
 }
 

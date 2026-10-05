@@ -147,7 +147,7 @@ func TestFileDecisions(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("edit: %d %s", w.Code, w.Body)
 	}
-	if w := f.do("DELETE", fmt.Sprintf("/api/files?round=%d&file=%s", f.round, a.Key), ""); w.Code != 200 {
+	if w := f.do("POST", "/api/files/clear", fmt.Sprintf(`{"round":%d,"file":%q,"prints":%s}`, f.round, a.Key, f.prints())); w.Code != 200 {
 		t.Fatalf("clear: %d %s", w.Code, w.Body)
 	}
 	for _, x := range f.files().Files {
@@ -165,7 +165,7 @@ func TestFileDecisions(t *testing.T) {
 }
 
 // A decision answers the content the page shows. Its response carries the
-// group's prints for the page to hold; an old page that still shows an edit
+// group's files as they now are, each with its print; an old page that still shows an edit
 // another client cleared is refused, and after a reload it can accept.
 func TestAcceptAnswersTheEditThePageShowed(t *testing.T) {
 	f, a, b := auditFixture(t)
@@ -174,17 +174,11 @@ func TestAcceptAnswersTheEditThePageShowed(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("edit: %d %s", w.Code, w.Body)
 	}
-	var got struct {
-		Prints map[string]string `json:"prints"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
-		t.Fatalf("%v %s", err, w.Body)
-	}
 	shown := f.prints()
-	if b2, _ := json.Marshal(got.Prints); string(b2) != shown {
-		t.Fatalf("the response's prints %s are not the page's %s", b2, shown)
+	if got := snapPrints(t, w.Body.Bytes()); got != shown {
+		t.Fatalf("the response's prints %s are not the page's %s", got, shown)
 	}
-	if w := f.do("DELETE", fmt.Sprintf("/api/files?round=%d&file=%s", f.round, b.Key), ""); w.Code != 200 {
+	if w := f.do("POST", "/api/files/clear", fmt.Sprintf(`{"round":%d,"file":%q,"prints":%s}`, f.round, b.Key, f.prints())); w.Code != 200 {
 		t.Fatalf("clear: %d %s", w.Code, w.Body)
 	}
 	w = f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"accept","prints":%s}`, f.round, b.Key, shown))
@@ -219,5 +213,91 @@ func TestAgentReviewWaitsForReady(t *testing.T) {
 	w = f.do("POST", "/api/agent/review", `{"session":"s1"}`)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"open":2`) {
 		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+// snapPrints is the prints of a decision's or clear's snapshot, as JSON.
+func snapPrints(t *testing.T, body []byte) string {
+	t.Helper()
+	var got struct {
+		Files []fileOut `json:"files"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("%v %s", err, body)
+	}
+	m := map[string]string{}
+	for _, x := range got.Files {
+		m[x.Key] = x.Fingerprint
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// A clear answers the content the page shows, as a decision does: a page
+// still showing an edit on a recommendation another client replaced is
+// refused with no snapshot; once it shows the new one (the snapshot a
+// reload gives), accepting it approves exactly that.
+func TestAStaleClearIsRefused(t *testing.T) {
+	f, a, b := auditFixture(t)
+	f.propose(a, b, "# App\n")
+	w := f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"edit","content":"# Docs, mine\n","prints":%s}`, f.round, b.Key, f.prints()))
+	if w.Code != 200 {
+		t.Fatalf("edit: %d %s", w.Code, w.Body)
+	}
+	shown := f.prints()
+	f.propose(a, b, "# App, again\n")
+	w = f.do("POST", "/api/files/clear", fmt.Sprintf(`{"round":%d,"file":%q,"prints":%s}`, f.round, b.Key, shown))
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "changed") || strings.Contains(w.Body.String(), "fingerprint") {
+		t.Fatalf("a stale clear: %d %s", w.Code, w.Body)
+	}
+	if w := f.do("POST", "/api/files/clear", fmt.Sprintf(`{"round":%d,"file":%q}`, f.round, b.Key)); w.Code != 400 {
+		t.Fatalf("a clear with no prints: %d %s", w.Code, w.Body)
+	}
+	rv := f.files()
+	w = f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"accept","prints":%s}`, f.round, a.Key, f.prints()))
+	if w.Code != 200 {
+		t.Fatalf("accept after a reload: %d %s", w.Code, w.Body)
+	}
+	var got struct {
+		Files []fileOut `json:"files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || len(got.Files) != 2 {
+		t.Fatalf("the snapshot: %v %s", err, w.Body)
+	}
+	for i, x := range got.Files {
+		if x.Decision == nil || x.Decision.Action != "accept" || x.Decision.Content != "" || x.Rec.Content != rv.Files[i].Rec.Content {
+			t.Fatalf("%s: %+v %+v", x.Path, x.Decision, x.Rec)
+		}
+	}
+	if !strings.Contains(got.Files[0].Rec.Content, "again") {
+		t.Fatalf("approved %q, not the recommendation shown", got.Files[0].Rec.Content)
+	}
+}
+
+// A note sets the note alone, on a file or a backlog row, and carries no
+// print: it approves nothing.
+func TestANoteSetsTheNoteAlone(t *testing.T) {
+	f, a, b := auditFixture(t)
+	f.propose(a, b, "# App\n")
+	if w := f.do("PUT", "/api/notes", fmt.Sprintf(`{"round":%d,"file":%q,"note":"why"}`, f.round, a.Key)); w.Code != 409 {
+		t.Fatalf("a note on an undecided file: %d %s", w.Code, w.Body)
+	}
+	if w := f.do("PUT", "/api/files", fmt.Sprintf(`{"round":%d,"file":%q,"action":"reject","prints":%s}`, f.round, a.Key, f.prints())); w.Code != 200 {
+		t.Fatalf("reject: %d %s", w.Code, w.Body)
+	}
+	before := f.prints()
+	if w := f.do("PUT", "/api/notes", fmt.Sprintf(`{"round":%d,"file":%q,"note":"why"}`, f.round, a.Key)); w.Code != 204 {
+		t.Fatalf("a note: %d %s", w.Code, w.Body)
+	}
+	for _, x := range f.files().Files {
+		if x.Key == a.Key && (x.Decision.Action != "reject" || x.Decision.Note != "why") {
+			t.Fatalf("after the note: %+v", x.Decision)
+		}
+	}
+	if f.prints() != before {
+		t.Fatal("a note changed the prints")
+	}
+	if w := f.do("PUT", "/api/notes", fmt.Sprintf(`{"round":%d,"note":"why"}`, f.round)); w.Code != 400 {
+		t.Fatalf("a note on nothing: %d %s", w.Code, w.Body)
 	}
 }

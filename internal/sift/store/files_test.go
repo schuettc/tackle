@@ -192,7 +192,7 @@ func TestLinkedFilesAreDecidedTogether(t *testing.T) {
 	if its[m].Decision.Action != "edit" || !strings.Contains(its[m].Decision.Content, "Mine.") {
 		t.Fatalf("an accept of the other side dropped the edit: %+v", its[m].Decision)
 	}
-	if _, err := s.UndecideFile(ctx, id, m); err != nil {
+	if _, err := s.UndecideFile(ctx, id, m, both()); err != nil {
 		t.Fatal(err)
 	}
 	if d := decisions(t, s, id); len(d) != 0 {
@@ -230,7 +230,7 @@ func TestAcceptKeepsTheFilesOwnEdit(t *testing.T) {
 	if d := its[g].Decision; d.Action != "accept" {
 		t.Fatalf("the other side: %+v", d)
 	}
-	if _, err := s.UndecideFile(ctx, id, m); err != nil {
+	if _, err := s.UndecideFile(ctx, id, m, both()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, both()); err != nil {
@@ -254,7 +254,7 @@ func TestAcceptAnswersTheContentThePageShowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	shown := both()
-	if _, err := s.UndecideFile(ctx, id, m); err != nil {
+	if _, err := s.UndecideFile(ctx, id, m, both()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, shown); !errors.Is(err, ErrChanged) {
@@ -410,7 +410,7 @@ func TestABacklogRoundWaitsForEveryItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Answer(ctx, id, []Answer{{Row: "i1", Fingerprint: rows[0].Fingerprint, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrNotReady) {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: "i1", Fingerprint: rows[0].Fingerprint, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("answer while recommending: %v", err)
 	}
 	if err := s.Decide(ctx, id, "i1", row.Decision{Action: "accept"}); !errors.Is(err, ErrNotReady) {
@@ -456,5 +456,74 @@ func TestSendCarriesFileDecisions(t *testing.T) {
 	}
 	if st, _ := s.State(ctx, id); st.State != Applied {
 		t.Fatalf("%+v", st)
+	}
+}
+
+// A clear answers the content the page showed, as a decision does. A page
+// still showing an edit on the old recommendation, after another client
+// replaced it, is refused, and gets no snapshot to show in its place; once
+// it shows the new recommendation, accepting it approves that.
+func TestAStaleClearIsRefused(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	both := func() map[string]string { return printsOf(t, s, id, g, m) }
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# M\n\n- Mine.\n- Do x safely here.\n"}, both()); err != nil {
+		t.Fatal(err)
+	}
+	shown := both()
+	m2 := recM(f, g)
+	m2.Content += "- More.\n"
+	if _, err := s.Propose(ctx, id, []rec.Rec{m2}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.UndecideFile(ctx, id, m, shown)
+	if !errors.Is(err, ErrChanged) || after != nil {
+		t.Fatalf("a stale clear: %v, returned %+v", err, after)
+	}
+	its := items(t, s, id)
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, shown); !errors.Is(err, ErrChanged) {
+		t.Fatalf("an accept with the old prints: %v", err)
+	}
+	// The page reloads and shows the new recommendation.
+	got, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "accept"}, map[string]string{g: its[g].Fingerprint, m: its[m].Fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range got {
+		if it.Key == m && (it.Decision == nil || it.Decision.Action != "accept" || it.Rec.Content != m2.Content) {
+			t.Fatalf("the snapshot after the accept: %+v %+v", it.Decision, it.Rec)
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("the snapshot holds the group: %d files", len(got))
+	}
+	if d := items(t, s, id)[m].Decision; d.Action != "accept" || d.Content != "" {
+		t.Fatalf("approved %+v", d)
+	}
+}
+
+// A file's note changes the note alone: the decision, its content and the
+// prints stay as they are, and it needs a decision to sit on.
+func TestAFileNoteChangesOnlyTheNote(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m := f["g"].Key, f["m"].Key
+	if err := s.NoteFile(ctx, id, m, "why"); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a note on an undecided file: %v", err)
+	}
+	mine := "# M\n\n- Mine.\n- Do x safely here.\n"
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: mine}, printsOf(t, s, id, g, m)); err != nil {
+		t.Fatal(err)
+	}
+	before := printsOf(t, s, id, g, m)
+	if err := s.NoteFile(ctx, id, m, "why"); err != nil {
+		t.Fatal(err)
+	}
+	if d := items(t, s, id)[m].Decision; d.Action != "edit" || d.Content != mine || d.Note != "why" {
+		t.Fatalf("after the note: %+v", d)
+	}
+	if after := printsOf(t, s, id, g, m); after[g] != before[g] || after[m] != before[m] {
+		t.Fatalf("a note changed the prints: %v -> %v", before, after)
 	}
 }

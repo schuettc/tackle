@@ -190,10 +190,10 @@ func TestUndecideAndOwner(t *testing.T) {
 	s, _ := open(t)
 	id, rows := round(t, s)
 	_ = s.Decide(ctx, id, rows[2].ID, row.Decision{Action: "reject"})
-	if err := s.Undecide(ctx, id, rows[2].ID); err != nil {
+	if _, err := s.Undecide(ctx, id, rows[2].ID, prints(t, s, id)[rows[2].ID]); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Undecide(ctx, id, "nope"); !errors.Is(err, ErrStale) {
+	if _, err := s.Undecide(ctx, id, "nope", "x"); !errors.Is(err, ErrStale) {
 		t.Fatalf("err %v", err)
 	}
 	if err := s.SetOwner(ctx, id, "sess", "pi · w"); err != nil {

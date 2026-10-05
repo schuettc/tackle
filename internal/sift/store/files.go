@@ -456,13 +456,14 @@ func rowsIn(ctx context.Context, tx *sql.Tx, roundID int64) (map[string]row.Row,
 // which covers the edit it showed in place of a recommendation: ErrChanged
 // when one is missing or differs from the content in force, ErrStale when
 // the file is not in the round, ErrNotReady while the round is
-// recommending. It returns the group's prints after the decision, for the
-// page to hold. All in one transaction.
-func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec.Decision, prints map[string]string) (map[string]string, error) {
+// recommending. It returns the group's files after the decision, read in
+// the same transaction: the snapshot the page shows next, each file with
+// the print its next decision answers. All in one transaction.
+func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec.Decision, prints map[string]string) ([]FileItem, error) {
 	if err := d.Validate(); err != nil {
 		return nil, err
 	}
-	var after map[string]string
+	var after []FileItem
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
@@ -475,14 +476,8 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 		for _, it := range items {
 			by[it.Key] = it
 		}
-		for _, k := range group {
-			it := by[k]
-			if it.Rec == nil {
-				return fmt.Errorf("%w: %s has no recommendation", ErrChanged, k)
-			}
-			if p := prints[k]; p == "" || p != it.Fingerprint {
-				return fmt.Errorf("%w: %s", ErrChanged, it.Source.File)
-			}
+		if err := checkPrints(group, by, prints); err != nil {
+			return err
 		}
 		now := time.Now().UnixMilli()
 		put := func(k string, dd rec.Decision) error {
@@ -519,25 +514,63 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 				}
 			}
 		}
-		after, err = groupPrints(ctx, tx, roundID, group)
+		after, err = groupNow(ctx, tx, roundID, group)
 		return err
 	})
 	return after, err
 }
 
-// groupPrints is the prints of group's files as they are now.
-func groupPrints(ctx context.Context, tx *sql.Tx, roundID int64, group []string) (map[string]string, error) {
+// groupNow is group's files as they are now, in the round's order.
+func groupNow(ctx context.Context, tx *sql.Tx, roundID int64, group []string) ([]FileItem, error) {
 	items, err := filesIn(ctx, tx, roundID)
 	if err != nil {
 		return nil, err
 	}
-	out := map[string]string{}
+	var out []FileItem
 	for _, it := range items {
 		if slices.Contains(group, it.Key) {
-			out[it.Key] = it.Fingerprint
+			out = append(out, it)
 		}
 	}
 	return out, nil
+}
+
+// NoteFile sets the note on a file's decision, and nothing else: it
+// approves nothing, so it carries no print. The decision is unsent again.
+// ErrChanged when the file has no decision (cleared since the page showed
+// it), ErrStale when the file is not in the round.
+func (s *Store) NoteFile(ctx context.Context, roundID int64, key, note string) error {
+	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if err := bump(ctx, tx, roundID); err != nil {
+			return err
+		}
+		if _, _, err := groupFor(ctx, tx, roundID, key); err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE file_decisions SET note = ?, sent_at = 0 WHERE round_id = ? AND key = ?`, note, roundID, key)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: %s has no decision", ErrChanged, key)
+		}
+		return nil
+	})
+}
+
+// checkPrints is ErrChanged unless each group file has a recommendation
+// and prints holds its print as it is now.
+func checkPrints(group []string, by map[string]FileItem, prints map[string]string) error {
+	for _, k := range group {
+		it := by[k]
+		if it.Rec == nil {
+			return fmt.Errorf("%w: %s has no recommendation", ErrChanged, k)
+		}
+		if p := prints[k]; p == "" || p != it.Fingerprint {
+			return fmt.Errorf("%w: %s", ErrChanged, it.Source.File)
+		}
+	}
+	return nil
 }
 
 func noteOf(d *rec.Decision) string {
@@ -570,16 +603,25 @@ func groupFor(ctx context.Context, tx *sql.Tx, roundID int64, key string) ([]str
 	return rec.Group(recsOf(items), key), items, nil
 }
 
-// UndecideFile clears the decisions on a file and the files linked to it,
-// and returns the group's prints after, for the page to hold.
-func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string) (map[string]string, error) {
-	var after map[string]string
+// UndecideFile clears the decisions on a file and the files linked to it
+// (for an edited file: reverts it to the recommendation). prints is each
+// group file's print as the page showed it, checked as DecideFile checks
+// it. It returns the group's files after, as DecideFile does.
+func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string, prints map[string]string) ([]FileItem, error) {
+	var after []FileItem
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		group, _, err := groupFor(ctx, tx, roundID, key)
+		group, items, err := groupFor(ctx, tx, roundID, key)
 		if err != nil {
+			return err
+		}
+		by := map[string]FileItem{}
+		for _, it := range items {
+			by[it.Key] = it
+		}
+		if err := checkPrints(group, by, prints); err != nil {
 			return err
 		}
 		for _, k := range group {
@@ -587,7 +629,7 @@ func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string) (ma
 				return err
 			}
 		}
-		after, err = groupPrints(ctx, tx, roundID, group)
+		after, err = groupNow(ctx, tx, roundID, group)
 		return err
 	})
 	return after, err

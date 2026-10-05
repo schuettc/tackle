@@ -1,6 +1,7 @@
 // api.ts — the page's calls to sift serve's /api/, typed.
 
 import { createApi, ApiError, type Api } from '/_kit/kit.js';
+import type { DecisionServer } from './decide.ts';
 
 export { ApiError };
 
@@ -25,41 +26,35 @@ export interface FileOut {
   truncated: boolean;
 }
 
-export interface Client {
-  review(): Promise<Review>;
-  decide(round: number, ds: DecisionIn[]): Promise<void>;
-  clear(round: number, id: string): Promise<void>;
-  /** A decision on an audit round's file (and the files linked to it),
-   * with the prints of every file in its group as the page shows them
-   * (an edit in place of a recommendation counts). Returns the group's
-   * prints after it, for the page's next decision. */
-  decideFile(
-    round: number,
-    file: string,
-    d: FileDecision,
-    prints: Record<string, string>,
-  ): Promise<Record<string, string>>;
-  /** Clears a file's group; returns its prints after. */
-  clearFile(round: number, file: string): Promise<Record<string, string>>;
+export interface Client extends DecisionServer {
   /** A file's content at the audit. */
   base(round: number, file: string): Promise<{ content: string }>;
-  send(round: number): Promise<{ sent: number; to: string }>;
   file(round: number, id: string): Promise<FileOut>;
 }
 
-/** The client over a kit Api (base /api; the page's cookie authenticates). */
+/** The client over a kit Api (base /api; the page's cookie authenticates).
+ * A decision or clear returns the server's snapshot of what it touched:
+ * the group's files, or the rows, each with the print its next decision
+ * answers. */
 export function client(api: Api): Client {
   return {
     review: () => api.get<Review>('/review'),
     async decide(round, decisions) {
-      await api.put('/decisions', { round, decisions });
+      const r = await api.put<{ rows?: Finding[] }>('/decisions', {
+        round,
+        decisions,
+      });
+      return r?.rows ?? [];
     },
-    async clear(round, id) {
-      const q = new URLSearchParams({ round: String(round), id });
-      await api.del(`/decisions?${q.toString()}`);
+    async clear(round, id, fingerprint) {
+      const q = new URLSearchParams({ round: String(round), id, fingerprint });
+      const r = await api.del<{ rows?: Finding[] }>(
+        `/decisions?${q.toString()}`,
+      );
+      return r?.rows ?? [];
     },
     async decideFile(round, file, d, prints) {
-      const r = await api.put<{ prints?: Record<string, string> }>('/files', {
+      const r = await api.put<{ files?: FileView[] }>('/files', {
         round,
         file,
         action: d.action,
@@ -67,14 +62,18 @@ export function client(api: Api): Client {
         note: d.note ?? '',
         prints,
       });
-      return r?.prints ?? {};
+      return r?.files ?? [];
     },
-    async clearFile(round, file) {
-      const q = new URLSearchParams({ round: String(round), file });
-      const r = await api.del<{ prints?: Record<string, string> }>(
-        `/files?${q.toString()}`,
-      );
-      return r?.prints ?? {};
+    async clearFile(round, file, prints) {
+      const r = await api.post<{ files?: FileView[] }>('/files/clear', {
+        round,
+        file,
+        prints,
+      });
+      return r?.files ?? [];
+    },
+    async note(round, on, note) {
+      await api.put('/notes', { round, ...on, note });
     },
     base: (round, file) =>
       api.get<{ content: string }>('/base', { round: String(round), file }),

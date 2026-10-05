@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/row"
@@ -61,7 +63,7 @@ func TestAnOldPageCannotAcceptAChangedProposal(t *testing.T) {
 	if c := put(""); c != 400 {
 		t.Errorf("accept with no fingerprint: %d", c)
 	}
-	if c := put(f.printOf("r-neg")); c != 204 {
+	if c := put(f.printOf("r-neg")); c != 200 {
 		t.Errorf("accept with the current fingerprint: %d", c)
 	}
 }
@@ -84,7 +86,37 @@ func TestAnOldPageCannotMergeIntoAChangedTarget(t *testing.T) {
 	if d, e := f.decisionOf("r-neg"), f.decisionOf("r-dead"); d != nil || e != nil {
 		t.Fatalf("stored %+v %+v", d, e)
 	}
-	if c := put(f.printOf("r-size")); c != 204 {
+	if c := put(f.printOf("r-size")); c != 200 {
 		t.Errorf("edit with the target's current fingerprint: %d", c)
+	}
+}
+
+// A row's clear answers the proposal the page showed: an old page's clear
+// gets 409 and leaves the decision; a current one returns the row as it
+// now is.
+func TestAnOldPageCannotClearAChangedProposal(t *testing.T) {
+	f := newFixture(t)
+	old := f.printOf("r-neg")
+	if _, err := f.st.AddRows(context.Background(), f.round, []row.Row{{ID: "r-neg", Verdict: "rewrite", Text: "- Push to main on Fridays."}}); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.decide("r-neg", "reject", ""); w.Code != 200 {
+		t.Fatalf("reject: %d %s", w.Code, w.Body)
+	}
+	clear := func(print string) *httptest.ResponseRecorder {
+		return f.do("DELETE", fmt.Sprintf("/api/decisions?round=%d&id=r-neg&fingerprint=%s", f.round, print), "")
+	}
+	if w := clear(old); w.Code != 409 || strings.Contains(w.Body.String(), "fingerprint") {
+		t.Fatalf("a clear with the old fingerprint: %d %s", w.Code, w.Body)
+	}
+	if d := f.decisionOf("r-neg"); d == nil {
+		t.Fatal("the old page's clear cleared it")
+	}
+	if w := clear(""); w.Code != 400 {
+		t.Fatalf("a clear with no fingerprint: %d", w.Code)
+	}
+	w := clear(f.printOf("r-neg"))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"fingerprint":"`+f.printOf("r-neg")+`"`) || strings.Contains(w.Body.String(), `"decision"`) {
+		t.Fatalf("a current clear: %d %s", w.Code, w.Body)
 	}
 }

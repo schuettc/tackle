@@ -60,6 +60,19 @@ async function until(fn, ms = 4000) {
 
 const serves = [];
 let browser = null;
+// A decision key, once the page has no decision saving: a group's keys do
+// nothing while its last decision saves (the app marks that on .kit-app).
+async function settled(p) {
+  await p.waitForFunction(
+    () => !document.querySelector('.kit-app')?.dataset.saving,
+  );
+}
+
+async function decideKey(p, key) {
+  await settled(p);
+  await p.keyboard.press(key);
+}
+
 async function cleanup() {
   try {
     await browser?.close();
@@ -240,7 +253,9 @@ async function main() {
 
   // ---- 2. a file: summary, diff, decisions, findings, note, in that order
   console.log('file');
+  // Once no decision is saving: a saved decision moves the page on.
   const openFile = async (f) => {
+    await settled(page);
     await page.evaluate((h) => (location.hash = h), `#/open/f:${f.key}`);
     await page.waitForFunction(
       (p) =>
@@ -354,7 +369,7 @@ async function main() {
 
   // ---- 3. edit: 2 opens the whole recommended file; ⌘↵ stores it
   console.log('edit');
-  await page.keyboard.press('2');
+  await decideKey(page, '2');
   const ta = page.locator('textarea.sift-whole');
   await ta.waitFor();
   check(
@@ -416,7 +431,7 @@ async function main() {
         .locator('.sift-dl.add', { hasText: 'Ask the shop team.' })
         .count()) === 1,
   );
-  await page.keyboard.press('1');
+  await decideKey(page, '1');
   check(
     '1 on an edited file keeps the edit',
     await until(async () => {
@@ -425,7 +440,7 @@ async function main() {
     }),
   );
   await openFile(shop);
-  await page.keyboard.press('u');
+  await decideKey(page, 'u');
   check(
     'u reverts to the recommendation and shows it again',
     await until(
@@ -439,7 +454,7 @@ async function main() {
           .count()) === 0,
     ),
   );
-  await page.keyboard.press('2');
+  await decideKey(page, '2');
   await ta.waitFor();
   await ta.fill(mine);
   await page.keyboard.press('Meta+Enter');
@@ -448,7 +463,7 @@ async function main() {
   // ---- 4. 1 accepts, 3 rejects, n notes; linked files decided together
   console.log('keys');
   await openFile(docs);
-  await page.keyboard.press('1');
+  await decideKey(page, '1');
   check(
     '1 accepts',
     await until(async () => (await fileOf(docs)).decision?.action === 'accept'),
@@ -463,7 +478,7 @@ async function main() {
     await page.evaluate(() => location.hash),
   );
   await openFile(skill);
-  await page.keyboard.press('3');
+  await decideKey(page, '3');
   check(
     '3 rejects',
     await until(
@@ -490,7 +505,7 @@ async function main() {
     ),
   );
   await openFile(global);
-  await page.keyboard.press('3');
+  await decideKey(page, '3');
   check(
     '3 on a linked file rejects both',
     await until(
@@ -500,7 +515,7 @@ async function main() {
     ),
   );
   await openFile(global);
-  await page.keyboard.press('1');
+  await decideKey(page, '1');
   check(
     '1 on a linked file accepts both',
     await until(
@@ -510,7 +525,7 @@ async function main() {
     ),
   );
   await openFile(global);
-  await page.keyboard.press('u');
+  await decideKey(page, 'u');
   check(
     'u clears both',
     await until(
@@ -518,7 +533,7 @@ async function main() {
         !(await fileOf(global)).decision && !(await fileOf(shop)).decision,
     ),
   );
-  await page.keyboard.press('1');
+  await decideKey(page, '1');
   await until(async () => (await fileOf(shop)).decision?.action === 'accept');
 
   // ---- 5. a recommendation changed under the page: an old page is refused
@@ -568,7 +583,7 @@ async function main() {
           .count()) === 1,
     ),
   );
-  await page.keyboard.press('1');
+  await decideKey(page, '1');
   await until(async () => (await fileOf(docs)).decision?.action === 'accept');
 
   // ---- 6. Send
@@ -669,7 +684,7 @@ async function main() {
   );
   await bp0.locator('.kit-row').first().click();
   await bp0.waitForSelector('.kit-card');
-  await bp0.keyboard.press('1');
+  await decideKey(bp0, '1');
   check(
     '1 accepts an item',
     await until(

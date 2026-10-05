@@ -56,7 +56,7 @@ func TestAnEditsMergeTargetIsFingerprinted(t *testing.T) {
 		"unknown target": {Row: a, Fingerprint: now[a], TargetFingerprint: old[c],
 			Decision: row.Decision{Action: "edit", Verdict: "merge:nope", Text: "both"}},
 	} {
-		if err := s.Answer(ctx, id, []Answer{ans}); !errors.Is(err, ErrChanged) {
+		if _, err := s.Answer(ctx, id, []Answer{ans}); !errors.Is(err, ErrChanged) {
 			t.Errorf("%s: %v, want ErrChanged", name, err)
 		}
 	}
@@ -64,7 +64,7 @@ func TestAnEditsMergeTargetIsFingerprinted(t *testing.T) {
 		t.Fatalf("%d rows decided", n)
 	}
 	// A multi-row answer where one row's target changed stores nothing.
-	err := s.Answer(ctx, id, []Answer{
+	_, err := s.Answer(ctx, id, []Answer{
 		{Row: c, Fingerprint: now[c], Decision: row.Decision{Action: "accept"}},
 		{Row: a, Fingerprint: now[a], TargetFingerprint: old[c], Decision: edit},
 	})
@@ -74,7 +74,7 @@ func TestAnEditsMergeTargetIsFingerprinted(t *testing.T) {
 	if _, got, _ := s.Round(ctx, id); got[1].Decision != nil {
 		t.Fatalf("stored %+v", got[1].Decision)
 	}
-	if err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: now[a], TargetFingerprint: now[c], Decision: edit}}); err != nil {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: now[a], TargetFingerprint: now[c], Decision: edit}}); err != nil {
 		t.Fatalf("with the current target print: %v", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestAMergeIntoAMissingRowIsRefused(t *testing.T) {
 	if err := s.Decide(ctx, id, a, row.Decision{Action: "edit", Verdict: "merge:mem-2", Text: "x"}); err == nil {
 		t.Error("edited to a merge into a missing row")
 	}
-	if err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
 		t.Errorf("answer: %v, want ErrChanged", err)
 	}
 	if err := s.Decide(ctx, id, a, row.Decision{Action: "reject"}); err != nil {
@@ -119,5 +119,49 @@ func TestAddingAMergeTargetDropsDecisionsOnIt(t *testing.T) {
 	}
 	if _, got, _ := s.Round(ctx, id); got[0].Decision != nil {
 		t.Fatalf("kept %+v", got[0].Decision)
+	}
+}
+
+// A row's clear answers the proposal the page showed, as a decision does:
+// a page still showing an old proposal is refused, and gets no row to show
+// in its place. Answer and Undecide return the rows as they are after.
+func TestARowsClearAnswersWhatThePageShowed(t *testing.T) {
+	s, _ := open(t)
+	id, rows := round(t, s)
+	a, c := rows[0].ID, rows[1].ID
+	old := prints(t, s, id)
+	got, err := s.Answer(ctx, id, []Answer{{Row: c, Fingerprint: old[c], Decision: row.Decision{Action: "reject", Note: "no"}}})
+	if err != nil || len(got) != 1 || got[0].ID != c || got[0].Decision == nil || got[0].Decision.Action != "reject" || got[0].Fingerprint != old[c] {
+		t.Fatalf("the answered rows: %+v %v", got, err)
+	}
+	if _, err := s.AddRows(ctx, id, []row.Row{{ID: c, Verdict: "delete"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Answer(ctx, id, []Answer{{Row: c, Fingerprint: prints(t, s, id)[c], Decision: row.Decision{Action: "reject"}}}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Undecide(ctx, id, c, old[c])
+	if !errors.Is(err, ErrChanged) || after.ID != "" {
+		t.Fatalf("a stale clear: %v, returned %+v", err, after)
+	}
+	if n := decided(t, s, id); n != 1 {
+		t.Fatalf("%d rows decided, want the reject kept", n)
+	}
+	after, err = s.Undecide(ctx, id, c, prints(t, s, id)[c])
+	if err != nil || after.ID != c || after.Decision != nil || after.Fingerprint != prints(t, s, id)[c] {
+		t.Fatalf("a current clear: %+v %v", after, err)
+	}
+	// A note changes the note alone, and needs a decision to sit on.
+	if err := s.Note(ctx, id, a, "why"); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a note on an undecided row: %v", err)
+	}
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: old[a], Decision: row.Decision{Action: "accept"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Note(ctx, id, a, "why"); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, _ := s.Round(ctx, id); got[0].Decision.Action != "accept" || got[0].Decision.Note != "why" {
+		t.Fatalf("after the note: %+v", got[0].Decision)
 	}
 }

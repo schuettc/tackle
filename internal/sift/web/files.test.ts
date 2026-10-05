@@ -2,12 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   certainLines,
-  decideLocal,
   diffLines,
   fileEntries,
   fileMeta,
   filesProgress,
-  holdPrints,
+  holdFiles,
   hunks,
   printsFor,
   unsentFiles,
@@ -128,48 +127,6 @@ test('fileMeta: sizes before and after, findings, decision', () => {
   assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · edited');
 });
 
-test('decideLocal mirrors the store: linked files decided together, an edit keeps the link', () => {
-  const files = [
-    mk('g', '/g', { group: ['g', 'm'] }),
-    mk('m', '/m', { group: ['g', 'm'] }),
-    mk('q', '/q'),
-  ];
-  const by = (k: string) => files.find((f) => f.key === k)!;
-  decideLocal(files, 'g', { action: 'accept', note: 'yes' });
-  assert.equal(by('g').decision?.action, 'accept');
-  assert.equal(by('m').decision?.action, 'accept');
-  assert.equal(by('m').decision?.note ?? '', '');
-  assert.equal(by('q').decision, null);
-  decideLocal(files, 'm', { action: 'edit', content: 'mine\n' });
-  assert.equal(by('g').decision?.action, 'accept');
-  assert.equal(by('m').decision?.action, 'edit');
-  decideLocal(files, 'g', { action: 'accept' });
-  assert.equal(by('m').decision?.action, 'edit');
-  decideLocal(files, 'g', { action: 'reject' });
-  assert.equal(by('m').decision?.action, 'reject');
-  decideLocal(files, 'g', null);
-  assert.equal(by('g').decision, null);
-  assert.equal(by('m').decision, null);
-  assert.deepEqual(printsFor(files, 'g'), { g: 'fp-g', m: 'fp-m' });
-});
-
-test('decideLocal: accepting an edited file keeps its edit; clearing it goes back to the recommendation', () => {
-  const files = [mk('m', '/m', { after: 2 })];
-  const m = files[0];
-  decideLocal(files, 'm', { action: 'edit', content: 'mine, longer\n' });
-  decideLocal(files, 'm', { action: 'accept', note: 'looks right' });
-  assert.equal(m.decision?.action, 'edit');
-  assert.equal(m.decision?.content, 'mine, longer\n');
-  assert.equal(m.decision?.note, 'looks right');
-  assert.equal(m.after, 'mine, longer\n'.length);
-  decideLocal(files, 'm', null);
-  assert.equal(m.decision, null);
-  assert.equal(m.after, m.rec!.content.length);
-  decideLocal(files, 'm', { action: 'accept' });
-  assert.equal(m.decision?.action, 'accept');
-  assert.equal(m.decision?.content, undefined);
-});
-
 test('filesProgress and unsentFiles', () => {
   const files = [
     mk('a', '/a', { decision: { action: 'accept', sent: true } }),
@@ -180,16 +137,24 @@ test('filesProgress and unsentFiles', () => {
   assert.equal(unsentFiles(files), 1);
 });
 
-test('holdPrints: the page holds the prints a decision returns, so its next decision answers what it now shows', () => {
+test('holdFiles: a snapshot replaces the files it holds, content and print together', () => {
   const files = [
     mk('g', '/g', { group: ['g', 'm'] }),
     mk('m', '/m', { group: ['g', 'm'] }),
     mk('q', '/q'),
   ];
-  decideLocal(files, 'm', { action: 'edit', content: 'mine\n' });
-  holdPrints(files, { g: 'fp-g2', m: 'fp-m2' });
+  const m2 = mk('m', '/m', {
+    group: ['g', 'm'],
+    decision: { action: 'edit', content: 'mine\n' },
+    fingerprint: 'fp-m2',
+  });
+  holdFiles(files, [
+    mk('g', '/g', { group: ['g', 'm'], fingerprint: 'fp-g2' }),
+    m2,
+  ]);
+  assert.equal(files[1], m2);
   assert.deepEqual(printsFor(files, 'g'), { g: 'fp-g2', m: 'fp-m2' });
   assert.deepEqual(printsFor(files, 'q'), { q: 'fp-q' });
-  holdPrints(files, undefined);
-  assert.deepEqual(printsFor(files, 'm'), { g: 'fp-g2', m: 'fp-m2' });
+  holdFiles(files, [mk('nope', '/nope')]);
+  assert.equal(files.length, 3);
 });

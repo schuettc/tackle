@@ -190,7 +190,7 @@ func TestABacklogRoundWaitsForItsRecommendations(t *testing.T) {
 	if _, err := f.st.AddRows(context.Background(), id, []row.Row{{ID: "b2", Verdict: "ask", Text: "which repo?"}}); err != nil {
 		t.Fatal(err)
 	}
-	if w := f.decide("b1", "accept", ""); w.Code != http.StatusNoContent {
+	if w := f.decide("b1", "accept", ""); w.Code != http.StatusOK {
 		t.Fatalf("decide when ready: %d %s", w.Code, w.Body)
 	}
 }
@@ -209,7 +209,7 @@ func TestReviewWithNoRound(t *testing.T) {
 func TestPutStoresAndEmits(t *testing.T) {
 	f := newFixture(t)
 	cur := f.review().Cursor
-	if w := f.decide("r-neg", "edit", `,"text":"- Push to a feature branch.","note":"shorter"`); w.Code != 204 {
+	if w := f.decide("r-neg", "edit", `,"text":"- Push to a feature branch.","note":"shorter"`); w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	got := f.review().Rows[0].Decision
@@ -306,7 +306,7 @@ func TestWatchEmitsOnRevision(t *testing.T) {
 // an empty value can't (empty means "keep the proposal's").
 func TestPutClearsAField(t *testing.T) {
 	f := newFixture(t)
-	if w := f.decide("r-neg", "edit", `,"verdict":"delete","cleared":["text"]`); w.Code != 204 {
+	if w := f.decide("r-neg", "edit", `,"verdict":"delete","cleared":["text"]`); w.Code != 200 {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 	d := f.review().Rows[0].Decision

@@ -42,6 +42,8 @@ export interface Ctx {
   cancelEdit(): void;
   saveEdit(r: Finding, f: EditForm): string | null;
   clear(r: Finding): void;
+  /** A decision on some of rows is saving: theirs wait. */
+  busy(rows: Finding[]): boolean;
   open(key: string): void;
   file(r: Finding): Promise<FileOut>;
 }
@@ -215,22 +217,30 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
       h('div', { class: 'kit-label' }, 'the proposal'),
     );
     const a = r.decision?.action;
+    const busy = ctx.busy([r]);
     const bs: Button[] = [
       {
         label: '1 accept',
         fill: a === 'accept',
-        disabled: !r.verdict,
+        disabled: !r.verdict || busy,
         run: () => ctx.accept([r]),
       },
-      { label: '2 edit', fill: a === 'edit', run: () => ctx.startEdit(r) },
+      {
+        label: '2 edit',
+        fill: a === 'edit',
+        disabled: busy,
+        run: () => ctx.startEdit(r),
+      },
       {
         label: '3 reject',
         fill: a === 'reject',
         danger: true,
+        disabled: busy,
         run: () => ctx.reject([r]),
       },
     ];
-    if (r.decision) bs.push({ label: 'clear (u)', run: () => ctx.clear(r) });
+    if (r.decision)
+      bs.push({ label: 'clear (u)', disabled: busy, run: () => ctx.clear(r) });
     parts.push(buttons(bs));
     if (r.decision)
       parts.push(
@@ -272,13 +282,13 @@ export function groupDoc(ctx: Ctx, g: Group): HTMLElement {
           {
             label: `1 accept ${acc.length}`,
             fill: true,
-            disabled: !acc.length,
+            disabled: !acc.length || ctx.busy(rows),
             run: () => ctx.accept(acc),
           },
           {
             label: `3 reject ${rej.length}`,
             danger: true,
-            disabled: !rej.length,
+            disabled: !rej.length || ctx.busy(rows),
             run: () => ctx.reject(rej),
           },
           { label: 'open the first', run: () => ctx.open(`r:${rows[0].id}`) },
@@ -360,6 +370,8 @@ export interface FileCtx {
   /** Saves the edit; an error message, or null when saved. */
   saveEdit(f: FileView, content: string): string | null;
   clear(f: FileView): void;
+  /** A decision on f's group is saving: its decisions wait. */
+  busy(f: FileView): boolean;
 }
 
 const kb = (n: number) => `${(n / 1000).toFixed(1)} KB`;
@@ -556,23 +568,32 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
   // Once edited, the page shows the edit, so accept keeps it; going back
   // to the recommendation is its own step (u), which shows it again first.
   const a = f.decision?.action;
+  const busy = ctx.busy(f);
   const bs: Button[] = [
     {
       label: edited ? '1 accept your edit' : '1 accept',
       fill: a === 'accept',
+      disabled: busy,
       run: () => ctx.accept(f),
     },
-    { label: '2 edit', fill: a === 'edit', run: () => ctx.startEdit(f) },
+    {
+      label: '2 edit',
+      fill: a === 'edit',
+      disabled: busy,
+      run: () => ctx.startEdit(f),
+    },
     {
       label: '3 reject',
       fill: a === 'reject',
       danger: true,
+      disabled: busy,
       run: () => ctx.reject(f),
     },
   ];
   if (f.decision)
     bs.push({
       label: edited ? 'revert to the recommendation (u)' : 'clear (u)',
+      disabled: busy,
       run: () => ctx.clear(f),
     });
   const decide = buttons(bs);
@@ -587,6 +608,7 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
     said.push(
       `decided together with ${others.map((o) => displayPath(o.source, ctx.home)).join(', ')}: the recommendation moves text between them`,
     );
+  if (busy) said.push('saving');
   if (said.length)
     parts.push(h('p', { class: 'sift-why' }, said.join('. ') + '.'));
   if (ctx.editing === f.key) parts.push(fileEdit(ctx, f));

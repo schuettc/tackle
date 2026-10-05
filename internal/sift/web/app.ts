@@ -7,9 +7,10 @@
 // page says how far it got and takes no decision. A backlog round is
 // decided one item at a time, in groups.
 //
-// State lives here; doc.ts only draws. Every decision is applied to the
-// page at once and saved as it is given; a failure rolls it back and says
-// so in the bar, a 409 reloads.
+// State lives here; doc.ts only draws; decide.ts makes the decisions. A
+// decision shows once the server has it, from the snapshot it returns;
+// while it saves, its group's decisions and Send wait. A 409 reloads the
+// group and says so in the bar.
 
 import {
   bar,
@@ -22,7 +23,8 @@ import {
   type LiveStatus,
   type StatusTone,
 } from '/_kit/kit.js';
-import { ApiError, client, newApi, type DecisionIn } from './api.ts';
+import { ApiError, client, newApi } from './api.ts';
+import { createDecider } from './decide.ts';
 import {
   fileDoc,
   groupDoc,
@@ -32,19 +34,15 @@ import {
   type FileCtx,
 } from './doc.ts';
 import {
-  decideLocal,
   fileEntries,
   fileMeta,
   filesProgress,
-  holdPrints,
-  printsFor,
   unsentFiles,
   type FileEntry,
 } from './files.ts';
 import {
   displayPath,
   editDecision,
-  editTarget,
   entries,
   groupTargets,
   groupsOf,
@@ -109,7 +107,6 @@ export function boot(): void {
   let lastView = '';
   let syncing = false;
   let stale = false;
-  let inflight = 0;
   let loading = false;
   let dirty = false;
   let flashing = false;
@@ -118,7 +115,6 @@ export function boot(): void {
   let prevLive: LiveStatus = 'live';
   let loadTimer: ReturnType<typeof setTimeout> | undefined;
   let shown: Item[] = [];
-  const pending = new Map<string, string>(); // notes waiting for a decision
   // A file's audited content, read on demand (by round, file and base).
   const bases = new Map<string, string | Error>();
 
@@ -128,6 +124,21 @@ export function boot(): void {
       ? Promise.reject(new Error('sift serve restarted: this tab has stopped'))
       : fetch(input, init);
   const api = client(newApi({ fetch: gated, onStale: () => goStale() }));
+  const decider = createDecider(api, {
+    review: () => review,
+    replace(r) {
+      review = r;
+      render();
+    },
+    changed() {
+      // The probe waits on this before a decision key.
+      if (decider.idle()) delete app.dataset.saving;
+      else app.dataset.saving = '1';
+      render();
+      if (dirty && decider.idle()) void reload();
+    },
+    failed: (msg) => flash(msg, 'danger'),
+  });
 
   // ---- derived ---------------------------------------------------------------
   const home = () => review?.home ?? '';
@@ -162,12 +173,6 @@ export function boot(): void {
       .map((e) => ({ ...e, kind: 'file' as const }));
   };
   const rowById = (id: string) => review?.rows.find((r) => r.id === id);
-  const fileByKey = (k: string) => files().find((f) => f.key === k);
-  /** For an edit to merge:C, C's fingerprint as the page shows it. */
-  const targetPrint = (d: Decision) => {
-    const id = editTarget(d);
-    return id ? rowById(id)?.fingerprint : undefined;
-  };
   const current = (): Item | undefined => shown.find((e) => e.key === openKey);
   const baseKey = (f: FileView) =>
     `${review?.round?.id ?? 0}:${f.key}:${f.base}`;
@@ -219,9 +224,12 @@ export function boot(): void {
       review?.round && !recommending() ? `${p.decided}/${p.total}` : '',
     );
     const n = unsent(review?.rows ?? []) + unsentFiles(files());
+    // While a decision saves, Send waits for it.
     b.setPrimary(
       n && review?.round && !recommending()
-        ? { label: `Send ${n}`, run: () => void send() }
+        ? decider.idle()
+          ? { label: `Send ${n}`, run: () => void send() }
+          : { label: 'saving…', run: () => {} }
         : null,
     );
     if (!flashing) b.setStatus(baseStatus());
@@ -327,8 +335,8 @@ export function boot(): void {
     get editing() {
       return editing;
     },
-    noteOf: (r) => pending.get(r.id) ?? r.decision?.note ?? '',
-    setNote,
+    noteOf: (r) => decider.noteOf(`r:${r.id}`) ?? r.decision?.note ?? '',
+    setNote: (r, text) => decider.noteRow(r.id, text),
     accept: (rows) => decide(rows, 'accept'),
     reject: (rows) => decide(rows, 'reject'),
     startEdit(r) {
@@ -340,7 +348,8 @@ export function boot(): void {
       render();
     },
     saveEdit,
-    clear,
+    clear: (r) => void decider.clearRow(r.id),
+    busy: (rows) => decider.busy(rows.map((r) => `r:${r.id}`)),
     open: (key) => go(frag(key)),
     file: (r) => api.file(review?.round?.id ?? 0, r.id),
   };
@@ -365,8 +374,8 @@ export function boot(): void {
       if (v === undefined) loadBase(f);
       return v;
     },
-    noteOf: (f) => pending.get(`f:${f.key}`) ?? f.decision?.note ?? '',
-    setNote: setFileNote,
+    noteOf: (f) => decider.noteOf(`f:${f.key}`) ?? f.decision?.note ?? '',
+    setNote: (f, text) => decider.noteFile(f.key, text),
     accept: (f) => putFile(f, { action: 'accept' }),
     reject: (f) => putFile(f, { action: 'reject' }),
     startEdit(f) {
@@ -384,10 +393,12 @@ export function boot(): void {
         f.decision?.action === 'edit' ? f.decision.content : f.rec?.content;
       if (content === was)
         return 'nothing changed: accept the recommendation instead';
+      if (fctx.busy(f)) return 'the last decision on this file is saving';
       putFile(f, { action: 'edit', content });
       return null;
     },
-    clear: clearFile,
+    clear: (f) => void decider.clearFile(f.key),
+    busy: (f) => decider.busy(f.group.map((k) => `f:${k}`)),
   };
 
   const loadingBases = new Set<string>();
@@ -576,8 +587,10 @@ export function boot(): void {
     }
   }
 
+  // A reload waits while a decision saves, and one a decision overtook
+  // (its snapshot landed while the review was read) reads again.
   async function reload(): Promise<void> {
-    if (inflight > 0 || loading) {
+    if (!decider.idle() || loading) {
       dirty = true;
       return;
     }
@@ -585,14 +598,19 @@ export function boot(): void {
     try {
       do {
         dirty = false;
+        const epoch = decider.epoch;
         const r = await api.review();
+        if (epoch !== decider.epoch || !decider.idle()) {
+          dirty = true;
+          continue;
+        }
         if (review && signature(review) === signature(r)) {
           review.cursor = r.cursor;
           continue;
         }
         review = r;
         render();
-      } while (dirty && inflight === 0);
+      } while (dirty && decider.idle());
     } catch (err) {
       if (!(err instanceof ApiError && err.isStale))
         flash(`could not reload: ${(err as Error).message}`, 'danger');
@@ -635,29 +653,6 @@ export function boot(): void {
   }
 
   // ---- decisions -------------------------------------------------------------
-  function persist(op: () => Promise<void>, rollback: () => void): void {
-    inflight++;
-    op()
-      .catch((err: unknown) => {
-        if (err instanceof ApiError && err.isStale) return;
-        rollback();
-        if (err instanceof ApiError && err.status === 409) {
-          flash(
-            `The review changed; reloaded. ${err.message}`.trim(),
-            'danger',
-          );
-          dirty = true;
-          return;
-        }
-        render();
-        flash(`Not saved: ${(err as Error).message ?? String(err)}`, 'danger');
-      })
-      .finally(() => {
-        inflight--;
-        if (inflight === 0 && dirty) void reload();
-      });
-  }
-
   /** The next file with no decision after key, else the next file. */
   function nextFile(key: string): string {
     const i = shown.findIndex((e) => e.key === key);
@@ -668,128 +663,32 @@ export function boot(): void {
     return shown[i + 1]?.key ?? key;
   }
 
-  /** A file decision: applied to the page (with its linked files), saved
-   * with the prints the page shows, and the page moves to the next file. */
+  /** A file decision, with its linked files: shown once saved, and then
+   * the page moves to the next file (an edit stays). */
   function putFile(f: FileView, d: FileDecision): void {
-    const round = review?.round?.id;
-    if (!round) return;
-    const fs = files();
-    const prints = printsFor(fs, f.key);
-    const group = f.group
-      .map((k) => fileByKey(k))
-      .filter((x): x is FileView => !!x);
-    const prev = group.map((m) => ({ m, d: m.decision, after: m.after }));
-    const pendingNote = pending.get(`f:${f.key}`);
-    const note = pendingNote ?? f.decision?.note ?? '';
-    pending.delete(`f:${f.key}`);
-    const full: FileDecision = { ...d, note };
-    decideLocal(fs, f.key, full);
-    editing = null;
-    if (openKey === `f:${f.key}` && d.action !== 'edit')
-      go(frag(nextFile(openKey)));
-    else render();
-    persist(
-      async () =>
-        holdPrints(fs, await api.decideFile(round, f.key, full, prints)),
-      () => {
-        for (const p of prev) {
-          p.m.decision = p.d;
-          p.m.after = p.after;
-        }
-        if (pendingNote !== undefined) pending.set(`f:${f.key}`, pendingNote);
-      },
-    );
-  }
-
-  function clearFile(f: FileView): void {
-    const round = review?.round?.id;
-    if (!round || !f.decision) return;
-    const group = f.group
-      .map((k) => fileByKey(k))
-      .filter((x): x is FileView => !!x);
-    const prev = group.map((m) => ({ m, d: m.decision, after: m.after }));
-    decideLocal(files(), f.key, null);
-    render();
-    const fs = files();
-    persist(
-      async () => holdPrints(fs, await api.clearFile(round, f.key)),
-      () => {
-        for (const p of prev) {
-          p.m.decision = p.d;
-          p.m.after = p.after;
-        }
-      },
-    );
-  }
-
-  function setFileNote(f: FileView, text: string): void {
-    const d = f.decision;
-    if (!d) {
-      if (text) pending.set(`f:${f.key}`, text);
-      else pending.delete(`f:${f.key}`);
-      return;
-    }
-    if ((d.note ?? '') === text) return;
-    const round = review?.round?.id;
-    if (!round) return;
-    const old = d.note;
-    d.note = text;
-    d.sent = false;
-    const fs = files();
-    persist(
-      async () =>
-        holdPrints(
-          fs,
-          await api.decideFile(
-            round,
-            f.key,
-            { action: d.action, content: d.content, note: text },
-            printsFor(fs, f.key),
-          ),
-        ),
-      () => {
-        d.note = old;
-      },
-    );
-    refreshBar();
-  }
-
-  /** Apply row decisions locally, save them, and move on from a single row. */
-  function put(rows: Finding[], make: (r: Finding) => Decision): void {
-    const round = review?.round?.id;
-    if (!round || !rows.length) return;
-    const prev = rows.map((r) => r.decision);
-    const notes = rows.map((r) => pending.get(r.id));
-    const body: DecisionIn[] = rows.map((r) => {
-      const d = make(r);
-      const note = pending.get(r.id) ?? r.decision?.note ?? '';
-      pending.delete(r.id);
-      r.decision = { ...d, note };
-      return {
-        id: r.id,
-        action: d.action,
-        verdict: d.verdict,
-        title: d.title,
-        text: d.text,
-        cleared: d.cleared,
-        note,
-        fingerprint: r.fingerprint,
-        target_fingerprint: targetPrint(d),
-      };
+    const at = `f:${f.key}`;
+    void decider.file(f.key, d).then((ok) => {
+      if (!ok) return;
+      if (editing === f.key) editing = null;
+      if (openKey === at && d.action !== 'edit') go(frag(nextFile(at)));
+      else render();
     });
+  }
+
+  /** Row decisions: shown once saved; a single open row moves on. */
+  function put(rows: Finding[], make: (r: Finding) => Decision): void {
+    if (!rows.length) return;
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
-    editing = null;
-    if (single) go(frag(nextOpen(shown as Entry[], openKey!)));
-    else render();
-    persist(
-      () => api.decide(round, body),
-      () =>
-        rows.forEach((r, i) => {
-          r.decision = prev[i];
-          const n = notes[i];
-          if (n !== undefined) pending.set(r.id, n);
-        }),
-    );
+    const at = openKey;
+    void decider
+      .rows(rows.map((r) => ({ id: r.id, d: make(r) })))
+      .then((ok) => {
+        if (!ok) return;
+        if (rows.some((r) => r.id === editing)) editing = null;
+        if (single && at && openKey === at)
+          go(frag(nextOpen(shown as Entry[], at)));
+        else render();
+      });
   }
 
   function decide(rows: Finding[], action: 'accept' | 'reject'): void {
@@ -809,64 +708,16 @@ export function boot(): void {
   ): string | null {
     const res = editDecision(r, f);
     if (!res.ok) return res.error;
+    if (ctx.busy([r])) return 'the last decision on this row is saving';
     put([r], () => res.decision);
     return null;
   }
 
-  function clear(r: Finding): void {
-    const round = review?.round?.id;
-    const prev = r.decision;
-    if (!round || !prev) return;
-    delete r.decision;
-    render();
-    persist(
-      () => api.clear(round, r.id),
-      () => {
-        r.decision = prev;
-      },
-    );
-  }
-
-  function setNote(shownRow: Finding, text: string): void {
-    const r = rowById(shownRow.id) ?? shownRow;
-    const d = r.decision;
-    const round = review?.round?.id;
-    if (!d || !round) {
-      if (text) pending.set(r.id, text);
-      else pending.delete(r.id);
-      return;
-    }
-    if ((d.note ?? '') === text) return;
-    const old = d.note;
-    d.note = text;
-    d.sent = false;
-    persist(
-      () =>
-        api.decide(round, [
-          {
-            id: r.id,
-            action: d.action,
-            verdict: d.verdict,
-            title: d.title,
-            text: d.text,
-            cleared: d.cleared,
-            note: text,
-            fingerprint: r.fingerprint,
-            target_fingerprint: targetPrint(d),
-          },
-        ]),
-      () => {
-        d.note = old;
-      },
-    );
-    refreshBar();
-  }
-
   async function send(): Promise<void> {
-    const round = review?.round?.id;
-    if (!round) return;
     try {
-      const { sent, to } = await api.send(round);
+      const out = await decider.send();
+      if (!out) return;
+      const { sent, to } = out;
       if (review) {
         markSent(review.rows);
         for (const f of review.files) if (f.decision) f.decision.sent = true;
@@ -937,8 +788,8 @@ export function boot(): void {
     label: 'clear a decision',
     group,
     run: on(
-      (f) => clearFile(f),
-      (r) => clear(r),
+      (f) => fctx.clear(f),
+      (r) => ctx.clear(r),
     ),
   });
   keys.register({

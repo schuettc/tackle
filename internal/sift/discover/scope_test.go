@@ -1,6 +1,7 @@
 package discover
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -125,4 +126,43 @@ func TestARootHoldingTheHomeSkipsItsVendorDirs(t *testing.T) {
 		st.Repo(t, home, files)
 		check(t, home)
 	})
+}
+
+// A user skill that is a link to a directory outside the vendor dirs is
+// the user's, and audited, even when a link inside a vendor dir reaches
+// the same directory: the vendor check is by the path a skill is reached
+// by (given and real), not by what else reaches its target. Named to sort
+// after the vendor dir, so the vendor alias is met first.
+func TestALinkedUserSkillIsAuditedWhenAVendorAliasSharesItsTarget(t *testing.T) {
+	st.Env(t)
+	home := st.Home(t)
+	shared := filepath.Join(t.TempDir(), "shared")
+	st.Write(t, shared, "SKILL.md", "shared\n")
+	st.Write(t, home, ".claude/skills/synced/a/SKILL.md", "a\n")
+	for _, link := range []string{".claude/skills/synced/alias", ".claude/skills/zlinked"} {
+		if err := os.Symlink(shared, filepath.Join(home, link)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res := run(t, Options{Profiles: profiles(t, "claude-code")})
+	var got []string
+	for _, f := range res.Files {
+		got = append(got, f.Path)
+	}
+	want := filepath.Join(home, ".claude/skills/zlinked/SKILL.md")
+	if !slices.Contains(got, want) {
+		t.Fatalf("left out the linked user skill %s: audited %v", want, got)
+	}
+	for _, p := range got {
+		if strings.Contains(p, "/synced/") {
+			t.Errorf("audited a vendor skill %s", p)
+		}
+	}
+	var skipped []string
+	for _, s := range res.Skipped {
+		skipped = append(skipped, s.Path)
+	}
+	if !slices.Contains(skipped, filepath.Join(home, ".claude/skills/synced/alias/SKILL.md")) {
+		t.Errorf("the vendor alias is not listed as skipped: %v", skipped)
+	}
 }
