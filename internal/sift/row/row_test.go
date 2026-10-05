@@ -193,13 +193,22 @@ func TestEffective(t *testing.T) {
 	}
 }
 
-// Print changes with every field that says what applying the row does, and
-// with a merge target's source and passage; not with the reason or the
-// decision.
+// Print changes with every field that says what applying the row does, as
+// the page shows it (an edit in force over the proposal included), and
+// with a merge target's print; not with the reason, the note, or an accept
+// or reject.
 func TestPrint(t *testing.T) {
 	base := Row{ID: "a", Check: "duplicate", Verdict: "merge:b", Text: "t", Passage: "p", Source: Source{File: "/r/x.md", Repo: "/r", Path: "x.md", Start: 1, End: 1}}
 	target := Row{ID: "b", Passage: "q", Source: Source{Path: "y.md", Start: 2}}
-	want := base.Print(&target)
+	in := func(tg *Row) func(string) *Row {
+		return func(id string) *Row {
+			if id == tg.ID {
+				return tg
+			}
+			return nil
+		}
+	}
+	want := base.Print(in(&target))
 	for name, change := range map[string]func(r, t *Row){
 		"verdict":        func(r, _ *Row) { r.Verdict = "delete" },
 		"title":          func(r, _ *Row) { r.Title = "x" },
@@ -208,21 +217,48 @@ func TestPrint(t *testing.T) {
 		"path":           func(r, _ *Row) { r.Source.Path = "z.md" },
 		"lines":          func(r, _ *Row) { r.Source.Start = 9 },
 		"passage":        func(r, _ *Row) { r.Passage = "p2" },
+		"an edit":        func(r, _ *Row) { r.Decision = &Decision{Action: "edit", Text: "mine"} },
 		"target path":    func(_, t *Row) { t.Source.Path = "w.md" },
 		"target passage": func(_, t *Row) { t.Passage = "q2" },
+		"target's edit":  func(_, t *Row) { t.Decision = &Decision{Action: "edit", Text: "theirs"} },
 	} {
 		r, tg := base, target
 		change(&r, &tg)
-		if r.Print(&tg) == want {
+		if r.Print(in(&tg)) == want {
 			t.Errorf("%s: print unchanged", name)
 		}
 	}
-	r := base
-	r.Reason, r.Decision, r.Fingerprint = "why", &Decision{Action: "accept"}, "x"
-	if r.Print(&target) != want {
-		t.Error("the reason or decision changed the print")
+	for _, d := range []*Decision{{Action: "accept", Note: "n"}, {Action: "reject"}} {
+		r := base
+		r.Reason, r.Decision, r.Fingerprint = "why", d, "x"
+		if r.Print(in(&target)) != want {
+			t.Errorf("the reason or %s changed the print", d.Action)
+		}
 	}
 	if base.Print(nil) == want {
 		t.Error("the target is not in the print")
+	}
+	// An edit's own merge target is the one printed.
+	r := base
+	r.Verdict, r.Decision = "keep", &Decision{Action: "edit", Verdict: "merge:b"}
+	tg := target
+	p := r.Print(in(&tg))
+	tg.Passage = "q3"
+	if r.Print(in(&tg)) == p {
+		t.Error("an edited merge does not cover its target")
+	}
+	// A merge cycle ends.
+	a, b := base, Row{ID: "b", Verdict: "merge:a"}
+	both := func(id string) *Row {
+		switch id {
+		case "a":
+			return &a
+		case "b":
+			return &b
+		}
+		return nil
+	}
+	if a.Print(both) == "" || b.Print(both) == "" {
+		t.Error("no print for a cycle")
 	}
 }

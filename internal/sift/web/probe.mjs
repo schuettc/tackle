@@ -8,7 +8,8 @@
 // file's summary, a wrapping diff with the certain fix marked, accept /
 // edit / reject on 1–3 (edit opens the whole file), the findings with what
 // the rewrite did, the note; linked files decided together; a stale page
-// refused; Send; light and dark. Then a round still being recommended (the
+// refused; while a decision or Send is in flight, no key or Send does
+// anything; Send; light and dark. Then a round still being recommended (the
 // page waits), a backlog round (decided per item), and a round the size of
 // a real one (653 rows). Screenshots go to $PROBE_OUT (default a temp dir).
 //
@@ -586,13 +587,95 @@ async function main() {
   await decideKey(page, '1');
   await until(async () => (await fileOf(docs)).decision?.action === 'accept');
 
-  // ---- 6. Send
+  // ---- 6. busy: while a request is held in flight, 1, 2, 3, u and Send
+  // do nothing (no request leaves the page, 2 opens no edit)
+  console.log('busy');
+  const writes = [];
+  page.on('request', (r) => {
+    if (r.url().includes('/api/') && r.method() !== 'GET')
+      writes.push(`${r.method()} ${new URL(r.url()).pathname}`);
+  });
+  // Holds the next request matching glob until the returned release.
+  const hold = async (glob) => {
+    let release;
+    let done;
+    const held = new Promise((r) => (release = r));
+    const passed = new Promise((r) => (done = r));
+    await page.route(
+      glob,
+      async (route) => {
+        await held;
+        await route.continue();
+        done();
+      },
+      { times: 1 },
+    );
+    return async () => {
+      release();
+      await passed;
+      await settled(page);
+    };
+  };
+  const saving = () =>
+    page.waitForFunction(
+      () => !!document.querySelector('.kit-app')?.dataset.saving,
+    );
+  const pressAll = async () => {
+    for (const k of ['1', '2', '3', 'u']) await page.keyboard.press(k);
+    await send.click();
+    await sleep(400);
+  };
+  await openFile(skill);
+  let release = await hold('**/api/files');
+  writes.length = 0;
+  await page.keyboard.press('1');
+  await saving();
+  await pressAll();
+  check(
+    'while a decision is in flight, 1, 2, 3, u and Send send nothing',
+    writes.length === 1 && writes[0] === 'PUT /api/files',
+    writes.join(', '),
+  );
+  check(
+    'and 2 opens no edit',
+    (await page.locator('textarea.sift-whole').count()) === 0,
+  );
+  check('Send reads saving…', norm(await send.innerText()) === 'saving…');
+  await release();
+  check(
+    'the held decision lands',
+    await until(
+      async () => (await fileOf(skill)).decision?.action === 'accept',
+    ),
+  );
+
+  // ---- 7. Send
   console.log('send');
   check(
     'Send shows what it carries',
     await until(async () => norm(await send.innerText()) === 'Send 4'),
   );
+  await openFile(skill);
+  release = await hold('**/api/send');
+  writes.length = 0;
   await send.click();
+  await saving();
+  check(
+    'Send in flight reads sending…',
+    norm(await send.innerText()) === 'sending…',
+  );
+  for (const k of ['1', '2', '3', 'u']) await page.keyboard.press(k);
+  await sleep(400);
+  check(
+    'while Send is in flight, 1, 2, 3 and u send nothing',
+    writes.length === 1 && writes[0] === 'POST /api/send',
+    writes.join(', '),
+  );
+  check(
+    'and 2 opens no edit while Send is in flight',
+    (await page.locator('textarea.sift-whole').count()) === 0,
+  );
+  await release();
   check(
     'Send says where the decisions went',
     await until(async () =>
@@ -612,7 +695,7 @@ async function main() {
     await until(async () => !(await send.isVisible())),
   );
 
-  // ---- 7. light and dark
+  // ---- 8. light and dark
   console.log('themes');
   for (const theme of ['light', 'dark']) {
     const p = await open(
@@ -646,7 +729,7 @@ async function main() {
     await p.close();
   }
 
-  // ---- 8. a round still being recommended: the page waits
+  // ---- 9. a round still being recommended: the page waits
   console.log('recommending');
   const recServe = await startServe({ recommending: true });
   serves.push(recServe);
@@ -664,7 +747,7 @@ async function main() {
   await shoot(rp, 'recommending');
   await rp.close();
 
-  // ---- 9. a backlog round: decided per item
+  // ---- 10. a backlog round: decided per item
   console.log('backlog');
   const blServe = await startServe({ fixture: BACKLOG });
   serves.push(blServe);
@@ -732,7 +815,7 @@ async function main() {
   );
   await bpr.close();
 
-  // ---- 10. a round the size of a real one
+  // ---- 11. a round the size of a real one
   console.log('scale');
   const bigServe = await startServe({ scale: 653 });
   serves.push(bigServe);

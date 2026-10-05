@@ -1,7 +1,7 @@
 // api.ts — the page's calls to sift serve's /api/, typed.
 
 import { createApi, ApiError, type Api } from '/_kit/kit.js';
-import type { DecisionServer } from './decide.ts';
+import type { DecisionServer, Sent } from './decide.ts';
 
 export { ApiError };
 
@@ -77,11 +77,14 @@ export function client(api: Api): Client {
     },
     base: (round, file) =>
       api.get<{ content: string }>('/base', { round: String(round), file }),
-    async send(round) {
-      const r = await api.post<{ sent: number; to?: string }>('/send', {
-        round,
-      });
-      return { sent: r?.sent ?? 0, to: r?.to ?? '' };
+    async send(round, shown) {
+      const r = await api.post<Partial<Sent>>('/send', { round, ...shown });
+      return {
+        sent: r?.sent ?? 0,
+        to: r?.to ?? '',
+        files: r?.files ?? [],
+        rows: r?.rows ?? [],
+      };
     },
     file: (round, id) =>
       api.get<FileOut>('/file', { round: String(round), id }),

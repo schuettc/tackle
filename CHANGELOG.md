@@ -41,11 +41,15 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   accept, edit (the whole file) or reject on 1–3, the findings with what the
   rewrite did, and a note. Linked files are decided together. A backlog
   round lists its items, grouped as issues by repo, decisions and closes.
-  Each decision and clear carries the fingerprints of what the page showed,
-  and one the agent or another page has changed since is refused, and the
-  page reloads what changed. A decision shows once the server has it, and
-  while it saves, its linked files and Send wait. Send delivers the
-  decisions to the agent session that opened that review.
+  A file or an item shows your edit once you make one, and accepting it
+  keeps the edit; u reverts to the proposal. Each decision and clear
+  carries the fingerprints of what the page showed (an edit included), and
+  one the agent or another page has changed since is refused, and the page
+  reloads what changed. A decision shows once the server has it, and while
+  it saves, its linked files and Send wait; while Send is in flight,
+  nothing else runs. Send delivers the decisions the page showed, those
+  still in force, to the agent session that opened that review, and the
+  page marks only those sent.
 - `sift wait`: returns when you press Send and prints what to do, for
   sessions without the channel.
 - `sift channel`: the MCP server for an agent session, with `sift_check`,

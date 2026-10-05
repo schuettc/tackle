@@ -16,6 +16,7 @@ import (
 
 	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/schuettc/tackle/internal/sift/shown"
 )
 
 // schemaV4: the audit round's files (content at the audit), the agent's
@@ -163,7 +164,7 @@ func filesIn(ctx context.Context, tx *sql.Tx, roundID int64) ([]FileItem, error)
 func editsOf(items []FileItem) map[string]string {
 	m := map[string]string{}
 	for _, it := range items {
-		if it.Decision != nil && it.Decision.Action == "edit" {
+		if it.Decision != nil && it.Decision.Act() == "edit" {
 			m[it.Key] = it.Decision.Content
 		}
 	}
@@ -491,15 +492,11 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 		for _, k := range group {
 			cur := by[k].Decision
 			switch {
-			case k == key && d.Action == "accept" && cur != nil && cur.Action == "edit":
-				// The page shows an edited file's edit, so accepting it
-				// approves the edit. Going back to the recommendation is
-				// UndecideFile first.
-				if err := put(k, rec.Decision{Action: "edit", Content: cur.Content, Note: d.Note}); err != nil {
-					return err
-				}
 			case k == key:
-				if err := put(k, d); err != nil {
+				// The page shows an edited file's edit, so accepting it
+				// approves the edit (shown.Kept). Going back to the
+				// recommendation is UndecideFile first.
+				if err := put(k, shown.Kept(d, d.Note, cur)); err != nil {
 					return err
 				}
 			case d.Action == "reject":

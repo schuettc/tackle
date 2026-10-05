@@ -118,7 +118,7 @@ func (g *rig) decide(f rec.File, d rec.Decision) {
 // applies.
 func (g *rig) run(o Options) Result {
 	g.t.Helper()
-	if _, err := g.s.Send(ctx, g.round, ""); err != nil {
+	if _, err := g.s.Send(ctx, g.round, "", nil); err != nil {
 		g.t.Fatal(err)
 	}
 	return g.runUnsent(o)

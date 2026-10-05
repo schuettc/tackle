@@ -563,12 +563,22 @@ func (s *Server) base(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, http.StatusNotFound, "no such file in the round")
 }
 
+// send marks sent the decisions the page shows (files by key, rows by id),
+// each only while it is still the one in force: a decision made since Send
+// was pressed waits for the next. The response names what it sent, and the
+// page marks only those. A Send that names no decisions is refused.
 func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Round int64 `json:"round"`
+		Round int64                   `json:"round"`
+		Files map[string]rec.Decision `json:"files"`
+		Rows  map[string]row.Decision `json:"rows"`
 	}
 	if err := decode(r, &b); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if b.Files == nil && b.Rows == nil {
+		writeErr(w, http.StatusBadRequest, "a Send names the decisions the page shows (files, rows)")
 		return
 	}
 	if _, ok := s.current(w, r.Context(), b.Round); !ok {
@@ -579,7 +589,7 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	sd, err := s.st.Send(r.Context(), b.Round, rd.OwnerSession)
+	sd, err := s.st.Send(r.Context(), b.Round, rd.OwnerSession, &store.Shown{Files: b.Files, Rows: b.Rows})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -594,9 +604,11 @@ func (s *Server) send(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, struct {
-		Sent int    `json:"sent"`
-		To   string `json:"to"`
-	}{n, to})
+		Sent  int      `json:"sent"`
+		To    string   `json:"to"`
+		Files []string `json:"files"`
+		Rows  []string `json:"rows"`
+	}{n, to, append([]string{}, sd.Files...), append([]string{}, sd.Rows...)})
 }
 
 // file returns the whole file a row is about, as it was audited: a repo

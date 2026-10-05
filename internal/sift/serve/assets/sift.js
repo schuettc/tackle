@@ -50,11 +50,14 @@ function client(api) {
       await api.put("/notes", { round, ...on, note });
     },
     base: (round, file) => api.get("/base", { round: String(round), file }),
-    async send(round) {
-      const r = await api.post("/send", {
-        round
-      });
-      return { sent: r?.sent ?? 0, to: r?.to ?? "" };
+    async send(round, shown) {
+      const r = await api.post("/send", { round, ...shown });
+      return {
+        sent: r?.sent ?? 0,
+        to: r?.to ?? "",
+        files: r?.files ?? [],
+        rows: r?.rows ?? []
+      };
     },
     file: (round, id) => api.get("/file", { round: String(round), id })
   };
@@ -117,9 +120,6 @@ function displayPath(src, home) {
 function editTarget(d) {
   if (d.action !== "edit" || !d.verdict?.startsWith("merge:")) return "";
   return d.verdict.slice("merge:".length);
-}
-function markSent(rows) {
-  for (const r of rows) if (r.decision) r.decision.sent = true;
 }
 function holdRows(rows, snap) {
   for (const r of snap) {
@@ -450,8 +450,10 @@ function createDecider(server, hooks) {
   const locks = /* @__PURE__ */ new Set();
   const notes = /* @__PURE__ */ new Map();
   let noting = 0;
+  let sending = false;
   let epoch = 0;
-  const busy = (keys) => keys.some((k) => locks.has(k));
+  const busy = (keys) => sending || keys.some((k) => locks.has(k));
+  const idle = () => locks.size === 0 && noting === 0 && !sending;
   const fileOf = (key) => hooks.review()?.files.find((f) => f.key === key);
   const rowOf = (id) => hooks.review()?.rows.find((r) => r.id === id);
   const groupKeys = (f) => [
@@ -576,7 +578,10 @@ function createDecider(server, hooks) {
   }
   return {
     busy,
-    idle: () => locks.size === 0 && noting === 0,
+    idle,
+    get sending() {
+      return sending;
+    },
     get epoch() {
       return epoch;
     },
@@ -658,9 +663,35 @@ function createDecider(server, hooks) {
     noteFile,
     noteRow,
     async send() {
-      const round = hooks.review()?.round?.id;
-      if (!round || locks.size > 0 || noting > 0) return null;
-      return server.send(round);
+      const r = hooks.review();
+      const round = r?.round?.id;
+      if (!r || !round || !idle()) return null;
+      const shown = { files: {}, rows: {} };
+      for (const f of r.files)
+        if (f.decision && !f.decision.sent)
+          shown.files[f.key] = { ...f.decision };
+      for (const x of r.rows)
+        if (x.decision && !x.decision.sent)
+          shown.rows[x.id] = { ...x.decision };
+      sending = true;
+      hooks.changed();
+      try {
+        const out = await server.send(round, shown);
+        epoch++;
+        const cur = shownRound(round);
+        if (cur) {
+          for (const f of cur.files)
+            if (f.decision && out.files.includes(f.key)) f.decision.sent = true;
+          for (const x of cur.rows)
+            if (x.decision && out.rows.includes(x.id)) x.decision.sent = true;
+          if (out.sent) cur.sends++;
+        }
+        return out;
+      } finally {
+        sending = false;
+        hooks.changed();
+        flush([...notes.keys()]);
+      }
     }
   };
 }
@@ -845,12 +876,13 @@ function rowDoc(ctx, r) {
       h2("div", { class: "kit-label" }, "the proposal")
     );
     const a = r.decision?.action;
+    const edited = a === "edit";
     const busy = ctx.busy([r]);
     const bs = [
       {
-        label: "1 accept",
+        label: edited ? "1 accept your edit" : "1 accept",
         fill: a === "accept",
-        disabled: !r.verdict || busy,
+        disabled: !v || busy,
         run: () => ctx.accept([r])
       },
       {
@@ -868,7 +900,11 @@ function rowDoc(ctx, r) {
       }
     ];
     if (r.decision)
-      bs.push({ label: "clear (u)", disabled: busy, run: () => ctx.clear(r) });
+      bs.push({
+        label: edited ? "revert to the proposal (u)" : "clear (u)",
+        disabled: busy,
+        run: () => ctx.clear(r)
+      });
     parts.push(buttons(bs));
     if (r.decision)
       parts.push(
@@ -1327,7 +1363,7 @@ function boot() {
     );
     const n = unsent(review?.rows ?? []) + unsentFiles(files());
     b.setPrimary(
-      n && review?.round && !recommending() ? decider.idle() ? { label: `Send ${n}`, run: () => void send() } : { label: "saving…", run: () => {
+      n && review?.round && !recommending() ? decider.idle() ? { label: `Send ${n}`, run: () => void send() } : { label: decider.sending ? "sending…" : "saving…", run: () => {
       } } : null
     );
     if (!flashing) b.setStatus(baseStatus());
@@ -1421,6 +1457,7 @@ function boot() {
     accept: (rows) => decide(rows, "accept"),
     reject: (rows) => decide(rows, "reject"),
     startEdit(r) {
+      if (ctx.busy([r])) return;
       editing = r.id;
       render();
     },
@@ -1455,6 +1492,7 @@ function boot() {
     accept: (f) => putFile(f, { action: "accept" }),
     reject: (f) => putFile(f, { action: "reject" }),
     startEdit(f) {
+      if (fctx.busy(f)) return;
       editing = f.key;
       render();
     },
@@ -1722,7 +1760,7 @@ function boot() {
     });
   }
   function decide(rows, action) {
-    const targets = action === "accept" ? rows.filter((r) => r.verdict) : rows;
+    const targets = action === "accept" ? rows.filter((r) => verdictOf(r)) : rows;
     if (!targets.length) {
       flash(
         "Nothing to accept: the agent proposed nothing here. Edit to give it a verdict."
@@ -1743,11 +1781,6 @@ function boot() {
       const out = await decider.send();
       if (!out) return;
       const { sent, to } = out;
-      if (review) {
-        markSent(review.rows);
-        for (const f of review.files) if (f.decision) f.decision.sent = true;
-        if (sent) review.sends++;
-      }
       refreshBar();
       flash(
         sent === 0 ? "Nothing to send." : to ? `Sent ${plural2(sent, "decision")} to ${to}.` : `Sent ${plural2(sent, "decision")}. The next agent session that opens sift gets them.`
@@ -1759,9 +1792,10 @@ function boot() {
   }
   const keys = createKeys({ list: l });
   const group = "decide";
+  const busyNow = (e) => e.kind === "file" ? fctx.busy(e.file) : ctx.busy(e.kind === "row" ? [e.row] : e.group.rows);
   const on = (onFile, onRow, onGroup) => () => {
     const e = current();
-    if (!e) return;
+    if (!e || busyNow(e)) return;
     if (e.kind === "file") onFile(e.file);
     else if (e.kind === "row") onRow(e.row);
     else onGroup?.(e.group.rows);

@@ -9,13 +9,13 @@ package rec
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
 	"strings"
 
 	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/schuettc/tackle/internal/sift/shown"
 )
 
 // File is one audited file as the round holds it: where it is, the hash of
@@ -107,6 +107,15 @@ func (d Decision) Validate() error {
 		return fmt.Errorf("decision: action %q is not accept, edit or reject", d.Action)
 	}
 	return nil
+}
+
+// Act is the decision's action (shown.Decision).
+func (d Decision) Act() string { return d.Action }
+
+// Noted is d with note as its note (shown.Decision).
+func (d Decision) Noted(note string) Decision {
+	d.Note = note
+	return d
 }
 
 // Approved is the content a decision approves: the recommendation's on an
@@ -236,32 +245,30 @@ func short(h string) string {
 // Print is the fingerprint a decision on r answers: its content, base,
 // findings, summary and links, each linked recommendation's content and
 // base, and the edit in force (edits, by file) on r's file and each linked
-// one. The page shows an edit in place of the recommendation, and an accept
-// keeps it, so a decision given against another print answered other
-// content, and is refused.
+// one, hashed by shown.Print. The page shows an edit in place of the
+// recommendation, and an accept keeps it (shown.Kept), so a decision given
+// against another print answered other content, and is refused.
 func Print(r Rec, linked []Rec, edits map[string]string) string {
 	type side struct{ File, Base, Content string }
 	type edit struct{ File, Content string }
 	others := make([]side, 0, len(linked))
-	var shown []edit
+	var edited []edit
 	if c, ok := edits[r.File]; ok {
-		shown = append(shown, edit{r.File, c})
+		edited = append(edited, edit{r.File, c})
 	}
 	for _, l := range linked {
 		others = append(others, side{l.File, l.Base, l.Content})
 		if c, ok := edits[l.File]; ok {
-			shown = append(shown, edit{l.File, c})
+			edited = append(edited, edit{l.File, c})
 		}
 	}
 	sort.Slice(others, func(i, j int) bool { return others[i].File < others[j].File })
-	sort.Slice(shown, func(i, j int) bool { return shown[i].File < shown[j].File })
-	b, _ := json.Marshal(struct {
+	sort.Slice(edited, func(i, j int) bool { return edited[i].File < edited[j].File })
+	return shown.Print(struct {
 		Rec    Rec
 		Linked []side
 		Edits  []edit `json:",omitempty"`
-	}{r, others, shown})
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:8])
+	}{r, others, edited})
 }
 
 // Group is the files decided together with key: those its recommendation's

@@ -51,7 +51,7 @@ func TestAFailureAfterTheCommitKeepsTheBranch(t *testing.T) {
 	if _, err := s.DecideFile(ctx, round, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: printOf(t, s, round, f.Key)}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Send(ctx, round, ""); err != nil {
+	if _, err := s.Send(ctx, round, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	defer apply.SetTempFile(func(content string) (string, error) {

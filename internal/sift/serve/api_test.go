@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
@@ -70,6 +71,9 @@ func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 // current one, as the page sends what it shows. A test about fingerprints
 // sets the key itself.
 func (f *fixture) withPrints(method, path, body string) string {
+	if method == "POST" && path == "/api/send" {
+		return f.withShown(body)
+	}
 	if method == "GET" || path != "/api/decisions" {
 		return body
 	}
@@ -96,6 +100,40 @@ func (f *fixture) withPrints(method, path, body string) string {
 	} else {
 		add(m)
 	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+// withShown gives a Send that names no decisions the round's unsent ones,
+// as the page sends what it shows. A test about what a Send covers names
+// them itself.
+func (f *fixture) withShown(body string) string {
+	var m map[string]any
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return body
+	}
+	if _, ok := m["files"]; ok {
+		return body
+	}
+	if _, ok := m["rows"]; ok {
+		return body
+	}
+	ctx := context.Background()
+	rows, files := map[string]row.Decision{}, map[string]rec.Decision{}
+	if rd, rs, err := f.st.LatestRound(ctx); err == nil {
+		for _, r := range rs {
+			if r.Decision != nil && !r.Decision.Sent {
+				rows[r.ID] = *r.Decision
+			}
+		}
+		items, _ := f.st.Files(ctx, rd.ID)
+		for _, it := range items {
+			if it.Decision != nil && !it.Decision.Sent {
+				files[it.Key] = *it.Decision
+			}
+		}
+	}
+	m["rows"], m["files"] = rows, files
 	b, _ := json.Marshal(m)
 	return string(b)
 }
@@ -260,6 +298,37 @@ func TestSend(t *testing.T) {
 	w = f.do("POST", "/api/send", fmt.Sprintf(`{"round":%d}`, f.round))
 	if !strings.Contains(w.Body.String(), `"sent":0`) {
 		t.Fatalf("second send %s", w.Body)
+	}
+}
+
+// A Send names the decisions the page shows, and sends each only while it
+// is still in force: one changed by another page since is left unsent, and
+// the response names what it sent. A Send that names nothing is refused.
+func TestSendSendsWhatThePageShowed(t *testing.T) {
+	f := newFixture(t)
+	f.decide("r-neg", "accept", "")
+	shown := fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r-neg":{"action":"accept"}}}`, f.round)
+	// Another page rejects it before the Send is stored.
+	f.decide("r-neg", "reject", "")
+	w := f.do("POST", "/api/send", shown)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":0`) || !strings.Contains(w.Body.String(), `"rows":[]`) {
+		t.Fatalf("send %d %s", w.Code, w.Body)
+	}
+	if rv := f.review(); rv.Rows[0].Decision.Sent || rv.Sends != 0 {
+		t.Fatalf("the reject was sent: %+v, sends %d", rv.Rows[0].Decision, rv.Sends)
+	}
+	w = f.do("POST", "/api/send", fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r-neg":{"action":"reject"}}}`, f.round))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"sent":1`) || !strings.Contains(w.Body.String(), `"rows":["r-neg"]`) || !strings.Contains(w.Body.String(), `"files":[]`) {
+		t.Fatalf("send %d %s", w.Code, w.Body)
+	}
+	if rv := f.review(); !rv.Rows[0].Decision.Sent {
+		t.Fatal("not sent")
+	}
+	req := httptest.NewRequest("POST", "/api/send", strings.NewReader(fmt.Sprintf(`{"round":%d}`, f.round)))
+	out := httptest.NewRecorder()
+	f.h.ServeHTTP(out, req)
+	if out.Code != 400 {
+		t.Fatalf("a Send naming nothing: %d %s", out.Code, out.Body)
 	}
 }
 

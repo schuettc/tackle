@@ -16,6 +16,7 @@ import (
 
 	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/schuettc/tackle/internal/sift/shown"
 	tools "github.com/schuettc/tools-common"
 	"github.com/schuettc/tools-common/sqlitedb"
 )
@@ -301,19 +302,22 @@ func rowsOf(ctx context.Context, db querier, roundID int64) ([]row.Row, error) {
 	for i := range rows {
 		byID[rows[i].ID] = &rows[i]
 	}
+	in := func(id string) *row.Row { return byID[id] }
 	for i := range rows {
-		rows[i].Fingerprint = rows[i].Print(byID[row.MergeTarget(rows[i].Verdict)])
+		rows[i].Fingerprint = rows[i].Print(in)
 	}
 	return rows, nil
 }
 
 // ErrChanged is returned when a decision answers a fingerprint the row no
-// longer has: the proposal changed since the page showed it.
+// longer has: what the page shows of it (the proposal, or the edit in
+// force) changed since the page showed it.
 var ErrChanged = errors.New("store: the row changed since it was shown")
 
 // Answer is one decision on a row, given against the row's fingerprint as
-// the page showed it. An edit to merge:C also carries C's fingerprint as the
-// page showed it (TargetFingerprint).
+// the page showed it (row.Print: the proposal with the edit in force over
+// it). An edit to merge:C also carries C's fingerprint as the page showed
+// it (TargetFingerprint).
 type Answer struct {
 	Row               string
 	Fingerprint       string
@@ -331,13 +335,16 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 }
 
 // Answer records decisions on a round's rows, all or nothing, each only if
-// the row's fingerprint (row.Print, with its merge target) is still the
-// one given, and, for an edit to merge:C, C's is still TargetFingerprint:
-// ErrChanged when either is not, ErrStale when the row is not in the
-// round, ErrNotReady while a round decided per item still waits for the
-// agent's verdicts. The check and the write are one transaction, which
-// also reads back the answered rows: the snapshot the page shows next, each
-// with its decision and fingerprint.
+// the row's fingerprint (row.Print: what the page shows, the edit in force
+// included, with its merge target's) is still the one given, and, for an
+// edit to merge:C, C's is still TargetFingerprint: ErrChanged when either
+// is not, ErrStale when the row is not in the round, ErrNotReady while a
+// round decided per item still waits for the agent's verdicts. An accept
+// of an edited row keeps the edit, with the accept's note (shown.Kept), as
+// an accept of an edited file does; going back to the proposal is
+// Undecide. The check and the write are one transaction, which also reads
+// back the answered rows: the snapshot the page shows next, each with its
+// decision and fingerprint.
 func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) ([]row.Row, error) {
 	return s.answer(ctx, roundID, as, true)
 }
@@ -371,42 +378,35 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 				return ErrNotReady
 			}
 		}
+		// Every print is checked against the round as the page showed it,
+		// before this answer writes anything.
+		before, err := rowsOf(ctx, tx, roundID)
+		if err != nil {
+			return err
+		}
+		byID := make(map[string]row.Row, len(before))
+		for _, r := range before {
+			byID[r.ID] = r
+		}
 		for _, a := range as {
-			cur, err := rowIn(ctx, tx, roundID, a.Row)
-			if errors.Is(err, sql.ErrNoRows) {
+			cur, ok := byID[a.Row]
+			if !ok {
 				return ErrStale
 			}
-			if err != nil {
-				return err
+			if check && (a.Fingerprint == "" || cur.Fingerprint != a.Fingerprint) {
+				return fmt.Errorf("%w: %s", ErrChanged, a.Row)
 			}
-			if check {
-				p, err := printIn(ctx, tx, roundID, cur)
-				if err != nil {
-					return err
-				}
-				if a.Fingerprint == "" || p != a.Fingerprint {
-					return fmt.Errorf("%w: %s", ErrChanged, a.Row)
-				}
-			}
-			if id := row.MergeTarget(chosen(cur, a.Decision)); id != "" {
-				target, err := rowIn(ctx, tx, roundID, id)
-				if errors.Is(err, sql.ErrNoRows) {
+			d := shown.Kept(a.Decision, a.Decision.Note, cur.Decision)
+			if id := row.MergeTarget(chosen(cur, d)); id != "" {
+				target, ok := byID[id]
+				if !ok {
 					return fmt.Errorf("%w: %s merges into %s, which is not in the round", ErrChanged, a.Row, id)
 				}
-				if err != nil {
-					return err
-				}
-				if check && a.Decision.Action == "edit" && a.Decision.Verdict != "" {
-					p, err := printIn(ctx, tx, roundID, target)
-					if err != nil {
-						return err
-					}
-					if a.TargetFingerprint == "" || p != a.TargetFingerprint {
-						return fmt.Errorf("%w: %s (its merge target %s)", ErrChanged, a.Row, id)
-					}
+				if check && a.Decision.Action == "edit" && a.Decision.Verdict != "" &&
+					(a.TargetFingerprint == "" || target.Fingerprint != a.TargetFingerprint) {
+					return fmt.Errorf("%w: %s (its merge target %s)", ErrChanged, a.Row, id)
 				}
 			}
-			d := a.Decision
 			if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, cleared, note, decided_at, sent_at)
 				VALUES (?,?,?,?,?,?,?,?,?,0)
 				ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
@@ -420,7 +420,6 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 		for i, a := range as {
 			ids[i] = a.Row
 		}
-		var err error
 		after, err = rowsNow(ctx, tx, roundID, ids)
 		return err
 	})
@@ -458,21 +457,6 @@ func chosen(cur row.Row, d row.Decision) string {
 	return cur.Verdict
 }
 
-// printIn is r's fingerprint as the page shows it (row.Print, with r's
-// merge target as the round holds it).
-func printIn(ctx context.Context, tx *sql.Tx, roundID int64, r row.Row) (string, error) {
-	var target *row.Row
-	if id := row.MergeTarget(r.Verdict); id != "" {
-		t, err := rowIn(ctx, tx, roundID, id)
-		if err == nil {
-			target = &t
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-	}
-	return r.Print(target), nil
-}
-
 // rowIn reads one row of a round as stored (no decision); sql.ErrNoRows
 // when the round has no such row.
 func rowIn(ctx context.Context, tx *sql.Tx, roundID int64, rowID string) (row.Row, error) {
@@ -485,33 +469,31 @@ func rowIn(ctx context.Context, tx *sql.Tx, roundID int64, rowID string) (row.Ro
 	return r, err
 }
 
-// Undecide removes the answer to one row (for a certain row: redoes it),
-// if the row's fingerprint is still the one the page showed: ErrChanged
-// when it is not, ErrStale when the row is not in the round. It returns
-// the row as it is after, read in the same transaction.
+// Undecide removes the answer to one row (for a certain row: redoes it; for
+// an edited row: reverts it to the proposal, which the page then shows
+// again), if the row's fingerprint is still the one the page showed:
+// ErrChanged when it is not, ErrStale when the row is not in the round. It
+// returns the row as it is after, read in the same transaction.
 func (s *Store) Undecide(ctx context.Context, roundID int64, rowID, fingerprint string) (row.Row, error) {
 	var after row.Row
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		cur, err := rowIn(ctx, tx, roundID, rowID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrStale
-		} else if err != nil {
-			return err
-		}
-		p, err := printIn(ctx, tx, roundID, cur)
+		rows, err := rowsNow(ctx, tx, roundID, []string{rowID})
 		if err != nil {
 			return err
 		}
-		if fingerprint == "" || p != fingerprint {
+		if len(rows) == 0 {
+			return ErrStale
+		}
+		if fingerprint == "" || rows[0].Fingerprint != fingerprint {
 			return fmt.Errorf("%w: %s", ErrChanged, rowID)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM decisions WHERE round_id = ? AND row_id = ?`, roundID, rowID); err != nil {
 			return err
 		}
-		rows, err := rowsNow(ctx, tx, roundID, []string{rowID})
+		rows, err = rowsNow(ctx, tx, roundID, []string{rowID})
 		if err != nil {
 			return err
 		}

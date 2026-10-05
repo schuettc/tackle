@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -307,7 +308,7 @@ func TestReproposingDropsTheGroupsDecisions(t *testing.T) {
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, old); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Send(ctx, id, ""); err != nil {
+	if _, err := s.Send(ctx, id, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	m2 := recM(f, g)
@@ -334,7 +335,7 @@ func TestProposeRefusesAnAppliedFileOrGroup(t *testing.T) {
 	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, printsOf(t, s, id, g, m)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Send(ctx, id, ""); err != nil {
+	if _, err := s.Send(ctx, id, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.RecordApply(ctx, Apply{Round: id, Repo: "/w/m", State: "branch", Branch: "sift/round-1", Rows: []string{m}}); err != nil {
@@ -439,7 +440,7 @@ func TestSendCarriesFileDecisions(t *testing.T) {
 	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
 		t.Fatal(err)
 	}
-	sd, err := s.Send(ctx, id, "")
+	sd, err := s.Send(ctx, id, "", nil)
 	if err != nil || sd.Counts.Accept != 2 || sd.Counts.Reject != 1 || len(sd.Notes) != 1 || !strings.Contains(sd.Notes[0].Row, "/h/AGENTS.md") {
 		t.Fatalf("%+v %v", sd, err)
 	}
@@ -525,5 +526,78 @@ func TestAFileNoteChangesOnlyTheNote(t *testing.T) {
 	}
 	if after := printsOf(t, s, id, g, m); after[g] != before[g] || after[m] != before[m] {
 		t.Fatalf("a note changed the prints: %v -> %v", before, after)
+	}
+}
+
+// A Send covers the decisions the page showed when Send was pressed, and
+// names the ones it sent. A decision made since, by another page and
+// stored before the Send, is not sent: on a file, or on a row. One stored
+// after the Send is unsent again.
+func TestASendSendsOnlyWhatThePageShowed(t *testing.T) {
+	s, _ := open(t)
+	id, f := ready(t, s)
+	g, m, q := f["g"].Key, f["m"].Key, f["q"].Key
+	if _, err := s.DecideFile(ctx, id, g, rec.Decision{Action: "accept"}, printsOf(t, s, id, g, m)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DecideFile(ctx, id, q, rec.Decision{Action: "reject"}, printsOf(t, s, id, q)); err != nil {
+		t.Fatal(err)
+	}
+	// The page shows g, m accepted and q rejected, and presses Send.
+	shown := &Shown{Files: map[string]rec.Decision{}}
+	for k, it := range items(t, s, id) {
+		shown.Files[k] = *it.Decision
+	}
+	// Another page edits m before the Send is stored.
+	if _, err := s.DecideFile(ctx, id, m, rec.Decision{Action: "edit", Content: "# mine\n"}, printsOf(t, s, id, g, m)); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, id, "", shown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(sd.Files)
+	want := []string{g, q}
+	slices.Sort(want)
+	if !slices.Equal(sd.Files, want) || sd.Counts != (Counts{Accept: 1, Reject: 1}) {
+		t.Fatalf("sent %v %+v, want %v", sd.Files, sd.Counts, want)
+	}
+	for k, it := range items(t, s, id) {
+		if it.Decision.Sent == (k == m) {
+			t.Errorf("%s: sent %v", k, it.Decision.Sent)
+		}
+	}
+	// Nothing the page showed is left: a second Send of the same shows
+	// sends nothing, and records nothing.
+	if again, err := s.Send(ctx, id, "", shown); err != nil || again.ID != 0 || len(again.Files) != 0 {
+		t.Fatalf("again: %+v %v", again, err)
+	}
+}
+
+// The row side of the same.
+func TestASendSendsOnlyTheRowsThePageShowed(t *testing.T) {
+	s, _ := open(t)
+	id, rows := round(t, s)
+	a, b := rows[0].ID, rows[1].ID
+	p := prints(t, s, id)
+	if _, err := s.Answer(ctx, id, []Answer{
+		{Row: a, Fingerprint: p[a], Decision: row.Decision{Action: "accept"}},
+		{Row: b, Fingerprint: p[b], Decision: row.Decision{Action: "reject", Note: "no"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, rs, _ := s.Round(ctx, id)
+	shown := &Shown{Rows: map[string]row.Decision{a: *rs[0].Decision, b: *rs[1].Decision}}
+	// Another page edits a before the Send is stored.
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], Decision: row.Decision{Action: "edit", Text: "mine"}}}); err != nil {
+		t.Fatal(err)
+	}
+	sd, err := s.Send(ctx, id, "", shown)
+	if err != nil || !slices.Equal(sd.Rows, []string{b}) || sd.Counts != (Counts{Reject: 1}) || len(sd.Notes) != 1 {
+		t.Fatalf("%+v %v", sd, err)
+	}
+	_, rs, _ = s.Round(ctx, id)
+	if rs[0].Decision.Sent || !rs[1].Decision.Sent {
+		t.Fatalf("sent flags: %+v %+v", rs[0].Decision, rs[1].Decision)
 	}
 }

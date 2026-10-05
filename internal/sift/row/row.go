@@ -6,12 +6,13 @@ package row
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/schuettc/tackle/internal/sift/shown"
 )
 
 // Row is one finding.
@@ -41,9 +42,11 @@ type Row struct {
 	// recommendation must fix them.
 	Certain  bool      `json:"certain"`
 	Decision *Decision `json:"decision,omitempty"`
-	// Fingerprint is Print's hash of the proposal as the store holds it
-	// now, filled when a round is read (never stored). The page sends it
-	// back with each decision, and a decision on a changed row is refused.
+	// Fingerprint is Print's hash of what the page shows of the row now:
+	// the proposal with the edit in force over it. It is filled when a
+	// round is read (never stored). The page sends it back with each
+	// decision, and a decision on a row that shows something else now is
+	// refused.
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
@@ -124,62 +127,85 @@ func MergeTarget(verdict string) string {
 	return id
 }
 
-// Print hashes every field that says what applying r does: the verdict,
-// title, destination, text, the whole source, the passage, whether it is
-// certain, and, for a merge, its target's source and passage (target is that row;
-// nil for any other verdict or a target not in the round). A decision
-// answers one print: when it changes, the decision answered another row.
-func (r Row) Print(target *Row) string {
-	type about struct {
-		Source  Source
-		Passage string
-	}
+// Print hashes what the page shows of r (shown.Print): every field that
+// says what applying it does, as Shown has them (the proposal, with the
+// edit in force over it), the whole source, the passage and whether it is
+// certain; and, for a merge, its target's print. in finds a row of the
+// round (nil when the round lacks it); a target already printed on the
+// way (a merge cycle) is left out. Not the reason, the note or whether
+// the decision is an accept or a reject: a decision answers the content
+// shown, and when it changes, the decision answered another row.
+func (r Row) Print(in func(id string) *Row) string {
+	return r.print(in, map[string]bool{})
+}
+
+func (r Row) print(in func(id string) *Row, seen map[string]bool) string {
+	seen[r.ID] = true
+	c := r.Shown()
 	v := struct {
 		Verdict, Title, Destination, Text string
 		Source                            Source
 		Passage                           string
 		Certain                           bool
-		Target                            *about
-	}{r.Verdict, r.Title, r.Destination, r.Text, r.Source, r.Passage, r.Certain, nil}
-	if target != nil {
-		v.Target = &about{target.Source, target.Passage}
+		Target                            string `json:",omitempty"`
+	}{c.Verdict, c.Title, c.Destination, c.Text, r.Source, r.Passage, r.Certain, ""}
+	if id := MergeTarget(c.Verdict); id != "" && !seen[id] && in != nil {
+		if t := in(id); t != nil {
+			v.Target = t.print(in, seen)
+		}
 	}
-	b, _ := json.Marshal(v)
-	h := sha256.Sum256(b)
-	return hex.EncodeToString(h[:8])
+	return shown.Print(v)
 }
 
-// Effective is the change the user approved. ok is false when there is none:
-// the row is undecided, rejected, or accepted with no verdict.
-func (r Row) Effective() (Change, bool) {
-	d := r.Decision
+// Shown is what the page shows of r: the proposal, with the edit in force
+// over it (an edit's verdict, title and text, and the fields it cleared).
+func (r Row) Shown() Change {
 	c := Change{Verdict: r.Verdict, Title: r.Title, Destination: r.Destination, Text: r.Text}
-	switch {
-	case d == nil, d.Action == "reject":
-		return Change{}, false
-	case d.Action == "edit":
-		if d.Verdict != "" {
-			c.Verdict = d.Verdict
-		}
-		if d.Title != "" {
-			c.Title = d.Title
-		}
-		if d.Text != "" {
-			c.Text = d.Text
-		}
-		for _, f := range d.Cleared {
-			switch f {
-			case "title":
-				c.Title = ""
-			case "text":
-				c.Text = ""
-			}
+	d := r.Decision
+	if d == nil || d.Action != "edit" {
+		return c
+	}
+	if d.Verdict != "" {
+		c.Verdict = d.Verdict
+	}
+	if d.Title != "" {
+		c.Title = d.Title
+	}
+	if d.Text != "" {
+		c.Text = d.Text
+	}
+	for _, f := range d.Cleared {
+		switch f {
+		case "title":
+			c.Title = ""
+		case "text":
+			c.Text = ""
 		}
 	}
+	return c
+}
+
+// Effective is the change the user approved: what the page shows (Shown)
+// once accepted or edited. ok is false when there is none: the row is
+// undecided, rejected, or accepted with no verdict.
+func (r Row) Effective() (Change, bool) {
+	if d := r.Decision; d == nil || d.Action == "reject" {
+		return Change{}, false
+	}
+	c := r.Shown()
 	if c.Verdict == "" {
 		return Change{}, false
 	}
 	return c, true
+}
+
+// Act is the decision's action (shown.Decision).
+func (d Decision) Act() string { return d.Action }
+
+// Noted is d with note as its note (shown.Decision).
+func (d Decision) Noted(note string) Decision {
+	d.Note = note
+	return d
 }
 
 // Validate reports what is wrong with a decision: an unknown action, an edit

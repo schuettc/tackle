@@ -216,13 +216,16 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
       }),
       h('div', { class: 'kit-label' }, 'the proposal'),
     );
+    // Once edited, the page shows the edit, so accept keeps it; going back
+    // to the proposal is its own step (u), which shows it again first.
     const a = r.decision?.action;
+    const edited = a === 'edit';
     const busy = ctx.busy([r]);
     const bs: Button[] = [
       {
-        label: '1 accept',
+        label: edited ? '1 accept your edit' : '1 accept',
         fill: a === 'accept',
-        disabled: !r.verdict || busy,
+        disabled: !v || busy,
         run: () => ctx.accept([r]),
       },
       {
@@ -240,7 +243,11 @@ export function rowDoc(ctx: Ctx, r: Finding): HTMLElement {
       },
     ];
     if (r.decision)
-      bs.push({ label: 'clear (u)', disabled: busy, run: () => ctx.clear(r) });
+      bs.push({
+        label: edited ? 'revert to the proposal (u)' : 'clear (u)',
+        disabled: busy,
+        run: () => ctx.clear(r),
+      });
     parts.push(buttons(bs));
     if (r.decision)
       parts.push(

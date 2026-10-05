@@ -122,7 +122,7 @@ func decideAndPressSend(t *testing.T, s *store.Store) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, _ := http.NewRequest("POST", adv.Base+"/api/send", strings.NewReader(fmt.Sprintf(`{"round":%d}`, id)))
+	req, _ := http.NewRequest("POST", adv.Base+"/api/send", strings.NewReader(fmt.Sprintf(`{"round":%d,"files":{},"rows":{"r1":{"action":"reject","note":"it is fine"}}}`, id)))
 	req.Header.Set(localweb.TokenHeader, adv.Token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
@@ -213,7 +213,7 @@ func applyRig(t *testing.T) string {
 	if _, err := s.DecideFile(ctx, id, f.Key, rec.Decision{Action: "accept"}, map[string]string{f.Key: items[0].Fingerprint}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Send(context.Background(), id, ""); err != nil {
+	if _, err := s.Send(context.Background(), id, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	return repo

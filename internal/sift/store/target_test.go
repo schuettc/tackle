@@ -165,3 +165,118 @@ func TestARowsClearAnswersWhatThePageShowed(t *testing.T) {
 		t.Fatalf("after the note: %+v", got[0].Decision)
 	}
 }
+
+// A row follows the file model: its print covers what the page shows, the
+// edit in force over the proposal, so an edit changes it and a clear
+// changes it back. Accepting an edited row, alone or in a group, keeps the
+// edit (with the accept's note); the proposal comes back only through a
+// clear.
+func TestAcceptingAnEditedRowKeepsTheEdit(t *testing.T) {
+	s, _ := open(t)
+	id, rows := round(t, s)
+	a, b := rows[0].ID, rows[1].ID
+	old := prints(t, s, id)
+	snap, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: old[a], Decision: row.Decision{Action: "edit", Text: "mine"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap[0].Fingerprint == old[a] {
+		t.Fatal("the edit left the print as it was: the print does not cover the edit the page shows")
+	}
+	if snap[0].Fingerprint != prints(t, s, id)[a] {
+		t.Fatal("the snapshot's print is not the round's")
+	}
+	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: snap[0].Fingerprint, Decision: row.Decision{Action: "accept", Note: "fine"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := snap[0].Decision; d == nil || d.Action != "edit" || d.Text != "mine" || d.Note != "fine" {
+		t.Fatalf("a single accept of an edited row: %+v", d)
+	}
+	// A group accept: a (edited) and b (edited too).
+	now := prints(t, s, id)
+	if _, err := s.Answer(ctx, id, []Answer{{Row: b, Fingerprint: now[b], Decision: row.Decision{Action: "edit", Text: "theirs"}}}); err != nil {
+		t.Fatal(err)
+	}
+	now = prints(t, s, id)
+	snap, err = s.Answer(ctx, id, []Answer{
+		{Row: a, Fingerprint: now[a], Decision: row.Decision{Action: "accept"}},
+		{Row: b, Fingerprint: now[b], Decision: row.Decision{Action: "accept"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap) != 2 || snap[0].Decision.Action != "edit" || snap[0].Decision.Text != "mine" ||
+		snap[1].Decision.Action != "edit" || snap[1].Decision.Text != "theirs" {
+		t.Fatalf("a group accept of edited rows: %+v %+v", snap[0].Decision, snap[1].Decision)
+	}
+	if c, ok := snap[0].Effective(); !ok || c.Text != "mine" {
+		t.Fatalf("what apply would do: %+v %v", c, ok)
+	}
+	// The clear is the way back: the page then shows the proposal again.
+	after, err := s.Undecide(ctx, id, a, snap[0].Fingerprint)
+	if err != nil || after.Decision != nil || after.Fingerprint != old[a] {
+		t.Fatalf("the clear: %+v %v", after, err)
+	}
+}
+
+// An accept from a page still showing an edit another client has cleared
+// since is refused: it would approve the proposal the page never showed.
+func TestAStaleAcceptOfAClearedEditIsRefused(t *testing.T) {
+	s, _ := open(t)
+	id, rows := round(t, s)
+	a := rows[0].ID
+	old := prints(t, s, id)
+	snap, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: old[a], Decision: row.Decision{Action: "edit", Text: "mine"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shown := snap[0].Fingerprint
+	// Another page clears the edit.
+	if _, err := s.Undecide(ctx, id, a, shown); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: shown, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
+		t.Fatalf("a stale accept: %v, want ErrChanged", err)
+	}
+	if n := decided(t, s, id); n != 0 {
+		t.Fatalf("%d rows decided", n)
+	}
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: prints(t, s, id)[a], Decision: row.Decision{Action: "accept"}}}); err != nil {
+		t.Fatalf("after a reload: %v", err)
+	}
+}
+
+// An edited merge:C covers C as the page shows it: when C's shown content
+// changes (here C's own edit), the merge's print changes, an accept given
+// against the old one is refused, and one given against the new keeps the
+// edit.
+func TestAnEditedMergeCoversItsTarget(t *testing.T) {
+	s, _ := open(t)
+	id, rows := round(t, s)
+	a, c := rows[0].ID, rows[1].ID
+	old := prints(t, s, id)
+	snap, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: old[a], TargetFingerprint: old[c],
+		Decision: row.Decision{Action: "edit", Verdict: "merge:" + c, Text: "both"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged := snap[0].Fingerprint
+	if _, err := s.Answer(ctx, id, []Answer{{Row: c, Fingerprint: old[c], Decision: row.Decision{Action: "edit", Text: "c's own"}}}); err != nil {
+		t.Fatal(err)
+	}
+	now := prints(t, s, id)
+	if now[a] == merged {
+		t.Fatal("the merge's print did not change with its target's")
+	}
+	if _, err := s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: merged, Decision: row.Decision{Action: "accept"}}}); !errors.Is(err, ErrChanged) {
+		t.Fatalf("an accept against the old target: %v, want ErrChanged", err)
+	}
+	snap, err = s.Answer(ctx, id, []Answer{{Row: a, Fingerprint: now[a], Decision: row.Decision{Action: "accept"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := snap[0].Decision; d.Action != "edit" || d.Verdict != "merge:"+c || d.Text != "both" {
+		t.Fatalf("the accept: %+v", d)
+	}
+}

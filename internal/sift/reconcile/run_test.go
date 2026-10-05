@@ -57,7 +57,7 @@ func applied(t *testing.T) (*store.Store, int64, string, []rec.Rec, string) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.Send(ctx, round, ""); err != nil {
+	if _, err := s.Send(ctx, round, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	res, err := apply.Run(ctx, apply.Options{Store: s, WorktreeDir: t.TempDir()})

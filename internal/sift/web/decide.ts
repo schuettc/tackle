@@ -6,10 +6,13 @@
 // a next decision answers, and the page shows that snapshot: a print is
 // never held apart from the content it came with. One request per group of
 // linked files (or per row) at a time: while one is in flight the group's
-// decisions do nothing, and neither does Send. Every decision and clear
-// carries the prints of what the page shows; a 409 reloads the group from
-// the server and shows that. Notes are the exception: they approve
-// nothing, so they are shown at once and saved on their own.
+// decisions do nothing, and neither does Send. Send is exclusive: while it
+// is in flight nothing else runs, and it carries the decisions the page
+// shows; the server sends only those still in force and names them, and
+// only those are marked sent. Every decision and clear carries the prints
+// of what the page shows; a 409 reloads the group from the server and
+// shows that. Notes are the exception: they approve nothing, so they are
+// shown at once and saved on their own (and wait while Send is in flight).
 
 import type { DecisionIn } from './api.ts';
 import { holdFiles, printsFor } from './files.ts';
@@ -36,7 +39,22 @@ export interface DecisionServer {
     on: { file?: string; id?: string },
     note: string,
   ): Promise<void>;
-  send(round: number): Promise<{ sent: number; to: string }>;
+  send(round: number, shown: Shown): Promise<Sent>;
+}
+
+/** The decisions the page shows unsent, which a Send covers: by file key
+ * and by row id. */
+export interface Shown {
+  files: Record<string, FileDecision>;
+  rows: Record<string, Decision>;
+}
+
+/** What a Send sent: how many, to whom, and which (file keys, row ids). */
+export interface Sent {
+  sent: number;
+  to: string;
+  files: string[];
+  rows: string[];
 }
 
 /** What the decisions need from the page. */
@@ -53,10 +71,13 @@ export interface Hooks {
 }
 
 export interface Decider {
-  /** Some of keys ('f:<file>' or 'r:<row>') has a request in flight. */
+  /** Some of keys ('f:<file>' or 'r:<row>') has a request in flight, or a
+   * Send is (which holds every key). */
   busy(keys: string[]): boolean;
   /** No request in flight at all: Send and a reload may go. */
   idle(): boolean;
+  /** A Send is in flight. */
+  readonly sending: boolean;
   /** Counts the snapshots shown; a reload that started before one landed
    * is older than the page. */
   readonly epoch: number;
@@ -70,8 +91,9 @@ export interface Decider {
   clearRow(id: string): Promise<boolean>;
   noteFile(key: string, text: string): void;
   noteRow(id: string, text: string): void;
-  /** Send, unless a request is in flight (null then). */
-  send(): Promise<{ sent: number; to: string } | null>;
+  /** Send what the page shows unsent, unless a request is in flight (null
+   * then); marks sent what the server says it sent. A failure throws. */
+  send(): Promise<Sent | null>;
 }
 
 const statusOf = (err: unknown) => (err as { status?: number }).status;
@@ -83,9 +105,11 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
   const locks = new Set<string>();
   const notes = new Map<string, string>();
   let noting = 0;
+  let sending = false;
   let epoch = 0;
 
-  const busy = (keys: string[]) => keys.some((k) => locks.has(k));
+  const busy = (keys: string[]) => sending || keys.some((k) => locks.has(k));
+  const idle = () => locks.size === 0 && noting === 0 && !sending;
   const fileOf = (key: string) =>
     hooks.review()?.files.find((f) => f.key === key);
   const rowOf = (id: string) => hooks.review()?.rows.find((r) => r.id === id);
@@ -236,7 +260,10 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
 
   return {
     busy,
-    idle: () => locks.size === 0 && noting === 0,
+    idle,
+    get sending() {
+      return sending;
+    },
     get epoch() {
       return epoch;
     },
@@ -324,9 +351,37 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
     noteRow,
 
     async send() {
-      const round = hooks.review()?.round?.id;
-      if (!round || locks.size > 0 || noting > 0) return null;
-      return server.send(round);
+      const r = hooks.review();
+      const round = r?.round?.id;
+      if (!r || !round || !idle()) return null;
+      const shown: Shown = { files: {}, rows: {} };
+      for (const f of r.files)
+        if (f.decision && !f.decision.sent)
+          shown.files[f.key] = { ...f.decision };
+      for (const x of r.rows)
+        if (x.decision && !x.decision.sent)
+          shown.rows[x.id] = { ...x.decision };
+      sending = true;
+      hooks.changed();
+      try {
+        const out = await server.send(round, shown);
+        epoch++;
+        const cur = shownRound(round);
+        if (cur) {
+          // Only what the server sent; nothing else changed on this page
+          // while Send was in flight.
+          for (const f of cur.files)
+            if (f.decision && out.files.includes(f.key)) f.decision.sent = true;
+          for (const x of cur.rows)
+            if (x.decision && out.rows.includes(x.id)) x.decision.sent = true;
+          if (out.sent) cur.sends++;
+        }
+        return out;
+      } finally {
+        sending = false;
+        hooks.changed();
+        flush([...notes.keys()]);
+      }
     },
   };
 }

@@ -140,7 +140,7 @@ func TestSendCountsAndClaims(t *testing.T) {
 	id, rows := round(t, s)
 	_ = s.Decide(ctx, id, rows[0].ID, row.Decision{Action: "edit", Text: "mine", Note: "shorter"})
 	_ = s.Decide(ctx, id, rows[1].ID, row.Decision{Action: "reject"})
-	sd, err := s.Send(ctx, id, "sess-1")
+	sd, err := s.Send(ctx, id, "sess-1", nil)
 	if err != nil || sd.ID == 0 {
 		t.Fatalf("%+v %v", sd, err)
 	}
@@ -151,14 +151,14 @@ func TestSendCountsAndClaims(t *testing.T) {
 		t.Errorf("notes %+v", sd.Notes)
 	}
 	// Nothing new: no second send.
-	if again, err := s.Send(ctx, id, ""); err != nil || again.ID != 0 {
+	if again, err := s.Send(ctx, id, "", nil); err != nil || again.ID != 0 {
 		t.Fatalf("an empty send was recorded: %+v %v", again, err)
 	}
 	// A decision on the certain row is a new answer.
 	if err := s.Decide(ctx, id, rows[2].ID, row.Decision{Action: "reject"}); err != nil {
 		t.Fatal(err)
 	}
-	two, _ := s.Send(ctx, id, "")
+	two, _ := s.Send(ctx, id, "", nil)
 	if two.Counts != (Counts{Reject: 1}) {
 		t.Errorf("second send %+v", two.Counts)
 	}
@@ -256,7 +256,7 @@ func TestAddRowsClearsADecisionOnAChangedIntakeRow(t *testing.T) {
 		if err := s.Decide(ctx, id, base.ID, row.Decision{Action: "accept"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Send(ctx, id, ""); err != nil {
+		if _, err := s.Send(ctx, id, "", nil); err != nil {
 			t.Fatal(err)
 		}
 		next := base

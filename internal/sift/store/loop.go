@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 )
 
@@ -237,12 +239,27 @@ type Send struct {
 	Owner       string // the review's owner session at send time ("" if none)
 	DeliveredTo string // "" until delivered
 	DeliveredAt time.Time
+	// Files and Rows name the decisions this Send marked sent (file keys,
+	// row ids); not recorded.
+	Files, Rows []string
+}
+
+// Shown is the decisions the page showed when Send was pressed, by file key
+// and by row id. A Send given it sends each only while it is still the
+// decision in force, unsent; a decision made since is left for the next.
+type Shown struct {
+	Files map[string]rec.Decision
+	Rows  map[string]row.Decision
 }
 
 // Send marks the round's unsent decisions sent, on files and on rows, and
-// records one send for them, in one transaction. With nothing new it
-// returns a zero Send and records nothing.
-func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, error) {
+// records one send for them, in one transaction. Given what the page
+// showed (shown, non-nil), it sends only those decisions, each only while
+// it is still the one in force: a decision made since Send was pressed
+// waits for the next. nil sends every unsent decision. With nothing to
+// send it returns a zero Send and records nothing. The Send names the
+// decisions it marked (Files, Rows).
+func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Shown) (Send, error) {
 	now := time.Now()
 	sd := Send{Round: roundID, CreatedAt: now, Owner: owner}
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -264,55 +281,43 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 		if err != nil {
 			return err
 		}
-		n := 0
 		for _, it := range items {
-			if d := it.Decision; d != nil && !d.Sent {
-				n++
-				count(d.Action)
-				if d.Note != "" {
-					sd.Notes = append(sd.Notes, Note{Row: it.Source.File, Note: d.Note})
-				}
+			d := it.Decision
+			if d == nil || d.Sent || !shown.hasFile(it.Key, *d) {
+				continue
+			}
+			sd.Files = append(sd.Files, it.Key)
+			count(d.Action)
+			if d.Note != "" {
+				sd.Notes = append(sd.Notes, Note{Row: it.Source.File, Note: d.Note})
 			}
 		}
-		q, err := tx.QueryContext(ctx, `SELECT r.body, d.action, d.note FROM rows r
-			JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
-			WHERE r.round_id = ? AND d.sent_at = 0 ORDER BY r.seq`, roundID)
+		rows, err := rowsOf(ctx, tx, roundID)
 		if err != nil {
 			return err
 		}
-		for q.Next() {
-			var body, action, note string
-			if err := q.Scan(&body, &action, &note); err != nil {
-				_ = q.Close()
-				return err
+		for _, r := range rows {
+			d := r.Decision
+			if d == nil || d.Sent || !shown.hasRow(r.ID, *d) {
+				continue
 			}
-			var r row.Row
-			if err := json.Unmarshal([]byte(body), &r); err != nil {
-				_ = q.Close()
-				return err
-			}
-			n++
-			count(action)
-			if note != "" {
-				sd.Notes = append(sd.Notes, Note{Row: where(r), Note: note})
+			sd.Rows = append(sd.Rows, r.ID)
+			count(d.Action)
+			if d.Note != "" {
+				sd.Notes = append(sd.Notes, Note{Row: where(r), Note: d.Note})
 			}
 		}
-		if err := q.Err(); err != nil {
-			_ = q.Close()
-			return err
-		}
-		if err := q.Close(); err != nil {
-			return err
-		}
-		if n == 0 {
+		if len(sd.Files)+len(sd.Rows) == 0 {
 			sd.Counts, sd.Notes = Counts{}, nil
 			return nil
 		}
-		for _, q := range []string{
-			`UPDATE decisions SET sent_at = ? WHERE round_id = ? AND sent_at = 0`,
-			`UPDATE file_decisions SET sent_at = ? WHERE round_id = ? AND sent_at = 0`,
-		} {
-			if _, err := tx.ExecContext(ctx, q, now.UnixMilli(), roundID); err != nil {
+		for _, k := range sd.Files {
+			if _, err := tx.ExecContext(ctx, `UPDATE file_decisions SET sent_at = ? WHERE round_id = ? AND key = ?`, now.UnixMilli(), roundID, k); err != nil {
+				return err
+			}
+		}
+		for _, id := range sd.Rows {
+			if _, err := tx.ExecContext(ctx, `UPDATE decisions SET sent_at = ? WHERE round_id = ? AND row_id = ?`, now.UnixMilli(), roundID, id); err != nil {
 				return err
 			}
 		}
@@ -332,6 +337,27 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string) (Send, er
 		return Send{}, err
 	}
 	return sd, nil
+}
+
+// hasFile reports whether the page showed d on file key (a nil Shown shows
+// everything).
+func (sh *Shown) hasFile(key string, d rec.Decision) bool {
+	if sh == nil {
+		return true
+	}
+	w, ok := sh.Files[key]
+	return ok && w.Action == d.Action && w.Content == d.Content && w.Note == d.Note
+}
+
+// hasRow reports whether the page showed d on row id (a nil Shown shows
+// everything).
+func (sh *Shown) hasRow(id string, d row.Decision) bool {
+	if sh == nil {
+		return true
+	}
+	w, ok := sh.Rows[id]
+	return ok && w.Action == d.Action && w.Verdict == d.Verdict && w.Title == d.Title && w.Text == d.Text &&
+		slices.Equal(w.Cleared, d.Cleared) && w.Note == d.Note
 }
 
 // where names a row for a note: file:line · check.

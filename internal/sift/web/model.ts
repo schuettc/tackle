@@ -82,11 +82,6 @@ export function editTarget(d: Decision): string {
   return d.verdict.slice('merge:'.length);
 }
 
-/** After a Send: every decision is sent. */
-export function markSent(rows: Finding[]): void {
-  for (const r of rows) if (r.decision) r.decision.sent = true;
-}
-
 /** A decision's snapshot, shown: each row the server returned replaces the
  * page's, its decision and fingerprint together. */
 export function holdRows(rows: Finding[], snap: Finding[]): void {

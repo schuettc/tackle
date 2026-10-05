@@ -26,6 +26,7 @@ interface Dec {
   action: 'accept' | 'edit' | 'reject';
   content?: string;
   note?: string;
+  sent?: boolean;
 }
 
 const conflict = () =>
@@ -157,11 +158,28 @@ class Fake {
           const d = this.dec[on.file!];
           if (!d) throw conflict();
           d.note = note;
+          d.sent = false;
         }),
-      send: () =>
+      // As the store's Send: each decision the page showed, only while it
+      // is still the one in force and unsent.
+      send: (_r, shown) =>
         this.call('send', () => {
-          this.sends++;
-          return { sent: 1, to: '' };
+          const files: string[] = [];
+          for (const [k, w] of Object.entries(shown.files)) {
+            const d = this.dec[k];
+            if (
+              d &&
+              !d.sent &&
+              d.action === w.action &&
+              (d.content ?? '') === (w.content ?? '') &&
+              (d.note ?? '') === (w.note ?? '')
+            ) {
+              d.sent = true;
+              files.push(k);
+            }
+          }
+          if (files.length) this.sends++;
+          return { sent: files.length, to: '', files, rows: [] };
         }),
     };
   }
@@ -253,7 +271,12 @@ test('while a decision on a group is in flight, its decisions and Send do nothin
   assert.equal(shown(p.review, 'm').decision, 'edit');
   const sent = d.send();
   await fake.run();
-  assert.deepEqual(await sent, { sent: 1, to: '' });
+  assert.deepEqual(await sent, {
+    sent: 3,
+    to: '',
+    files: ['g', 'm', 'q'],
+    rows: [],
+  });
 });
 
 test('a decision on content another page changed gets 409; the page reloads the group, and its next accept approves what it then shows', async () => {
@@ -343,7 +366,14 @@ test('rows: a group decision in flight blocks its rows; a clear sends the print 
     source: { file: '', entry: id },
     verdict: 'close:done',
     certain: false,
-    fingerprint: 'fp-' + id + (d ? '-' + d.action : ''),
+    // As row.Print: what the page shows, the edit in force over the
+    // proposal; not an accept, a reject or a note.
+    fingerprint:
+      'fp-' +
+      id +
+      (d?.action === 'edit'
+        ? '-edit:' + JSON.stringify([d.verdict, d.title, d.text, d.cleared])
+        : ''),
     ...(d ? { decision: d } : {}),
   });
   const review: Review = {
@@ -384,5 +414,198 @@ test('rows: a group decision in flight blocks its rows; a clear sends the print 
   assert.equal(review.rows[1].decision?.action, 'accept');
   assert.equal(await d.clearRow('c'), true);
   assert.equal(review.rows[2].decision, undefined);
-  assert.deepEqual(sent, ['decide a@fp-a,b@fp-b', 'clear c@fp-c-reject']);
+  assert.deepEqual(sent, ['decide a@fp-a,b@fp-b', 'clear c@fp-c']);
 });
+
+test('rows: an accept of an edited row answers the edit it shows, and shows the edit the server kept', async () => {
+  const edit: Decision = { action: 'edit', text: 'mine' };
+  const print = (d?: Decision) =>
+    'fp-a' + (d?.action === 'edit' ? '-edit:' + d.text : '');
+  const a: Finding = {
+    id: 'a',
+    check: 'intake',
+    summary: 's',
+    source: { file: '', entry: 'a' },
+    verdict: 'keep',
+    text: 'theirs',
+    certain: false,
+    decision: edit,
+    fingerprint: print(edit),
+  };
+  const review: Review = {
+    ...new Fake().review(),
+    round: { id: 1, kind: 'backlog', at: '', summary: {}, owner: '' },
+    files: [],
+    rows: [a],
+  };
+  const sent: string[] = [];
+  const server: DecisionServer = {
+    ...new Fake().server(),
+    decide: (_r, ds) => {
+      sent.push(ds.map((x) => `${x.id} ${x.action}@${x.fingerprint}`).join());
+      // The store keeps the edit (shown.Kept).
+      const kept: Decision = { ...edit, note: ds[0].note };
+      return Promise.resolve([
+        { ...a, decision: kept, fingerprint: print(kept) },
+      ]);
+    },
+  };
+  const d = createDecider(server, {
+    review: () => review,
+    replace: () => {},
+    changed: () => {},
+    failed: () => {},
+  });
+  assert.equal(await d.rows([{ id: 'a', d: { action: 'accept' } }]), true);
+  assert.deepEqual(sent, ['a accept@fp-a-edit:mine']);
+  assert.equal(review.rows[0].decision?.action, 'edit');
+  assert.equal(review.rows[0].decision?.text, 'mine');
+});
+
+test('while a Send is in flight, nothing else runs: no decision, clear, note or second Send', async () => {
+  const fake = new Fake();
+  const { p, d } = page(fake);
+  const q = d.file('q', { action: 'reject' });
+  await fake.run();
+  assert.equal(await q, true);
+  const send = d.send();
+  assert.equal(d.idle(), false, 'idle() reports busy');
+  assert.equal(d.busy(['f:g']), true);
+  assert.equal(d.busy(['f:q']), true);
+  assert.equal(await d.file('m', { action: 'edit', content: 'mine\n' }), false);
+  assert.equal(await d.file('g', { action: 'accept' }), false);
+  assert.equal(await d.clearFile('q'), false);
+  assert.equal(await d.send(), null);
+  d.noteFile('q', 'later');
+  assert.deepEqual(
+    fake.calls.map((c) => c.what),
+    ['decide q reject', 'send'],
+    'nothing else reached the server',
+  );
+  await fake.run();
+  assert.deepEqual(await send, { sent: 1, to: '', files: ['q'], rows: [] });
+  // The held note saves once Send lands (run serves it too).
+  await fake.run();
+  await settle();
+  assert.equal(d.idle(), true);
+  assert.deepEqual(
+    fake.calls.map((c) => c.what),
+    ['decide q reject', 'send', 'note q'],
+  );
+  // The note came after Send was pressed: it is unsent, on the page and in
+  // the store.
+  assert.equal(fake.dec.q?.sent, false);
+  assert.equal(
+    p.review.files.find((f) => f.key === 'q')?.decision?.sent,
+    false,
+  );
+});
+
+/** What a page shows as sent, by file. */
+const sentOn = (r: Review) =>
+  Object.fromEntries(
+    r.files.map((f) => [f.key, f.decision ? (f.decision.sent ?? false) : null]),
+  );
+
+for (const order of ['edit stored first', 'Send stored first, answered last'])
+  test(`Send marks only what it sent (${order}): an edit made after Send was pressed stays unsent, on the page and in the store`, async () => {
+    const fake = new Fake();
+    const a = page(fake);
+    const g = a.d.file('g', { action: 'accept' });
+    const q = a.d.file('q', { action: 'reject' });
+    await fake.run();
+    assert.equal((await g) && (await q), true);
+    // Another page, current, is open on the same round.
+    const b = page(fake);
+    // a presses Send; then, on b, the person edits m.
+    const send = a.d.send();
+    const edit = b.d.file('m', { action: 'edit', content: 'mine\n' });
+    assert.deepEqual(
+      fake.calls.slice(-2).map((c) => c.what),
+      ['send', 'decide m edit'],
+    );
+    const [si, ei] = [fake.calls.length - 2, fake.calls.length - 1];
+    if (order === 'edit stored first') {
+      fake.serve(ei);
+      fake.serve(si);
+      await fake.deliver(ei);
+      await fake.deliver(si);
+    } else {
+      fake.serve(si);
+      fake.serve(ei);
+      await fake.deliver(ei);
+      await fake.deliver(si);
+    }
+    assert.equal(await edit, true);
+    const out = await send;
+    assert.equal(fake.dec.m?.action, 'edit');
+    assert.equal(
+      fake.dec.m?.sent ?? false,
+      false,
+      'the store: the edit is unsent',
+    );
+    assert.equal(shown(b.p.review, 'm').decision, 'edit', 'b shows its edit');
+    assert.equal(sentOn(b.p.review).m, false, 'b: the edit is unsent');
+    // a marks exactly what the server says it sent, and only that.
+    for (const k of ['g', 'm', 'q'])
+      assert.equal(
+        sentOn(a.p.review)[k],
+        out?.files.includes(k) ?? false,
+        `a: ${k}`,
+      );
+    assert.equal(sentOn(a.p.review).q, true);
+    if (order === 'edit stored first')
+      assert.deepEqual(
+        out?.files,
+        ['g', 'q'],
+        'the accept a showed on m was replaced first',
+      );
+    else assert.deepEqual(out?.files, ['g', 'm', 'q']);
+    // Once a reloads, it shows the edit, unsent.
+    const r = await fake.server().review();
+    assert.equal(sentOn(r).m, false);
+  });
+
+for (const order of ['edit stored first', 'Send stored first, answered last'])
+  test(`one page: an edit pressed after Send (${order}) is not marked sent, on the page or in the store`, async () => {
+    const fake = new Fake();
+    const { p, d } = page(fake);
+    const g = d.file('g', { action: 'accept' });
+    const q = d.file('q', { action: 'reject' });
+    await fake.run();
+    assert.equal((await g) && (await q), true);
+    const n = fake.calls.length;
+    const send = d.send();
+    const edit = d.file('m', { action: 'edit', content: 'mine\\n' });
+    // Whatever reached the server, in the order picked.
+    const si = n;
+    const ei = fake.calls.length > n + 1 ? n + 1 : -1;
+    if (ei >= 0 && order === 'edit stored first') {
+      fake.serve(ei);
+      fake.serve(si);
+    } else {
+      fake.serve(si);
+      if (ei >= 0) fake.serve(ei);
+    }
+    if (ei >= 0) await fake.deliver(ei);
+    await fake.deliver(si);
+    await edit;
+    await send;
+    await fake.run();
+    await settle();
+    const edited = fake.dec.m?.action === 'edit';
+    if (edited)
+      assert.equal(
+        fake.dec.m?.sent ?? false,
+        false,
+        'the store: the edit is unsent',
+      );
+    const m = p.review.files.find((f) => f.key === 'm')?.decision;
+    if (m?.action === 'edit')
+      assert.equal(m.sent ?? false, false, 'the page: the edit is unsent');
+    assert.equal(
+      edited,
+      false,
+      'the edit did not run while Send was in flight',
+    );
+  });

@@ -86,7 +86,8 @@ interface Finding {
   reason?: string;
   certain: boolean;
   decision?: Decision;
-  /** The proposal's fingerprint; every decision on the row sends it back. */
+  /** The fingerprint of what the page shows (the proposal, with the edit in
+   * force over it); every decision on the row sends it back. */
   fingerprint: string;
 }
 

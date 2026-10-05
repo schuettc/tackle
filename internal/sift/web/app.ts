@@ -7,10 +7,11 @@
 // page says how far it got and takes no decision. A backlog round is
 // decided one item at a time, in groups.
 //
-// State lives here; doc.ts only draws; decide.ts makes the decisions. A
-// decision shows once the server has it, from the snapshot it returns;
-// while it saves, its group's decisions and Send wait. A 409 reloads the
-// group and says so in the bar.
+// State lives here; doc.ts only draws; decide.ts makes the decisions:
+// every decision, clear, note and Send goes through it. A decision shows
+// once the server has it, from the snapshot it returns; while it saves, its
+// group's decisions (keys and buttons) and Send wait, and while Send is in
+// flight everything waits. A 409 reloads the group and says so in the bar.
 
 import {
   bar,
@@ -46,12 +47,12 @@ import {
   entries,
   groupTargets,
   groupsOf,
-  markSent,
   nextOpen,
   progress,
   rowMeta,
   rowTitle,
   unsent,
+  verdictOf,
   type Entry,
 } from './model.ts';
 
@@ -229,7 +230,7 @@ export function boot(): void {
       n && review?.round && !recommending()
         ? decider.idle()
           ? { label: `Send ${n}`, run: () => void send() }
-          : { label: 'saving…', run: () => {} }
+          : { label: decider.sending ? 'sending…' : 'saving…', run: () => {} }
         : null,
     );
     if (!flashing) b.setStatus(baseStatus());
@@ -340,6 +341,7 @@ export function boot(): void {
     accept: (rows) => decide(rows, 'accept'),
     reject: (rows) => decide(rows, 'reject'),
     startEdit(r) {
+      if (ctx.busy([r])) return;
       editing = r.id;
       render();
     },
@@ -379,6 +381,7 @@ export function boot(): void {
     accept: (f) => putFile(f, { action: 'accept' }),
     reject: (f) => putFile(f, { action: 'reject' }),
     startEdit(f) {
+      if (fctx.busy(f)) return;
       editing = f.key;
       render();
     },
@@ -692,7 +695,9 @@ export function boot(): void {
   }
 
   function decide(rows: Finding[], action: 'accept' | 'reject'): void {
-    const targets = action === 'accept' ? rows.filter((r) => r.verdict) : rows;
+    // An edited row's accept keeps the edit, so its verdict counts.
+    const targets =
+      action === 'accept' ? rows.filter((r) => verdictOf(r)) : rows;
     if (!targets.length) {
       flash(
         'Nothing to accept: the agent proposed nothing here. Edit to give it a verdict.',
@@ -715,14 +720,10 @@ export function boot(): void {
 
   async function send(): Promise<void> {
     try {
+      // The decider marks sent what the server says it sent, and only that.
       const out = await decider.send();
       if (!out) return;
       const { sent, to } = out;
-      if (review) {
-        markSent(review.rows);
-        for (const f of review.files) if (f.decision) f.decision.sent = true;
-        if (sent) review.sends++;
-      }
       refreshBar();
       flash(
         sent === 0
@@ -740,6 +741,12 @@ export function boot(): void {
   // ---- keys ------------------------------------------------------------------
   const keys = createKeys({ list: l });
   const group = 'decide';
+  // A decision key does nothing while its item's last decision saves, or
+  // while Send is in flight.
+  const busyNow = (e: Item) =>
+    e.kind === 'file'
+      ? fctx.busy(e.file)
+      : ctx.busy(e.kind === 'row' ? [e.row] : e.group.rows);
   const on =
     (
       onFile: (f: FileView) => void,
@@ -748,7 +755,7 @@ export function boot(): void {
     ) =>
     () => {
       const e = current();
-      if (!e) return;
+      if (!e || busyNow(e)) return;
       if (e.kind === 'file') onFile(e.file);
       else if (e.kind === 'row') onRow(e.row);
       else onGroup?.(e.group.rows);
