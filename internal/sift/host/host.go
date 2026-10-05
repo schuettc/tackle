@@ -43,7 +43,11 @@ func Exec(ctx context.Context, name string, args ...string) ([]byte, error) {
 	out, err := exec.CommandContext(ctx, name, args...).Output()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-		return out, fmt.Errorf("%s: %s", name, strings.TrimSpace(string(ee.Stderr)))
+		msg := strings.TrimSpace(string(ee.Stderr))
+		if !strings.HasPrefix(msg, name+":") {
+			msg = name + ": " + msg
+		}
+		return out, errors.New(msg)
 	}
 	return out, err
 }
@@ -124,11 +128,11 @@ func Slug(remote string) (string, bool) {
 	return m[1] + "/" + m[2], true
 }
 
-var refRE = regexp.MustCompile(`https?://github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)|(?:^|[^\w&/])(?:([\w.-]+/[\w.-]+))?#(\d+)\b`)
+var refRE = regexp.MustCompile(`https?://github\.com/([\w.-]+/[\w.-]+)/(?:pull|issues)/(\d+)|(?:^|[^\w&/\[])(?:([\w.-]+/[\w.-]+))?#(\d+)\b`)
 
 // Refs returns the pull request and issue references in a line, in order: a
 // GitHub URL, owner/name#N, or a bare #N (which names repo, when there is
-// one).
+// one). A link label ([#71](url)) is not a reference of its own.
 func Refs(line, repo string) []Ref {
 	var out []Ref
 	for _, m := range refRE.FindAllStringSubmatch(line, -1) {

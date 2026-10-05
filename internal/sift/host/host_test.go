@@ -102,3 +102,13 @@ func TestRefs(t *testing.T) {
 		t.Fatalf("bare ref without a repo: %+v", got)
 	}
 }
+
+// A link's label is not a second reference: [#71](https://github.com/a/b/pull/71)
+// names a/b#71 only.
+func TestRefsLinkLabelIsNotABareRef(t *testing.T) {
+	got := Refs("Upstream: [#71](https://github.com/a/b/pull/71), [#72](https://github.com/a/b/pull/72) and #9.", "me/here")
+	want := []Ref{{"a/b", 71}, {"a/b", 72}, {"me/here", 9}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v\nwant %+v", got, want)
+	}
+}
