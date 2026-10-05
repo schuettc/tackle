@@ -23,7 +23,7 @@ func TestRowJSONGolden(t *testing.T) {
 		Verdict:     "rewrite",
 		Destination: "CLAUDE.md#Git",
 		Text:        "- Push to a branch and open a pull request.",
-		Decision:    &Decision{Value: "rewrite", Note: "fine"},
+		Decision:    &Decision{Action: "edit", Verdict: "rewrite", Text: "- Push to a branch; open a pull request.", Note: "fine"},
 	}
 	got, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
@@ -43,7 +43,7 @@ func TestRowJSONGolden(t *testing.T) {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
 	var back Row
-	if err := json.Unmarshal(got, &back); err != nil || back.ID != r.ID || back.Decision.Note != "fine" {
+	if err := json.Unmarshal(got, &back); err != nil || back.ID != r.ID || back.Decision.Note != "fine" || back.Decision.Action != "edit" {
 		t.Fatalf("decode %+v %v", back, err)
 	}
 }
@@ -69,15 +69,76 @@ func TestIDStableAcrossWhitespace(t *testing.T) {
 	}
 }
 
+// An issue row (backlog intake) carries the issue's title, and its
+// destination is the repo the issue goes to.
+func TestIssueRowJSONGolden(t *testing.T) {
+	r := Row{
+		ID:          ID("store/todo", "intake", "fix the flaky probe"),
+		Check:       "intake",
+		Summary:     "a to-do from the memory store",
+		Source:      Source{File: "/m/MEMORY.md", Entry: "todo-3"},
+		Passage:     "fix the flaky probe",
+		Verdict:     "issue",
+		Title:       "Probe is flaky on a cold start",
+		Destination: "owner/tool",
+		Text:        "The probe times out on a cold start.",
+		Decision:    &Decision{Action: "accept"},
+	}
+	got, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("testdata", "issue-row.golden.json")
+	if *update {
+		if err := os.WriteFile(golden, append(got, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got)+"\n" != string(want) {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestValidVerdict(t *testing.T) {
-	for _, v := range []string{"keep", "delete", "rewrite", "move", "merge:ab12", "drop:obsolete", "issue", "global", "private"} {
+	for _, v := range []string{"keep", "delete", "rewrite", "move", "merge:ab12", "drop:obsolete", "issue", "global", "private",
+		"close:done", "close:obsolete", "close:tracked:owner/name#12", "close:tracked:name#3", "ask"} {
 		if !ValidVerdict(v) {
 			t.Errorf("%q should be valid", v)
 		}
 	}
-	for _, v := range []string{"", "Keep", "merge:", "drop:", "cut", "merge"} {
+	for _, v := range []string{"", "Keep", "merge:", "drop:", "cut", "merge", "close", "close:", "close:later", "close:tracked:", "close:tracked:name", "close:tracked:#3", "ask:x"} {
 		if ValidVerdict(v) {
 			t.Errorf("%q should be invalid", v)
+		}
+	}
+}
+
+func TestDecisionValidate(t *testing.T) {
+	for _, d := range []Decision{
+		{Action: "accept"},
+		{Action: "reject", Note: "not now"},
+		{Action: "edit", Verdict: "close:done"},
+		{Action: "edit", Title: "a better title"},
+		{Action: "edit", Text: "new text"},
+	} {
+		if err := d.Validate(); err != nil {
+			t.Errorf("%+v: %v", d, err)
+		}
+	}
+	for _, d := range []Decision{
+		{},
+		{Action: "approve"},
+		{Action: "edit"},
+		{Action: "edit", Verdict: "cut"},
+		{Action: "accept", Verdict: "keep"},
+		{Action: "reject", Text: "x"},
+	} {
+		if d.Validate() == nil {
+			t.Errorf("%+v: want an error", d)
 		}
 	}
 }

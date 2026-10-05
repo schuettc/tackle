@@ -22,7 +22,9 @@
   "text": "- Push to a branch and open a pull request.",
   "certain": false,
   "decision": {
-    "value": "rewrite",
+    "action": "edit",
+    "verdict": "rewrite",
+    "text": "- Push to a branch; open a pull request.",
     "note": "fine"
   }
 }

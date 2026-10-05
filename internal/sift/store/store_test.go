@@ -78,17 +78,22 @@ func TestDecideNeedsTheRowInTheRound(t *testing.T) {
 	s, _ := open(t)
 	r := finding("/a", "size", "x")
 	id, _ := s.RecordRound(ctx, Round{Kind: "on-demand"}, []row.Row{r})
-	if err := s.Decide(ctx, id, "nope", row.Decision{Value: "keep"}); !errors.Is(err, ErrStale) {
+	if err := s.Decide(ctx, id, "nope", row.Decision{Action: "accept"}); !errors.Is(err, ErrStale) {
 		t.Fatalf("err %v", err)
 	}
-	if err := s.Decide(ctx, id, r.ID, row.Decision{Value: "bogus"}); err == nil {
+	if err := s.Decide(ctx, id, r.ID, row.Decision{Action: "edit", Verdict: "bogus"}); err == nil {
 		t.Fatal("an invalid verdict was stored")
 	}
-	if err := s.Decide(ctx, id, r.ID, row.Decision{Value: "delete", Note: "gone"}); err != nil {
+	if err := s.Decide(ctx, id, r.ID, row.Decision{Action: "accept"}); err != nil {
+		t.Fatal(err)
+	}
+	// A later answer replaces the earlier one.
+	want := row.Decision{Action: "edit", Verdict: "close:tracked:o/r#4", Title: "t", Text: "x", Note: "gone"}
+	if err := s.Decide(ctx, id, r.ID, want); err != nil {
 		t.Fatal(err)
 	}
 	_, got, _ := s.LatestRound(ctx)
-	if got[0].Decision == nil || got[0].Decision.Value != "delete" || got[0].Decision.Note != "gone" {
+	if got[0].Decision == nil || *got[0].Decision != want {
 		t.Fatalf("decision %+v", got[0].Decision)
 	}
 }

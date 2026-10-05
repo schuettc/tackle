@@ -6,6 +6,9 @@ package row
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -21,7 +24,10 @@ type Row struct {
 	Evidence []Fact `json:"evidence,omitempty"`
 	// Verdict is the proposal (see ValidVerdict); empty until one is made.
 	Verdict string `json:"verdict,omitempty"`
-	// Destination is a file and section, for move, rewrite and intake rows.
+	// Title is the issue's title, for issue rows.
+	Title string `json:"title,omitempty"`
+	// Destination is a file and section, for move, rewrite and intake rows;
+	// the repo, for issue rows.
 	Destination string `json:"destination,omitempty"`
 	// Text is the proposed text, written as guidance.
 	Text string `json:"text,omitempty"`
@@ -53,10 +59,36 @@ type Fact struct {
 	Value string `json:"value"`
 }
 
-// Decision is the answer from the review page.
+// Decision is the answer to a row's proposal from the review page: accept
+// it, edit it (a changed verdict, title or text) or reject it.
 type Decision struct {
-	Value string `json:"value"`
-	Note  string `json:"note,omitempty"`
+	Action  string `json:"action"` // accept, edit or reject
+	Verdict string `json:"verdict,omitempty"`
+	Title   string `json:"title,omitempty"`
+	Text    string `json:"text,omitempty"`
+	Note    string `json:"note,omitempty"`
+}
+
+// Validate reports what is wrong with a decision: an unknown action, an edit
+// that changes nothing, an invalid verdict, or edits on an accept or reject.
+func (d Decision) Validate() error {
+	edited := d.Verdict != "" || d.Title != "" || d.Text != ""
+	switch d.Action {
+	case "accept", "reject":
+		if edited {
+			return fmt.Errorf("decision: %s takes no verdict, title or text (use edit)", d.Action)
+		}
+	case "edit":
+		if !edited {
+			return errors.New("decision: an edit changes the verdict, title or text")
+		}
+		if d.Verdict != "" && !ValidVerdict(d.Verdict) {
+			return fmt.Errorf("decision: %q is not a verdict", d.Verdict)
+		}
+	default:
+		return fmt.Errorf("decision: action %q is not accept, edit or reject", d.Action)
+	}
+	return nil
 }
 
 // ID is a row's id: the first 16 hex digits of a hash of the check, the
@@ -69,14 +101,19 @@ func ID(file, check, passage string) string {
 // Normalize collapses runs of whitespace to one space and trims the ends.
 func Normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
 
-// plain verdicts take no argument; merge and drop take one after a colon.
+// plain verdicts take no argument; merge, drop and close take one after a
+// colon. ask means the row needs the user's own decision before any verdict.
 var plain = map[string]bool{
 	"keep": true, "delete": true, "rewrite": true, "move": true,
-	"issue": true, "global": true, "private": true,
+	"issue": true, "global": true, "private": true, "ask": true,
 }
 
+// trackedRE is close:tracked's argument: the issue that already tracks it.
+var trackedRE = regexp.MustCompile(`^tracked:[\w.-]+(?:/[\w.-]+)?#\d+$`)
+
 // ValidVerdict reports whether v is a verdict: keep, delete, rewrite, move,
-// merge:ID, drop:REASON, issue, global or private.
+// merge:ID, drop:REASON, issue, global, private, ask, or close:REASON where
+// REASON is done, obsolete or tracked:REPO#N.
 func ValidVerdict(v string) bool {
 	if plain[v] {
 		return true
@@ -85,6 +122,9 @@ func ValidVerdict(v string) bool {
 		if strings.HasPrefix(v, p) && strings.TrimSpace(v[len(p):]) != "" {
 			return true
 		}
+	}
+	if r, ok := strings.CutPrefix(v, "close:"); ok {
+		return r == "done" || r == "obsolete" || trackedRE.MatchString(r)
 	}
 	return false
 }

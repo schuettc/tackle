@@ -39,7 +39,10 @@ CREATE TABLE rows (
 CREATE TABLE decisions (
   round_id   INTEGER NOT NULL,
   row_id     TEXT NOT NULL,
-  value      TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  verdict    TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  text       TEXT NOT NULL DEFAULT '',
   note       TEXT NOT NULL DEFAULT '',
   decided_at INTEGER NOT NULL,
   PRIMARY KEY (round_id, row_id)
@@ -146,7 +149,7 @@ func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
 	if err := json.Unmarshal([]byte(sum), &r.Summary); err != nil {
 		return r, nil, err
 	}
-	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.value, d.note FROM rows r
+	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.note FROM rows r
 		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
 		WHERE r.round_id = ? ORDER BY r.seq`, r.ID)
 	if err != nil {
@@ -156,26 +159,27 @@ func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
 	var rows []row.Row
 	for q.Next() {
 		var body string
-		var value, note sql.NullString
-		if err := q.Scan(&body, &value, &note); err != nil {
+		var action, verdict, title, text, note sql.NullString
+		if err := q.Scan(&body, &action, &verdict, &title, &text, &note); err != nil {
 			return r, nil, err
 		}
 		var rw row.Row
 		if err := json.Unmarshal([]byte(body), &rw); err != nil {
 			return r, nil, err
 		}
-		if value.Valid {
-			rw.Decision = &row.Decision{Value: value.String, Note: note.String}
+		if action.Valid {
+			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String, Note: note.String}
 		}
 		rows = append(rows, rw)
 	}
 	return r, rows, q.Err()
 }
 
-// Decide records the answer to one row of a round, replacing an earlier one.
+// Decide records the answer to one row of a round (accept, edit or reject
+// its proposal), replacing an earlier one.
 func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.Decision) error {
-	if !row.ValidVerdict(d.Value) {
-		return fmt.Errorf("store: %q is not a verdict", d.Value)
+	if err := d.Validate(); err != nil {
+		return err
 	}
 	return s.db.Tx(ctx, func(tx *sql.Tx) error {
 		var n int
@@ -185,9 +189,11 @@ func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.D
 		if n == 0 {
 			return ErrStale
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, value, note, decided_at) VALUES (?,?,?,?,?)
-			ON CONFLICT(round_id, row_id) DO UPDATE SET value = excluded.value, note = excluded.note, decided_at = excluded.decided_at`,
-			roundID, rowID, d.Value, d.Note, time.Now().UnixMilli())
+		_, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at)
+			VALUES (?,?,?,?,?,?,?,?)
+			ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
+			  title = excluded.title, text = excluded.text, note = excluded.note, decided_at = excluded.decided_at`,
+			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, d.Note, time.Now().UnixMilli())
 		return err
 	})
 }
