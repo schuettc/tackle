@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Ref is one pull request or issue: owner/name and a number.
@@ -80,7 +81,13 @@ func (g *github) Lookup(ctx context.Context, r Ref) (State, error) {
 	return a.s, a.err
 }
 
+// lookupTimeout bounds one gh call, so a hung network call cannot hold an
+// audit.
+const lookupTimeout = 20 * time.Second
+
 func (g *github) lookup(ctx context.Context, r Ref) (State, error) {
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
 	out, err := g.run(ctx, "gh", "api", fmt.Sprintf("repos/%s/issues/%d", r.Repo, r.Number))
 	if err != nil {
 		return State{}, err
