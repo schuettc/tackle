@@ -129,3 +129,25 @@ func TestInitProposesTheCurrentRepo(t *testing.T) {
 		t.Fatalf("roots %+v, want %s", c.Roots, dir)
 	}
 }
+
+// Run from a git hook, init sees GIT_DIR and the like for another repo; it
+// still proposes the repo it runs in.
+func TestInitIgnoresRepoSelectingVariables(t *testing.T) {
+	siftEnv(t)
+	termSeam(t, false)
+	other, here := t.TempDir(), t.TempDir()
+	gitInit(t, other)
+	gitInit(t, here)
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	t.Chdir(here)
+	if code, _, errw := run(t, "", "init", "--yes"); code != 0 {
+		t.Fatal(errw)
+	}
+	c, _ := config.Load(config.Path())
+	real, _ := filepath.EvalSymlinks(here)
+	if len(c.Roots) != 1 || (c.Roots[0].Path != here && c.Roots[0].Path != real) {
+		t.Fatalf("roots %+v, want %s", c.Roots, here)
+	}
+}

@@ -2,17 +2,18 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/mattn/go-isatty"
 	"github.com/schuettc/tackle/internal/sift/config"
+	"github.com/schuettc/tackle/internal/sift/discover"
 	"github.com/schuettc/tackle/internal/sift/profile"
 	tools "github.com/schuettc/tools-common"
 )
@@ -113,7 +114,7 @@ func proposeRoot() string {
 	if err != nil {
 		return "."
 	}
-	b, err := exec.Command("git", "-C", wd, "rev-parse", "--show-toplevel").Output()
+	b, err := discover.Git(context.Background(), wd, "rev-parse", "--show-toplevel").Output()
 	if err != nil {
 		return wd
 	}

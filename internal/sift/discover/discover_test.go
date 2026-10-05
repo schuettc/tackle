@@ -313,3 +313,32 @@ func TestGlob(t *testing.T) {
 		}
 	}
 }
+
+// Run from a git hook, sift sees GIT_DIR and the like for another repo;
+// every repo is still read as itself.
+func TestIgnoresRepoSelectingVariables(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	other := st.Repo(t, filepath.Join(t.TempDir(), "other"), map[string]string{"CLAUDE.md": "other\n"})
+	ws := t.TempDir()
+	st.Repo(t, filepath.Join(ws, "app"), map[string]string{"CLAUDE.md": "app\n"})
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index"))
+	t.Setenv("GIT_COMMON_DIR", filepath.Join(other, ".git"))
+
+	res := run(t, Options{Profiles: profiles(t, "claude-code"), Roots: []config.Root{{Path: ws}}})
+	f := byRel(res)["app:CLAUDE.md"]
+	if f == nil || f.Content != "app\n" {
+		t.Fatalf("read %+v (files %v, warnings %v)", f, keys(byRel(res)), res.Warnings)
+	}
+}
+
+// GitEnv drops every variable that picks a repository, and keeps the rest.
+func TestGitEnvDropsRepoSelectors(t *testing.T) {
+	env := GitEnv([]string{"GIT_DIR=/x", "GIT_WORK_TREE=/y", "GIT_INDEX_FILE=/z", "GIT_OBJECT_DIRECTORY=/o",
+		"GIT_COMMON_DIR=/c", "GIT_PREFIX=p/", "HOME=/h", "GIT_CONFIG_GLOBAL=/g"})
+	if strings.Join(env, " ") != "HOME=/h GIT_CONFIG_GLOBAL=/g" {
+		t.Fatalf("%v", env)
+	}
+}
