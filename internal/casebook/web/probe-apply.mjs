@@ -87,6 +87,20 @@ const read = {
       .catch(() => null),
 };
 
+// evalNow finds an element and reads it in one go, in the page. Playwright's
+// $eval finds it and reads it in two calls, so a live redraw between them
+// (the running job redraws on every step event) hands the read a detached
+// element: no computed colours, no size, no focus. The selector must be
+// CSS, and the read takes no argument.
+function evalNow(pg, selector, read) {
+  const sel = JSON.stringify(selector);
+  return pg.evaluate(`(() => {
+    const e = document.querySelector(${sel});
+    if (!e) throw new Error('no element matches ' + ${JSON.stringify(sel)});
+    return (${read.toString()})(e);
+  })()`);
+}
+
 // cssColor resolves a CSS colour expression to its computed rgb() string.
 function cssColor(pg, expr) {
   return pg.evaluate((e) => {
@@ -828,7 +842,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       // keep finishing while this reads, so read the row and serve's job until
       // both are from the same moment (the row's n/total equals serve's count).
       const readRow = () =>
-        pg.$eval(`.cb-apply-list .kit-row[data-job="${jobId}"]`, (e) => ({
+        evalNow(pg, `.cb-apply-list .kit-row[data-job="${jobId}"]`, (e) => ({
           lanes: [...e.querySelectorAll('.cb-lanename')].map(
             (l) => `${l.textContent}=${getComputedStyle(l).color}`,
           ),
@@ -1040,14 +1054,15 @@ async function applyScenariosOn(context, t, serveHandle) {
           undefined,
           8000,
         )) &&
-          (await pg.$eval('.cb-needs-card[data-kind="text"]', (e) =>
+          (await evalNow(pg, '.cb-needs-card[data-kind="text"]', (e) =>
             [...e.querySelectorAll('.kit-btn')]
               .map((b) => b.textContent)
               .join(' \u00b7 '),
           )) ===
             'post and close \u00b7 edit text \u00b7 close without comment \u00b7 skip',
       );
-      const textCard = await pg.$eval(
+      const textCard = await evalNow(
+        pg,
         '.cb-needs-card[data-kind="text"]',
         (e) => ({
           edge: getComputedStyle(e).borderLeftColor,
@@ -1107,13 +1122,11 @@ async function applyScenariosOn(context, t, serveHandle) {
         [fieldBefore, field],
       );
       await pg.keyboard.type('on main through #9.');
-      const ed = await pg
-        .$eval(field, (e) => ({
-          value: e.value,
-          focused: document.activeElement === e,
-          caret: e.selectionStart,
-        }))
-        .catch(() => ({ value: '(no field)', focused: false, caret: -1 }));
+      const ed = await evalNow(pg, field, (e) => ({
+        value: e.value,
+        focused: document.activeElement === e,
+        caret: e.selectionStart,
+      })).catch(() => ({ value: '(no field)', focused: false, caret: -1 }));
       check(
         `typing in "edit text" while step events redraw the job: the text, focus and caret survive ("${ed.value}", focused ${ed.focused}, caret ${ed.caret}; redrawn ${redrawn && replaced})`,
         redrawn &&
@@ -1201,7 +1214,7 @@ async function applyScenariosOn(context, t, serveHandle) {
           pg,
           () => !!document.querySelector('.cb-needs-card[data-kind="paused"]'),
         )) &&
-          (await pg.$eval('.cb-needs-card[data-kind="paused"]', (e) => {
+          (await evalNow(pg, '.cb-needs-card[data-kind="paused"]', (e) => {
             const bs = [...e.querySelectorAll('.kit-btn')];
             return [
               e.querySelector('.kit-card-head').textContent,
