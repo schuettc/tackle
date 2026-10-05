@@ -4650,6 +4650,20 @@ const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
 const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell'];
+const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
+
+// throttlePage slows a page's CPU by PROBE_THROTTLE (see run()).
+async function throttlePage(c, pg) {
+  try {
+    const cdp = await c.newCDPSession(pg);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    throttled++;
+  } catch (err) {
+    // A page closed before its session opened is no page to slow.
+    if (!pg.isClosed()) throw err;
+  }
+}
+let throttled = 0;
 
 async function run() {
   if (only && !PROBE_GROUPS.includes(only)) {
@@ -4704,6 +4718,9 @@ async function run() {
 
   // Every context the probe opens watches its pages' consoles for a section
   // key clash (app.ts reports one there rather than failing to show).
+  // PROBE_THROTTLE=<rate> (opt-in, e.g. 4) slows every page's CPU that
+  // many times (CDP Emulation.setCPUThrottlingRate), as a busy CI runner
+  // does: the stress the probe's races are checked under.
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => {
     const c = await newContext(...args);
@@ -4712,6 +4729,7 @@ async function run() {
         keyClashes.push(msg.text());
       }
     });
+    if (throttle > 1) c.on('page', (pg) => void throttlePage(c, pg));
     return c;
   };
   const context = await browser.newContext();
@@ -9353,6 +9371,9 @@ async function run() {
 let ran = false; // a browser ran the scenarios (not the no-Chrome skip)
 
 void run().then(() => {
+  if (throttle > 1) {
+    console.log(`\nprobe: ${throttled} pages ran at ${throttle}x CPU throttle`);
+  }
   console.log(`\nprobe: ${passes} passed, ${fails} failed`);
   if (ran && !only && passes < MIN_CHECKS) {
     console.error(
