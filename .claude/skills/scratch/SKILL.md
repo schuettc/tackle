@@ -13,8 +13,9 @@ non-destructively, and never leaves a half-written file. Built on the Charm stac
 (Bubble Tea, Bubbles, Lipgloss) plus fsnotify.
 
 Use this skill to orient fast, then read the code. When a design choice looks
-surprising, it's almost always deliberate — the "why" is captured below and, in
-depth, in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+surprising, it's almost always deliberate — the "why" is captured below. New
+design docs go in private tools-ops (`docs/tackle/specs/`, `docs/tackle/plans/`),
+never in this public repo.
 
 ## Layout
 
@@ -27,8 +28,6 @@ internal/tui/               the terminal UI
   model.go                    Bubble Tea Model: editing, autosave, chrome, keybinds
   model_test.go               drives Update() with synthetic messages
   watcher.go                  fsnotify watcher + Run(path) entry point
-docs/superpowers/specs/     the design docs (the "why")
-docs/superpowers/plans/     the task-by-task build plans
 ```
 
 ## The pieces
@@ -129,4 +128,5 @@ default a knob and every release note explaining *what changed and why*.
   (add a `model_test.go` case that drives `Update()`).
 - Watching / startup / graceful degradation → `internal/tui/watcher.go`.
 - A new subcommand → `cmd/scratch/main.go` `run()` + `cmd/scratch/main_test.go`.
-- The design rationale for any of the above → `docs/superpowers/specs/`.
+- The design rationale for any of the above → this skill; new design docs go in
+  private tools-ops `docs/tackle/specs/`.
