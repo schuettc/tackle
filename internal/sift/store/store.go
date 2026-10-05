@@ -93,7 +93,8 @@ type Round struct {
 }
 
 // RecordRound stores a round and its rows in one transaction, then prunes
-// to the latest keepRounds rounds.
+// to the latest keepRounds rounds. When the transaction rolls back the round
+// is not stored and its id is 0.
 func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64, error) {
 	if r.At.IsZero() {
 		r.At = time.Now()
@@ -131,7 +132,10 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 		_, err = tx.ExecContext(ctx, `DELETE FROM rounds WHERE id IN (`+old+`)`, keepRounds)
 		return err
 	})
-	return id, err
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 // LatestRound returns the newest round and its rows in the order they were

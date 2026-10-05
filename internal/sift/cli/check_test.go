@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/config"
+	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
 )
@@ -165,5 +166,53 @@ func TestCheckWithoutConfig(t *testing.T) {
 	code, _, errw := run(t, "", "check")
 	if code != 2 || !strings.Contains(errw, "sift init") {
 		t.Fatalf("code %d %q", code, errw)
+	}
+}
+
+// Repeated identical rules and a paragraph pasted twice in one file record
+// as a round, and every row can be answered on its own.
+func TestCheckRecordsRepeatedPassages(t *testing.T) {
+	siftEnv(t)
+	ws := t.TempDir()
+	para := "Run the full verification suite before you push, because the hook and CI run exactly the same command."
+	st.Repo(t, filepath.Join(ws, "app"), map[string]string{
+		"CLAUDE.md": "# app\n\n- Never force-push.\n- Never force-push.\n- Never force-push.\n\n" + para + "\n\n" + para + "\n",
+	})
+	c := config.Default()
+	c.Profiles = []string{"claude-code"}
+	c.Roots = []config.Root{{Path: ws}}
+	if err := config.Save(config.Path(), c); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errw := run(t, "", "check", "--json")
+	if code != 1 || strings.Contains(errw, "not recorded") {
+		t.Fatalf("code %d\n%s\n%s", code, out, errw)
+	}
+	var got checkOut
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Round == 0 || got.Summary["negative-rule"] != 3 || got.Summary["duplicate"] != 2 {
+		t.Fatalf("round %d summary %v", got.Round, got.Summary)
+	}
+	s, err := store.Open(context.Background(), store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	_, rows, err := s.LatestRound(context.Background())
+	if err != nil || len(rows) != len(got.Rows) {
+		t.Fatalf("%d rows stored, %v", len(rows), err)
+	}
+	for _, r := range rows {
+		if err := s.Decide(context.Background(), got.Round, r.ID, row.Decision{Action: "reject", Note: r.ID}); err != nil {
+			t.Fatalf("row %s: %v", r.ID, err)
+		}
+	}
+	_, rows, _ = s.LatestRound(context.Background())
+	for _, r := range rows {
+		if r.Decision == nil || r.Decision.Note != r.ID {
+			t.Errorf("row %s has decision %+v", r.ID, r.Decision)
+		}
 	}
 }

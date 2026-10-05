@@ -49,6 +49,8 @@ var All = []Check{
 }
 
 // Run runs every check and returns the rows ordered by file, line and check.
+// A passage repeated in a file gets one row per copy, each with its own id
+// (row.Nth, numbered in line order).
 func Run(ctx context.Context, in *Input) []row.Row {
 	var rows []row.Row
 	order := map[string]int{}
@@ -66,6 +68,12 @@ func Run(ctx context.Context, in *Input) []row.Row {
 		}
 		return order[a.Check] < order[b.Check]
 	})
+	seen := map[string]int{}
+	for i := range rows {
+		id := rows[i].ID
+		rows[i].ID = row.Nth(id, seen[id])
+		seen[id]++
+	}
 	return rows
 }
 

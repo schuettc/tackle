@@ -142,3 +142,19 @@ func TestDecisionValidate(t *testing.T) {
 		}
 	}
 }
+
+// The first occurrence of a passage keeps the plain id; a later identical
+// one (whitespace aside) is told apart by its ordinal, and the same ordinal
+// always gives the same id.
+func TestNthTellsRepeatsApart(t *testing.T) {
+	id := ID("/f", "negative-rule", "Never  push.")
+	if Nth(id, 0) != id {
+		t.Error("the first occurrence must keep the plain id")
+	}
+	if Nth(id, 1) == id || Nth(id, 1) == Nth(id, 2) {
+		t.Error("repeats share an id")
+	}
+	if Nth(ID("/f", "negative-rule", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
+		t.Error("an ordinal id is not stable")
+	}
+}

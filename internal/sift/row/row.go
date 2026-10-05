@@ -14,7 +14,9 @@ import (
 
 // Row is one finding.
 type Row struct {
-	// ID is stable: the check, the file and the normalized passage, hashed.
+	// ID is stable: the check, the file and the normalized passage, hashed;
+	// a repeat of the same passage in the file and check also hashes its
+	// ordinal (see Nth).
 	ID      string `json:"id"`
 	Check   string `json:"check"`
 	Summary string `json:"summary"`
@@ -95,6 +97,17 @@ func (d Decision) Validate() error {
 // file and the passage with its whitespace collapsed.
 func ID(file, check, passage string) string {
 	h := sha256.Sum256([]byte(check + "\x00" + file + "\x00" + Normalize(passage)))
+	return hex.EncodeToString(h[:8])
+}
+
+// Nth is the id of the n-th repeat (0-based, in line order) of a passage
+// whose plain id is id: the first keeps id, so a passage gains no new id
+// when a copy of it is added below.
+func Nth(id string, n int) string {
+	if n == 0 {
+		return id
+	}
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d", id, n)))
 	return hex.EncodeToString(h[:8])
 }
 

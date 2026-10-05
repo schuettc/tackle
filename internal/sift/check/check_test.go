@@ -107,3 +107,36 @@ func TestRunOrdersRows(t *testing.T) {
 		}
 	}
 }
+
+// Identical passages in one file (a rule repeated, a paragraph pasted twice)
+// get their own ids, numbered in line order: the first keeps the plain id,
+// and a whitespace change does not move any of them.
+func TestRunGivesRepeatsTheirOwnIDs(t *testing.T) {
+	para := "Run the full verification suite before you push, because the hook and CI run exactly the same command."
+	f := &discover.File{Path: "/r/CLAUDE.md", Class: discover.ClassRepo, Content: "- Never force-push.\n- Never force-push.\n\n" + para + "\n\n" + para + "\n\n" + para + "\n"}
+	rows := Run(ctx, input(f))
+	ids := map[string]bool{}
+	var neg []row.Row
+	for _, r := range rows {
+		if ids[r.ID] {
+			t.Fatalf("id %s twice: %+v", r.ID, rows)
+		}
+		ids[r.ID] = true
+		if r.Check == "negative-rule" {
+			neg = append(neg, r)
+		}
+	}
+	if len(neg) != 2 || neg[0].ID != row.ID(f.Path, "negative-rule", "- Never force-push.") || neg[1].ID != row.Nth(neg[0].ID, 1) {
+		t.Fatalf("negative rows %+v", neg)
+	}
+	f.Content = strings.Replace(f.Content, "- Never force-push.\n- Never force-push.", "- Never  force-push.\n-   Never force-push. ", 1)
+	again := map[string]bool{}
+	for _, r := range Run(ctx, input(f)) {
+		again[r.ID] = true
+	}
+	for id := range ids {
+		if !again[id] {
+			t.Errorf("id %s moved with whitespace", id)
+		}
+	}
+}

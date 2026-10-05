@@ -148,3 +148,16 @@ func TestOldRoundsArePruned(t *testing.T) {
 		t.Fatalf("rows of a pruned round %d %v", n, err)
 	}
 }
+
+// A round that cannot be recorded is not recorded at all, and its id is 0.
+func TestRecordRoundRollsBack(t *testing.T) {
+	s, _ := open(t)
+	r := finding("/a", "size", "x")
+	id, err := s.RecordRound(ctx, Round{Kind: "on-demand"}, []row.Row{r, r})
+	if err == nil || id != 0 {
+		t.Fatalf("id %d err %v", id, err)
+	}
+	if _, _, err := s.LatestRound(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("a rolled-back round is stored: %v", err)
+	}
+}
