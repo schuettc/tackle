@@ -1,6 +1,7 @@
 package apply
 
 import (
+	"database/sql"
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/row"
@@ -47,3 +48,31 @@ func TestApplySkipsAMergeWhoseTargetChanged(t *testing.T) {
 
 // otherFile is b's file moved to docs/other.md in the same repo.
 func otherFile(b *row.Row) string { return b.Source.Repo + "/docs/other.md" }
+
+// A merge into a row the round lacks can't be approved; and an approval
+// that predates its target (seeded in the store, sent) is dropped when the
+// target is added, so apply skips the merge.
+func TestApplySkipsAMergeApprovedBeforeItsTargetWasAdded(t *testing.T) {
+	g := newRig(t)
+	g.record(g.at("dup2", "duplicate", 16, "- Keep the changelog up to date."))
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: "dup2", Verdict: "merge:mem", Text: "- Keep the changelog current with every change."}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.s.Decide(ctx, g.round, "dup2", row.Decision{Action: "accept"}); err == nil {
+		t.Fatal("accepted a merge into a row the round lacks")
+	}
+	db, err := sql.Open("sqlite", g.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, decided_at, sent_at) VALUES (?, 'dup2', 'accept', 1, 1)`, g.round); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.s.AddRows(ctx, g.round, []row.Row{g.at("mem", "intake", 15, "- Keep the changelog current.")}); err != nil {
+		t.Fatal(err)
+	}
+	if res := g.runUnsent(Options{DryRun: true}); len(res.Repos) != 0 {
+		t.Fatalf("applied a merge approved before its target was added: %+v", res.Repos)
+	}
+}

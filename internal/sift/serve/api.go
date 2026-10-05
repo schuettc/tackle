@@ -182,6 +182,9 @@ type decisionIn struct {
 	Note    string   `json:"note"`
 	// Fingerprint is the row's fingerprint as the page showed it.
 	Fingerprint string `json:"fingerprint"`
+	// TargetFingerprint is, for an edit to merge:C, C's fingerprint as the
+	// page showed it.
+	TargetFingerprint string `json:"target_fingerprint"`
 }
 
 func (d decisionIn) decision() row.Decision {
@@ -221,7 +224,7 @@ func (s *Server) putDecisions(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusConflict, "stale")
 			return
 		}
-		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, Decision: d.decision()})
+		as = append(as, store.Answer{Row: d.ID, Fingerprint: d.Fingerprint, TargetFingerprint: d.TargetFingerprint, Decision: d.decision()})
 	}
 	if !s.answer(w, r.Context(), b.Round, as) {
 		return

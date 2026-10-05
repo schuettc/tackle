@@ -9,6 +9,7 @@ package apply
 // redirect a write, and nothing resolves into .git or out of the tree.
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +55,10 @@ func RepoPath(p string) (string, error) {
 // or is not the directory its Lstat saw by the time it is opened, is
 // refused. It returns the directory, the leaf's name, and a close for the
 // directory (root itself is never closed).
+//
+// It assumes no other process modifies the worktree while apply runs: a
+// directory renamed elsewhere in the tree after it is opened is still
+// written through.
 func parentDir(root *os.Root, rel string, mk bool) (*os.Root, string, func(), error) {
 	parts := strings.Split(rel, "/")
 	cur, done := root, func() {}
@@ -112,8 +117,7 @@ func leafInfo(dir *os.Root, leaf, rel string) (fs.FileInfo, error) {
 }
 
 // openSeen opens the leaf with flag and checks it is the file Lstat saw
-// (fi): a leaf swapped for a symlink since is refused before anything is
-// written to it.
+// (fi): a leaf swapped for a symlink since is refused before it is read.
 func openSeen(dir *os.Root, leaf, rel string, flag int, fi fs.FileInfo) (*os.File, error) {
 	f, err := dir.OpenFile(leaf, flag, 0)
 	if err != nil {
@@ -126,9 +130,12 @@ func openSeen(dir *os.Root, leaf, rel string, flag int, fi fs.FileInfo) (*os.Fil
 	return f, nil
 }
 
-// writeFile writes content to rel (checked by RepoPath) under root. A new
-// file is made with O_EXCL, which never follows a symlink; an existing one
-// is opened without truncating, checked, then truncated.
+// writeFile writes content to rel (checked by RepoPath) under root. It
+// never writes into an existing inode: the content goes to a new temporary
+// file beside the leaf, made with O_EXCL (which never follows a symlink),
+// synced, given the old file's mode, then renamed over the leaf through the
+// same directory. A leaf hard-linked to a file outside the worktree is
+// replaced, and the outside file keeps its bytes.
 func writeFile(root *os.Root, rel, content string) error {
 	clean, err := RepoPath(rel)
 	if err != nil {
@@ -143,23 +150,49 @@ func writeFile(root *os.Root, rel, content string) error {
 	if err != nil {
 		return err
 	}
-	var f *os.File
-	if fi == nil {
-		f, err = dir.OpenFile(leaf, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	} else if f, err = openSeen(dir, leaf, clean, os.O_WRONLY, fi); err == nil {
-		err = f.Truncate(0)
-	}
+	tmp, f, err := createTemp(dir, leaf)
 	if err != nil {
-		if f != nil {
-			_ = f.Close()
-		}
+		return err
+	}
+	fail := func(err error) error {
+		_ = f.Close()
+		_ = dir.Remove(tmp)
 		return err
 	}
 	if _, err := f.WriteString(content); err != nil {
-		_ = f.Close()
+		return fail(err)
+	}
+	if fi != nil {
+		if err := f.Chmod(fi.Mode().Perm()); err != nil {
+			return fail(err)
+		}
+	}
+	if err := f.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := f.Close(); err != nil {
+		_ = dir.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := dir.Rename(tmp, leaf); err != nil {
+		_ = dir.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// createTemp makes a new file beside leaf in dir with O_EXCL, under a
+// random name, and returns the name and the open file.
+func createTemp(dir *os.Root, leaf string) (string, *os.File, error) {
+	for range 10 {
+		name := "." + leaf + "-" + rand.Text() + ".tmp"
+		f, err := dir.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		return name, f, err
+	}
+	return "", nil, fmt.Errorf("no free temporary name beside %s", leaf)
 }
 
 // removeFile removes rel (checked by RepoPath) under root; gone already is

@@ -14,6 +14,8 @@ export interface DecisionIn {
   note?: string;
   /** The row's fingerprint as the page shows it: a changed row is refused. */
   fingerprint: string;
+  /** For an edit to merge:C, C's fingerprint as the page shows it. */
+  target_fingerprint?: string;
 }
 
 export interface FileOut {

@@ -221,3 +221,100 @@ func TestRepoPath(t *testing.T) {
 		}
 	}
 }
+
+// linkAt replaces dir/leaf, once, with a hard link to to, the moment apply
+// has checked dir: a destination that shares its inode with a file outside.
+func linkAt(t *testing.T, base, leaf, to string) {
+	t.Helper()
+	done := false
+	afterCheck = func(dir string) {
+		if done || filepath.Base(dir) != base {
+			return
+		}
+		done = true
+		p := filepath.Join(dir, leaf)
+		if err := os.Remove(p); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := os.Link(to, p); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { afterCheck = nil })
+}
+
+// A destination hard-linked to a file outside the worktree (a sentinel, or a
+// copy of a .git/config) is replaced, not written into: the outside file is
+// byte-identical after apply, and the branch holds the new content.
+func TestApplyReplacesAHardLinkedDestination(t *testing.T) {
+	for name, mk := range map[string]func(g *rig) string{
+		"sentinel": func(*rig) string { return "outside\n" },
+		"git config": func(g *rig) string {
+			b, err := os.ReadFile(filepath.Join(g.repo, ".git", "config"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return string(b)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newRig(t)
+			out := t.TempDir()
+			outFile := filepath.Join(out, "linked")
+			want := mk(g)
+			if err := os.WriteFile(outFile, []byte(want), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			r := g.at("mv", "misplaced", 5, "- Never push to main.")
+			g.record(r)
+			if _, err := g.s.AddRows(ctx, g.round, []row.Row{{ID: "mv", Verdict: "move", Destination: "docs/other.md#Notes"}}); err != nil {
+				t.Fatal(err)
+			}
+			g.decide("mv", row.Decision{Action: "accept"})
+			linkAt(t, "docs", "other.md", outFile)
+			res := g.run(Options{}).Repos[0]
+			if res.State != "branch" {
+				t.Fatalf("state %q (%s)", res.State, res.Detail)
+			}
+			if b, err := os.ReadFile(outFile); err != nil || string(b) != want {
+				t.Errorf("the outside file changed: %q %v", b, err)
+			}
+			if got := g.show(res.Branch, "docs/other.md"); !strings.Contains(got, "- Never push to main.") {
+				t.Errorf("docs/other.md on the branch:\n%s", got)
+			}
+		})
+	}
+}
+
+// writeFile replaces an existing file with a new inode and keeps its mode:
+// a hard link to it elsewhere keeps the old bytes.
+func TestWriteFileReplacesTheInode(t *testing.T) {
+	root, out := t.TempDir(), t.TempDir()
+	outFile := filepath.Join(out, "sentinel")
+	if err := os.WriteFile(outFile, []byte("outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dest := filepath.Join(root, "f.md")
+	if err := os.Link(outFile, dest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dest, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAt(root, "f.md", "new\n"); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(outFile); string(b) != "outside\n" {
+		t.Errorf("the linked file changed: %q", b)
+	}
+	if b, _ := os.ReadFile(dest); string(b) != "new\n" {
+		t.Errorf("f.md %q", b)
+	}
+	if fi, err := os.Stat(dest); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode %v %v, want 0640", fi.Mode().Perm(), err)
+	}
+	if files := tree(t, root); len(files) != 1 {
+		t.Errorf("files left: %v", files)
+	}
+}

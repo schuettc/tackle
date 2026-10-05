@@ -280,23 +280,27 @@ func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 var ErrChanged = errors.New("store: the row changed since it was shown")
 
 // Answer is one decision on a row, given against the row's fingerprint as
-// the page showed it.
+// the page showed it. An edit to merge:C also carries C's fingerprint as the
+// page showed it (TargetFingerprint).
 type Answer struct {
-	Row         string
-	Fingerprint string
-	Decision    row.Decision
+	Row               string
+	Fingerprint       string
+	TargetFingerprint string
+	Decision          row.Decision
 }
 
 // Decide records the answer to one row of a round (accept, edit or reject
 // its proposal), replacing an earlier one, whatever the row holds now. The
 // review page's decisions go through Answer, which checks the fingerprint.
+// Both refuse to approve a merge into a row the round lacks (ErrChanged).
 func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.Decision) error {
 	return s.answer(ctx, roundID, []Answer{{Row: rowID, Decision: d}}, false)
 }
 
 // Answer records decisions on a round's rows, all or nothing, each only if
 // the row's fingerprint (row.Print, with its merge target) is still the
-// one given: ErrChanged when it is not, ErrStale when the row is not in the
+// one given, and, for an edit to merge:C, C's is still TargetFingerprint:
+// ErrChanged when either is not, ErrStale when the row is not in the
 // round. The check and the write are one transaction.
 func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) error {
 	return s.answer(ctx, roundID, as, true)
@@ -322,17 +326,30 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 				return err
 			}
 			if check {
-				var target *row.Row
-				if id := row.MergeTarget(cur.Verdict); id != "" {
-					t, err := rowIn(ctx, tx, roundID, id)
-					if err == nil {
-						target = &t
-					} else if !errors.Is(err, sql.ErrNoRows) {
+				p, err := printIn(ctx, tx, roundID, cur)
+				if err != nil {
+					return err
+				}
+				if a.Fingerprint == "" || p != a.Fingerprint {
+					return fmt.Errorf("%w: %s", ErrChanged, a.Row)
+				}
+			}
+			if id := row.MergeTarget(chosen(cur, a.Decision)); id != "" {
+				target, err := rowIn(ctx, tx, roundID, id)
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("%w: %s merges into %s, which is not in the round", ErrChanged, a.Row, id)
+				}
+				if err != nil {
+					return err
+				}
+				if check && a.Decision.Action == "edit" && a.Decision.Verdict != "" {
+					p, err := printIn(ctx, tx, roundID, target)
+					if err != nil {
 						return err
 					}
-				}
-				if a.Fingerprint == "" || cur.Print(target) != a.Fingerprint {
-					return fmt.Errorf("%w: %s", ErrChanged, a.Row)
+					if a.TargetFingerprint == "" || p != a.TargetFingerprint {
+						return fmt.Errorf("%w: %s (its merge target %s)", ErrChanged, a.Row, id)
+					}
 				}
 			}
 			d := a.Decision
@@ -347,6 +364,33 @@ func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bo
 		}
 		return nil
 	})
+}
+
+// chosen is the verdict a decision on cur approves: the proposal's for an
+// accept, the edit's own when it names one, none for a reject.
+func chosen(cur row.Row, d row.Decision) string {
+	switch {
+	case d.Action == "reject":
+		return ""
+	case d.Action == "edit" && d.Verdict != "":
+		return d.Verdict
+	}
+	return cur.Verdict
+}
+
+// printIn is r's fingerprint as the page shows it (row.Print, with r's
+// merge target as the round holds it).
+func printIn(ctx context.Context, tx *sql.Tx, roundID int64, r row.Row) (string, error) {
+	var target *row.Row
+	if id := row.MergeTarget(r.Verdict); id != "" {
+		t, err := rowIn(ctx, tx, roundID, id)
+		if err == nil {
+			target = &t
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
+	}
+	return r.Print(target), nil
 }
 
 // rowIn reads one row of a round as stored (no decision); sql.ErrNoRows

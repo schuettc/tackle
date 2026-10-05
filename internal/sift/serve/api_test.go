@@ -66,6 +66,7 @@ func (f *fixture) do(method, path, body string) *httptest.ResponseRecorder {
 }
 
 // withPrints gives a decision request that names no fingerprint the row's
+// current one, and an edit to merge:C that names no target fingerprint C's
 // current one, as the page sends what it shows. A test about fingerprints
 // sets the key itself.
 func (f *fixture) withPrints(method, path, body string) string {
@@ -80,6 +81,10 @@ func (f *fixture) withPrints(method, path, body string) string {
 		if _, ok := d["fingerprint"]; !ok {
 			id, _ := d["id"].(string)
 			d["fingerprint"] = f.currentPrint(id)
+		}
+		v, _ := d["verdict"].(string)
+		if _, ok := d["target_fingerprint"]; !ok && d["action"] == "edit" && row.MergeTarget(v) != "" {
+			d["target_fingerprint"] = f.currentPrint(row.MergeTarget(v))
 		}
 	}
 	if ds, ok := m["decisions"].([]any); ok {

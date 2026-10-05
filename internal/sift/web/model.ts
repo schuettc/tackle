@@ -82,6 +82,13 @@ export function fixOf(r: Finding): string {
   return r.fix || 'delete';
 }
 
+/** The row an edit chooses to merge into ('' for any other decision): the
+ * page sends that row's fingerprint with the edit (target_fingerprint). */
+export function editTarget(d: Decision): string {
+  if (d.action !== 'edit' || !d.verdict?.startsWith('merge:')) return '';
+  return d.verdict.slice('merge:'.length);
+}
+
 /** A certain row still carrying only its own fix (row.FixOnly): no
  * proposal, or one that repeats the fix. Any other row is a judgment. */
 export function isFix(r: Finding): boolean {

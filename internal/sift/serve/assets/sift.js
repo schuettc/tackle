@@ -114,6 +114,10 @@ function displayPath(src, home) {
 function fixOf(r) {
   return r.fix || "delete";
 }
+function editTarget(d) {
+  if (d.action !== "edit" || !d.verdict?.startsWith("merge:")) return "";
+  return d.verdict.slice("merge:".length);
+}
 function isFix(r) {
   return r.certain && (!r.verdict || r.verdict === fixOf(r)) && !r.title && !r.destination && !r.text;
 }
@@ -670,6 +674,10 @@ function boot() {
     home()
   );
   const rowById = (id) => review?.rows.find((r) => r.id === id);
+  const targetPrint = (d) => {
+    const id = editTarget(d);
+    return id ? rowById(id)?.fingerprint : void 0;
+  };
   const current = () => shown.find((e) => e.key === openKey);
   const b = bar({
     brand: { name: "sift" },
@@ -1039,7 +1047,8 @@ function boot() {
         text: d.text,
         cleared: d.cleared,
         note,
-        fingerprint: r.fingerprint
+        fingerprint: r.fingerprint,
+        target_fingerprint: targetPrint(d)
       };
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
@@ -1134,7 +1143,8 @@ function boot() {
           text: d.text,
           cleared: d.cleared,
           note: text,
-          fingerprint: r.fingerprint
+          fingerprint: r.fingerprint,
+          target_fingerprint: targetPrint(d)
         }
       ]),
       () => {

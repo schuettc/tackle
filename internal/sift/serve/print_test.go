@@ -83,3 +83,29 @@ func TestAnOldPageCannotAcceptAChangedProposal(t *testing.T) {
 		t.Errorf("redo with another fingerprint: %d", c)
 	}
 }
+
+// An edit to merge:C binds to C as the page showed it: C changed since gets
+// 409 and nothing is stored, in a multi-row request too.
+func TestAnOldPageCannotMergeIntoAChangedTarget(t *testing.T) {
+	f := newFixture(t)
+	old := f.printOf("r-size")
+	if _, err := f.st.AddRows(context.Background(), f.round, []row.Row{{ID: "r-size", Verdict: "keep"}}); err != nil {
+		t.Fatal(err)
+	}
+	put := func(target string) int {
+		return f.do("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":"r-dead","action":"reject"},
+			{"id":"r-neg","action":"edit","verdict":"merge:r-size","text":"both","target_fingerprint":%q}]}`, f.round, target)).Code
+	}
+	if w := f.do("PUT", "/api/decisions", fmt.Sprintf(`{"round":%d,"decisions":[{"id":"r-dead","action":"reject"},{"id":"r-neg","action":"edit","verdict":"merge:r-size","text":"both","target_fingerprint":%q}]}`, f.round, old)); true {
+		t.Log(w.Code, w.Body.String())
+	}
+	if c := put(old); c != 409 {
+		t.Errorf("edit with the target's old fingerprint: %d", c)
+	}
+	if d, e := f.decisionOf("r-neg"), f.decisionOf("r-dead"); d != nil || e != nil {
+		t.Fatalf("stored %+v %+v", d, e)
+	}
+	if c := put(f.printOf("r-size")); c != 204 {
+		t.Errorf("edit with the target's current fingerprint: %d", c)
+	}
+}

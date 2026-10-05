@@ -30,7 +30,7 @@ type AddResult struct {
 // (decisions are the user's), an intake row with no source. A decision on a
 // row whose proposal, source or passage changed is dropped, sent or not: it
 // answered another row. So is every merge into a row whose source or
-// passage changed (dropMergesInto).
+// passage changed, or that was not in the round until now (dropMergesInto).
 func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddResult, error) {
 	var res AddResult
 	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
@@ -78,6 +78,12 @@ func (s *Store) AddRows(ctx context.Context, roundID int64, in []row.Row) (AddRe
 				}
 				seq++
 				res.Added++
+				// A merge into this id was approved while it was not here.
+				k, err := dropMergesInto(ctx, tx, roundID, r.ID)
+				if err != nil {
+					return err
+				}
+				res.Cleared += k
 				continue
 			}
 			if err != nil {

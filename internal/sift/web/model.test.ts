@@ -16,6 +16,7 @@ import {
   progress,
   rowMeta,
   rowTitle,
+  editTarget,
   unsent,
   validVerdict,
 } from './model.ts';
@@ -348,4 +349,11 @@ test('rowTitle: issue title, else the passage first line, else the summary', () 
     rowTitle(mk('a', '/f', 'size', 0, { passage: '' })),
     'size summary',
   );
+});
+
+test('editTarget names the row an edit chooses to merge into', () => {
+  assert.equal(editTarget({ action: 'edit', verdict: 'merge:r-2' }), 'r-2');
+  assert.equal(editTarget({ action: 'edit', text: 'x' }), '');
+  assert.equal(editTarget({ action: 'edit', verdict: 'delete' }), '');
+  assert.equal(editTarget({ action: 'accept' }), '');
 });

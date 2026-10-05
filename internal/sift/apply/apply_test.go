@@ -37,6 +37,7 @@ type rig struct {
 	t     *testing.T
 	repo  string
 	bare  string
+	db    string
 	s     *store.Store
 	round int64
 	rows  []row.Row
@@ -48,12 +49,13 @@ func newRig(t *testing.T) *rig {
 	t.Setenv("SIFT_HOME", t.TempDir())
 	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{"CLAUDE.md": claude, "docs/other.md": "# Other\n\n## Notes\n\n- one\n"})
 	bare := st.Publish(t, repo)
-	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "sift.db"))
+	db := filepath.Join(t.TempDir(), "sift.db")
+	s, err := store.Open(ctx, db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	return &rig{t: t, repo: repo, bare: bare, s: s}
+	return &rig{t: t, repo: repo, bare: bare, db: db, s: s}
 }
 
 // at builds a row about lines of CLAUDE.md in the rig's repo.

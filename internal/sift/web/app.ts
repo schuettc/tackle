@@ -23,6 +23,7 @@ import {
   checkCount,
   displayPath,
   editDecision,
+  editTarget,
   entries,
   fixDecision,
   groupTargets,
@@ -123,6 +124,11 @@ export function boot(): void {
       home(),
     );
   const rowById = (id: string) => review?.rows.find((r) => r.id === id);
+  /** For an edit to merge:C, C's fingerprint as the page shows it. */
+  const targetPrint = (d: Decision) => {
+    const id = editTarget(d);
+    return id ? rowById(id)?.fingerprint : undefined;
+  };
   const current = (): Entry | undefined => shown.find((e) => e.key === openKey);
 
   // ---- bar -------------------------------------------------------------------
@@ -555,6 +561,7 @@ export function boot(): void {
         cleared: d.cleared,
         note,
         fingerprint: r.fingerprint,
+        target_fingerprint: targetPrint(d),
       };
     });
     const single = rows.length === 1 && openKey === `r:${rows[0].id}`;
@@ -669,6 +676,7 @@ export function boot(): void {
                   cleared: d.cleared,
                   note: text,
                   fingerprint: r.fingerprint,
+                  target_fingerprint: targetPrint(d),
                 },
               ]),
       () => {
