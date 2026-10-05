@@ -66,13 +66,15 @@ type Windows struct {
 }
 
 // Negative holds the negative-rule patterns (case-insensitive regexps).
+// Unset, the shipped defaults apply.
 type Negative struct {
-	Patterns []string `toml:"patterns"`
+	Patterns []string `toml:"patterns,omitempty"`
 }
 
-// Stale holds the stale-status phrases (case-insensitive regexps).
+// Stale holds the stale-status phrases (case-insensitive regexps). Unset,
+// the shipped defaults apply.
 type Stale struct {
-	Phrases []string `toml:"phrases"`
+	Phrases []string `toml:"phrases,omitempty"`
 }
 
 // Retired is a memory store that has been migrated: any pointer to it in an

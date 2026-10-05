@@ -95,6 +95,9 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 				return nil
 			}
 		}
+		// The pattern lists stay unset so the shipped defaults, and any
+		// improvement to them, apply.
+		c.Negative, c.Stale = config.Negative{}, config.Stale{}
 		if err := config.Save(path, c); err != nil {
 			return tools.Exitf(2, "%v", err)
 		}
