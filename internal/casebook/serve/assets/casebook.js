@@ -5167,6 +5167,11 @@ function renderRule(ctx, detail, hooks) {
   }
   function drawPropose() {
     const p = workPropose;
+    if (editable() && refreshPropose) {
+      refreshPropose();
+      return;
+    }
+    refreshPropose = null;
     const tr = (label, value) => h12(
       "div",
       { class: "kit-tr" },
@@ -5223,7 +5228,9 @@ function renderRule(ctx, detail, hooks) {
       h12("span"),
       h12("span", { class: "cb-disp-col" }, menuChips, whyEl)
     );
-    menuNav(menu, ".cb-disp-opt", pick, () => setMenu(false));
+    menuNav(menu, ".cb-disp-opt", pick, () => {
+      if (!redrawing) setMenu(false);
+    });
     const onEsc = (e) => {
       if (e.key !== "Escape" || e.isComposing) return;
       if (!menu.isConnected) {
@@ -5266,24 +5273,44 @@ function renderRule(ctx, detail, hooks) {
 ${dispositions.join(" ")}`;
       if (sig === chipsFor) return;
       chipsFor = sig;
-      menuChips.replaceChildren(
-        ...dispositions.map(
-          (d) => h12(
-            "button",
-            {
-              type: "button",
-              role: "menuitemradio",
-              "aria-checked": String(d === cur),
-              class: "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : ""),
-              "data-disp": d,
-              onclick() {
-                choose(d);
-              }
-            },
-            d
-          )
+      const have = new Map(
+        [...menuChips.querySelectorAll(".cb-disp-opt")].map(
+          (e) => [e.dataset.disp ?? "", e]
         )
       );
+      const chips = dispositions.map((d) => {
+        const chip = have.get(d) ?? h12(
+          "button",
+          {
+            type: "button",
+            role: "menuitemradio",
+            "data-disp": d,
+            onclick() {
+              choose(d);
+            }
+          },
+          d
+        );
+        chip.setAttribute("aria-checked", String(d === cur));
+        chip.className = "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : "");
+        return chip;
+      });
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && menuChips.contains(focused) && !chips.includes(focused)) {
+        (chips.find((c) => c.classList.contains("on")) ?? chips[0] ?? pick).focus();
+      }
+      keepFocus(() => {
+        for (const [d, chip] of have) {
+          if (!chips.includes(chip)) {
+            have.delete(d);
+            chip.remove();
+          }
+        }
+        chips.forEach((chip, i) => {
+          const at2 = menuChips.children[i];
+          if (at2 !== chip) menuChips.insertBefore(chip, at2 ?? null);
+        });
+      });
     };
     const text = (field, placeholder2) => {
       const input = h12("input", {
@@ -5345,6 +5372,12 @@ ${dispositions.join(" ")}`;
       );
     }).catch(() => {
     });
+    refreshPropose = () => {
+      untilIn.value = workPropose.until ?? "";
+      noteIn.value = workPropose.note ?? "";
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      drawChoices();
+    };
     proposeEl.replaceChildren(
       h12(
         "div",
@@ -5362,6 +5395,20 @@ ${dispositions.join(" ")}`;
   }
   let drawChoices = () => {
   };
+  let refreshPropose = null;
+  let redrawing = false;
+  function keepFocus(redraw) {
+    const focused = document.activeElement;
+    redrawing = true;
+    try {
+      redraw();
+    } finally {
+      redrawing = false;
+    }
+    if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) {
+      focused.focus();
+    }
+  }
   let allDispositions = [];
   function drawProposeErr() {
     let msg = "";
@@ -5920,20 +5967,26 @@ ${dispositions.join(" ")}`;
       onEdit
     );
     factsEl = h12("div");
-    doc.replaceChildren(
-      kickEl,
-      titleEl,
-      factsEl,
-      proseEl,
-      invalidEl,
-      conflictEl,
-      h12("h3", { class: "kit-label" }, "when an undecided item matches all of"),
-      editor,
-      h12("h3", { class: "kit-label" }, "propose"),
-      proposeEl,
-      h12("div", { class: "cb-matches-head" }, heading, groupChips),
-      matchesEl,
-      actionsEl
+    keepFocus(
+      () => doc.replaceChildren(
+        kickEl,
+        titleEl,
+        factsEl,
+        proseEl,
+        invalidEl,
+        conflictEl,
+        h12(
+          "h3",
+          { class: "kit-label" },
+          "when an undecided item matches all of"
+        ),
+        editor,
+        h12("h3", { class: "kit-label" }, "propose"),
+        proposeEl,
+        h12("div", { class: "cb-matches-head" }, heading, groupChips),
+        matchesEl,
+        actionsEl
+      )
     );
     note.textContent = "";
     drawProse();

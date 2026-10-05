@@ -4405,6 +4405,59 @@ async function rulesScenariosOn(context, serveHandle) {
               'Race repos, renamed',
         ),
       );
+
+      // Nothing of his unsaved: a change of serve's draws the rule again.
+      // With the disposition menu open, it stays open, its chips (and his
+      // focus) the same elements, so his click on one lands.
+      await pg.click('[data-testid="propose"] button.cb-disp');
+      const keepChip = await pg.waitForSelector(
+        '.cb-disp-menu:not([hidden]) .cb-disp-opt[data-disp="keep"]',
+        { timeout: 4000 },
+      );
+      const focused = await pg.evaluateHandle(() => document.activeElement);
+      await agent.api('POST', '/api/rules/draft', {
+        id: 'r8-race',
+        name: 'Race repos, renamed again',
+        status: 'draft',
+        match: [
+          { field: 'kind', op: 'is', value: 'repo' },
+          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
+        ],
+        propose: { disposition: 'archive' },
+      });
+      const redrawn = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule .kit-h1')?.textContent ===
+          'Race repos, renamed again',
+      );
+      check(
+        "serve's copy drawn again while the menu is open leaves it open, its chips and Court's focus where they were",
+        redrawn &&
+          (await pg.evaluate(
+            ([k, f]) =>
+              !document.querySelector('.cb-disp-menu').hidden &&
+              k.isConnected &&
+              f.matches('.cb-disp-opt') &&
+              f.isConnected &&
+              document.activeElement === f,
+            [keepChip, focused],
+          )),
+      );
+      const clicked = await keepChip
+        .click({ timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      check(
+        'and his click on a chip chooses it',
+        clicked &&
+          (await until(
+            pg,
+            () =>
+              document.querySelector('[data-testid="propose"] button.cb-disp')
+                ?.dataset.value === 'keep',
+          )),
+      );
     } finally {
       await pg.close();
     }
@@ -4686,12 +4739,84 @@ async function invalidRulesScenariosOn(context, serveHandle) {
         document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
         'true',
     );
+    // The condition he adds is previewed (debounced) and the preview offers
+    // the dispositions it allows, a different list. Here it lands while
+    // the disposition menu is open, as it can on a slow runner: the preview
+    // is held until the menu is open, then let through. The chips that
+    // stay offered stay the same elements, so his click lands, and his
+    // focus stays where it was.
+    let previewAsked;
+    const asked = new Promise((r) => (previewAsked = r));
+    let releasePreview;
+    const release = new Promise((r) => (releasePreview = r));
+    const holdPreview = async (route) => {
+      previewAsked();
+      await release;
+      await route.continue();
+    };
+    await pg.route('**/api/rules/preview*', holdPreview);
     await pg.click('.cb-cond-add');
     await pg.click(
       '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
     );
+    await asked;
     await pg.click('[data-testid="propose"] button.cb-disp');
-    await pg.click('.cb-disp-opt[data-disp="keep"]');
+    const chipsNow = () =>
+      pg.$$eval('.cb-disp-opt', (els) => els.map((e) => e.dataset.disp));
+    const before = await chipsNow();
+    const keepChip = await pg.$('.cb-disp-opt[data-disp="keep"]');
+    const focused = await pg.evaluateHandle(() => document.activeElement);
+    const previewed = pg.waitForResponse((r) =>
+      r.url().includes('/api/rules/preview'),
+    );
+    releasePreview();
+    await previewed;
+    await pg.unroute('**/api/rules/preview*', holdPreview);
+    const changed = await until(
+      pg,
+      (b) =>
+        [...document.querySelectorAll('.cb-disp-opt')]
+          .map((e) => e.dataset.disp)
+          .join(' ') !== b,
+      before.join(' '),
+    );
+    const after = await chipsNow();
+    check(
+      `a preview offering other dispositions (${before.join(',')} → ${after.join(',')}) while the menu is open leaves it open, the "keep" chip and Court's focus where they were`,
+      changed &&
+        !!keepChip &&
+        (await pg.evaluate(
+          ([k, f]) =>
+            !document.querySelector('.cb-disp-menu').hidden &&
+            k.isConnected &&
+            f.matches('.cb-disp-opt') &&
+            f.isConnected &&
+            document.activeElement === f,
+          [keepChip, focused],
+        )),
+    );
+    // His click on the chip he saw lands on it (were it replaced, the
+    // click fails, and the menu is reopened for the rest of the scenario).
+    const clicked = await keepChip
+      .click({ timeout: 5000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!clicked) {
+      if (await pg.$eval('.cb-disp-menu', (m) => m.hidden)) {
+        await pg.click('[data-testid="propose"] button.cb-disp');
+      }
+      await pg.click('.cb-disp-opt[data-disp="keep"]');
+    }
+    check(
+      'the click on that chip chooses it',
+      clicked &&
+        (await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="propose"] button.cb-disp')
+              ?.dataset.value === 'keep',
+        )),
+    );
     await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
     check(
       'saving replaces it with a valid rule',
