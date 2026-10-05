@@ -97,6 +97,9 @@ func TestValidateRejects(t *testing.T) {
 		"empty retired":    "[[retired]]\nname = \"store\"",
 		"wait without ref": "[stale]\nwaits = [\"until it lands\"]",
 		"bad wait":         "[stale]\nwaits = [\"({ref}\"]",
+		"two refs":         "[stale]\nwaits = [\"after {ref} and {ref}\"]",
+		"own ref group":    "[stale]\nwaits = [\"(?P<ref>x) {ref}\"]",
+		"quoted ref":       "[stale]\nwaits = [\"\\\\Q{ref}\\\\E\"]",
 	} {
 		if _, err := Load(write(t, body)); err == nil {
 			t.Errorf("%s: want an error", name)

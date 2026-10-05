@@ -26,7 +26,11 @@ func staleStatus(ctx context.Context, in *Input) []row.Row {
 		phrases = append(phrases, regexp.MustCompile("(?i)"+p))
 	}
 	for _, w := range in.Config.Stale.Waits {
-		waits = append(waits, regexp.MustCompile("(?i)"+strings.ReplaceAll(w, config.RefPlaceholder, "("+host.RefPattern+")")))
+		re, err := config.Wait(w)
+		if err != nil {
+			panic(err) // config.Validate rejects it
+		}
+		waits = append(waits, re)
 	}
 	cutoff := in.Now.AddDate(0, 0, -in.Config.Windows.StaleDays)
 	var rows []row.Row
@@ -45,7 +49,7 @@ func staleStatus(ctx context.Context, in *Input) []row.Row {
 			waited := map[host.Ref]bool{}
 			for _, re := range waits {
 				for _, m := range re.FindAllStringSubmatch(l.Text, -1) {
-					for _, ref := range host.Refs(m[len(m)-1], slug) {
+					for _, ref := range host.Refs(m[re.SubexpIndex(config.RefGroup)], slug) {
 						waited[ref] = true
 					}
 				}

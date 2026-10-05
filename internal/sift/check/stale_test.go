@@ -142,3 +142,21 @@ func TestStaleWaitPhrasesAreConfigurable(t *testing.T) {
 		t.Fatalf("configured phrase: %+v", rows)
 	}
 }
+
+// A configured wait phrase can hold its own groups, before and after {ref}:
+// the reference is read from {ref}'s own group, not the last one.
+func TestStaleWaitPhrasesWithGroups(t *testing.T) {
+	for _, c := range []struct{ wait, line string }{
+		{`\buntil {ref} (merges|lands)\b`, "- Pin the old client until #9 merges."},
+		{`\b(pending|awaiting) {ref}`, "- Hold the release pending #9."},
+		{`\b(hold|keep) (\w+ )*until {ref} (merges|lands)`, "- Keep the shim until #9 lands."},
+	} {
+		f := inRepo(&discover.File{Class: discover.ClassRepo, Content: c.line + "\n"}, "/w/app", "CLAUDE.md")
+		in := input(f)
+		in.Host = fakeHost{{Repo: "owner/app", Number: 9}: {Kind: "pr", State: "merged"}}
+		in.Config.Stale.Waits = []string{c.wait}
+		if rows := only(t, "stale-status", in); len(rows) != 1 || !rows[0].Certain || evidence(rows[0], "waits on") != "owner/app#9" {
+			t.Errorf("%s on %q: %+v", c.wait, c.line, rows)
+		}
+	}
+}

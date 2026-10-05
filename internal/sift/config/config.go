@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/schuettc/tackle/internal/sift/host"
 	"github.com/schuettc/tackle/internal/sift/profile"
 	tools "github.com/schuettc/tools-common"
 )
@@ -82,6 +83,32 @@ type Stale struct {
 
 // RefPlaceholder marks where a wait phrase's reference goes.
 const RefPlaceholder = "{ref}"
+
+// RefGroup is the named group RefPlaceholder becomes; a wait phrase may not
+// name a group of its own with it.
+const RefGroup = "ref"
+
+// Wait compiles a wait phrase as it runs: case-insensitive, with its one
+// RefPlaceholder replaced by the group RefGroup matching a reference.
+func Wait(w string) (*regexp.Regexp, error) {
+	if n := strings.Count(w, RefPlaceholder); n != 1 {
+		return nil, fmt.Errorf("needs %s once where the reference goes, has it %d times", RefPlaceholder, n)
+	}
+	re, err := regexp.Compile("(?i)" + strings.Replace(w, RefPlaceholder, "(?P<"+RefGroup+">"+host.RefPattern+")", 1))
+	if err != nil {
+		return nil, err
+	}
+	n := 0
+	for _, name := range re.SubexpNames() {
+		if name == RefGroup {
+			n++
+		}
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("the group %s must be %s's alone, and %s must not be quoted", RefGroup, RefPlaceholder, RefPlaceholder)
+	}
+	return re, nil
+}
 
 // Retired is a memory store that has been migrated: any pointer to it in an
 // instruction file is now wrong.
@@ -200,10 +227,7 @@ func (c Config) Validate() error {
 		}
 	}
 	for _, w := range c.Stale.Waits {
-		if !strings.Contains(w, RefPlaceholder) {
-			return fmt.Errorf("wait phrase %q: needs %s where the reference goes", w, RefPlaceholder)
-		}
-		if _, err := regexp.Compile("(?i)" + strings.ReplaceAll(w, RefPlaceholder, "#1")); err != nil {
+		if _, err := Wait(w); err != nil {
 			return fmt.Errorf("wait phrase %q: %w", w, err)
 		}
 	}
