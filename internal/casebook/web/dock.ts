@@ -763,8 +763,17 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // loadProgress shows the session's current progress line on load (the
   // live 'progress' event keeps it current afterwards).
+  //
+  // A live progress or settled event is newer than any load asked before
+  // it: a load whose answer lands after one (serve answered before the
+  // agent reported, the reply came late) is dropped, never shown over it.
+  // serve's line carries its own clock (now): the line's age is now −
+  // updated_at by serve's clock, counted on in the page's, so a page whose
+  // clock differs from serve's still reads the right age.
+  let progSeq = 0;
   async function loadProgress() {
     const sid = currentSessionId;
+    const mine = ++progSeq;
     if (!sid) {
       progLine.clear();
       return;
@@ -773,9 +782,10 @@ export function makeDock(ctx: Ctx): DockHandle {
       const pv = await ctx.api.get<SessionProgressView>('/session/progress', {
         session: sid,
       });
-      if (sid !== currentSessionId) return;
+      if (sid !== currentSessionId || mine !== progSeq) return;
       if (pv.progress) {
-        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+        const age = Date.parse(pv.now) - Date.parse(pv.progress.updated_at);
+        progLine.set(pv.progress, Date.now() - Math.max(0, age));
       } else {
         progLine.clear();
       }
@@ -891,7 +901,9 @@ export function makeDock(ctx: Ctx): DockHandle {
   // counts from now in page time.
   ctx.on('progress', (data: unknown) => {
     const p = data as Progress;
-    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+    if (p.session_id !== currentSessionId) return;
+    progSeq++; // a load in flight is older than this
+    progLine.set(p, Date.now());
   });
 
   // settled: the turn ended. The line clears; serve has folded it into the
@@ -899,6 +911,7 @@ export function makeDock(ctx: Ctx): DockHandle {
   ctx.on('settled', (data: unknown) => {
     const d = data as SettledResult;
     if (d.session !== currentSessionId) return;
+    progSeq++; // a load in flight is older than this
     progLine.clear();
     void loadMessages();
     void loadSessions();

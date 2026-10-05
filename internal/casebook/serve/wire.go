@@ -329,9 +329,12 @@ type NeedsYouView struct {
 }
 
 // SessionProgressView is the response body of GET /api/session/progress.
-// Progress is nil when the session has no live progress line.
+// Progress is nil when the session has no live progress line. Now is serve's
+// clock as it answered: the page ages the line by Now − UpdatedAt, both
+// serve's, so a page whose clock differs from serve's still reads its age.
 type SessionProgressView struct {
 	Progress *propose.Progress `json:"progress"`
+	Now      time.Time         `json:"now"`
 }
 
 // AnswerResult is the response body of POST /api/jobs/answer.

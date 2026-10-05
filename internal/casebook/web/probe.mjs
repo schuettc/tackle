@@ -275,7 +275,10 @@ const T7_SEED = [
 async function openDock(context, serveHandle, fx, opts = {}) {
   const pg = await context.newPage();
   await pg.setViewportSize({ width: 1600, height: 900 });
-  if (opts.clock) await pg.clock.install({ time: Date.now() });
+  // opts.clock fakes the page's clock (from opts.clockAt, else now).
+  if (opts.clock) await pg.clock.install({ time: opts.clockAt ?? Date.now() });
+  // opts.before runs on the page before it loads (e.g. to route its calls).
+  if (opts.before) await opts.before(pg);
   // opts.search adds query parameters (e.g. the Attention search, q=…).
   await pg.goto(serveHandle.url + (opts.search ?? '') + (opts.hash ?? ''), {
     waitUntil: 'domcontentloaded',
@@ -1014,7 +1017,22 @@ async function composerScenariosOn(context, serveHandle) {
     // Playwright's clock belongs to the whole browser context, so the
     // advancing clock gets a context of its own.
     const clockContext = await context.browser().newContext();
-    const pg = await openDock(clockContext, serveHandle, fx, { clock: true });
+    // The page loads the session's line as it opens. serve answers that load
+    // before the agent reports (nothing yet), and the answer is held until
+    // the live update has shown, so it lands after it, as it can on a slow
+    // runner: an older answer must not clear a newer line.
+    const held = [];
+    let reported = false;
+    const pg = await openDock(clockContext, serveHandle, fx, {
+      clock: true,
+      before: (p) =>
+        p.route('**/api/session/progress?*', async (route) => {
+          if (reported) return route.continue();
+          const answered = route.fetch();
+          held.push(answered.then((res) => ({ route, res })));
+          await answered;
+        }),
+    });
     try {
       const line = () =>
         pg.$eval('[data-testid="progress-line"]', (el) => {
@@ -1036,6 +1054,25 @@ async function composerScenariosOn(context, serveHandle) {
           };
         });
       check('no progress line before the agent reports', (await line()).hidden);
+      // The fake clock runs on with real time until paused: paused, the
+      // line's age is only the time the probe moves it on, however long a
+      // slow runner takes between the update and the fastForward.
+      await pg.clock.pauseAt((await pg.evaluate(() => Date.now())) + 1000);
+      // The page has asked for its line, and serve has answered: none yet.
+      const asked = await eventually(async () => held.length > 0, 10000);
+      const stale = await Promise.all(held);
+      const staleBodies = await Promise.all(stale.map((h) => h.res.json()));
+      check(
+        `the page asked for its line before the agent reported, and serve said none (${stale.length} held)`,
+        asked && staleBodies.every((b) => b.progress === null),
+      );
+      // PROBE_PROGRESS_DELAY=<ms> (opt-in stress): serve's clock runs on
+      // that long past the page's, paused, before the agent reports, as a
+      // slow runner leaves it. Nothing the page shows may hang on the two
+      // clocks agreeing.
+      if (progressDelay > 0) {
+        await new Promise((r) => setTimeout(r, progressDelay));
+      }
 
       await fx.agent.progress(fx.sid, 'checking CI on #671', 2, 4);
       check(
@@ -1046,6 +1083,23 @@ async function composerScenariosOn(context, serveHandle) {
             document.querySelector('.cb-prog-text')?.textContent ===
             'checking CI on #671 \u00b7 2 of 4',
         ),
+      );
+      // The held answers (no line) land now, after the update.
+      reported = true;
+      const release = await Promise.all(held);
+      const landed = pg.waitForResponse((r) =>
+        r.url().includes('/api/session/progress?'),
+      );
+      for (const h of release) await h.route.fulfill({ response: h.res });
+      await landed;
+      check(
+        'an older load landing after the update leaves the line showing',
+        !(await until(
+          pg,
+          () => document.querySelector('[data-testid="progress-line"]').hidden,
+          undefined,
+          1500,
+        )),
       );
       let l = await line();
       check(
@@ -1139,6 +1193,32 @@ async function composerScenariosOn(context, serveHandle) {
       );
     } finally {
       await pg2.close();
+    }
+
+    // A page whose clock runs 10 minutes ahead of serve's (a skewed or
+    // fake clock) ages the line by serve's clock: seconds, not "no
+    // progress for 10m".
+    const skewContext = await context.browser().newContext();
+    try {
+      const pg4 = await openDock(skewContext, serveHandle, fx, {
+        clock: true,
+        clockAt: Date.now() + 10 * 60 * 1000,
+      });
+      const age = await until(
+        pg4,
+        () =>
+          document.querySelector('.cb-prog-text')?.textContent ===
+            'writing the summary' &&
+          /^\d+s ago$/.test(
+            document.querySelector('.cb-prog-age')?.textContent ?? '',
+          ),
+      );
+      check(
+        `a page whose clock is 10m ahead of serve's ages the line by serve's clock (${await pg4.$eval('.cb-prog-age', (e) => e.textContent)})`,
+        age,
+      );
+    } finally {
+      await skewContext.close();
     }
   }
 
@@ -4651,6 +4731,7 @@ const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
 const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell'];
 const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
+const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
 
 // throttlePage slows a page's CPU by PROBE_THROTTLE (see run()).
 async function throttlePage(c, pg) {

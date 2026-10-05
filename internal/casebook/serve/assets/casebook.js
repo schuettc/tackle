@@ -4490,8 +4490,10 @@ function makeDock(ctx) {
       console.error("[dock] loadDelivery:", err);
     }
   }
+  let progSeq = 0;
   async function loadProgress() {
     const sid = currentSessionId;
+    const mine = ++progSeq;
     if (!sid) {
       progLine.clear();
       return;
@@ -4500,9 +4502,10 @@ function makeDock(ctx) {
       const pv = await ctx.api.get("/session/progress", {
         session: sid
       });
-      if (sid !== currentSessionId) return;
+      if (sid !== currentSessionId || mine !== progSeq) return;
       if (pv.progress) {
-        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+        const age = Date.parse(pv.now) - Date.parse(pv.progress.updated_at);
+        progLine.set(pv.progress, Date.now() - Math.max(0, age));
       } else {
         progLine.clear();
       }
@@ -4585,11 +4588,14 @@ function makeDock(ctx) {
   });
   ctx.on("progress", (data) => {
     const p = data;
-    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+    if (p.session_id !== currentSessionId) return;
+    progSeq++;
+    progLine.set(p, Date.now());
   });
   ctx.on("settled", (data) => {
     const d = data;
     if (d.session !== currentSessionId) return;
+    progSeq++;
     progLine.clear();
     void loadMessages();
     void loadSessions();
