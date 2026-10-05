@@ -286,8 +286,18 @@ export function renderRule(
   }
 
   // The proposal: a draft's is editable (disposition, until, note).
+  //
+  // A draft's picker is built once and kept across redraws (a live preview,
+  // or serve's copy of the rule drawn again): an open disposition menu
+  // stays open with its chips, and Court's focus, where they were, so a
+  // click on a chip never lands on one a redraw has just replaced.
   function drawPropose(): void {
     const p = workPropose;
+    if (editable() && refreshPropose) {
+      refreshPropose();
+      return;
+    }
+    refreshPropose = null;
     const tr = (label: string, value: Node) =>
       h(
         'div',
@@ -353,7 +363,11 @@ export function renderRule(
       h('span'),
       h('span', { class: 'cb-disp-col' }, menuChips, whyEl),
     );
-    menuNav(menu, '.cb-disp-opt', pick, () => setMenu(false));
+    // A chip moved or dropped by a redraw loses focus as it leaves the
+    // document; that is no leaving the menu (redrawing says so).
+    menuNav(menu, '.cb-disp-opt', pick, () => {
+      if (!redrawing) setMenu(false);
+    });
     const onEsc = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.isComposing) return;
       if (!menu.isConnected) {
@@ -390,8 +404,11 @@ export function renderRule(
       edited();
       pick.focus();
     };
-    // The chips drawn: a preview that offers the same ones leaves them (and
-    // Court's focus in an open menu) alone.
+    // The chips drawn. A preview offering another list (a kind condition
+    // added) keeps the chip of each disposition still offered, the same
+    // element, in place: only the ones it drops leave and the new ones
+    // join. A chip with Court's focus that leaves hands it to the chosen
+    // one (or the first), so an open menu stays open.
     let chipsFor = '';
     drawChoices = () => {
       const cur = workPropose.disposition;
@@ -403,27 +420,58 @@ export function renderRule(
       const sig = `${cur}\n${dispositions.join(' ')}`;
       if (sig === chipsFor) return;
       chipsFor = sig;
-      menuChips.replaceChildren(
-        ...dispositions.map((d) =>
+      const have = new Map(
+        [...menuChips.querySelectorAll<HTMLElement>('.cb-disp-opt')].map(
+          (e) => [e.dataset.disp ?? '', e],
+        ),
+      );
+      const chips = dispositions.map((d) => {
+        const chip =
+          have.get(d) ??
           h(
             'button',
             {
               type: 'button',
               role: 'menuitemradio',
-              'aria-checked': String(d === cur),
-              class:
-                'kit-chip cb-disp-opt' +
-                (d === cur ? ' on' : '') +
-                (DANGER_DISPS.has(d) ? ' cb-danger' : ''),
               'data-disp': d,
               onclick() {
                 choose(d);
               },
             },
             d,
-          ),
-        ),
-      );
+          );
+        chip.setAttribute('aria-checked', String(d === cur));
+        chip.className =
+          'kit-chip cb-disp-opt' +
+          (d === cur ? ' on' : '') +
+          (DANGER_DISPS.has(d) ? ' cb-danger' : '');
+        return chip;
+      });
+      const focused = document.activeElement;
+      if (
+        focused instanceof HTMLElement &&
+        menuChips.contains(focused) &&
+        !chips.includes(focused)
+      ) {
+        (
+          chips.find((c) => c.classList.contains('on')) ??
+          chips[0] ??
+          pick
+        ).focus();
+      }
+      keepFocus(() => {
+        for (const [d, chip] of have) {
+          if (!chips.includes(chip)) {
+            have.delete(d);
+            chip.remove();
+          }
+        }
+        // In order: a kept chip already in place is never moved.
+        chips.forEach((chip, i) => {
+          const at = menuChips.children[i];
+          if (at !== chip) menuChips.insertBefore(chip, at ?? null);
+        });
+      });
     };
     const text = (field: 'until' | 'note', placeholder: string) => {
       const input = h('input', {
@@ -491,6 +539,12 @@ export function renderRule(
         );
       })
       .catch(() => {});
+    refreshPropose = () => {
+      untilIn.value = workPropose.until ?? '';
+      noteIn.value = workPropose.note ?? '';
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      drawChoices();
+    };
     proposeEl.replaceChildren(
       h(
         'div',
@@ -509,6 +563,30 @@ export function renderRule(
 
   // drawChoices redraws the disposition picker (a new list from serve).
   let drawChoices: () => void = () => {};
+  // refreshPropose shows the proposal in a draft's picker already built.
+  let refreshPropose: (() => void) | null = null;
+  // redrawing: elements are being moved in the document, not left by Court.
+  let redrawing = false;
+
+  // keepFocus runs a redraw that moves elements (a focused one loses focus
+  // as it leaves the document, if only to be put back) and gives the focus
+  // back to the element that had it, if it is still in the document.
+  function keepFocus(redraw: () => void): void {
+    const focused = document.activeElement;
+    redrawing = true;
+    try {
+      redraw();
+    } finally {
+      redrawing = false;
+    }
+    if (
+      focused instanceof HTMLElement &&
+      focused !== document.activeElement &&
+      focused.isConnected
+    ) {
+      focused.focus();
+    }
+  }
   // Every disposition some kind of item allows (the decision vocabulary).
   let allDispositions: string[] = [];
 
@@ -1013,12 +1091,20 @@ export function renderRule(
       refuseActivate();
       return false;
     }
+    // What this save sends. An edit Court makes while it is in flight is
+    // newer than serve's reply: it is kept over the copy saved.
+    const sentMatch = work.map((c) => ({ ...c }));
+    const sentPropose = { ...workPropose };
     try {
       const d = await ctx.api.post<RuleDetailView>(
         `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        body(),
+        { ...body(), match: sentMatch, propose: sentPropose },
       );
-      draw(d); // drops a conflict that was this save, heard live first
+      const later =
+        !sameConditions(work, sentMatch) ||
+        !sameAction(workPropose, sentPropose);
+      // drops a conflict that was this save, heard live first
+      draw(d, later ? { match: work, propose: workPropose } : undefined);
       hooks.saved();
       if (conflict) {
         // A change that landed after his save (serve took the save
@@ -1178,20 +1264,26 @@ export function renderRule(
       onEdit,
     );
     factsEl = h('div');
-    doc.replaceChildren(
-      kickEl,
-      titleEl,
-      factsEl,
-      proseEl,
-      invalidEl,
-      conflictEl,
-      h('h3', { class: 'kit-label' }, 'when an undecided item matches all of'),
-      editor,
-      h('h3', { class: 'kit-label' }, 'propose'),
-      proposeEl,
-      h('div', { class: 'cb-matches-head' }, heading, groupChips),
-      matchesEl,
-      actionsEl,
+    keepFocus(() =>
+      doc.replaceChildren(
+        kickEl,
+        titleEl,
+        factsEl,
+        proseEl,
+        invalidEl,
+        conflictEl,
+        h(
+          'h3',
+          { class: 'kit-label' },
+          'when an undecided item matches all of',
+        ),
+        editor,
+        h('h3', { class: 'kit-label' }, 'propose'),
+        proposeEl,
+        h('div', { class: 'cb-matches-head' }, heading, groupChips),
+        matchesEl,
+        actionsEl,
+      ),
     );
     note.textContent = '';
     drawProse();

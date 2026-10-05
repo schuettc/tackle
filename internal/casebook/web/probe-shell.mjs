@@ -860,6 +860,13 @@ async function pollFallbackScenario(shared, t) {
             ),
           );
           const polls = [];
+          // Poll requests as the page makes them (a response's body is read
+          // later, so a poll asked before the stream came back can be
+          // counted after it).
+          let pollsAsked = 0;
+          pg.on('request', (r) => {
+            if (r.url().includes('/api/state?since=')) pollsAsked++;
+          });
           pg.on('response', async (r) => {
             if (!r.url().includes('/api/state?since=')) return;
             const body = await r.json().catch(() => null);
@@ -930,20 +937,29 @@ async function pollFallbackScenario(shared, t) {
               8000,
             ),
           );
-          const pollsAt = polls.length;
+          // A poll already asked as the stream came back may still finish;
+          // after it, no poll is asked again.
+          await pg.waitForTimeout(1000);
+          const pollsAt = pollsAsked;
           await agent.api('POST', '/api/decide', {
             keys: [`pr:schuettc/${FB}#52`],
             disposition: 'keep',
           });
           check(
-            'live again, the stream delivers (the last row leaves) and polling has stopped',
-            (await until(
+            'live again, the stream delivers (the last row leaves)',
+            await until(
               pg,
               () =>
                 document.querySelectorAll(
                   '.kit-app > .kit-list:not([hidden]) .kit-row',
                 ).length === 0,
-            )) && polls.length === pollsAt,
+            ),
+          );
+          // Polling runs every 2 s: longer than that without one, it stopped.
+          await pg.waitForTimeout(2500);
+          check(
+            `and polling has stopped (${pollsAsked - pollsAt} polls asked since)`,
+            pollsAsked === pollsAt,
           );
         } finally {
           await pg.close();

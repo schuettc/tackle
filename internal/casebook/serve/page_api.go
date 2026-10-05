@@ -414,11 +414,12 @@ func (s *Server) getSessionProgress(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
+	now := s.Now()
 	if !ok {
-		reply(w, SessionProgressView{Progress: nil}, nil)
+		reply(w, SessionProgressView{Progress: nil, Now: now}, nil)
 		return
 	}
-	reply(w, SessionProgressView{Progress: &p}, nil)
+	reply(w, SessionProgressView{Progress: &p, Now: now}, nil)
 }
 
 // getSessionDelivery returns the current in-flight delivery for a session,

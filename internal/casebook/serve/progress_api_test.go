@@ -3,6 +3,7 @@ package serve
 import (
 	"net/http"
 	"testing"
+	"time"
 )
 
 // TestGetSessionProgressNone verifies that GET /api/session/progress returns
@@ -109,5 +110,39 @@ func TestGetSessionProgressMissingSession(t *testing.T) {
 	r := newRig(t)
 	if c := r.do(t, "GET", "/api/session/progress", nil, nil); c != http.StatusBadRequest {
 		t.Fatalf("expected 400 for missing session, got %d", c)
+	}
+}
+
+// TestGetSessionProgressCarriesServesClock: the line comes with serve's
+// clock as it answered, so the page ages it by serve's own clock (now −
+// updated_at), whatever its own reads.
+func TestGetSessionProgressCarriesServesClock(t *testing.T) {
+	r := newRig(t)
+	c := useClock(r)
+	r.attach(t, "s1")
+
+	var none SessionProgressView
+	if code := r.do(t, "GET", "/api/session/progress?session=s1", nil, &none); code != http.StatusOK {
+		t.Fatalf("session/progress %d", code)
+	}
+	if none.Progress != nil || !none.Now.Equal(c.now()) {
+		t.Errorf("no line: got progress %+v now %v, want none at %v", none.Progress, none.Now, c.now())
+	}
+
+	if code := r.do(t, "POST", "/api/agent/progress", map[string]any{
+		"session": "s1", "text": "checking CI on #671",
+	}, nil); code != http.StatusOK {
+		t.Fatalf("agent/progress %d", code)
+	}
+	c.add(8 * time.Second)
+	var pv SessionProgressView
+	if code := r.do(t, "GET", "/api/session/progress?session=s1", nil, &pv); code != http.StatusOK {
+		t.Fatalf("session/progress %d", code)
+	}
+	if pv.Progress == nil {
+		t.Fatal("expected progress, got null")
+	}
+	if age := pv.Now.Sub(pv.Progress.UpdatedAt); age != 8*time.Second {
+		t.Errorf("now − updated_at = %v, want 8s (now %v, updated %v)", age, pv.Now, pv.Progress.UpdatedAt)
 	}
 }
