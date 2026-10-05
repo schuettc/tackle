@@ -102,13 +102,13 @@ var skipDirs = map[string]bool{
 type finder struct {
 	opt   Options
 	res   Result
-	real  map[string]*File // realpath → file, so a file reached twice is one
-	repos map[string]*Repo // root → repo
+	real  map[string]*File     // realpath → file, so a file reached twice is one
+	repos map[string]*repoTree // root → repo
 }
 
 // Run discovers the files.
 func Run(ctx context.Context, opt Options) (Result, error) {
-	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*Repo{}}
+	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}}
 	f.globals()
 	for _, root := range opt.Roots {
 		f.root(ctx, root)
@@ -212,7 +212,8 @@ func (f *finder) skillDirs() {
 
 // root walks one root on disk: every directory holding a .git directory is
 // a repo, read at its base; a .git file (a linked worktree or submodule) is
-// skipped; files outside any repo are read from disk.
+// skipped; files outside any repo are read from disk. A root inside a repo is
+// read at that repo's base too, limited to the root's subtree.
 func (f *finder) root(ctx context.Context, root config.Root) {
 	start := root.Path
 	if st, err := os.Lstat(start); err != nil {
@@ -225,6 +226,12 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 		}
 	}
 	var repoRoots []string
+	if top, prefix := enclosing(ctx, start); top != "" {
+		repoRoots = append(repoRoots, start)
+		if err := f.repo(ctx, top, root, prefix); err != nil {
+			f.warn("repo %s: %v", top, err)
+		}
+	}
 	inRepo := func(p string) bool {
 		for _, r := range repoRoots {
 			if p == r || strings.HasPrefix(p, r+string(filepath.Separator)) {
@@ -252,7 +259,7 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 					return filepath.SkipDir
 				}
 				repoRoots = append(repoRoots, p)
-				if err := f.repo(ctx, p, root); err != nil {
+				if err := f.repo(ctx, p, root, ""); err != nil {
 					f.warn("repo %s: %v", p, err)
 				}
 			}
@@ -320,31 +327,48 @@ func (f *finder) pick(names []string) map[string][]string {
 	return out
 }
 
-// repo reads one repo at its base.
-func (f *finder) repo(ctx context.Context, dir string, root config.Root) error {
-	if _, ok := f.repos[dir]; ok {
-		return nil
+// enclosing returns the top of the repo start is inside (in start's own
+// form where it can) and start's '/'-separated path under it; "" when start
+// is no repo's subdirectory (it is a repo's top, or in none).
+func enclosing(ctx context.Context, start string) (top, prefix string) {
+	if _, err := os.Lstat(filepath.Join(start, ".git")); err == nil {
+		return "", ""
 	}
-	ref := resolveRef(ctx, dir, root.Base)
-	if ref == "" {
-		return errors.New("no commits")
+	out, err := git(ctx, start, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", ""
 	}
-	out, err := git(ctx, dir, "ls-tree", "-r", "-z", "--name-only", ref)
+	real := strings.TrimSpace(string(out))
+	realStart, err := filepath.EvalSymlinks(start)
+	if err != nil || real == "" {
+		return "", ""
+	}
+	rel, err := filepath.Rel(real, realStart)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", ""
+	}
+	top = start
+	for range strings.Split(rel, string(filepath.Separator)) {
+		top = filepath.Dir(top)
+	}
+	if t, err := filepath.EvalSymlinks(top); err != nil || t != real {
+		top = real
+	}
+	return top, filepath.ToSlash(rel)
+}
+
+// repo reads one repo at its base: its whole tree, and the files sift audits
+// under prefix (a '/'-separated directory; "" is the whole repo) that no
+// other root has added.
+func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix string) error {
+	r, err := f.readRepo(ctx, dir, root.Base)
 	if err != nil {
 		return err
 	}
-	r := &Repo{Root: dir, Ref: ref, Tree: map[string]bool{}}
-	if u, err := git(ctx, dir, "config", "--get", "remote.origin.url"); err == nil {
-		r.Remote = strings.TrimSpace(string(u))
-	}
 	byDir := map[string][]string{}
-	for _, rel := range strings.Split(string(out), "\x00") {
-		if rel == "" {
+	for rel := range r.files {
+		if prefix != "" && !strings.HasPrefix(rel, prefix+"/") {
 			continue
-		}
-		r.Tree[rel] = true
-		for d := path.Dir(rel); d != "."; d = path.Dir(d) {
-			r.Tree[d] = true
 		}
 		name := path.Base(rel)
 		if name != profile.SkillFile && !f.isRepoFile(name) {
@@ -355,9 +379,7 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root) error {
 		}
 		byDir[path.Dir(rel)] = append(byDir[path.Dir(rel)], name)
 	}
-	f.repos[dir] = r
-	f.res.Repos = append(f.res.Repos, r)
-
+	ref := r.Ref
 	realRoot, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		realRoot = dir
@@ -379,6 +401,10 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root) error {
 			if d != "." {
 				rel = d + "/" + n
 			}
+			key := filepath.Join(realRoot, filepath.FromSlash(rel))
+			if _, ok := f.real[key]; ok {
+				continue
+			}
 			body, err := git(ctx, dir, "show", ref+":"+rel)
 			if err != nil {
 				f.warn("%s: %v", filepath.Join(dir, rel), err)
@@ -388,12 +414,50 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root) error {
 			if n == profile.SkillFile {
 				class = ClassSkill
 			}
-			file := &File{Path: filepath.Join(dir, filepath.FromSlash(rel)), Class: class, Profiles: picked[n], Repo: r, Rel: rel, Content: string(body)}
-			f.real[filepath.Join(realRoot, filepath.FromSlash(rel))] = file
+			file := &File{Path: filepath.Join(dir, filepath.FromSlash(rel)), Class: class, Profiles: picked[n], Repo: r.Repo, Rel: rel, Content: string(body)}
+			f.real[key] = file
 			f.res.Files = append(f.res.Files, file)
 		}
 	}
 	return nil
+}
+
+// readRepo reads a repo's tree at its base, once.
+func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, error) {
+	if r, ok := f.repos[dir]; ok {
+		return r, nil
+	}
+	ref := resolveRef(ctx, dir, base)
+	if ref == "" {
+		return nil, errors.New("no commits")
+	}
+	out, err := git(ctx, dir, "ls-tree", "-r", "-z", "--name-only", ref)
+	if err != nil {
+		return nil, err
+	}
+	r := &repoTree{Repo: &Repo{Root: dir, Ref: ref, Tree: map[string]bool{}}, files: map[string]bool{}}
+	if u, err := git(ctx, dir, "config", "--get", "remote.origin.url"); err == nil {
+		r.Remote = strings.TrimSpace(string(u))
+	}
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" {
+			continue
+		}
+		r.files[rel] = true
+		r.Tree[rel] = true
+		for d := path.Dir(rel); d != "."; d = path.Dir(d) {
+			r.Tree[d] = true
+		}
+	}
+	f.repos[dir] = r
+	f.res.Repos = append(f.res.Repos, r.Repo)
+	return r, nil
+}
+
+// repoTree is a repo read once, with its files apart from its directories.
+type repoTree struct {
+	*Repo
+	files map[string]bool
 }
 
 // resolveRef picks what a repo is read at: origin/<base> or <base> when

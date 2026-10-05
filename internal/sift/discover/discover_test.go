@@ -342,3 +342,28 @@ func TestGitEnvDropsRepoSelectors(t *testing.T) {
 		t.Fatalf("%v", env)
 	}
 }
+
+// A root inside a repo is read at the repo's base like any repo, limited to
+// the root's subtree: the committed text, not the working tree's, and
+// nothing above the root.
+func TestRootInsideARepoReadsItsBase(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{
+		"CLAUDE.md": "top\n", "docs/CLAUDE.md": "committed\n", "docs/guide/CLAUDE.md": "guide\n", "other/CLAUDE.md": "other\n",
+	})
+	st.Write(t, repo, "docs/CLAUDE.md", "changed\n")
+
+	res := run(t, Options{Profiles: profiles(t, "claude-code"), Roots: []config.Root{{Path: filepath.Join(repo, "docs")}}})
+	got := byRel(res)
+	if k := strings.Join(keys(got), " "); k != "app:docs/CLAUDE.md app:docs/guide/CLAUDE.md" {
+		t.Fatalf("files %s (warnings %v)", k, res.Warnings)
+	}
+	f := got["app:docs/CLAUDE.md"]
+	if f.Content != "committed\n" || f.Repo.Ref != "HEAD" || f.Path != filepath.Join(repo, "docs", "CLAUDE.md") {
+		t.Fatalf("%+v ref %s", f, f.Repo.Ref)
+	}
+	if !f.Repo.Has("other/CLAUDE.md") {
+		t.Error("the repo's tree is the whole tree, for resolving paths")
+	}
+}
