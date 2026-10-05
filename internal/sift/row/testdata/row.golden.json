@@ -1,0 +1,28 @@
+{
+  "id": "e173f6e752f6fc81",
+  "check": "negative-rule",
+  "summary": "a rule phrased as a prohibition",
+  "source": {
+    "file": "/w/repo/CLAUDE.md",
+    "repo": "/w/repo",
+    "ref": "origin/main",
+    "path": "CLAUDE.md",
+    "start": 4,
+    "end": 4
+  },
+  "passage": "- Never push to main.",
+  "evidence": [
+    {
+      "name": "matched",
+      "value": "Never"
+    }
+  ],
+  "verdict": "rewrite",
+  "destination": "CLAUDE.md#Git",
+  "text": "- Push to a branch and open a pull request.",
+  "certain": false,
+  "decision": {
+    "value": "rewrite",
+    "note": "fine"
+  }
+}
