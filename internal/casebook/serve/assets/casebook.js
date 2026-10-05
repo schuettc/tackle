@@ -3681,7 +3681,10 @@ function makeBatchTray(ctx) {
   el.classList.add("cb-batch");
   el.setAttribute("data-testid", "batch-tray");
   el.hidden = true;
+  let editing = null;
   function render() {
+    if (editing?.isConnected) return;
+    editing = null;
     el.hidden = drafts.length === 0;
     if (!drafts.length) {
       list4.replaceChildren();
@@ -3744,28 +3747,35 @@ function makeBatchTray(ctx) {
     return row;
   }
   function editDraft(d, text) {
+    const done = () => {
+      if (editing === field) editing = null;
+      render();
+    };
     const field = noteField3({
       value: d.body,
       onCommit(v) {
         const body = v.trim();
         if (body && body !== d.body) {
           d.body = body;
+          const now = drafts.find((x) => x.id === d.id);
+          if (now) now.body = body;
           void ctx.api.post("/drafts/edit", { id: d.id, body }).catch((err) => {
             console.error("[batch] edit:", err);
             void reload();
           });
         }
-        render();
+        done();
       }
     });
     field.classList.add("cb-batch-edit");
     field.setAttribute("aria-label", "edit draft");
     field.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") render();
+      if (e.key === "Escape") done();
     });
     field.addEventListener("blur", () => {
-      if (field.isConnected) render();
+      if (field.isConnected) done();
     });
+    editing = field;
     text.replaceWith(field);
     field.focus();
     field.select();
@@ -4411,17 +4421,21 @@ function makeDock(ctx) {
     threadChips.append(addChip);
   }
   function renderMessages() {
-    messageArea.replaceChildren();
+    for (const c of [...messageArea.children]) {
+      if (c !== batchTray.el) c.remove();
+    }
+    if (batchTray.el.parentNode !== messageArea) {
+      messageArea.append(batchTray.el);
+    }
+    const cards = [];
     if (messages.length === 0) {
-      const empty = h10("p", { class: "cb-dock-empty" }, "no messages");
-      messageArea.append(empty);
+      cards.push(h10("p", { class: "cb-dock-empty" }, "no messages"));
     }
     const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
-      messageArea.append(el);
+      cards.push(renderMsgCard(msg, currentDelivery, sessions, ctx, name));
     }
-    messageArea.append(batchTray.el);
+    batchTray.el.before(...cards);
     messageArea.scrollTop = messageArea.scrollHeight;
   }
   async function loadSessions() {

@@ -665,10 +665,45 @@ async function composerScenariosOn(context, serveHandle) {
         'charlie',
       ]);
 
-      // Edit bravo.
+      // Edit bravo. Halfway through his typing the tray reloads (a drafts
+      // event: here charlie saved unchanged; on a slow runner, the late
+      // event of a draft just added): his field, focus and typing stay,
+      // and nothing half-typed is saved.
       await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
       await pg.keyboard.press('ControlOrMeta+a');
-      await pg.keyboard.type('bravo, edited');
+      await pg.keyboard.type('bravo, ed');
+      const editField = await pg.$('.cb-batch-edit');
+      const charlie = (await fx.agent.messages(fx.thread.id)).drafts.find(
+        (m) => m.body === 'charlie',
+      );
+      const reloaded = pg.waitForResponse((r) =>
+        r.url().includes('/api/messages?'),
+      );
+      await fx.agent.api('POST', '/api/drafts/edit', {
+        id: charlie.id,
+        body: 'charlie',
+      });
+      await reloaded;
+      const fieldLeft =
+        !editField ||
+        (await until(
+          pg,
+          (f) => !f.isConnected || document.activeElement !== f,
+          editField,
+          1500,
+        ));
+      check(
+        'a tray reload while he edits a draft leaves his field, focused, with what he typed, and saves none of it',
+        !!editField &&
+          !fieldLeft &&
+          (await editField.evaluate((f) => f.value)) === 'bravo, ed' &&
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
+            'alpha',
+            'bravo',
+            'charlie',
+          ]),
+      );
+      await pg.keyboard.type('ited');
       await pg.keyboard.press('Enter');
       check(
         'edit: the tray shows the edited draft',
@@ -791,6 +826,71 @@ async function composerScenariosOn(context, serveHandle) {
         text.indexOf('charlie') >= 0 &&
           text.indexOf('charlie') < text.indexOf('bravo, edited') &&
           !text.includes('alpha'),
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the thread drawn again under an edit in the tray ---------
+  console.log(
+    '\nscenario: a message arriving while a draft is edited leaves the edit',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'batch-msg');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      for (const [i, text] of ['one', 'two'].entries()) {
+        await compose(pg, text, 'Meta+Enter');
+        await until(
+          pg,
+          (n) => document.querySelectorAll('.cb-batch-draft').length === n,
+          i + 1,
+        );
+      }
+      // Court edits "two"; halfway through, a message goes into the
+      // thread (from another tab): the thread's cards are drawn again, the
+      // tray after them.
+      await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.type('two, ed');
+      const editField = await pg.$('.cb-batch-edit');
+      const redrawn = until(
+        pg,
+        () =>
+          [...document.querySelectorAll('.cb-dock-card')].some((c) =>
+            c.textContent.includes('from another tab'),
+          ),
+        undefined,
+        8000,
+      );
+      await fx.agent.postMessage(fx.thread.id, 'from another tab');
+      const shown = await redrawn;
+      const fieldLeft =
+        !editField ||
+        (await until(
+          pg,
+          (f) => !f.isConnected || document.activeElement !== f,
+          editField,
+          1500,
+        ));
+      check(
+        'the thread drawn again while he edits a draft leaves his field, focused, with what he typed, and saves none of it',
+        shown &&
+          !fieldLeft &&
+          (await editField.evaluate((f) => f.value)) === 'two, ed' &&
+          sameList(await draftBodies(fx.agent, fx.thread.id), ['one', 'two']),
+      );
+      await pg.keyboard.type('ited');
+      await pg.keyboard.press('Enter');
+      check(
+        'his edit, finished, is what serve holds',
+        await eventually(async () =>
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
+            'one',
+            'two, edited',
+          ]),
+        ),
       );
     } finally {
       await pg.close();

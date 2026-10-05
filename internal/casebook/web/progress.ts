@@ -56,7 +56,15 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
   el.setAttribute('data-testid', 'batch-tray');
   el.hidden = true;
 
+  // The field of the draft Court is editing. A redraw (a live reload: a
+  // drafts or message event) waits until his edit ends: it would take the
+  // field from under his typing, and its leaving commits what he has typed
+  // so far. The edit's end draws the tray as it is by then.
+  let editing: HTMLElement | null = null;
+
   function render(): void {
+    if (editing?.isConnected) return;
+    editing = null;
     el.hidden = drafts.length === 0;
     if (!drafts.length) {
       list.replaceChildren();
@@ -127,12 +135,19 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
   // editDraft swaps the text for the kit's noteField: ↵ or leaving commits a
   // changed value, Esc reverts and leaves. The row comes back either way.
   function editDraft(d: Message, text: HTMLElement): void {
+    const done = () => {
+      if (editing === field) editing = null;
+      render();
+    };
     const field = noteField({
       value: d.body,
       onCommit(v: string) {
         const body = v.trim();
         if (body && body !== d.body) {
           d.body = body;
+          // A reload while he edited brought the draft anew: it shows his.
+          const now = drafts.find((x) => x.id === d.id);
+          if (now) now.body = body;
           void ctx.api
             .post('/drafts/edit', { id: d.id, body })
             .catch((err: unknown) => {
@@ -140,7 +155,7 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
               void reload();
             });
         }
-        render();
+        done();
       },
     });
     field.classList.add('cb-batch-edit');
@@ -148,11 +163,12 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
     // Leaving without a change (Esc, or a blur with nothing changed) doesn't
     // commit, so the row is restored here.
     field.addEventListener('keydown', (e: KeyboardEvent) => {
-      if (e.key === 'Escape') render();
+      if (e.key === 'Escape') done();
     });
     field.addEventListener('blur', () => {
-      if (field.isConnected) render();
+      if (field.isConnected) done();
     });
+    editing = field;
     text.replaceWith(field);
     field.focus();
     field.select();

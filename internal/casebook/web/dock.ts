@@ -667,18 +667,25 @@ export function makeDock(ctx: Ctx): DockHandle {
   }
 
   function renderMessages() {
-    messageArea.replaceChildren();
+    // The draft batch is the last card (it hides itself when empty). It
+    // stays put while the cards before it are drawn again: moved out and
+    // back, a draft Court is editing in it would lose his focus, and the
+    // edit would commit what he had typed so far.
+    for (const c of [...messageArea.children]) {
+      if (c !== batchTray.el) c.remove();
+    }
+    if (batchTray.el.parentNode !== messageArea) {
+      messageArea.append(batchTray.el);
+    }
+    const cards: HTMLElement[] = [];
     if (messages.length === 0) {
-      const empty = h('p', { class: 'cb-dock-empty' }, 'no messages');
-      messageArea.append(empty);
+      cards.push(h('p', { class: 'cb-dock-empty' }, 'no messages'));
     }
     const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
-      messageArea.append(el);
+      cards.push(renderMsgCard(msg, currentDelivery, sessions, ctx, name));
     }
-    // The draft batch is the last card (it hides itself when empty).
-    messageArea.append(batchTray.el);
+    batchTray.el.before(...cards);
     // Auto-scroll to the latest message.
     messageArea.scrollTop = messageArea.scrollHeight;
   }
