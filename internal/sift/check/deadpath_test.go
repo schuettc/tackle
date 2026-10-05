@@ -18,10 +18,11 @@ func TestDeadPath(t *testing.T) {
 	if evidence(rows[0], "missing") != "internal/tool/" || evidence(rows[1], "missing") != "docs/CHANGES.md" {
 		t.Errorf("evidence %+v %+v", rows[0].Evidence, rows[1].Evidence)
 	}
-	// Gone at the audited commit and not on disk either: certain.
+	// A file gone at the audited commit and not on disk either is certain;
+	// a directory (line 3) is a judgment.
 	for _, r := range rows {
-		if !r.Certain {
-			t.Errorf("line %d not certain", r.Source.Start)
+		if r.Certain != (r.Source.Start != 3) {
+			t.Errorf("line %d certain=%v", r.Source.Start, r.Certain)
 		}
 	}
 
@@ -37,6 +38,9 @@ func TestDeadPath(t *testing.T) {
 	}
 }
 
+// Near misses: untracked files on disk, refs and hosts, URLs, placeholders,
+// globs, slash commands, ellipses, and a path that lives in another audited
+// repo.
 func TestDeadPathNearMiss(t *testing.T) {
 	root := t.TempDir()
 	near := inRepo(fixture(t, "dead-path", "near.md", discover.ClassRepo), root, "CLAUDE.md", "cmd/tool/main.go")
@@ -46,7 +50,31 @@ func TestDeadPathNearMiss(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "notes", "local.md"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rows := only(t, "dead-path", input(near)); len(rows) != 0 {
+	sibling := &discover.Repo{Root: "/w/shared", Tree: map[string]bool{"docs": true, "docs/shared": true, "docs/shared/GUIDE.md": true}}
+	in := input(near)
+	in.Repos = []*discover.Repo{near.Repo, sibling}
+	if rows := only(t, "dead-path", in); len(rows) != 0 {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// A skill is used in whatever repo the agent is in, so its relative paths
+// are not resolved against the repo it lives in; home paths still are.
+func TestDeadPathInASkill(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	f := inRepo(fixture(t, "dead-path", "skill.md", discover.ClassSkill), t.TempDir(), "skills/example/SKILL.md")
+	rows := only(t, "dead-path", input(f))
+	if len(rows) != 1 || evidence(rows[0], "missing") != "~/.example-missing/settings.json" || rows[0].Certain {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// Only a missing file is certain: a missing directory is often a convention
+// ("specs go in docs/specs/") or a name.
+func TestDeadPathDirectoryIsAJudgment(t *testing.T) {
+	f := inRepo(&discover.File{Class: discover.ClassRepo, Content: "- Specs go in `docs/specs/`.\n"}, t.TempDir(), "CLAUDE.md")
+	rows := only(t, "dead-path", input(f))
+	if len(rows) != 1 || rows[0].Certain {
 		t.Fatalf("%+v", rows)
 	}
 }

@@ -24,8 +24,8 @@ var (
 // candidate returns the path a backticked span or link target names, or ""
 // when it does not look like a path: it needs a slash, plain segments, and
 // a file extension, a trailing slash or a ./, ../, ~/ or / start. URLs,
-// placeholders, globs and host-like first segments (example.tools/x) are not
-// paths.
+// placeholders, globs, ellipses, slash commands (/ship) and host-like first
+// segments (example.tools/x) are not paths.
 func candidate(s string) string {
 	if strings.Contains(s, "://") || strings.HasPrefix(s, "mailto:") || strings.HasPrefix(s, "#") {
 		return ""
@@ -39,9 +39,12 @@ func candidate(s string) string {
 	anchored := strings.HasPrefix(s, "./") || strings.HasPrefix(s, "../") || strings.HasPrefix(s, "~/") || strings.HasPrefix(s, "/")
 	segs := strings.Split(strings.TrimPrefix(strings.TrimPrefix(s, "~/"), "/"), "/")
 	for _, seg := range segs {
-		if !segmentRE.MatchString(seg) {
+		if !segmentRE.MatchString(seg) || strings.HasPrefix(seg, "...") {
 			return ""
 		}
+	}
+	if strings.HasPrefix(s, "/") && len(segs) == 1 && !extRE.MatchString(segs[0]) {
+		return "" // a slash command
 	}
 	if !anchored && strings.Contains(segs[0], ".") && !strings.HasPrefix(segs[0], ".") {
 		return "" // a host, not a directory
@@ -53,11 +56,14 @@ func candidate(s string) string {
 }
 
 // deadPath flags backticked paths and link targets that do not resolve. In
-// a repo a relative path is resolved from the repo root and from the file's
-// directory, at the audited commit and then on disk (an untracked file or a
-// nested repo is alive); gone from both is certain. Home and absolute paths
-// are checked on disk, and a miss there is a judgment: the path may exist on
-// another machine. Outside a repo only those are checked.
+// a repo file a relative path is resolved from the repo root and from the
+// file's directory, at the audited commit and then on disk (an untracked file
+// or a nested repo is alive), and then in the other audited repos (the line
+// may name a sibling's file). A file gone from all of them is certain; a
+// directory is a judgment, since it is often a convention or a name. Home and
+// absolute paths are checked on disk, and a miss there is a judgment: the
+// path may exist on another machine. Elsewhere only those are checked: a
+// skill is used in whatever repo the agent is in.
 func deadPath(_ context.Context, in *Input) []row.Row {
 	var rows []row.Row
 	for _, f := range in.Files {
@@ -78,7 +84,7 @@ func deadPath(_ context.Context, in *Input) []row.Row {
 					continue
 				}
 				seen[p] = true
-				alive, sure, checked := resolve(f, p)
+				alive, sure, checked := resolve(f, p, in.Repos)
 				if !checked || alive {
 					continue
 				}
@@ -100,10 +106,13 @@ func deadPath(_ context.Context, in *Input) []row.Row {
 
 // resolve reports whether p exists, whether a miss is certain, and whether
 // p was checked at all.
-func resolve(f *discover.File, p string) (alive, certain, checked bool) {
+func resolve(f *discover.File, p string, repos []*discover.Repo) (alive, certain, checked bool) {
 	if strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "/") {
 		_, err := os.Stat(profile.Expand(p))
 		return err == nil, false, true
+	}
+	if f.Class == discover.ClassSkill {
+		return false, false, false
 	}
 	if f.Repo == nil {
 		if !strings.HasPrefix(p, "./") && !strings.HasPrefix(p, "../") {
@@ -132,5 +141,10 @@ func resolve(f *discover.File, p string) (alive, certain, checked bool) {
 			return true, false, true
 		}
 	}
-	return false, inside, true
+	for _, r := range repos {
+		if r != f.Repo && r.Has(p) {
+			return true, false, true
+		}
+	}
+	return false, inside && !strings.HasSuffix(p, "/"), true
 }

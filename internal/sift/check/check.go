@@ -93,16 +93,23 @@ func fact(name, format string, a ...any) row.Fact {
 type line struct {
 	N    int
 	Text string
-	Code bool // inside a fenced code block (fences included)
+	Code bool // in a fenced code block (fences included) or the frontmatter
 }
 
 var fenceRE = regexp.MustCompile("^\\s*(```|~~~)")
 
-// split returns a file's lines, marking those in fenced code blocks.
+// split returns a file's lines, marking those in fenced code blocks and in
+// YAML frontmatter (a skill's metadata) as code.
 func split(content string) []line {
 	var out []line
 	in := ""
+	front := strings.HasPrefix(content, "---\n")
 	for i, t := range strings.Split(strings.TrimSuffix(content, "\n"), "\n") {
+		if front {
+			out = append(out, line{N: i + 1, Text: t, Code: true})
+			front = i == 0 || strings.TrimSpace(t) != "---"
+			continue
+		}
 		code := in != ""
 		if m := fenceRE.FindStringSubmatch(t); m != nil {
 			code = true

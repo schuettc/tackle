@@ -104,7 +104,7 @@ func Default() Config {
 			`\bin[ -]flight\b`,
 			`\bin progress\b`,
 			`\bblocked (?:on|by)\b`,
-			`\b(?:until|once) .{1,80}? (?:lands|merges|ships|is merged|is released)\b`,
+			`\b(?:until|once) [^.;:!?]{1,80}? (?:lands|merges|ships|is merged|is released)\b`,
 			`\bnot yet (?:merged|released|shipped|landed)\b`,
 		}},
 	}

@@ -38,3 +38,14 @@ func TestDuplicateWithinAFile(t *testing.T) {
 		t.Fatalf("lines %v", got)
 	}
 }
+
+// A skill's frontmatter is metadata, not prose: its description repeating
+// the body is not a duplicate.
+func TestDuplicateIgnoresFrontmatter(t *testing.T) {
+	d := "Use this skill whenever the user pastes an article link and asks for a summary of what it says."
+	f := &discover.File{Path: "/s/SKILL.md", Class: discover.ClassSkill,
+		Content: "---\nname: x\ndescription: " + d + "\n---\n\n# X\n\n" + d + "\n"}
+	if rows := only(t, "duplicate", input(f)); len(rows) != 0 {
+		t.Fatalf("%+v", rows)
+	}
+}

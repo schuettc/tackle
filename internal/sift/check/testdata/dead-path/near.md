@@ -7,3 +7,5 @@
 ```
 cat docs/missing-in-code.md
 ```
+- Run `/ship` or `/login`; docs live at `.../plans/`.
+- The sibling repo's guide is `docs/shared/GUIDE.md`.

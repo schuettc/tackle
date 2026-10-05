@@ -250,6 +250,7 @@ func TestInstalledCopiesCollapseIntoTheirSource(t *testing.T) {
 	})
 	st.Write(t, home, ".pi/agent/skills/alpha/SKILL.md", body+"<!-- installed by a tool, v1.2.3 -->\n")
 	st.Write(t, home, ".pi/agent/skills/beta/SKILL.md", "Something else entirely.\n")
+	st.Write(t, home, ".pi/agent/skills/.system/bundled/SKILL.md", "the harness's own\n")
 	// The skills directory itself may be a symlink.
 	other := st.Write(t, home, "elsewhere/gamma/SKILL.md", "gamma\n")
 	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
@@ -273,6 +274,9 @@ func TestInstalledCopiesCollapseIntoTheirSource(t *testing.T) {
 	}
 	if m[filepath.Join(home, ".pi/agent/skills/alpha/SKILL.md")] != nil {
 		t.Error("the installed copy is audited too")
+	}
+	if m[filepath.Join(home, ".pi/agent/skills/.system/bundled/SKILL.md")] != nil {
+		t.Error("a hidden directory in a skills directory is audited")
 	}
 	want := []Copy{{Path: filepath.Join(home, ".pi/agent/skills/alpha/SKILL.md"), Of: filepath.Join(repo, "skills/alpha/SKILL.md")}}
 	if !reflect.DeepEqual(res.Copies, want) {

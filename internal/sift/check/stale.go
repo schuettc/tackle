@@ -3,6 +3,7 @@ package check
 import (
 	"context"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/host"
@@ -43,7 +44,8 @@ func staleStatus(ctx context.Context, in *Input) []row.Row {
 				}
 				st, err := in.Host.Lookup(ctx, ref)
 				if err != nil {
-					ev = append(ev, fact("reference", "%s: state unknown (%v)", ref, err))
+					msg, _, _ := strings.Cut(err.Error(), "\n")
+					ev = append(ev, fact("reference", "%s: state unknown (%s)", ref, msg))
 					continue
 				}
 				ev = append(ev, fact("reference", "%s: %s %s", ref, st.Kind, st.State))

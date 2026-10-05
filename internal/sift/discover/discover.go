@@ -179,7 +179,8 @@ func (f *finder) globals() {
 }
 
 // skillDirs adds every SKILL.md under each profile's skill directories (a
-// directory may itself be a symlink).
+// directory may itself be a symlink). Hidden directories in them are the
+// harness's own (Codex keeps its bundled skills in .system) and are skipped.
 func (f *finder) skillDirs() {
 	for _, p := range f.opt.Profiles {
 		for _, s := range p.Skills {
@@ -193,7 +194,7 @@ func (f *finder) skillDirs() {
 					return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
 				}
 				if d.IsDir() {
-					if fp != real && skipDirs[d.Name()] {
+					if fp != real && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
 						return filepath.SkipDir
 					}
 					return nil

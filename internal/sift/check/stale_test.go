@@ -66,3 +66,29 @@ func TestStaleStatusNearMiss(t *testing.T) {
 		t.Fatalf("%+v", rows)
 	}
 }
+
+// "until X lands" stays within one sentence.
+func TestStalePhraseStaysInASentence(t *testing.T) {
+	f := inRepo(&discover.File{Class: discover.ClassRepo,
+		Content: "- Merge once CI is green. Anything merged that changes a release ships next week.\n"}, "/w/app", "CLAUDE.md")
+	if rows := only(t, "stale-status", input(f)); len(rows) != 0 {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+// A host error is reported by its first line only.
+func TestStaleHostErrorFirstLine(t *testing.T) {
+	f := inRepo(&discover.File{Class: discover.ClassRepo, Content: "- See #7.\n"}, "/w/app", "CLAUDE.md")
+	in := input(f)
+	in.Host = errHost{}
+	rows := only(t, "stale-status", in)
+	if len(rows) != 1 || evidence(rows[0], "reference") != "owner/app#7: state unknown (gh: not logged in)" {
+		t.Fatalf("%+v", rows)
+	}
+}
+
+type errHost struct{}
+
+func (errHost) Lookup(context.Context, host.Ref) (host.State, error) {
+	return host.State{}, errors.New("gh: not logged in\nrun gh auth login")
+}
