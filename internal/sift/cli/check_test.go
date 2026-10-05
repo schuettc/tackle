@@ -216,3 +216,26 @@ func TestCheckRecordsRepeatedPassages(t *testing.T) {
 		}
 	}
 }
+
+// A secret in an instruction file is never printed or stored: not in the
+// JSON, the table or the round's rows.
+func TestCheckNeverShowsASecret(t *testing.T) {
+	home := siftEnv(t)
+	fixtureWorkspace(t, home)
+	for _, args := range [][]string{{"check", "--json"}, {"check"}} {
+		_, out, errw := run(t, "", args...)
+		if !strings.Contains(out, "secret") || strings.Contains(out+errw, "hunter2hunter2") {
+			t.Fatalf("%v shows the secret:\n%s", args, out)
+		}
+	}
+	s, err := store.Open(context.Background(), store.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	_, rows, _ := s.LatestRound(context.Background())
+	b, _ := json.Marshal(rows)
+	if !strings.Contains(string(b), "hunt… (14 chars)") || strings.Contains(string(b), "hunter2hunter2") {
+		t.Fatalf("stored rows: %s", b)
+	}
+}

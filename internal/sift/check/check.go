@@ -50,7 +50,8 @@ var All = []Check{
 
 // Run runs every check and returns the rows ordered by file, line and check.
 // A passage repeated in a file gets one row per copy, each with its own id
-// (row.Nth, numbered in line order).
+// (row.Nth, numbered in line order). A secret's value is redacted in every
+// row about its file, after the ids are made from the original text.
 func Run(ctx context.Context, in *Input) []row.Row {
 	var rows []row.Row
 	order := map[string]int{}
@@ -74,6 +75,7 @@ func Run(ctx context.Context, in *Input) []row.Row {
 		rows[i].ID = row.Nth(id, seen[id])
 		seen[id]++
 	}
+	redactRows(in.Files, rows)
 	return rows
 }
 
