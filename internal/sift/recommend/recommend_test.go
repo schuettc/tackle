@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
@@ -16,25 +15,99 @@ import (
 
 var ctx = context.Background()
 
-// The guidance is product text other people's agents follow: written as
-// guidance (none of sift's own negative-rule patterns match it), naming no
+// The guidance is product text other people's agents follow: naming no
 // provider, model or person, and short.
-func TestGuidanceIsGuidance(t *testing.T) {
-	for _, p := range config.Default().Negative.Patterns {
-		re := regexp.MustCompile("(?im)" + p)
-		if m := re.FindString(Guidance); m != "" {
-			t.Errorf("negative rule %q matches %q", p, m)
-		}
-	}
+func TestGuidanceIsShortAndGeneric(t *testing.T) {
 	if m := regexp.MustCompile(`(?i)\b(claude|codex|openai|anthropic|gpt|gemini|opus|sonnet|court)\b`).FindString(Guidance); m != "" {
 		t.Errorf("names %q", m)
 	}
 	if len(Guidance) > 2500 {
 		t.Errorf("%d bytes: keep it short", len(Guidance))
 	}
-	for _, must := range []string{"whole file", "conventions", "one line", "guidance", "duplicate", "stale", "budget", "certain", "keep it", "links", "summary"} {
+	for _, must := range []string{"whole file", "conventions", "one line", "duplicate", "stale", "budget", "certain", "keep it", "links", "summary"} {
 		if !strings.Contains(strings.ToLower(Guidance), must) {
 			t.Errorf("says nothing about %q", must)
+		}
+	}
+}
+
+// bullets is the guidance's bullet points, lower-cased.
+func bullets() []string {
+	var out []string
+	for _, l := range strings.Split(Guidance, "\n") {
+		if strings.HasPrefix(l, "- ") {
+			out = append(out, strings.ToLower(l))
+		}
+	}
+	return out
+}
+
+// hedges are words that make an instruction optional.
+var hedges = regexp.MustCompile(`\b(where it helps|if possible|when possible|try to|ideally|consider|may)\b`)
+
+// A rewrite never narrows a rule. In the first real round the global file
+// lost "Leave out warnings, failure cases and backend mechanics they can't
+// see" (the rule's exclusions) and "don't chase hypothetical edge cases,
+// add generalized infrastructure, or do 'while we are here' cleanup" (what
+// a rule rules out). So one unconditional instruction says that a rewrite
+// keeps every rule's specifics and names each kind of specific, and nothing
+// tells the agent to rephrase a prohibition: a rule keeps its own wording
+// unless another finding needs the line changed.
+func TestGuidanceKeepsEveryRulesSpecifics(t *testing.T) {
+	var keep []string
+	for _, b := range bullets() {
+		if strings.Contains(b, "specifics") {
+			keep = append(keep, b)
+		}
+		for _, w := range []string{"prohibition", "as guidance", "positive", "what to do instead"} {
+			if strings.Contains(b, w) {
+				t.Errorf("tells the agent to rephrase prohibitions (%q): %s", w, b)
+			}
+		}
+	}
+	if len(keep) != 1 {
+		t.Fatalf("want one instruction about a rule's specifics, got %q", keep)
+	}
+	b := keep[0]
+	if !regexp.MustCompile(`\bkeeps?\b`).MatchString(b) || !strings.Contains(b, "every rule") {
+		t.Errorf("does not say a rewrite keeps every rule's specifics: %s", b)
+	}
+	for _, kind := range []string{"conditions", "exclusions", "commands", "examples", "exceptions"} {
+		if !strings.Contains(b, kind) {
+			t.Errorf("does not name %s as a specific to keep: %s", kind, b)
+		}
+	}
+	if m := hedges.FindString(b); m != "" {
+		t.Errorf("makes keeping specifics optional (%q): %s", m, b)
+	}
+	if !strings.Contains(b, "own wording") {
+		t.Errorf("does not say a rule keeps its own wording: %s", b)
+	}
+}
+
+// Status goes only once it is shown to be obsolete, and a record of
+// finished work is not status: it stays. No instruction lists finished work
+// among the things to remove.
+func TestGuidanceRemovesOnlyObsoleteStatus(t *testing.T) {
+	var status []string
+	for _, b := range bullets() {
+		if strings.Contains(b, "status") {
+			status = append(status, b)
+		}
+	}
+	if len(status) != 1 {
+		t.Fatalf("want one instruction about status, got %q", status)
+	}
+	b := status[0]
+	if !regexp.MustCompile(`\bonly (when|once|if)\b[^.]*\b(shown|known|confirmed)\b[^.]*\bobsolete\b`).MatchString(b) {
+		t.Errorf("removal is not conditioned on status shown to be obsolete: %s", b)
+	}
+	if !regexp.MustCompile(`record of finished work[^.]*\bstays\b`).MatchString(b) {
+		t.Errorf("does not say a record of finished work stays: %s", b)
+	}
+	for _, other := range bullets() {
+		if regexp.MustCompile(`\b(remove|drop|delete)\b[^.]*finished work`).MatchString(other) {
+			t.Errorf("lists finished work among what to remove: %s", other)
 		}
 	}
 }
@@ -56,8 +129,8 @@ func fixture(t *testing.T) (*store.Store, int64, map[string]rec.File) {
 	a.Commit = head
 	g := rec.NewFile(row.Source{File: global, Canon: row.Resolve(global)}, "global", 8000, "# G\n\n- Don't do x.\n")
 	rows := []row.Row{
-		{ID: "n1", Check: "negative-rule", Summary: "a prohibition", Passage: "- Never skip z.", Source: row.Source{File: a.Source.File, Start: 3, End: 3}},
-		{ID: "n2", Check: "negative-rule", Summary: "a prohibition", Passage: "- Don't do x.", Source: row.Source{File: global, Start: 3, End: 3}, Certain: true},
+		{ID: "n1", Check: "stale-status", Summary: "stale status", Passage: "- Never skip z.", Source: row.Source{File: a.Source.File, Start: 3, End: 3}},
+		{ID: "n2", Check: "stale-status", Summary: "stale status", Passage: "- Don't do x.", Source: row.Source{File: global, Start: 3, End: 3}, Certain: true},
 	}
 	a.Rows, g.Rows = []string{"n1"}, []string{"n2"}
 	id, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, rows, []rec.File{a, g})

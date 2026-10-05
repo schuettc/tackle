@@ -36,7 +36,7 @@ func TestReconcileAfterApply(t *testing.T) {
 		f := rec.NewFile(row.Source{File: filepath.Join(repo, rel), Repo: repo, Ref: "origin/main", Path: rel}, "repo", 6000, body)
 		f.Commit, f.Rows = commit, []string{"n-" + rel}
 		files = append(files, f)
-		rows = append(rows, row.Row{ID: "n-" + rel, Check: "negative-rule", Source: f.Source})
+		rows = append(rows, row.Row{ID: "n-" + rel, Check: "stale-status", Source: f.Source})
 	}
 	round, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, rows, files)
 	if err != nil {

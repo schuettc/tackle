@@ -21,12 +21,12 @@ var checkFlags = flags("check", "sift check [--json]",
 	"Audits the instruction files: each enabled profile's global file and skills, and every\n"+
 		"instruction file and skill under the configured roots, with repos read at their fetched\n"+
 		"base (origin/<base>, else origin/HEAD, else HEAD), not the working tree. Runs the checks\n"+
-		"(size, load-limit, duplicate, dead-path, stale-status, retired-store, misplaced,\n"+
-		"negative-rule, secret), leaves out rows you muted, records the round and its files, and\n"+
-		"prints its rows. Forks and vendor-managed skill directories are skipped unless the config's\n"+
-		"[include] turns them on. The round then waits for a recommendation per file (sift next,\n"+
-		"sift propose). With gh on PATH, PR and issue references are looked up. Exit 0 with no\n"+
-		"findings, 1 with findings, 2 on error.",
+		"(size, load-limit, duplicate, dead-path, stale-status, retired-store, misplaced, secret),\n"+
+		"leaves out rows you muted, records the round and its files, and prints its rows. Forks and\n"+
+		"vendor-managed skill directories (Claude Code's synced skills and plugins) are skipped\n"+
+		"unless the config's [include] turns them on. The round then waits for a recommendation per\n"+
+		"file (sift next, sift propose). With gh on PATH, PR and issue references are looked up.\n"+
+		"Exit 0 with no findings, 1 with findings, 2 on error.",
 	func(fs *flag.FlagSet) {
 		fs.Bool("json", false, "print the round as JSON")
 	})

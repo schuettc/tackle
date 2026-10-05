@@ -12,11 +12,12 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 - `sift check`: audits instruction files (global files, repo files and
   skills, read at each repo's fetched base) and records the round's findings
   as rows: size, load limit, duplicate, dead path, stale status, retired
-  store, misplaced content, negative rule and secret, and each audited file
-  (where it is, the commit it was read at, its content's hash; never the
-  content). Forks (a repo with an `upstream` remote) and vendor-managed
-  skill directories (Claude Code's `skills/synced`) are skipped and listed,
-  unless the config's `[include]` turns them on. `--json` prints them.
+  store, misplaced content and secret, and each audited file (where it is,
+  the commit it was read at, its content's hash; never the content). Forks
+  (a repo with an `upstream` remote) and vendor-managed skill directories
+  (Claude Code's `skills/synced`, `plugins/cache` and `plugins/marketplaces`)
+  are skipped and listed, unless the config's `[include]` turns them on.
+  `--json` prints them.
 - `sift doctor`: config, profiles found, roots readable, and whether `gh` is
   there for PR and issue state; the page server and each enabled harness's
   channel registration.

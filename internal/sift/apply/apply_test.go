@@ -66,14 +66,14 @@ func (g *rig) disk(p string) rec.File {
 	return rec.NewFile(row.Source{File: p, Canon: row.Resolve(p)}, "global", 8000, string(b))
 }
 
-// audit records a round of these files, one negative-rule finding each.
+// audit records a round of these files, one stale-status finding each.
 func (g *rig) audit(fs ...rec.File) {
 	g.t.Helper()
 	var rows []row.Row
 	for i := range fs {
 		id := "n-" + fs[i].Key
 		fs[i].Rows = []string{id}
-		rows = append(rows, row.Row{ID: id, Check: "negative-rule", Summary: "a prohibition", Source: fs[i].Source})
+		rows = append(rows, row.Row{ID: id, Check: "stale-status", Summary: "stale status", Source: fs[i].Source})
 	}
 	id, err := g.s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, rows, fs)
 	if err != nil {

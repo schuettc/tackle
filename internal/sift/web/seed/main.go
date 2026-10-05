@@ -8,7 +8,7 @@
 //
 //	go run ./internal/sift/web/seed [-scale N] [-recommending] <SIFT_HOME> <round.json> <base dir>
 //
-// -scale N pads the round to N rows with negative-rule findings spread over
+// -scale N pads the round to N rows with stale-status findings spread over
 // generated files, as a large real round would be, each file recommended.
 // -recommending leaves one file without a recommendation, so the round is
 // still being recommended.
@@ -208,9 +208,9 @@ func relOf(base, file string) string {
 	return filepath.ToSlash(rel)
 }
 
-// pad adds generated files to the fixture's first repo and negative-rule
+// pad adds generated files to the fixture's first repo and stale-status
 // rows in them until it has n rows: forty files of varying length, each
-// with a recommendation that rewrites its rules.
+// with a recommendation that drops those lines.
 func pad(fx *fixture, n int) {
 	repo := fx.Repos[0]
 	for i := 0; len(fx.Rows) < n; i++ {
@@ -219,20 +219,20 @@ func pad(fx *fixture, n int) {
 		if fx.Files[rel] == "" {
 			lines = []string{fmt.Sprintf("# pkg%02d", i%40), ""}
 		}
-		text := fmt.Sprintf("- Never call helper %d from a request handler; it blocks on the disk.", i)
+		text := fmt.Sprintf("- Waiting on the helper %d rewrite before request handlers call it.", i)
 		lines = append(lines, text)
 		fx.Files[rel] = strings.Join(lines, "\n") + "\n"
 		var fr fixtureRow
-		fr.Row = row.Row{ID: row.ID(rel, "negative-rule", fmt.Sprint(text, i)), Check: "negative-rule",
-			Summary: "a rule phrased as a prohibition", Passage: text, Evidence: []row.Fact{{Name: "matched", Value: "Never"}}}
+		fr.Row = row.Row{ID: row.ID(rel, "stale-status", fmt.Sprint(text, i)), Check: "stale-status",
+			Summary: "status that may be stale", Passage: text, Evidence: []row.Fact{{Name: "matched", Value: "Waiting on"}}}
 		fr.Source.Rel, fr.Source.Start, fr.Source.End = rel, len(lines), len(lines)
 		fx.Rows = append(fx.Rows, fr)
 		if fx.Recs == nil {
 			fx.Recs = map[string]fixtureRec{}
 		}
-		body := strings.NewReplacer("- Never call helper", "- Call helper", "from a request handler; it blocks on the disk.", "from a background job: it blocks on the disk.").
+		body := strings.NewReplacer("- Waiting on the helper", "- The helper", "rewrite before request handlers call it.", "is called from a background job: it blocks on the disk.").
 			Replace(fx.Files[rel])
-		fx.Recs[rel] = fixtureRec{Summary: "Each helper rule says where to call it instead.", Content: body, Fixed: "rewritten as guidance"}
+		fx.Recs[rel] = fixtureRec{Summary: "Each helper line says where it is called now that the rewrite is done.", Content: body, Fixed: "the rewrite is done: says where it is called"}
 	}
 }
 

@@ -38,7 +38,7 @@ type env struct {
 }
 
 // newEnv isolates sift's state, config and git, writes a fixture workspace
-// (one published repo with a negative rule and a misplaced line) and its
+// (one published repo with stale status and a misplaced line) and its
 // config, and runs a real serve that stops when the test ends.
 func newEnv(t *testing.T) *env {
 	t.Helper()
@@ -49,7 +49,7 @@ func newEnv(t *testing.T) *env {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	st.Write(t, home, ".codex/AGENTS.md", "# Global\n\n- In webapp, run the slow suite.\n")
 	ws := t.TempDir()
-	repo := st.Repo(t, filepath.Join(ws, "webapp"), map[string]string{"AGENTS.md": "# webapp\n\n- Never push to main.\n"})
+	repo := st.Repo(t, filepath.Join(ws, "webapp"), map[string]string{"AGENTS.md": "# webapp\n\n- Waiting on the API change before the client switches.\n"})
 	st.Publish(t, repo)
 	c := config.Default()
 	c.Profiles = []string{"codex"}
@@ -301,7 +301,7 @@ func TestCheckRecommendReviewSendApply(t *testing.T) {
 		Next    string         `json:"next"`
 	}
 	c.toolJSON("sift_check", map[string]any{}, &chk)
-	if chk.Round == 0 || chk.Summary["negative-rule"] != 1 || chk.Summary["misplaced"] != 1 || chk.Files != 2 || !strings.Contains(chk.Next, "sift_next") {
+	if chk.Round == 0 || chk.Summary["stale-status"] != 1 || chk.Summary["misplaced"] != 1 || chk.Files != 2 || !strings.Contains(chk.Next, "sift_next") {
 		t.Fatalf("check %+v", chk)
 	}
 

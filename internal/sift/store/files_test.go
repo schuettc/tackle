@@ -18,10 +18,10 @@ func audit(t *testing.T, s *Store) (int64, map[string]rec.File) {
 	m := rec.NewFile(row.Source{File: "/w/m/AGENTS.md", Repo: "/w/m", Ref: "origin/main", Path: "AGENTS.md"}, "repo", 6000, "# M\n\n- Don't skip z.\n")
 	q := rec.NewFile(row.Source{File: "/w/q/AGENTS.md", Repo: "/w/q", Ref: "HEAD", Path: "AGENTS.md"}, "repo", 6000, "# Q\n\n- No y.\n")
 	rows := []row.Row{
-		{ID: "neg", Check: "negative-rule", Source: g.Source},
+		{ID: "neg", Check: "stale-status", Source: g.Source},
 		{ID: "dead", Check: "dead-path", Source: g.Source, Certain: true},
-		{ID: "neg2", Check: "negative-rule", Source: m.Source},
-		{ID: "neg3", Check: "negative-rule", Source: q.Source},
+		{ID: "neg2", Check: "stale-status", Source: m.Source},
+		{ID: "neg3", Check: "stale-status", Source: q.Source},
 	}
 	g.Rows, m.Rows, q.Rows = []string{"neg", "dead"}, []string{"neg2"}, []string{"neg3"}
 	id, err := s.RecordAudit(ctx, Round{Kind: "on-demand"}, rows, []rec.File{g, m, q})

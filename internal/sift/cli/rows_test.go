@@ -20,7 +20,7 @@ func seedRound(t *testing.T) (int64, []row.Row) {
 	}
 	defer func() { _ = s.Close() }()
 	rows := []row.Row{
-		{ID: row.ID("/w/a/CLAUDE.md", "negative-rule", "- Never push."), Check: "negative-rule", Summary: "s",
+		{ID: row.ID("/w/a/CLAUDE.md", "stale-status", "- Never push."), Check: "stale-status", Summary: "s",
 			Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3}, Passage: "- Never push."},
 		{ID: row.ID("/w/a/CLAUDE.md", "size", "f"), Check: "size", Summary: "s", Source: row.Source{File: "/w/a/CLAUDE.md"}},
 	}

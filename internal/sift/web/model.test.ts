@@ -94,8 +94,8 @@ test('displayPath: repo name and path, else ~ for home', () => {
 
 test('audit groups: by file, then check in the spec order, rows by line', () => {
   const rows = [
-    mk('n2', '/home/u/b.md', 'negative-rule', 9),
-    mk('n1', '/home/u/b.md', 'negative-rule', 3),
+    mk('n2', '/home/u/b.md', 'stale-status', 9),
+    mk('n1', '/home/u/b.md', 'stale-status', 3),
     mk('s1', '/home/u/b.md', 'size', 0),
     mk('d1', '/home/u/a.md', 'dead-path', 4),
   ];
@@ -105,7 +105,7 @@ test('audit groups: by file, then check in the spec order, rows by line', () => 
     [
       ['~/a.md', '1 dead path', ['d1']],
       ['~/b.md', '1 size finding', ['s1']],
-      ['~/b.md', '2 negative rules', ['n1', 'n2']],
+      ['~/b.md', '2 stale statuses', ['n1', 'n2']],
     ],
   );
 });
@@ -152,8 +152,8 @@ test('backlog groups: issues by repo, then decisions, then closes', () => {
 test('entries: a lone row stands alone; the open group is expanded', () => {
   const rows = [
     mk('a', '/home/u/a.md', 'dead-path', 4),
-    mk('b1', '/home/u/b.md', 'negative-rule', 3),
-    mk('b2', '/home/u/b.md', 'negative-rule', 9),
+    mk('b1', '/home/u/b.md', 'stale-status', 3),
+    mk('b2', '/home/u/b.md', 'stale-status', 9),
   ];
   const gs = groupsOf(rows, false, HOME);
   const keys = (open: string | null) => entries(gs, open).map((e) => e.key);
@@ -172,11 +172,11 @@ test('entries: a lone row stands alone; the open group is expanded', () => {
 
 test('nextOpen: the next undecided row after a decision, else the next entry', () => {
   const rows = [
-    mk('a', '/home/u/b.md', 'negative-rule', 1),
-    mk('b', '/home/u/b.md', 'negative-rule', 2, {
+    mk('a', '/home/u/b.md', 'stale-status', 1),
+    mk('b', '/home/u/b.md', 'stale-status', 2, {
       decision: { action: 'accept' },
     }),
-    mk('c', '/home/u/b.md', 'negative-rule', 3),
+    mk('c', '/home/u/b.md', 'stale-status', 3),
     mk('z', '/home/u/z.md', 'size', 0),
   ];
   const gs = groupsOf(rows, false, HOME);
@@ -188,11 +188,11 @@ test('nextOpen: the next undecided row after a decision, else the next entry', (
 
 test('progress and unsent', () => {
   const rows = [
-    mk('a', '/f', 'negative-rule', 1, {
+    mk('a', '/f', 'stale-status', 1, {
       decision: { action: 'accept', sent: true },
     }),
-    mk('b', '/f', 'negative-rule', 2, { decision: { action: 'reject' } }),
-    mk('c', '/f', 'negative-rule', 3),
+    mk('b', '/f', 'stale-status', 2, { decision: { action: 'reject' } }),
+    mk('c', '/f', 'stale-status', 3),
     mk('d', '/f', 'dead-path', 4, { certain: true }),
     mk('e', '/f', 'dead-path', 5, {
       certain: true,
@@ -206,9 +206,9 @@ test('progress and unsent', () => {
 
 test('groupTargets: accept takes undecided rows with a proposal; reject every undecided row', () => {
   const rows = [
-    mk('a', '/f', 'negative-rule', 1, { verdict: 'rewrite', text: 'x' }),
-    mk('b', '/f', 'negative-rule', 2),
-    mk('c', '/f', 'negative-rule', 3, {
+    mk('a', '/f', 'stale-status', 1, { verdict: 'rewrite', text: 'x' }),
+    mk('b', '/f', 'stale-status', 2),
+    mk('c', '/f', 'stale-status', 3, {
       verdict: 'delete',
       decision: { action: 'reject' },
     }),
@@ -224,7 +224,7 @@ test('groupTargets: accept takes undecided rows with a proposal; reject every un
 });
 
 test('editDecision sends only what changed, and refuses a bad verdict or no change', () => {
-  const r = mk('a', '/f', 'negative-rule', 1, {
+  const r = mk('a', '/f', 'stale-status', 1, {
     verdict: 'rewrite',
     text: 'old',
     title: 't',

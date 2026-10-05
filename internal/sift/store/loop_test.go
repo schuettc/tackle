@@ -13,7 +13,7 @@ import (
 func round(t *testing.T, s *Store) (int64, []row.Row) {
 	t.Helper()
 	rows := []row.Row{
-		finding("/w/a/CLAUDE.md", "negative-rule", "- Never push."),
+		finding("/w/a/CLAUDE.md", "stale-status", "- Never push."),
 		finding("/w/a/CLAUDE.md", "size", "whole"),
 		finding("/w/b/AGENTS.md", "dead-path", "see `gone.md`"),
 	}
@@ -29,7 +29,7 @@ func round(t *testing.T, s *Store) (int64, []row.Row) {
 // by a proposal per row: rows add refuses them and says so.
 func TestAddRowsRefusesAnAuditRoundsFindings(t *testing.T) {
 	s, _ := open(t)
-	r := finding("/w/a/CLAUDE.md", "negative-rule", "- Never push.")
+	r := finding("/w/a/CLAUDE.md", "stale-status", "- Never push.")
 	id, err := s.RecordRound(ctx, Round{Kind: "on-demand"}, []row.Row{r})
 	if err != nil {
 		t.Fatal(err)
@@ -56,7 +56,7 @@ func TestAddRowsMergesProposals(t *testing.T) {
 	if got[0].Verdict != "rewrite" || got[0].Text != "- Push to a branch." || got[0].Reason != "guidance" {
 		t.Errorf("proposal not merged: %+v", got[0])
 	}
-	if got[0].Check != "negative-rule" || got[0].Passage != "- Never push." {
+	if got[0].Check != "stale-status" || got[0].Passage != "- Never push." {
 		t.Errorf("a check-owned field changed: %+v", got[0])
 	}
 	if r.Rev <= rev0 {

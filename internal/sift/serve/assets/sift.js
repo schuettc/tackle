@@ -88,7 +88,6 @@ var CHECKS = [
   ["stale-status", "stale status", "stale statuses"],
   ["retired-store", "retired-store pointer", "retired-store pointers"],
   ["misplaced", "misplaced line", "misplaced lines"],
-  ["negative-rule", "negative rule", "negative rules"],
   ["secret", "secret", "secrets"],
   ["intake", "intake row", "intake rows"]
 ];

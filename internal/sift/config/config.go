@@ -27,12 +27,11 @@ type Config struct {
 	Custom   []profile.Profile `toml:"profile,omitempty"`
 	Roots    []Root            `toml:"root,omitempty"`
 	// Archive is where intake copies a memory store before it is retired.
-	Archive  string    `toml:"archive,omitempty"`
-	Budgets  Budgets   `toml:"budgets"`
-	Windows  Windows   `toml:"windows"`
-	Negative Negative  `toml:"negative"`
-	Stale    Stale     `toml:"stale"`
-	Retired  []Retired `toml:"retired,omitempty"`
+	Archive string    `toml:"archive,omitempty"`
+	Budgets Budgets   `toml:"budgets"`
+	Windows Windows   `toml:"windows"`
+	Stale   Stale     `toml:"stale"`
+	Retired []Retired `toml:"retired,omitempty"`
 	// Include brings in what is not the user's by default: forks and
 	// vendor-managed skill directories.
 	Include Include `toml:"include"`
@@ -75,12 +74,6 @@ type Windows struct {
 	UsageDays int `toml:"usage_days"`
 	// StaleDays is the age past which a date in a file reads as stale status.
 	StaleDays int `toml:"stale_days"`
-}
-
-// Negative holds the negative-rule patterns (case-insensitive regexps).
-// Unset, the shipped defaults apply.
-type Negative struct {
-	Patterns []string `toml:"patterns,omitempty"`
 }
 
 // Stale holds the stale-status phrases (case-insensitive regexps). Unset,
@@ -139,12 +132,6 @@ func Default() Config {
 	return Config{
 		Budgets: Budgets{Global: 8000, Repo: 6000, Skill: 10000},
 		Windows: Windows{WeeklyDays: 7, UsageDays: 3, StaleDays: 30},
-		Negative: Negative{Patterns: []string{
-			`\bnever\b`,
-			`\b(?:don't|do not|must not|mustn't|should not|shouldn't)\b`,
-			`\bavoid\b`,
-			`^\s*(?:[-*+]|\d+\.)\s+(?:\*\*)?no\s`,
-		}},
 		Stale: Stale{Phrases: []string{
 			`\bwaiting (?:on|for)\b`,
 			`\bin[ -]flight\b`,
@@ -232,7 +219,7 @@ func (c Config) Validate() error {
 	if c.Windows.WeeklyDays <= 0 || c.Windows.UsageDays <= 0 || c.Windows.StaleDays <= 0 {
 		return errors.New("windows must be positive")
 	}
-	for _, p := range append(append([]string(nil), c.Negative.Patterns...), c.Stale.Phrases...) {
+	for _, p := range c.Stale.Phrases {
 		if _, err := regexp.Compile("(?i)" + p); err != nil {
 			return fmt.Errorf("pattern %q: %w", p, err)
 		}

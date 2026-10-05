@@ -49,7 +49,6 @@ const CHECKS: [string, string, string][] = [
   ['stale-status', 'stale status', 'stale statuses'],
   ['retired-store', 'retired-store pointer', 'retired-store pointers'],
   ['misplaced', 'misplaced line', 'misplaced lines'],
-  ['negative-rule', 'negative rule', 'negative rules'],
   ['secret', 'secret', 'secrets'],
   ['intake', 'intake row', 'intake rows'],
 ];
@@ -58,7 +57,7 @@ const checkOrder = (c: string) => {
   return i < 0 ? CHECKS.length : i;
 };
 
-/** "3 negative rules", "1 dead path". */
+/** "3 stale statuses", "1 dead path". */
 export function checkCount(check: string, n: number): string {
   const w = CHECKS.find(([k]) => k === check);
   return `${n} ${w ? (n === 1 ? w[1] : w[2]) : check}`;

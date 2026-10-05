@@ -90,7 +90,7 @@ test('certainLines: the audited lines of the certain findings', () => {
     },
     {
       id: 'b',
-      check: 'negative-rule',
+      check: 'stale-status',
       summary: '',
       source: { file: '/f', start: 9, end: 9 },
       certain: false,

@@ -93,7 +93,7 @@ func TestCheckFindsOneHitPerCheck(t *testing.T) {
 		checks = append(checks, c)
 	}
 	sort.Strings(checks)
-	want := "dead-path duplicate load-limit misplaced negative-rule retired-store secret size stale-status"
+	want := "dead-path duplicate load-limit misplaced retired-store secret size stale-status"
 	if strings.Join(checks, " ") != want {
 		t.Fatalf("checks with findings: %v\nsummary %v", checks, got.Summary)
 	}
@@ -178,7 +178,7 @@ func TestCheckRecordsRepeatedPassages(t *testing.T) {
 	ws := t.TempDir()
 	para := "Run the full verification suite before you push, because the hook and CI run exactly the same command."
 	st.Repo(t, filepath.Join(ws, "app"), map[string]string{
-		"CLAUDE.md": "# app\n\n- Never force-push.\n- Never force-push.\n- Never force-push.\n\n" + para + "\n\n" + para + "\n",
+		"CLAUDE.md": "# app\n\n- Waiting on the API change.\n- Waiting on the API change.\n- Waiting on the API change.\n\n" + para + "\n\n" + para + "\n",
 	})
 	c := config.Default()
 	c.Profiles = []string{"claude-code"}
@@ -194,7 +194,7 @@ func TestCheckRecordsRepeatedPassages(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Round == 0 || got.Summary["negative-rule"] != 3 || got.Summary["duplicate"] != 2 {
+	if got.Round == 0 || got.Summary["stale-status"] != 3 || got.Summary["duplicate"] != 2 {
 		t.Fatalf("round %d summary %v", got.Round, got.Summary)
 	}
 	s, err := store.Open(context.Background(), store.Path())

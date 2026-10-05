@@ -12,9 +12,9 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 
 func TestRowJSONGolden(t *testing.T) {
 	r := Row{
-		ID:      ID("/w/repo/CLAUDE.md", "negative-rule", "- Never push to main."),
-		Check:   "negative-rule",
-		Summary: "a rule phrased as a prohibition",
+		ID:      ID("/w/repo/CLAUDE.md", "stale-status", "- Never push to main."),
+		Check:   "stale-status",
+		Summary: "status that may be stale",
 		Source:  Source{File: "/w/repo/CLAUDE.md", Repo: "/w/repo", Ref: "origin/main", Path: "CLAUDE.md", Start: 4, End: 4},
 		Passage: "- Never push to main.",
 		Evidence: []Fact{
@@ -154,14 +154,14 @@ func TestDecisionValidate(t *testing.T) {
 // one (whitespace aside) is told apart by its ordinal, and the same ordinal
 // always gives the same id.
 func TestNthTellsRepeatsApart(t *testing.T) {
-	id := ID("/f", "negative-rule", "Never  push.")
+	id := ID("/f", "stale-status", "Never  push.")
 	if Nth(id, 0) != id {
 		t.Error("the first occurrence must keep the plain id")
 	}
 	if Nth(id, 1) == id || Nth(id, 1) == Nth(id, 2) {
 		t.Error("repeats share an id")
 	}
-	if Nth(ID("/f", "negative-rule", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
+	if Nth(ID("/f", "stale-status", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
 		t.Error("an ordinal id is not stable")
 	}
 }

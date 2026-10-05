@@ -38,9 +38,9 @@ type Profile struct {
 	RepoFiles []string `toml:"repo_files" json:"repo_files"`
 	FirstOnly bool     `toml:"first_only,omitempty" json:"first_only,omitempty"`
 	Skills    []string `toml:"skills,omitempty" json:"skills,omitempty"`
-	// Vendor lists skill directories a tool keeps in sync from elsewhere
-	// (relative to the home, like Skills): not the user's to rewrite, so
-	// skipped unless the config includes them.
+	// Vendor lists skill directories a tool keeps in sync from elsewhere, or
+	// installs from a marketplace (relative to the home, like Skills): not the
+	// user's to rewrite, so skipped unless the config includes them.
 	Vendor      []string `toml:"vendor,omitempty" json:"vendor,omitempty"`
 	Transcripts []string `toml:"transcripts,omitempty" json:"transcripts,omitempty"`
 	Memory      string   `toml:"memory,omitempty" json:"memory,omitempty"`
@@ -62,7 +62,7 @@ func Builtins() []Profile {
 			Global:      []string{"CLAUDE.md"},
 			RepoFiles:   []string{"CLAUDE.md"},
 			Skills:      []string{"skills"},
-			Vendor:      []string{"skills/synced"},
+			Vendor:      []string{"skills/synced", "plugins/cache", "plugins/marketplaces"},
 			Transcripts: []string{"projects/*/*.jsonl"},
 			Memory:      "projects/*/memory",
 		},

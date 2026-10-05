@@ -103,7 +103,7 @@ func TestDecideNeedsTheRowInTheRound(t *testing.T) {
 // lapses when the passage changes, because the id hashes the passage.
 func TestMuteSurvivesARoundAndLapsesWhenThePassageChanges(t *testing.T) {
 	s, _ := open(t)
-	r := finding("/a", "negative-rule", "- Never push to main.")
+	r := finding("/a", "stale-status", "- Never push to main.")
 	if _, err := s.RecordRound(ctx, Round{Kind: "on-demand"}, []row.Row{r}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,13 +117,13 @@ func TestMuteSurvivesARoundAndLapsesWhenThePassageChanges(t *testing.T) {
 	if err != nil || len(kept) != 0 || muted != 1 {
 		t.Fatalf("same passage: kept %d muted %d %v", len(kept), muted, err)
 	}
-	changed := finding("/a", "negative-rule", "- Never push to main without a review.")
+	changed := finding("/a", "stale-status", "- Never push to main without a review.")
 	kept, muted, err = s.Unmuted(ctx, []row.Row{changed})
 	if err != nil || len(kept) != 1 || muted != 0 {
 		t.Fatalf("changed passage: kept %d muted %d %v", len(kept), muted, err)
 	}
 	// Whitespace alone is not a change.
-	reflowed := finding("/a", "negative-rule", "-  Never push\nto main.")
+	reflowed := finding("/a", "stale-status", "-  Never push\nto main.")
 	if kept, _, _ := s.Unmuted(ctx, []row.Row{reflowed}); len(kept) != 0 {
 		t.Fatal("a reflowed passage lost its mute")
 	}

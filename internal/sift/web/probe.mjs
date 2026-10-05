@@ -290,7 +290,7 @@ async function main() {
     );
   check('no diff line scrolls sideways', wide === 0, String(wide));
   const longLine = diff.locator('.sift-dl.add', {
-    hasText: 'Run integration tests against the real database',
+    hasText: 'Run the slow suite before a release:',
   });
   const wrap = await longLine.locator('.sift-t').evaluate((el) => ({
     h: el.getBoundingClientRect().height,
@@ -313,7 +313,7 @@ async function main() {
   const add = await diff.locator('.sift-dl.add').count();
   check(
     'the diff shows removed and added lines',
-    del > 10 && add > 5,
+    del > 10 && add >= 1,
     `${del} ${add}`,
   );
   const gut = await diff

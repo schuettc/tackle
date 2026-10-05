@@ -23,9 +23,10 @@ const Guidance = `Recommend one revised version of this file: the whole file, co
 
 - Start from the content given here, and send its base hash back with the recommendation.
 - Keep the file's own conventions: its sections and their order, its voice and its line wrapping. Where the file writes each paragraph on one line, write new paragraphs on one line too.
-- Write every rule as guidance: say what to do and, where it helps, why. Turn a prohibition into the practice it protects.
-- Merge duplicates into the one place that owns the rule.
-- Remove stale status (finished work, merged pull requests, past dates) and lines whose paths are gone.
+- Keep every rule's specifics: its conditions, exclusions, commands, examples and exceptions. A list of what to leave out or not to do is part of its rule. A rule keeps its own wording unless another finding needs that line changed.
+- Merge duplicates into the one place that owns the rule, keeping what each copy adds.
+- Remove stale status only once it is shown to be obsolete: the pull request it waits on has merged, or the date it waits for has passed. A record of finished work is history, not status: it stays.
+- Remove the lines whose paths are gone.
 - Bring the file within its budget. Keep here what every session that loads the file needs; move what only one repo or one task needs to the file that owns it.
 - When text moves to another file, recommend both files in one batch, each naming the other in links, and show each side of the move in its file.
 - Fix every certain finding. For each other finding, fix it and say how in one line, or keep it and say why in one line.

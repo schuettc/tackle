@@ -43,7 +43,7 @@ func newFixture(t *testing.T) *fixture {
 func (f *fixture) record() {
 	f.t.Helper()
 	f.rows = []row.Row{
-		{ID: "r-neg", Check: "negative-rule", Summary: "a rule phrased as a prohibition", Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3},
+		{ID: "r-neg", Check: "stale-status", Summary: "status that may be stale", Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3},
 			Passage: "- Never push.", Verdict: "rewrite", Text: "- Push to a branch."},
 		{ID: "r-size", Check: "size", Summary: "over budget", Source: row.Source{File: "/w/a/CLAUDE.md"}, Verdict: "keep"},
 		{ID: "r-dead", Check: "dead-path", Summary: "a path that is gone", Source: row.Source{File: "/w/b/AGENTS.md", Repo: "/w/b", Start: 5, End: 5},
@@ -235,7 +235,7 @@ func TestFileReadsTheAuditedVersion(t *testing.T) {
 	f := newFixture(t)
 	repo := st.Repo(t, t.TempDir(), map[string]string{"CLAUDE.md": "# at the base\n- Never push.\n"})
 	st.Write(t, repo, "CLAUDE.md", "# edited since\n")
-	rows := []row.Row{{ID: "x", Check: "negative-rule", Source: row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "HEAD", Path: "CLAUDE.md", Start: 2, End: 2}}}
+	rows := []row.Row{{ID: "x", Check: "stale-status", Source: row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "HEAD", Path: "CLAUDE.md", Start: 2, End: 2}}}
 	id, _ := f.st.RecordRound(context.Background(), store.Round{Kind: "on-demand"}, rows)
 	w := f.do("GET", fmt.Sprintf("/api/file?round=%d&id=x", id), "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "# at the base") {

@@ -20,12 +20,12 @@ func TestMigrateAPopulatedV1Database(t *testing.T) {
 	}
 	certain := finding("/w/b/AGENTS.md", "dead-path", "see `gone.md`")
 	certain.Certain = true
-	judged := finding("/w/a/CLAUDE.md", "negative-rule", "- Never push.")
+	judged := finding("/w/a/CLAUDE.md", "stale-status", "- Never push.")
 	for _, stmt := range []struct {
 		q    string
 		args []any
 	}{
-		{`INSERT INTO rounds(id, kind, at, summary) VALUES (1, 'on-demand', 1790000000000, '{"negative-rule":1,"dead-path":1}')`, nil},
+		{`INSERT INTO rounds(id, kind, at, summary) VALUES (1, 'on-demand', 1790000000000, '{"stale-status":1,"dead-path":1}')`, nil},
 		{`INSERT INTO rows(round_id, seq, row_id, check_, body) VALUES (1, 0, ?, ?, ?)`, []any{judged.ID, judged.Check, mustJSON(t, judged)}},
 		{`INSERT INTO rows(round_id, seq, row_id, check_, body) VALUES (1, 1, ?, ?, ?)`, []any{certain.ID, certain.Check, mustJSON(t, certain)}},
 		{`INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at) VALUES (1, ?, 'edit', 'rewrite', '', '- Push to a branch.', 'shorter', 1790000000001)`, []any{judged.ID}},

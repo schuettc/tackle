@@ -15,10 +15,10 @@ func round() (map[string]File, map[string]row.Row) {
 	m := NewFile(row.Source{File: "/w/m/AGENTS.md", Repo: "/w/m", Ref: "origin/main", Path: "AGENTS.md"}, "repo", 6000, "# M\n\n- Don't skip z.\n")
 	m.Rows = []string{"neg2"}
 	rows := map[string]row.Row{
-		"neg":  {ID: "neg", Check: "negative-rule"},
+		"neg":  {ID: "neg", Check: "stale-status"},
 		"dead": {ID: "dead", Check: "dead-path", Certain: true},
 		"mis":  {ID: "mis", Check: "misplaced"},
-		"neg2": {ID: "neg2", Check: "negative-rule"},
+		"neg2": {ID: "neg2", Check: "stale-status"},
 	}
 	return map[string]File{g.Key: g, m.Key: m}, rows
 }
@@ -34,7 +34,7 @@ func good(files map[string]File) (Rec, Rec) {
 	}
 	rg := Rec{File: g.Key, Base: g.Base, Content: "# G\n\n- Do x the safe way.\n",
 		Findings: []Account{{"neg", "fixed", "rewritten as guidance"}, {"dead", "fixed", "line removed"}, {"mis", "fixed", "moved to m"}},
-		Links:    []string{m.Key}, Summary: "Rewrites a prohibition, drops a dead path and moves a repo-only rule to m."}
+		Links:    []string{m.Key}, Summary: "Drops a finished migration note, drops a dead path and moves a repo-only rule to m."}
 	rm := Rec{File: m.Key, Base: m.Base, Content: "# M\n\n- Run z every time.\n- Run y.\n",
 		Findings: []Account{{"neg2", "fixed", "rewritten as guidance"}},
 		Links:    []string{g.Key}, Summary: "Takes the rule from the global file."}

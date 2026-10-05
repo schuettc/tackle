@@ -110,7 +110,7 @@ func waitRig(t *testing.T) *store.Store {
 func decideAndPressSend(t *testing.T, s *store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	r := row.Row{ID: "r1", Check: "negative-rule", Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3}, Passage: "- Never push."}
+	r := row.Row{ID: "r1", Check: "stale-status", Source: row.Source{File: "/w/a/CLAUDE.md", Start: 3, End: 3}, Passage: "- Never push."}
 	id, err := s.RecordRound(ctx, store.Round{Kind: "on-demand"}, []row.Row{r})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +159,7 @@ func TestWaitPrintsTheSendAndExits0(t *testing.T) {
 	select {
 	case r := <-res:
 		if r.code != 0 || !strings.HasPrefix(r.out, "The user sent their decisions for sift round 1: 0 accepted, 0 edited, 1 rejected") ||
-			!strings.Contains(r.out, "- /w/a/CLAUDE.md:3 · negative-rule: it is fine\n") {
+			!strings.Contains(r.out, "- /w/a/CLAUDE.md:3 · stale-status: it is fine\n") {
 			t.Errorf("code %d\nout %q\nerr %q", r.code, r.out, r.errw)
 		}
 	case <-time.After(15 * time.Second):
@@ -200,7 +200,7 @@ func applyRig(t *testing.T) string {
 	ctx := context.Background()
 	f := rec.NewFile(row.Source{File: filepath.Join(repo, "CLAUDE.md"), Repo: repo, Ref: "origin/main", Path: "CLAUDE.md"}, "repo", 6000, "# App\n\n- Never push to main.\n")
 	f.Commit, f.Rows = st.Git(t, repo, "rev-parse", "origin/main"), []string{"neg"}
-	r := row.Row{ID: "neg", Check: "negative-rule", Passage: "- Never push to main.", Source: row.Source{File: f.Source.File, Start: 3, End: 3}}
+	r := row.Row{ID: "neg", Check: "stale-status", Passage: "- Never push to main.", Source: row.Source{File: f.Source.File, Start: 3, End: 3}}
 	id, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, []row.Row{r}, []rec.File{f})
 	if err != nil {
 		t.Fatal(err)

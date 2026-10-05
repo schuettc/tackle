@@ -1,7 +1,7 @@
 {
-  "id": "e173f6e752f6fc81",
-  "check": "negative-rule",
-  "summary": "a rule phrased as a prohibition",
+  "id": "b382cf95340028e6",
+  "check": "stale-status",
+  "summary": "status that may be stale",
   "source": {
     "file": "/w/repo/CLAUDE.md",
     "repo": "/w/repo",

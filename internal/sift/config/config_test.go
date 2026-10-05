@@ -30,7 +30,7 @@ func TestDefaultsMatchTheSpec(t *testing.T) {
 	if d.Windows != (Windows{WeeklyDays: 7, UsageDays: 3, StaleDays: 30}) {
 		t.Errorf("windows %+v", d.Windows)
 	}
-	if len(d.Negative.Patterns) == 0 || len(d.Stale.Phrases) == 0 || len(d.Stale.Waits) == 0 {
+	if len(d.Stale.Phrases) == 0 || len(d.Stale.Waits) == 0 {
 		t.Error("no default patterns")
 	}
 	if err := d.Validate(); err != nil {
@@ -77,6 +77,12 @@ func TestUnknownKeysAreAnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "budgets.globals") {
 		t.Fatalf("nested err %v", err)
 	}
+	// sift has no negative-rule check (spec decision 8, reversed), so its
+	// patterns are not a setting.
+	_, err = Load(write(t, "[negative]\npatterns = [\"never\"]\n"))
+	if err == nil || !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("negative patterns err %v", err)
+	}
 }
 
 func TestMissingIsErrMissing(t *testing.T) {
@@ -90,7 +96,7 @@ func TestValidateRejects(t *testing.T) {
 	for name, body := range map[string]string{
 		"unknown profile":  `profiles = ["nope"]`,
 		"relative root":    "[[root]]\npath = \"src\"",
-		"bad pattern":      "[negative]\npatterns = [\"(\"]",
+		"bad pattern":      "[stale]\nphrases = [\"(\"]",
 		"zero budget":      "[budgets]\nglobal = 0",
 		"bad custom":       "profiles = [\"x\"]\n[[profile]]\nname = \"x\"",
 		"shadowed builtin": "[[profile]]\nname = \"pi\"\nhome = \"~/.p\"\nrepo_files = [\"P.md\"]",

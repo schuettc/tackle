@@ -5,570 +5,26 @@
   "tools"
  ],
  "files": {
-  "shop/CLAUDE.md": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n- Never skip the hooks.\n- Avoid merge commits on feature branches.\n- No secrets in the repo.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that, and a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n\n## Layout\n\nSee `docs/architecture.md` for the layout.\nThe old runbook lives in `docs/runbook-v1.md`.\n\n## Status\n\n- Waiting on the payments migration before the checkout rewrite can start.\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n\n## Style\n\n- Never use the pattern number 1 in new code; it predates the style guide.\n- Never use the pattern number 2 in new code; it predates the style guide.\n- Never use the pattern number 3 in new code; it predates the style guide.\n- Never use the pattern number 4 in new code; it predates the style guide.\n- Never use the pattern number 5 in new code; it predates the style guide.\n- Never use the pattern number 6 in new code; it predates the style guide.\n- Never use the pattern number 7 in new code; it predates the style guide.\n- Never use the pattern number 8 in new code; it predates the style guide.\n- Never use the pattern number 9 in new code; it predates the style guide.\n- Never use the pattern number 10 in new code; it predates the style guide.\n- Never use the pattern number 11 in new code; it predates the style guide.\n- Never use the pattern number 12 in new code; it predates the style guide.\n- Never use the pattern number 13 in new code; it predates the style guide.\n- Never use the pattern number 14 in new code; it predates the style guide.\n- Never use the pattern number 15 in new code; it predates the style guide.\n- Never use the pattern number 16 in new code; it predates the style guide.\n- Never use the pattern number 17 in new code; it predates the style guide.\n- Never use the pattern number 18 in new code; it predates the style guide.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
-  "shop/docs/AGENTS.md": "# docs\n\n- Never edit the generated reference by hand.\n- Write in the second person.\n",
+  "shop/CLAUDE.md": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n\n## Layout\n\nSee `docs/architecture.md` for the layout.\nThe old runbook lives in `docs/runbook-v1.md`.\n\n## Status\n\n- Waiting on the payments migration before the checkout rewrite can start.\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.\n\n## Style\n\n- Waiting on the style migration for pattern 1 (#101) before new code uses its replacement.\n- Waiting on the style migration for pattern 2 (#102) before new code uses its replacement.\n- Waiting on the style migration for pattern 3 (#103) before new code uses its replacement.\n- Waiting on the style migration for pattern 4 (#104) before new code uses its replacement.\n- Waiting on the style migration for pattern 5 (#105) before new code uses its replacement.\n- Waiting on the style migration for pattern 6 (#106) before new code uses its replacement.\n- Waiting on the style migration for pattern 7 (#107) before new code uses its replacement.\n- Waiting on the style migration for pattern 8 (#108) before new code uses its replacement.\n- Waiting on the style migration for pattern 9 (#109) before new code uses its replacement.\n- Waiting on the style migration for pattern 10 (#110) before new code uses its replacement.\n- Waiting on the style migration for pattern 11 (#111) before new code uses its replacement.\n- Waiting on the style migration for pattern 12 (#112) before new code uses its replacement.\n- Waiting on the style migration for pattern 13 (#113) before new code uses its replacement.\n- Waiting on the style migration for pattern 14 (#114) before new code uses its replacement.\n- Waiting on the style migration for pattern 15 (#115) before new code uses its replacement.\n- Waiting on the style migration for pattern 16 (#116) before new code uses its replacement.\n- Waiting on the style migration for pattern 17 (#117) before new code uses its replacement.\n- Waiting on the style migration for pattern 18 (#118) before new code uses its replacement.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+  "shop/docs/AGENTS.md": "# docs\n\n- Waiting on the generator rewrite (#88): until it merges, edit the generated reference by hand.\n- Write in the second person.\n",
   "tools/skills/release/SKILL.md": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\nRead `~/.notes/memory.md` before you start.\n\n- Tag from main.\n",
-  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release.\n- Prefer small commits.\n"
+  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n- Prefer small commits.\n"
  },
  "rows": [
   {
-   "id": "480f565dbc31f07c",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
+   "id": "f3582c497c90a5db",
+   "check": "misplaced",
+   "summary": "a line about one root in the global file",
    "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 7,
-    "end": 7
+    "rel": "home/.agent/AGENTS.md",
+    "start": 3,
+    "end": 3
    },
-   "passage": "- Never push directly to main.",
+   "passage": "- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.",
    "evidence": [
     {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "9d68f7da082d3f0b",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 8,
-    "end": 8
-   },
-   "passage": "- Don't force-push a shared branch.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Don't"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "de5b35362646b5ec",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 9,
-    "end": 9
-   },
-   "passage": "- Do not commit generated files.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Do"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "d17b71649f1714cc",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 10,
-    "end": 10
-   },
-   "passage": "- Never skip the hooks.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "0f4f73356ea6213f",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 11,
-    "end": 11
-   },
-   "passage": "- Avoid merge commits on feature branches.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Avoid"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "ee548076bcfbef18",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 12,
-    "end": 12
-   },
-   "passage": "- No secrets in the repo.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "No"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "5a689be8985687d8",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 16,
-    "end": 16
-   },
-   "passage": "- Never mock the database in integration tests; the fixtures exist for that, and a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "c09c8ac44e58504d",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 17,
-    "end": 17
-   },
-   "passage": "- Don't leave a skipped test without an issue number.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Don't"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "a67bc3b561f883ea",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 32,
-    "end": 32
-   },
-   "passage": "- Never use the pattern number 1 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "16d8ad0f2d6eee2d",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 33,
-    "end": 33
-   },
-   "passage": "- Never use the pattern number 2 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "bc1574cdf0664fe6",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 34,
-    "end": 34
-   },
-   "passage": "- Never use the pattern number 3 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "f57f8376ec10df40",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 35,
-    "end": 35
-   },
-   "passage": "- Never use the pattern number 4 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "9be3f2e1febfbdd5",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 36,
-    "end": 36
-   },
-   "passage": "- Never use the pattern number 5 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "a0bd7ef38cc5397d",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 37,
-    "end": 37
-   },
-   "passage": "- Never use the pattern number 6 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "1b3382f265cdccf6",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 38,
-    "end": 38
-   },
-   "passage": "- Never use the pattern number 7 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "294450af0bdcf2f7",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 39,
-    "end": 39
-   },
-   "passage": "- Never use the pattern number 8 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "bb6c362382f8a30f",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 40,
-    "end": 40
-   },
-   "passage": "- Never use the pattern number 9 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "d116f3f91fb88c5f",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 41,
-    "end": 41
-   },
-   "passage": "- Never use the pattern number 10 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "bf2dfabe1c090301",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 42,
-    "end": 42
-   },
-   "passage": "- Never use the pattern number 11 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "3de28cebbf34e0cc",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 43,
-    "end": 43
-   },
-   "passage": "- Never use the pattern number 12 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "2d734c79047e86de",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 44,
-    "end": 44
-   },
-   "passage": "- Never use the pattern number 13 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "f214edf1b271a88b",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 45,
-    "end": 45
-   },
-   "passage": "- Never use the pattern number 14 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "e57116cffa7fbc2a",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 46,
-    "end": 46
-   },
-   "passage": "- Never use the pattern number 15 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "41e0ab8bb607a490",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 47,
-    "end": 47
-   },
-   "passage": "- Never use the pattern number 16 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "7055260f68015ff6",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 48,
-    "end": 48
-   },
-   "passage": "- Never use the pattern number 17 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "cd4c413c44969358",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 49,
-    "end": 49
-   },
-   "passage": "- Never use the pattern number 18 in new code; it predates the style guide.",
-   "evidence": [
-    {
-     "name": "matched",
-     "value": "Never"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "f2bd5dd90fa29c0e",
-   "check": "dead-path",
-   "summary": "a path that does not resolve",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 22,
-    "end": 22
-   },
-   "passage": "See `docs/architecture.md` for the layout.",
-   "evidence": [
-    {
-     "name": "path",
-     "value": "docs/architecture.md"
-    },
-    {
-     "name": "certain",
-     "value": "deleted at the audited commit"
-    }
-   ],
-   "certain": true
-  },
-  {
-   "id": "ff8d0c4ae38de2ec",
-   "check": "dead-path",
-   "summary": "a path that does not resolve",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 23,
-    "end": 23
-   },
-   "passage": "The old runbook lives in `docs/runbook-v1.md`.",
-   "evidence": [
-    {
-     "name": "path",
-     "value": "docs/runbook-v1.md"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "0a3b4551207c7805",
-   "check": "stale-status",
-   "summary": "status that may have gone stale",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 27,
-    "end": 27
-   },
-   "passage": "- Waiting on the payments migration before the checkout rewrite can start.",
-   "evidence": [
-    {
-     "name": "phrase",
-     "value": "Waiting on"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "33d5391a08af8c44",
-   "check": "duplicate",
-   "summary": "the same passage twice",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 28,
-    "end": 28
-   },
-   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
-   "evidence": [
-    {
-     "name": "copies",
-     "value": "lines 28, 53"
-    }
-   ],
-   "certain": false
-  },
-  {
-   "id": "415bf8e35218b9c6",
-   "check": "duplicate",
-   "summary": "the same passage twice",
-   "source": {
-    "rel": "shop/CLAUDE.md",
-    "start": 53,
-    "end": 53
-   },
-   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
-   "evidence": [
-    {
-     "name": "copies",
-     "value": "lines 28, 53"
+     "name": "names",
+     "value": "shop"
     }
    ],
    "certain": false
@@ -596,22 +52,530 @@
    "certain": false
   },
   {
-   "id": "06bebde0ccec2f12",
-   "check": "negative-rule",
-   "summary": "a rule phrased as a prohibition",
+   "id": "f2bd5dd90fa29c0e",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 19,
+    "end": 19
+   },
+   "passage": "See `docs/architecture.md` for the layout.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/architecture.md"
+    },
+    {
+     "name": "certain",
+     "value": "deleted at the audited commit"
+    }
+   ],
+   "certain": true
+  },
+  {
+   "id": "ff8d0c4ae38de2ec",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 20,
+    "end": 20
+   },
+   "passage": "The old runbook lives in `docs/runbook-v1.md`.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/runbook-v1.md"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "0a3b4551207c7805",
+   "check": "stale-status",
+   "summary": "status that may have gone stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 24,
+    "end": 24
+   },
+   "passage": "- Waiting on the payments migration before the checkout rewrite can start.",
+   "evidence": [
+    {
+     "name": "phrase",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "33d5391a08af8c44",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 25,
+    "end": 25
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "74e83fc84eb4cc09",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 26,
+    "end": 26
+   },
+   "passage": "- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ]
+  },
+  {
+   "id": "549aa2640703a341",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 30,
+    "end": 30
+   },
+   "passage": "- Waiting on the style migration for pattern 1 (#101) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#101"
+    }
+   ]
+  },
+  {
+   "id": "e241f69842a6d518",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 31,
+    "end": 31
+   },
+   "passage": "- Waiting on the style migration for pattern 2 (#102) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#102"
+    }
+   ]
+  },
+  {
+   "id": "b54e15165df5b0d4",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 32,
+    "end": 32
+   },
+   "passage": "- Waiting on the style migration for pattern 3 (#103) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#103"
+    }
+   ]
+  },
+  {
+   "id": "fc1d9f7e3e30977f",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 33,
+    "end": 33
+   },
+   "passage": "- Waiting on the style migration for pattern 4 (#104) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#104"
+    }
+   ]
+  },
+  {
+   "id": "62ce620f836cf945",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 34,
+    "end": 34
+   },
+   "passage": "- Waiting on the style migration for pattern 5 (#105) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#105"
+    }
+   ]
+  },
+  {
+   "id": "c6d7b6a73d1fe12c",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 35,
+    "end": 35
+   },
+   "passage": "- Waiting on the style migration for pattern 6 (#106) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#106"
+    }
+   ]
+  },
+  {
+   "id": "f5cdcdec1859c5d8",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 36,
+    "end": 36
+   },
+   "passage": "- Waiting on the style migration for pattern 7 (#107) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#107"
+    }
+   ]
+  },
+  {
+   "id": "cca5eaa9e2452efe",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 37,
+    "end": 37
+   },
+   "passage": "- Waiting on the style migration for pattern 8 (#108) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#108"
+    }
+   ]
+  },
+  {
+   "id": "63f90a1474683deb",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 38,
+    "end": 38
+   },
+   "passage": "- Waiting on the style migration for pattern 9 (#109) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#109"
+    }
+   ]
+  },
+  {
+   "id": "09b597d23b75555b",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 39,
+    "end": 39
+   },
+   "passage": "- Waiting on the style migration for pattern 10 (#110) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#110"
+    }
+   ]
+  },
+  {
+   "id": "d297e559478c44e6",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 40,
+    "end": 40
+   },
+   "passage": "- Waiting on the style migration for pattern 11 (#111) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#111"
+    }
+   ]
+  },
+  {
+   "id": "d211f2c3c6e63435",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 41,
+    "end": 41
+   },
+   "passage": "- Waiting on the style migration for pattern 12 (#112) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#112"
+    }
+   ]
+  },
+  {
+   "id": "c193e6911367997f",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 42,
+    "end": 42
+   },
+   "passage": "- Waiting on the style migration for pattern 13 (#113) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#113"
+    }
+   ]
+  },
+  {
+   "id": "0f6f1928af799321",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 43,
+    "end": 43
+   },
+   "passage": "- Waiting on the style migration for pattern 14 (#114) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#114"
+    }
+   ]
+  },
+  {
+   "id": "f52c156c1a3a62e1",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 44,
+    "end": 44
+   },
+   "passage": "- Waiting on the style migration for pattern 15 (#115) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#115"
+    }
+   ]
+  },
+  {
+   "id": "591bd183e8082f34",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 45,
+    "end": 45
+   },
+   "passage": "- Waiting on the style migration for pattern 16 (#116) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#116"
+    }
+   ]
+  },
+  {
+   "id": "37fde8cc31446171",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 46,
+    "end": 46
+   },
+   "passage": "- Waiting on the style migration for pattern 17 (#117) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#117"
+    }
+   ]
+  },
+  {
+   "id": "58ed52aad14d5009",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 47,
+    "end": 47
+   },
+   "passage": "- Waiting on the style migration for pattern 18 (#118) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#118"
+    }
+   ]
+  },
+  {
+   "id": "415bf8e35218b9c6",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 51,
+    "end": 51
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "7883e555ba5fba64",
+   "check": "stale-status",
+   "summary": "status that may be stale",
    "source": {
     "rel": "shop/docs/AGENTS.md",
     "start": 3,
     "end": 3
    },
-   "passage": "- Never edit the generated reference by hand.",
+   "passage": "- Waiting on the generator rewrite (#88): until it merges, edit the generated reference by hand.",
+   "certain": false,
    "evidence": [
     {
      "name": "matched",
-     "value": "Never"
+     "value": "Waiting on"
     }
-   ],
-   "certain": false
+   ]
   },
   {
    "id": "faf797b09bfb9144",
@@ -634,44 +598,44 @@
     }
    ],
    "certain": true
-  },
-  {
-   "id": "f3582c497c90a5db",
-   "check": "misplaced",
-   "summary": "a line about one root in the global file",
-   "source": {
-    "rel": "home/.agent/AGENTS.md",
-    "start": 3,
-    "end": 3
-   },
-   "passage": "- In shop, run the slow suite before a release.",
-   "evidence": [
-    {
-     "name": "names",
-     "value": "shop"
-    }
-   ],
-   "certain": false
   }
  ],
  "recs": {
   "shop/CLAUDE.md": {
-   "summary": "Rewrites the Git and test prohibitions as the practice each protects, folds eighteen pattern bans into one line, and drops the dead layout paths and the stale status. It takes the slow-suite rule from the global file, and keeps one rule the team asked for word for word.",
-   "content": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Push to a branch and open a pull request; main takes merges only.\n- Rebase your own branch freely, and add commits on top of a shared one.\n- Leave generated files out of commits: the build makes them.\n- Let the hooks run on every commit.\n- Rebase feature branches onto main to keep their history linear.\n- Keep secrets in the vault and read them from the environment.\n\n## Tests\n\n- Run integration tests against the real database with the fixtures in `testdata/`: a mocked database has hidden three real bugs this year, each one in a query that only failed against the real engine with real indexes and real collation rules, so the real engine is the test that counts.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n- Run the slow suite before a release.\n\n## Style\n\n- Write new code in the current style guide's patterns; patterns 1 to 18 predate it, and the linter lists them.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+   "summary": "Drops the Style section's eighteen migration notes and the payments line, whose pull requests have merged, and the dead layout paths. It takes the slow-suite rule from the global file, and keeps the flaky-test note because the vendor's fix has not shipped.",
+   "content": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n- Run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n\n## Status\n\n- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
    "links": [
     "home/.agent/AGENTS.md"
    ],
-   "fixed": "rewritten as guidance",
+   "fixed": "the status is obsolete: removed",
    "how": {
+    "c3141af60b8b7c71": "down to 1.4 KB, under the 6 KB budget",
     "f2bd5dd90fa29c0e": "the Layout section is gone: both paths are dead",
     "ff8d0c4ae38de2ec": "removed with the Layout section",
-    "0a3b4551207c7805": "the Status section is gone: the migration shipped",
+    "0a3b4551207c7805": "the payments migration shipped: line removed",
     "33d5391a08af8c44": "merged into Release, its one place",
-    "415bf8e35218b9c6": "kept in Release, the copy in Status removed",
-    "c3141af60b8b7c71": "4.2 KB down to 1.6 KB, under the 6 KB budget"
+    "549aa2640703a341": "#101 merged: the Style section is gone",
+    "e241f69842a6d518": "#102 merged: the Style section is gone",
+    "b54e15165df5b0d4": "#103 merged: the Style section is gone",
+    "fc1d9f7e3e30977f": "#104 merged: the Style section is gone",
+    "62ce620f836cf945": "#105 merged: the Style section is gone",
+    "c6d7b6a73d1fe12c": "#106 merged: the Style section is gone",
+    "f5cdcdec1859c5d8": "#107 merged: the Style section is gone",
+    "cca5eaa9e2452efe": "#108 merged: the Style section is gone",
+    "63f90a1474683deb": "#109 merged: the Style section is gone",
+    "09b597d23b75555b": "#110 merged: the Style section is gone",
+    "d297e559478c44e6": "#111 merged: the Style section is gone",
+    "d211f2c3c6e63435": "#112 merged: the Style section is gone",
+    "c193e6911367997f": "#113 merged: the Style section is gone",
+    "0f6f1928af799321": "#114 merged: the Style section is gone",
+    "f52c156c1a3a62e1": "#115 merged: the Style section is gone",
+    "591bd183e8082f34": "#116 merged: the Style section is gone",
+    "37fde8cc31446171": "#117 merged: the Style section is gone",
+    "58ed52aad14d5009": "#118 merged: the Style section is gone",
+    "415bf8e35218b9c6": "kept in Release, the copy in Status removed"
    },
    "kept": {
-    "c09c8ac44e58504d": "the team wants this one word for word; it is short and has no positive form that says more"
+    "74e83fc84eb4cc09": "the vendor's fix has not shipped, so the rerun still applies"
    }
   },
   "home/.agent/AGENTS.md": {
@@ -683,9 +647,9 @@
    "fixed": "moved to shop/CLAUDE.md, under Tests"
   },
   "shop/docs/AGENTS.md": {
-   "summary": "Says how to change the generated reference instead of forbidding hand edits.",
+   "summary": "Drops the wait on #88, which has merged, and points at the generator instead.",
    "content": "# docs\n\n- Change the generated reference through its generator (`make docs`).\n- Write in the second person.\n",
-   "fixed": "rewritten as guidance"
+   "fixed": "#88 merged: says to use the generator"
   },
   "tools/skills/release/SKILL.md": {
    "summary": "Drops the pointer to a memory store that has been retired.",

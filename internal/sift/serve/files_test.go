@@ -30,7 +30,7 @@ func auditFixture(t *testing.T) (*fixture, rec.File, rec.File) {
 	a, b := mk("CLAUDE.md", "# App\n\n- Never push.\n"), mk("docs/AGENTS.md", "# Docs\n")
 	a.Rows = []string{"n1"}
 	id, err := f.st.RecordAudit(context.Background(), store.Round{Kind: "on-demand"},
-		[]row.Row{{ID: "n1", Check: "negative-rule", Summary: "a prohibition", Source: row.Source{File: a.Source.File, Start: 3, End: 3}, Passage: "- Never push.", Certain: true}},
+		[]row.Row{{ID: "n1", Check: "stale-status", Summary: "stale status", Source: row.Source{File: a.Source.File, Start: 3, End: 3}, Passage: "- Never push.", Certain: true}},
 		[]rec.File{a, b})
 	if err != nil {
 		t.Fatal(err)
