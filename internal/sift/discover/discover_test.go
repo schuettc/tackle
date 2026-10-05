@@ -427,3 +427,36 @@ func TestRepoKnowsItsGoneFiles(t *testing.T) {
 		t.Fatalf("gone %v", r.Gone)
 	}
 }
+
+// A global file that links to an instruction file in an audited repo is one
+// file, read at the repo's base, loaded by both the global's harness and the
+// repo's, and in the repo's chain.
+func TestGlobalLinkedIntoARepo(t *testing.T) {
+	st.Env(t)
+	home := st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{
+		"AGENTS.md": "committed\n", "svc/AGENTS.md": "svc\n",
+	})
+	st.Write(t, repo, "AGENTS.md", "changed\n")
+	global := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(global), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(repo, "AGENTS.md"), global); err != nil {
+		t.Fatal(err)
+	}
+
+	res := run(t, Options{Profiles: profiles(t, "claude-code", "codex"), Roots: []config.Root{{Path: repo}}})
+	m := byRel(res)
+	if k := strings.Join(keys(m), " "); k != "app:AGENTS.md app:svc/AGENTS.md" {
+		t.Fatalf("files %s", k)
+	}
+	f := m["app:AGENTS.md"]
+	if f.Content != "committed\n" || f.Path != global || f.Class != ClassGlobal ||
+		!reflect.DeepEqual(f.Profiles, []string{"claude-code", "codex"}) || !reflect.DeepEqual(f.Also, []string{filepath.Join(repo, "AGENTS.md")}) {
+		t.Fatalf("%+v", f)
+	}
+	if len(res.Chains) != 1 || len(res.Chains[0].Files) != 2 || res.Chains[0].Files[0] != f || res.Chains[0].Dir != "svc" {
+		t.Fatalf("chains %+v", res.Chains)
+	}
+}

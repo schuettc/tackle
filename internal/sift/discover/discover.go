@@ -107,11 +107,17 @@ type finder struct {
 	res   Result
 	real  map[string]*File     // realpath → file, so a file reached twice is one
 	repos map[string]*repoTree // root → repo
+	// context holds, by realpath, instruction files above a root inside a
+	// repo: in chains, never audited.
+	context map[string]*File
+	// picks holds the profiles that load each repo file as a repo file (a
+	// global that links into a repo has other profiles too).
+	picks map[*File][]string
 }
 
 // Run discovers the files.
 func Run(ctx context.Context, opt Options) (Result, error) {
-	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}}
+	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}, context: map[string]*File{}, picks: map[*File][]string{}}
 	f.globals()
 	for _, root := range opt.Roots {
 		f.root(ctx, root)
@@ -376,18 +382,28 @@ func enclosing(ctx context.Context, start string) (top, prefix string) {
 
 // repo reads one repo at its base: its whole tree, and the files sift audits
 // under prefix (a '/'-separated directory; "" is the whole repo) that no
-// other root has added.
+// other root has added. With a prefix, the instruction files in the
+// directories above it are read too, as chain context only: a harness loads
+// them, but they are not this root's to audit.
 func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix string) error {
 	r, err := f.readRepo(ctx, dir, root.Base)
 	if err != nil {
 		return err
 	}
+	above := map[string]bool{}
+	if prefix != "" {
+		for _, a := range ancestors(prefix) {
+			if a != prefix {
+				above[a] = true
+			}
+		}
+	}
 	byDir := map[string][]string{}
 	for rel := range r.files {
-		if prefix != "" && !strings.HasPrefix(rel, prefix+"/") {
+		name := path.Base(rel)
+		if prefix != "" && !strings.HasPrefix(rel, prefix+"/") && (!above[dirOf(rel)] || name == profile.SkillFile) {
 			continue
 		}
-		name := path.Base(rel)
 		if name != profile.SkillFile && !f.isRepoFile(name) {
 			continue
 		}
@@ -396,7 +412,6 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 		}
 		byDir[path.Dir(rel)] = append(byDir[path.Dir(rel)], name)
 	}
-	ref := r.Ref
 	realRoot, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		realRoot = dir
@@ -418,25 +433,56 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			if d != "." {
 				rel = d + "/" + n
 			}
-			key := filepath.Join(realRoot, filepath.FromSlash(rel))
-			if _, ok := f.real[key]; ok {
-				continue
-			}
-			body, err := git(ctx, dir, "show", ref+":"+rel)
-			if err != nil {
-				f.warn("%s: %v", filepath.Join(dir, rel), err)
-				continue
-			}
-			class := ClassRepo
-			if n == profile.SkillFile {
-				class = ClassSkill
-			}
-			file := &File{Path: filepath.Join(dir, filepath.FromSlash(rel)), Class: class, Profiles: picked[n], Repo: r.Repo, Rel: rel, Content: string(body)}
-			f.real[key] = file
-			f.res.Files = append(f.res.Files, file)
+			f.repoFile(ctx, r, dir, realRoot, rel, picked[n], prefix != "" && !strings.HasPrefix(rel, prefix+"/"))
 		}
 	}
 	return nil
+}
+
+// repoFile reads one file of r at its base. A file already audited from the
+// repo is left alone; one a profile reached on disk (a global that links into
+// the repo) becomes the repo's file too: read at the base, with the repo's
+// profiles and path. A context file is kept for chains only, never audited.
+func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel string, profs []string, onlyContext bool) {
+	key := filepath.Join(realRoot, filepath.FromSlash(rel))
+	have := f.real[key]
+	if have != nil && have.Repo != nil {
+		return
+	}
+	if have == nil && onlyContext && f.context[key] != nil {
+		return
+	}
+	body, err := git(ctx, dir, "show", r.Ref+":"+rel)
+	if err != nil {
+		f.warn("%s: %v", filepath.Join(dir, rel), err)
+		return
+	}
+	p := filepath.Join(dir, filepath.FromSlash(rel))
+	if have != nil {
+		have.Repo, have.Rel, have.Content = r.Repo, rel, string(body)
+		for _, pn := range profs {
+			if !contains(have.Profiles, pn) {
+				have.Profiles = append(have.Profiles, pn)
+			}
+		}
+		if p != have.Path && !contains(have.Also, p) {
+			have.Also = append(have.Also, p)
+		}
+		f.picks[have] = profs
+		return
+	}
+	class := ClassRepo
+	if path.Base(rel) == profile.SkillFile {
+		class = ClassSkill
+	}
+	file := &File{Path: p, Class: class, Profiles: profs, Repo: r.Repo, Rel: rel, Content: string(body)}
+	f.picks[file] = profs
+	if onlyContext {
+		f.context[key] = file
+		return
+	}
+	f.real[key] = file
+	f.res.Files = append(f.res.Files, file)
 }
 
 // readRepo reads a repo's tree at its base, once.
@@ -668,7 +714,8 @@ func lines(s string) []string {
 
 // chains builds, for each profile with a load limit, the deepest chain in
 // each repo: its global file and the file it picks in every directory from
-// the repo root down.
+// the repo root down. Chains end at an audited file; the directories above
+// may hold context files (above a root inside the repo).
 func (f *finder) chains() {
 	for _, p := range f.opt.Profiles {
 		if p.LoadLimit <= 0 {
@@ -681,11 +728,19 @@ func (f *finder) chains() {
 				break
 			}
 		}
+		loads := func(file *File, r *Repo) bool {
+			return file.Repo == r && path.Base(file.Rel) != profile.SkillFile && contains(f.picks[file], p.Name)
+		}
 		for _, r := range f.res.Repos {
-			byDir := map[string]*File{}
+			byDir, above := map[string]*File{}, map[string]*File{}
 			for _, file := range f.res.Files {
-				if file.Repo == r && file.Class == ClassRepo && contains(file.Profiles, p.Name) {
+				if loads(file, r) {
 					byDir[dirOf(file.Rel)] = file
+				}
+			}
+			for _, file := range f.context {
+				if loads(file, r) {
+					above[dirOf(file.Rel)] = file
 				}
 			}
 			var dirs []string
@@ -708,7 +763,11 @@ func (f *finder) chains() {
 					c.Files = append(c.Files, global)
 				}
 				for _, a := range ancestors(d) {
-					if file := byDir[a]; file != nil {
+					file := byDir[a]
+					if file == nil {
+						file = above[a]
+					}
+					if file != nil && file != global {
 						c.Files = append(c.Files, file)
 					}
 				}
