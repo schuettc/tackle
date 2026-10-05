@@ -481,23 +481,33 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			names = append(names, n)
 		}
 		sort.Strings(names)
+		read := map[string]*File{}
 		for _, n := range names {
 			rel := n
 			if d != "." {
 				rel = d + "/" + n
 			}
-			f.repoFile(ctx, r, dir, realRoot, rel, picked[n], prefix != "" && !strings.HasPrefix(rel, prefix+"/"))
+			if file := f.repoFile(ctx, r, dir, realRoot, rel, prefix != "" && !strings.HasPrefix(rel, prefix+"/")); file != nil {
+				read[n] = file
+			}
+		}
+		// Each profile's loads go in its own order, so its chains do too.
+		for _, p := range f.opt.Profiles {
+			for _, n := range p.Pick(byDir[d]) {
+				if file := read[n]; file != nil {
+					f.load(p.Name, RoleRepo, dirOf(path.Join(d, n)), file)
+				}
+			}
 		}
 	}
 	return nil
 }
 
-// repoFile reads one file of r at its base, once per real path, and records
-// the loads of the profiles that pick it there. A file a profile reached on
-// disk (a global that links into the repo) becomes the repo's file too: read
-// at the base, with the repo's path in Also. A context file is read for
-// chains only, until a root that audits it comes along.
-func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel string, profs []string, onlyContext bool) {
+// repoFile reads one file of r at its base, once per real path. A file a
+// profile reached on disk (a global that links into the repo) becomes the
+// repo's file too: read at the base, with the repo's path in Also. A context
+// file is read for chains only, until a root that audits it comes along.
+func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel string, onlyContext bool) *File {
 	key := filepath.Join(realRoot, filepath.FromSlash(rel))
 	p := filepath.Join(dir, filepath.FromSlash(rel))
 	file := f.real[key]
@@ -505,7 +515,7 @@ func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel s
 		body, err := git(ctx, dir, "show", r.Ref+":"+rel)
 		if err != nil {
 			f.warn("%s: %v", p, err)
-			return
+			return nil
 		}
 		if file == nil {
 			class := ClassRepo
@@ -525,9 +535,7 @@ func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel s
 		file.Context = false
 		f.res.Files = append(f.res.Files, file)
 	}
-	for _, pn := range profs {
-		f.load(pn, RoleRepo, dirOf(rel), file)
-	}
+	return file
 }
 
 // readRepo reads a repo's tree at its base, once.

@@ -114,3 +114,46 @@ func TestLoadLimitOnAGlobalThatIsTheLeaf(t *testing.T) {
 		}
 	}
 }
+
+// A profile that loads several files in one directory loads them in its own
+// repo_files order, not alphabetically: the chain follows that order, and
+// the row and the dropped evidence land on the file the harness drops.
+func TestLoadLimitFollowsTheProfilesFileOrder(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	repo := st.Repo(t, filepath.Join(t.TempDir(), "app"), map[string]string{
+		"Z.md": strings.Repeat("z", 60),
+		"A.md": strings.Repeat("a", 60),
+	})
+	ps, err := config.Config{
+		Profiles: []string{"other"},
+		Custom:   []profile.Profile{{Name: "other", Home: "~/.other", RepoFiles: []string{"Z.md", "A.md"}, LoadLimit: 100}},
+	}.Enabled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := discover.Run(ctx, discover.Options{Profiles: ps, Roots: []config.Root{{Path: repo}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Chains) != 1 {
+		t.Fatalf("chains %+v", res.Chains)
+	}
+	var order []string
+	for _, f := range res.Chains[0].Files {
+		order = append(order, f.Rel)
+	}
+	if strings.Join(order, " ") != "Z.md A.md" {
+		t.Fatalf("chain order %q, want [Z.md A.md]", order)
+	}
+	in := input(res.Files...)
+	in.Chains = res.Chains
+	rows := only(t, "load-limit", in)
+	a := filepath.Join(repo, "A.md")
+	if len(rows) != 1 || rows[0].Source.File != a {
+		t.Fatalf("%+v", rows)
+	}
+	if got := evidence(rows[0], "dropped"); got != a {
+		t.Errorf("dropped %q, want %q", got, a)
+	}
+}
