@@ -1017,6 +1017,47 @@ function fmtAge(ts) {
   return `${Math.floor(mo / 12)}y`;
 }
 
+// sessions.ts
+function folderOf(s) {
+  return s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? "" : "";
+}
+function sessionTitle(s) {
+  return s.name || folderOf(s) || s.harness || s.id;
+}
+function sessionMeta(s) {
+  const folder = folderOf(s);
+  const parts = s.name && folder ? [folder, s.harness] : [s.harness];
+  return parts.filter(Boolean).join(" · ");
+}
+function pickable(sessions) {
+  return sessions.filter((s) => s.eligible).sort((a, b) => {
+    const t = sessionTitle(a).localeCompare(sessionTitle(b), void 0, {
+      sensitivity: "base"
+    });
+    return t !== 0 ? t : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+function resolveAttachment(urlSession2, sessions) {
+  if (urlSession2) return { id: urlSession2, auto: false };
+  const ps = pickable(sessions);
+  return ps.length === 1 ? { id: ps[0].id, auto: true } : { id: "", auto: false };
+}
+function attachedState(id, sessions) {
+  if (!id) return "none";
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return "unknown";
+  return s.left ? "left" : "here";
+}
+function urlSession(href) {
+  return new URL(href).searchParams.get("session") ?? "";
+}
+function urlWithSession(href, session) {
+  const u = new URL(href);
+  if (session) u.searchParams.set("session", session);
+  else u.searchParams.delete("session");
+  return u.toString();
+}
+
 // apply.ts
 var PAGE = 200;
 var STEPS_PAGE = 200;
@@ -1102,7 +1143,7 @@ function makeApply(ctx) {
   const itemsSeq = makeSeq();
   const listSeq = makeSeq();
   const jobSeq = makeSeq();
-  const present = () => sessions.filter((s) => !s.left);
+  const present = () => pickable(sessions);
   const planSession = () => {
     const ps = present();
     const here = (id) => !!id && ps.some((s) => s.id === id);
@@ -1819,6 +1860,7 @@ function makeApply(ctx) {
                   class: "kit-chip cb-session" + (s.id === chosen ? " on" : ""),
                   "aria-checked": String(s.id === chosen),
                   "data-session": s.id,
+                  title: sessionMeta(s),
                   onclick() {
                     courtSession = s.id;
                     note = "";
@@ -1826,7 +1868,7 @@ function makeApply(ctx) {
                     if (active) ctx.setPrimary(primary());
                   }
                 },
-                s.label || s.id
+                sessionTitle(s)
               )
             )
           )
@@ -3418,7 +3460,7 @@ function threadOrder(ms) {
 }
 
 // composer.ts
-import { h as h8 } from "/_kit/kit.js";
+import { h as h8, ApiError as ApiError2 } from "/_kit/kit.js";
 
 // attached.ts
 var KIND_PLURAL = { branch: "branches" };
@@ -3485,6 +3527,9 @@ function sameAttached(a, b) {
 }
 
 // composer.ts
+function movedNote(err) {
+  return err instanceof ApiError2 && err.status === 409 ? "that thread moved to another session; not sent" : "";
+}
 function threadName(body) {
   const words = body.split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
   return words.length > 40 ? words.slice(0, 39) + "…" : words;
@@ -3605,6 +3650,11 @@ function makeComposer(ctx, dock) {
     const sent = input.value;
     const body = sent.trim();
     if (!body || sending) return;
+    const why = dock.blocked();
+    if (why) {
+      note.textContent = why;
+      return;
+    }
     sending = true;
     note.textContent = "";
     input.value = "";
@@ -3620,13 +3670,16 @@ function makeComposer(ctx, dock) {
         thread,
         body,
         attached: effective(),
-        batch
+        batch,
+        session: dock.currentSession()
       });
       posted = true;
       override = null;
       renderAttached();
     } catch (err) {
-      note.textContent = "not sent";
+      const moved = movedNote(err);
+      note.textContent = moved || "not sent";
+      if (moved) dock.threadMoved();
       console.error("[composer] send:", err);
     } finally {
       if (!posted) restoreSent(sent);
@@ -3650,13 +3703,16 @@ function makeComposer(ctx, dock) {
     },
     addToBatch() {
       void send(true);
+    },
+    say(text) {
+      note.textContent = text;
     }
   };
 }
 
 // progress.ts
 import { h as h9, card as card3, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
-function makeBatchTray(ctx) {
+function makeBatchTray(ctx, dock) {
   let thread = 0;
   let batch = 0;
   let drafts = [];
@@ -3809,13 +3865,26 @@ function makeBatchTray(ctx) {
   }
   async function sendBatch() {
     if (!batch || !drafts.length) return;
+    const why = dock.blocked();
+    if (why) {
+      dock.say(why);
+      return;
+    }
     const sent = batch;
     drafts = [];
     render();
     try {
-      await ctx.api.post("/batches/send", { batch: sent });
+      await ctx.api.post("/batches/send", {
+        batch: sent,
+        session: dock.currentSession()
+      });
     } catch (err) {
       console.error("[batch] send:", err);
+      const moved = movedNote(err);
+      if (moved) {
+        dock.say(moved);
+        dock.threadMoved();
+      }
       await reload();
     }
   }
@@ -3975,11 +4044,16 @@ function stateLabel(msg) {
   }
   return base;
 }
-function sessionLabel(s) {
-  if (s.label) return s.label;
-  const harness = s.harness || "agent";
-  const cwd = s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? s.cwd : "";
-  return cwd ? `${harness} · ${cwd}` : harness;
+function sessionItem(s, extra = "") {
+  const el = h10(
+    "button",
+    { class: "cb-dock-pick-item", "data-session": s.id },
+    h10("span", { class: "cb-dock-dot" }),
+    h10("span", { class: "cb-dock-pick-title" }, sessionTitle(s))
+  );
+  const meta = [sessionMeta(s), extra].filter(Boolean).join(" · ");
+  if (meta) el.append(h10("span", { class: "cb-dock-pick-meta" }, meta));
+  return el;
 }
 function renderAgentBody(msg) {
   const wrap = h10("div", { class: "cb-dock-body" });
@@ -4135,7 +4209,9 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       }
     });
     releaseBtn.textContent = "release";
-    const otherSessions = sessions.filter((s) => s.id !== d.session_id);
+    const otherSessions = pickable(sessions).filter(
+      (s) => s.id !== d.session_id
+    );
     const moveBtn = h10("button", {
       class: "kit-btn",
       "data-action": "move",
@@ -4171,8 +4247,7 @@ async function moveDelivery(ctx, id, sessionId) {
 }
 function openMoveSheet(ctx, delivery, targets) {
   const items = targets.map((s) => {
-    const el = h10("button", { class: "cb-dock-pick-item" });
-    el.textContent = sessionLabel(s);
+    const el = sessionItem(s);
     el.onclick = () => {
       void moveDelivery(ctx, delivery.id, s.id);
       sheet4.close();
@@ -4216,8 +4291,7 @@ async function moveSession(ctx, fromSession, toSession) {
 }
 function openSessionMoveSheet(ctx, fromSession, targets) {
   const items = targets.map((s) => {
-    const el = h10("button", { class: "cb-dock-pick-item" });
-    el.textContent = sessionLabel(s);
+    const el = sessionItem(s);
     el.onclick = () => {
       void moveSession(ctx, fromSession, s.id);
       sheet4.close();
@@ -4250,20 +4324,20 @@ function openSessionMoveSheet(ctx, fromSession, targets) {
   return Promise.resolve();
 }
 function buildSessionPicker(sessions, currentId, onSelect) {
-  const items = sessions.map((s) => {
-    const busy = s.busy ? " · busy" : " · idle";
-    const stale = s.left ? " · left" : "";
-    const label = sessionLabel(s) + busy + stale;
-    const el = h10("button", {
-      class: "cb-dock-pick-item" + (s.id === currentId ? " cb-dock-pick-item--on" : "")
-    });
-    el.textContent = label;
+  const items = pickable(sessions).map((s) => {
+    const el = sessionItem(s, s.busy ? "busy" : "");
+    if (s.id === currentId) el.classList.add("cb-dock-pick-item--on");
     el.onclick = () => {
       onSelect(s.id);
       picker.remove();
     };
     return el;
   });
+  if (items.length === 0) {
+    items.push(
+      h10("p", { class: "cb-dock-pick-empty" }, "no agent sessions are here")
+    );
+  }
   const picker = h10(
     "div",
     { class: "cb-dock-picker", role: "listbox" },
@@ -4292,19 +4366,24 @@ function makeDock(ctx) {
   let currentThreadId = 0;
   let messages = [];
   let currentDelivery = null;
-  let lastUsedSessionId = "";
+  let urlRead = false;
+  let auto = false;
   const sessionDot = h10("span", { class: "cb-dock-dot" });
-  const sessionLabelEl = h10("span", { class: "cb-dock-session-label" });
+  const sessionLabelEl = h10("span", {
+    class: "cb-dock-session-label",
+    "data-testid": "dock-session-name"
+  });
+  const sessionMetaEl = h10("div", {
+    class: "cb-dock-meta-row",
+    "data-testid": "dock-session-meta"
+  });
   const sessionPickerBtn = h10("button", {
     class: "cb-dock-agent-btn",
     "aria-label": "pick agent session",
     onclick(e) {
       e.stopPropagation();
-      if (!sessions.length) return;
       const p = buildSessionPicker(sessions, currentSessionId, (id) => {
-        lastUsedSessionId = id;
-        ctx.setDockSession(id);
-        void switchSession(id);
+        void attach(id, true);
       });
       const btn = e.currentTarget;
       const rect = btn.getBoundingClientRect();
@@ -4325,19 +4404,42 @@ function makeDock(ctx) {
       h10("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
       sessionPickerBtn
     ),
+    sessionMetaEl,
     leftStatusRow
   );
+  const chooser = h10("div", {
+    class: "cb-dock-chooser",
+    "data-testid": "dock-chooser"
+  });
+  chooser.hidden = true;
   const threadChips = h10("div", { class: "cb-dock-threads" });
   const messageArea = h10("div", {
     class: "cb-dock-messages",
     "data-testid": "dock-messages"
   });
-  const batchTray = makeBatchTray(ctx);
+  const blocked = () => {
+    switch (attachedState(currentSessionId, sessions)) {
+      case "none":
+        return "choose a session first";
+      case "left":
+      case "unknown":
+        return "your session left";
+    }
+    return "";
+  };
+  const batchTray = makeBatchTray(ctx, {
+    blocked,
+    say: (text) => composer.say(text),
+    currentSession: () => currentSessionId,
+    threadMoved: () => void loadThreads()
+  });
   const progLine = makeProgressLine();
   const waitStrip = makeWaitingStrip();
   const composer = makeComposer(ctx, {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
+    blocked,
+    threadMoved: () => void loadThreads(),
     threadCreated(t) {
       threads = [...threads, t];
       currentThreadId = t.id;
@@ -4348,6 +4450,7 @@ function makeDock(ctx) {
   const rail = h10("div", { class: "cb-dock-inner" });
   rail.append(
     sessionHeader,
+    chooser,
     threadChips,
     messageArea,
     progLine.el,
@@ -4358,17 +4461,25 @@ function makeDock(ctx) {
     return sessions.find((s) => s.id === currentSessionId)?.harness || "agent";
   }
   function renderHeader() {
+    const state = attachedState(currentSessionId, sessions);
+    sessionHeader.setAttribute("data-attach", state);
     const sess = sessions.find((s) => s.id === currentSessionId);
     if (!sess) {
       sessionDot.style.background = "var(--kit-muted)";
-      sessionLabelEl.textContent = "no session";
+      sessionLabelEl.textContent = state === "unknown" ? "session not here" : "no session";
+      sessionMetaEl.textContent = "";
+      sessionHeader.removeAttribute("title");
       leftStatusRow.hidden = true;
-      sessionHeader.removeAttribute("data-left");
+      if (state === "unknown") sessionHeader.setAttribute("data-left", "1");
+      else sessionHeader.removeAttribute("data-left");
+      renderChooser(state, null);
       return;
     }
     const stale = !!sess.left;
     sessionDot.style.removeProperty("background");
-    sessionLabelEl.textContent = sessionLabel(sess);
+    sessionLabelEl.textContent = sessionTitle(sess);
+    sessionMetaEl.textContent = sessionMeta(sess);
+    sessionHeader.title = sess.id;
     if (stale) {
       leftStatusRow.textContent = "";
       const moveLink = h10("button", {
@@ -4376,7 +4487,7 @@ function makeDock(ctx) {
         "data-testid": "dock-move-link",
         onclick(e) {
           e.stopPropagation();
-          const others = sessions.filter((s) => s.id !== sess.id);
+          const others = pickable(sessions).filter((s) => s.id !== sess.id);
           void openSessionMoveSheet(ctx, sess.id, others);
         }
       });
@@ -4395,6 +4506,38 @@ function makeDock(ctx) {
       leftStatusRow.hidden = true;
       leftStatusRow.textContent = "";
       sessionHeader.removeAttribute("data-left");
+    }
+    renderChooser(state, sess);
+  }
+  function renderChooser(state, sess) {
+    const none = state === "none";
+    threadChips.hidden = none;
+    messageArea.hidden = none;
+    chooser.textContent = "";
+    if (state === "here") {
+      chooser.hidden = true;
+      return;
+    }
+    chooser.hidden = false;
+    chooser.setAttribute("data-state", state);
+    const offered = pickable(sessions).filter((s) => s.id !== currentSessionId);
+    const lead = h10("p", {
+      class: "cb-dock-chooser-lead",
+      "data-testid": "dock-chooser-lead"
+    });
+    if (none) {
+      lead.textContent = offered.length > 0 ? "Choose the session your messages go to." : "No agent session is here. Ask one to casebook_open this page.";
+    } else {
+      const who = sess ? sessionTitle(sess) : "This page’s session";
+      lead.textContent = offered.length > 0 ? `${who} left. Messages wait for it; choose a session to keep talking.` : `${who} left. Messages wait for it; no other session is here.`;
+    }
+    chooser.append(lead);
+    for (const s of offered) {
+      const el = sessionItem(s, s.busy ? "busy" : "");
+      el.onclick = () => {
+        void attach(s.id, true);
+      };
+      chooser.append(el);
     }
   }
   function renderThreadChips() {
@@ -4442,21 +4585,40 @@ function makeDock(ctx) {
     try {
       const sv = await ctx.api.get("/sessions");
       sessions = sv.sessions ?? [];
-      if (!currentSessionId && sessions.length > 0) {
-        currentSessionId = lastUsedSessionId ? sessions.find((s) => s.id === lastUsedSessionId)?.id ?? sessions[0].id : sessions[0].id;
-        updateSessionParts();
-        await loadThreads();
-        await loadProgress();
+      if (!currentSessionId) {
+        const fromUrl = urlRead ? "" : urlSession(location.href);
+        urlRead = true;
+        const r = resolveAttachment(fromUrl, sessions);
+        if (r.id) {
+          await attach(r.id, !r.auto);
+          return;
+        }
+      } else if (auto && pickable(sessions).length > 1) {
+        detach();
+        return;
       } else {
-        renderHeader();
         await loadDelivery();
-        updateSessionParts();
       }
       renderHeader();
       updateSessionParts();
     } catch (err) {
       console.error("[dock] loadSessions:", err);
     }
+  }
+  async function attach(id, explicit) {
+    auto = !explicit;
+    if (explicit) {
+      const next = urlWithSession(location.href, id);
+      if (next !== location.href) {
+        history.replaceState(history.state, "", next);
+      }
+      ctx.setDockSession(id);
+    }
+    if (id === currentSessionId) {
+      renderHeader();
+      return;
+    }
+    await switchSession(id);
   }
   async function loadThreads() {
     if (!currentSessionId) return;
@@ -4465,8 +4627,8 @@ function makeDock(ctx) {
         session: currentSessionId
       });
       threads = tv.threads ?? [];
-      if (!currentThreadId && threads.length > 0) {
-        currentThreadId = threads[0].id;
+      if (!threads.some((t) => t.id === currentThreadId)) {
+        currentThreadId = threads.length > 0 ? threads[0].id : 0;
       }
       renderThreadChips();
       await loadMessages();
@@ -4534,9 +4696,24 @@ function makeDock(ctx) {
     composer.setAgent(sess?.harness ?? "");
     ctx.setAgentName(sess?.harness ?? "");
   }
+  function detach() {
+    auto = false;
+    currentSessionId = "";
+    currentThreadId = 0;
+    threads = [];
+    messages = [];
+    currentDelivery = null;
+    void batchTray.load(0);
+    progLine.clear();
+    renderHeader();
+    renderThreadChips();
+    renderMessages();
+    updateSessionParts();
+  }
   async function switchSession(id) {
     currentSessionId = id;
     currentThreadId = 0;
+    void batchTray.load(0);
     threads = [];
     messages = [];
     currentDelivery = null;
@@ -4558,8 +4735,12 @@ function makeDock(ctx) {
     await batchTray.load(id);
   }
   async function newThread() {
-    const sessId = lastUsedSessionId || currentSessionId;
-    if (!sessId) return;
+    const sessId = currentSessionId;
+    const why = blocked();
+    if (why) {
+      composer.say(why);
+      return;
+    }
     try {
       const t = await ctx.api.post("/threads", {
         session: sessId,
@@ -4576,8 +4757,12 @@ function makeDock(ctx) {
       console.error("[dock] newThread:", err);
     }
   }
-  ctx.on("sessions", () => {
+  ctx.on("sessions", (data) => {
     void loadSessions();
+    const d = data;
+    if (d?.moved_from && d.moved_from === currentSessionId) {
+      void loadThreads();
+    }
   });
   ctx.on("thread", (data) => {
     void loadThreads();
@@ -4595,7 +4780,10 @@ function makeDock(ctx) {
   ctx.on("delivery", (data) => {
     const d = data;
     const isOurs = !d.session || d.session === currentSessionId || d.from === currentSessionId || d.id !== void 0 && currentDelivery?.id === d.id;
-    if (isOurs) {
+    if (d.from && d.from === currentSessionId && d.session !== d.from) {
+      void loadThreads();
+      void loadSessions();
+    } else if (isOurs) {
       void loadMessages().then(() => loadDelivery());
       void loadSessions();
     }
@@ -4675,7 +4863,7 @@ import {
   buttons as buttons2,
   card as card5,
   sheet as sheet3,
-  ApiError as ApiError2
+  ApiError as ApiError3
 } from "/_kit/kit.js";
 
 // conditions.ts
@@ -5065,7 +5253,7 @@ var VIEWS3 = [
 function message2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var isConflict = (err) => err instanceof ApiError2 && err.status === 409;
+var isConflict = (err) => err instanceof ApiError3 && err.status === 409;
 function slug(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
@@ -5608,7 +5796,7 @@ ${dispositions.join(" ")}`;
       if (mine === seq) setPreview({ ...p, page: rows });
     } catch (err) {
       if (mine !== seq) return;
-      if (err instanceof ApiError2 && err.status === 400)
+      if (err instanceof ApiError3 && err.status === 400)
         setInvalid(err.message);
       else note.textContent = `preview failed: ${message2(err)}`;
     }
@@ -5866,7 +6054,7 @@ ${dispositions.join(" ")}`;
       return true;
     } catch (err) {
       if (isConflict(err)) void afterConflict("saved");
-      else if (err instanceof ApiError2 && err.status === 400) {
+      else if (err instanceof ApiError3 && err.status === 400) {
         if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
         else note.textContent = err.message;
       } else note.textContent = `not saved: ${message2(err)}`;

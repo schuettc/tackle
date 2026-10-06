@@ -9,6 +9,7 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -92,10 +93,11 @@ type Server struct {
 	after       func(d time.Duration) <-chan time.Time // serve's clock for the pusher's retries (nil: time.After)
 	life        context.Context                        // Run's context; done while shutting down
 	stop        context.CancelFunc
-	// openPage opens the page in Court's browser at a route fragment ("" for
-	// the front, "#/item/<key>", "#/attention/<view>") for casebook_open; nil
-	// when serve can't open a browser.
-	openPage func(fragment string) error
+	// openPage opens the page in Court's browser for casebook_open: suffix
+	// is appended to the page URL (…/?t=<token>), an optional
+	// SessionQuery then an optional route fragment ("#/item/<key>",
+	// "#/attention/<view>"). nil when serve can't open a browser.
+	openPage func(suffix string) error
 }
 
 // The page_open flag in meta records whether a tab was connected when serve
@@ -221,6 +223,7 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	if err := s.resumeInterruptedJobs(ctx); err != nil {
 		return nil, err
 	}
+	s.pruneSessions(ctx)
 	s.activity.Store(time.Now().UnixMilli())
 	return s, nil
 }
@@ -528,6 +531,7 @@ func (s *Server) watch(ctx context.Context) {
 				if err := s.Props.TrimProgressLog(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "casebook serve: trim progress_log: %v\n", err)
 				}
+				s.pruneSessions(ctx)
 				lastTrim = time.Now()
 			}
 		}
@@ -593,6 +597,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/sync", s.postSync)
 	// agent (casebook channel)
 	m.HandleFunc("POST /api/agent/presence", s.agentPresence)
+	m.HandleFunc("POST /api/agent/session-info", s.agentSessionInfo)
 	m.HandleFunc("GET /api/agent/wait", s.agentWait)
 	m.HandleFunc("POST /api/agent/reply", s.agentReply)
 	m.HandleFunc("POST /api/agent/propose", s.agentPropose)
@@ -739,7 +744,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 		// Guard the write: agentOpen reads openPage concurrently once the
 		// handler is registered (localweb.Start already began serving above).
 		s.mu.Lock()
-		s.openPage = func(fragment string) error { return o.Open(srv.URL + fragment) }
+		s.openPage = func(suffix string) error { return o.Open(srv.URL + suffix) }
 		s.mu.Unlock()
 	}
 	if err := writeAdvert(adv); err != nil {
@@ -847,4 +852,47 @@ func Start(exe string, port int) (Advert, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return Advert{}, fmt.Errorf("casebook serve (pid %d) didn't start; see %s", pid, logPath)
+}
+
+// SessionRetention is how long serve keeps an exited session that nothing
+// refers to before pruning it: long enough that a session that left for a
+// weekend is still there to come back to.
+const SessionRetention = 7 * 24 * time.Hour
+
+// pruneSessions drops long-gone sessions nothing refers to
+// (deliver.Queue.Prune), at start and daily. The rule drafts' authors are
+// references Prune can't see (they live in the casebook repo); a rule file
+// serve can't read might name one, so with any unreadable rule nothing is
+// pruned this time. A failure is a diagnostic: the table just keeps them.
+func (s *Server) pruneSessions(ctx context.Context) {
+	all, errs := s.App.Repo.Rules()
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "casebook serve: prune sessions skipped: %d rule(s) unreadable\n", len(errs))
+		return
+	}
+	var spare []string
+	for _, r := range all {
+		if _, id, ok := strings.Cut(r.CreatedBy, ":"); ok && id != "" {
+			spare = append(spare, id)
+		}
+	}
+	n, err := s.Queue.Prune(ctx, SessionRetention, spare...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: prune sessions: %v\n", err)
+		return
+	}
+	if n > 0 {
+		s.publish(ctx, "sessions", map[string]int{"pruned": n})
+	}
+}
+
+// SessionQuery is the page URL's query addition that attaches the page to
+// a session: "&session=<id>" (the page URL already carries ?t=<token>;
+// localweb keeps other parameters through the token exchange), or "" for
+// none.
+func SessionQuery(id string) string {
+	if id == "" {
+		return ""
+	}
+	return "&session=" + url.QueryEscape(id)
 }

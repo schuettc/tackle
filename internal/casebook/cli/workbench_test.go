@@ -101,6 +101,36 @@ func TestServeStartsDetachedWhenNotRunning(t *testing.T) {
 	<-stop
 }
 
+// `casebook serve` run by a session (an agent's shell carries its session in
+// AGENT_SESSION_ID, Claude Code's in CLAUDE_CODE_SESSION_ID) opens the page
+// attached to that session; from a plain terminal it opens a page that
+// belongs to no session.
+func TestServeOpensThePageAttachedToTheCallingSession(t *testing.T) {
+	_, opened := wbSetup(t)
+	t.Setenv("AGENT_SESSION_CHILD", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("AGENT_SESSION_ID", "")
+	done := make(chan int, 1)
+	go func() { code, _, _ := run("serve", "--foreground", "--no-open"); done <- code }()
+	adv := waitRunning(t)
+	defer func() { run("serve", "--stop"); <-done }()
+	for _, c := range []struct{ agent, claude, want string }{
+		{"pi-sess-1", "", "?t=" + adv.Token + "&session=pi-sess-1"},
+		{"", "cc-sess-2", "?t=" + adv.Token + "&session=cc-sess-2"},
+		{"", "", "?t=" + adv.Token},
+	} {
+		t.Setenv("AGENT_SESSION_ID", c.agent)
+		t.Setenv("CLAUDE_CODE_SESSION_ID", c.claude)
+		before := len(*opened)
+		if code, out, _ := run("serve"); code != 0 || len(*opened) != before+1 {
+			t.Fatalf("serve: %d %q %v", code, out, *opened)
+		}
+		if got := (*opened)[before]; !strings.HasSuffix(got, c.want) {
+			t.Fatalf("AGENT_SESSION_ID=%q CLAUDE_CODE_SESSION_ID=%q opened %q, want a URL ending %q", c.agent, c.claude, got, c.want)
+		}
+	}
+}
+
 func TestSettledFromClaudeStopHook(t *testing.T) {
 	wbSetup(t)
 	go run("serve", "--foreground", "--no-open")
@@ -359,5 +389,75 @@ func TestSettledClaudeHungStdinReturns(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("settled --harness claude with a never-closing stdin did not return within 5 s")
+	}
+}
+
+// `casebook session-info` is how pi-casebook tells serve a pi session's name,
+// its parent session, and that it ended. Like settled it never fails, never prints, and never
+// starts serve.
+func TestSessionInfoReachesServe(t *testing.T) {
+	wbSetup(t)
+	done := make(chan int, 1)
+	go func() { code, _, _ := run("serve", "--foreground", "--no-open"); done <- code }()
+	waitRunning(t)
+	defer func() { run("serve", "--stop"); <-done }()
+	sessions := func() map[string]map[string]any {
+		var sv struct {
+			Sessions []map[string]any `json:"sessions"`
+		}
+		if _, err := channel.NewClient().Do(context.Background(), http.MethodGet, "/api/sessions", nil, &sv); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]map[string]any{}
+		for _, s := range sv.Sessions {
+			out[s["id"].(string)] = s
+		}
+		return out
+	}
+	for _, args := range [][]string{
+		{"session-info", "--session", "p1", "--name", "tools-workspace/casebook", "--cwd", "/w/tools-workspace", "--pid", "4242"},
+		{"session-info", "--session", "w1", "--name", "worker#40c0f7e1", "--cwd", "/w/tools-workspace", "--pid", "4242", "--parent", "p1"},
+	} {
+		if code, out := runIn("", args...); code != 0 || out != "" {
+			t.Fatalf("%v: %d %q", args, code, out)
+		}
+	}
+	ss := sessions()
+	if p := ss["p1"]; p == nil || p["name"] != "tools-workspace/casebook" || p["harness"] != "pi" || p["worker"] != false || p["eligible"] != true {
+		t.Fatalf("p1 = %v", p)
+	}
+	if w := ss["w1"]; w == nil || w["worker"] != true || w["eligible"] != false {
+		t.Fatalf("w1 = %v", w)
+	}
+	// A rename.
+	if code, out := runIn("", "session-info", "--session", "p1", "--name", "tools-workspace/owner", "--cwd", "/w/tools-workspace", "--pid", "4242"); code != 0 || out != "" {
+		t.Fatalf("rename: %d %q", code, out)
+	}
+	if p := sessions()["p1"]; p["name"] != "tools-workspace/owner" {
+		t.Fatalf("after the rename p1 = %v", p)
+	}
+	// pi replaced p1 in its process (/fork): it ended, so it has left, and
+	// w1 is no worker of a live parent any more.
+	if code, out := runIn("", "session-info", "--session", "p1", "--ended"); code != 0 || out != "" {
+		t.Fatalf("ended: %d %q", code, out)
+	}
+	ss = sessions()
+	if p := ss["p1"]; p["left"] != true || p["name"] != "tools-workspace/owner" {
+		t.Fatalf("after the end p1 = %v", p)
+	}
+	if w := ss["w1"]; w["worker"] != false {
+		t.Fatalf("after its parent ended w1 = %v", w)
+	}
+}
+
+func TestSessionInfoWithoutServeIsSilent(t *testing.T) {
+	wbSetup(t) // no serve started
+	for _, args := range [][]string{{"session-info", "--session", "x", "--name", "n"}, {"session-info"}, {"session-info", "--bogus"}} {
+		if code, out := runIn("", args...); code != 0 || out != "" {
+			t.Errorf("%v: %d %q", args, code, out)
+		}
+	}
+	if _, err := serve.Running(); err == nil {
+		t.Fatal("session-info started serve")
 	}
 }

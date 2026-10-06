@@ -21,7 +21,7 @@ func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
 		{Name: "casebook_status", Description: "The attention counts, whether the user has the casebook page open, and what changed since you last looked: how many of your proposals the user accepted, and each one they changed or rejected with their reason.",
 			InputSchema: schema(`{"type":"object","properties":{}}`)},
-		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. Only when they ask, or when you hand them something to review; never repeatedly.",
+		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. The page opens attached to this session: the user's messages from it come to you. Only when they ask, or when you hand them something to review; never repeatedly.",
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"},"view":{"type":"string","enum":["waiting","new","due","proposed","all","board"],"description":"open at this Attention view"}}}`)},
 		{Name: "casebook_attention", Description: "List items needing attention. view: waiting (incoming, no reply from the user), new (undecided), due (due/drift/conflict), proposed (a proposal is pending), all.",
 			InputSchema: schema(`{"type":"object","properties":{"view":{"type":"string","enum":["waiting","new","due","proposed","all"]},"kind":{"type":"string","enum":["repo","pr","issue","branch","worktree"]},"repo":{"type":"string","description":"owner/name or owner"},"q":{"type":"string","description":"substring of key or title"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}`)},
@@ -97,17 +97,43 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			return pretty(out), err
 		})
 	case "casebook_open":
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", map[string]any{"key": a.Key, "view": a.View}, nil)
+		// The page opens attached to this channel's session (galley_open's
+		// rule: what's opened belongs to the session that opened it), so
+		// Court's messages from it come here. No session: nobody's page.
+		open := func(session string) func() (string, error) {
+			return func() (string, error) {
+				body := map[string]any{"key": a.Key, "view": a.View}
+				if session != "" {
+					body["session"] = session
+				}
+				_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", body, nil)
+				return "", err
+			}
+		}
+		var err error
+		note := ""
+		if ch.ID.Session != "" {
+			_, err = ch.callSessionBound(ctx, open(ch.ID.Session))
+			if oldServe(err) {
+				// A serve started before pages could belong to a session
+				// refuses the field. Open the page anyway; it asks Court
+				// which session to talk to.
+				_, err = open("")()
+				note = "; it is not attached to this session: the running casebook serve is older than this casebook, so it needs a restart first (run `casebook serve --stop`, then casebook_open again, to attach it)"
+			}
+		} else {
+			_, err = open("")()
+		}
 		if err != nil {
 			return "", err
 		}
 		switch {
 		case a.Key != "":
-			return "opened the casebook page at " + a.Key, nil
+			return "opened the casebook page at " + a.Key + note, nil
 		case a.View != "":
-			return "opened the casebook page at the " + a.View + " view", nil
+			return "opened the casebook page at the " + a.View + " view" + note, nil
 		}
-		return "opened the casebook page", nil
+		return "opened the casebook page" + note, nil
 	case "casebook_attention":
 		return ch.attention(ctx, serve.Query{View: a.View, Kind: a.Kind, Repo: a.Repo, Text: a.Q, Offset: a.Offset, Limit: a.Limit})
 	case "casebook_show":
@@ -325,4 +351,11 @@ func (ch *Channel) history(ctx context.Context, key string) (string, error) {
 		return "", err
 	}
 	return pretty(map[string]any{"decisions": out.Decisions, "events": out.History}), nil
+}
+
+// oldServe reports whether err is a serve older than this channel refusing
+// casebook_open's "session" field (400, unknown field "session").
+func oldServe(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusBadRequest && strings.Contains(se.Msg, `unknown field "session"`)
 }

@@ -629,7 +629,8 @@ async function applyScenariosOn(context, t, serveHandle) {
             ].map((e) => e.textContent);
             return ls.length === 2 && ls.includes(a) && ls.includes(b);
           },
-          [LABEL, OTHER_LABEL],
+          // Named by folder (they have no pi name), as the dock names them.
+          ['t9', 'else'],
           8000,
         ),
       );

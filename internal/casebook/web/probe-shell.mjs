@@ -236,6 +236,12 @@ async function keyboardScenario(shared, t) {
       const sid = 'probe-t10-kb';
       const label = 'pi \u00b7 kb';
       await agent.presence(sid, label, '/home/court/kb', 'pi');
+      // The session stays here (serve's left threshold is 3 s in the probe):
+      // the dock adds to a batch only for a session that is.
+      const beat = setInterval(() => {
+        agent.presence(sid, label, '/home/court/kb', 'pi').catch(() => {});
+      }, 800);
+      beat.unref();
       const thread = await agent.newThread(sid, 'kb');
       await agent.propose(sid, [KB_KEY(41)], 'keep', 'kb');
       await agent.propose(sid, [KB_KEY(42)], 'close', 'kb');
@@ -278,7 +284,9 @@ async function keyboardScenario(shared, t) {
             !!document.querySelector(
               `.cb-dock-threads [data-thread="${th}"].on`,
             ),
-          [label, thread.id],
+          // The only session here: the dock attaches to it, named by its
+          // folder (it has no pi name).
+          ['kb', thread.id],
           10000,
         );
         check(
@@ -813,6 +821,7 @@ async function keyboardScenario(shared, t) {
         await setTheme(pg, 'light');
         check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
       } finally {
+        clearInterval(beat);
         await pg.close();
       }
     }),

@@ -17,7 +17,7 @@
 // keys, rules or jobs are dropped, and the line re-renders from what was
 // parsed, so the value shown is exactly what is sent.
 
-import { h } from '/_kit/kit.js';
+import { h, ApiError } from '/_kit/kit.js';
 import type { Attached, Thread } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import {
@@ -32,8 +32,29 @@ import {
 export interface ComposerDock {
   currentThread(): number;
   currentSession(): string;
+  /**
+   * Why nothing can be sent now ('' when it can): no session is attached,
+   * or the attached one left. The composer says so and keeps the text; it
+   * never sends to another session in its place.
+   */
+  blocked(): string;
   /** Called after a message is posted into a thread the composer created. */
   threadCreated(t: Thread): void;
+  /**
+   * serve refused a send because the thread belongs to another session
+   * now (moved behind the page's back): the dock reloads its threads.
+   */
+  threadMoved(): void;
+}
+
+/**
+ * The note for a send serve refused because its thread moved to another
+ * session (409 thread_moved), or '' for any other failure.
+ */
+export function movedNote(err: unknown): string {
+  return err instanceof ApiError && err.status === 409
+    ? 'that thread moved to another session; not sent'
+    : '';
 }
 
 export interface ComposerHandle {
@@ -51,6 +72,8 @@ export interface ComposerHandle {
   addToBatch(): void;
   /** The message field, so the `⌘↵` binding can scope itself to it. */
   input: HTMLTextAreaElement;
+  /** Show a note in the footer (why something wasn't sent). */
+  say(text: string): void;
 }
 
 // threadName names a new thread from its first request (spec §3.5 item 2).
@@ -210,6 +233,11 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     const sent = input.value;
     const body = sent.trim();
     if (!body || sending) return;
+    const why = dock.blocked();
+    if (why) {
+      note.textContent = why;
+      return;
+    }
     sending = true;
     note.textContent = '';
     // The field clears as the send starts, so it never holds sent text:
@@ -224,17 +252,23 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         note.textContent = 'no agent session';
         return;
       }
+      // The page's session goes with it: serve refuses a thread that is
+      // another session's now, so a send never reaches a session the
+      // header doesn't name.
       await ctx.api.post('/messages', {
         thread,
         body,
         attached: effective(),
         batch,
+        session: dock.currentSession(),
       });
       posted = true;
       override = null;
       renderAttached();
     } catch (err) {
-      note.textContent = 'not sent';
+      const moved = movedNote(err);
+      note.textContent = moved || 'not sent';
+      if (moved) dock.threadMoved();
       console.error('[composer] send:', err);
     } finally {
       if (!posted) restoreSent(sent);
@@ -260,6 +294,9 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     },
     addToBatch(): void {
       void send(true);
+    },
+    say(text: string): void {
+      note.textContent = text;
     },
   };
 }

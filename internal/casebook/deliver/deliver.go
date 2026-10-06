@@ -64,7 +64,42 @@ type Session struct {
 	LookedAt  time.Time `json:"looked_at,omitzero"`
 	Busy      bool      `json:"busy"`           // a delivery is in flight
 	Queued    int       `json:"queued"`         // count of queued (unsent) messages
-	Left      bool      `json:"left,omitempty"` // last_seen > LeftAfter (server-computed)
+	Left      bool      `json:"left,omitempty"` // last_seen > LeftAfter, or the harness said it ended (server-computed)
+	// Name is the name the session's harness knows it by: pi's session
+	// name (Court renames sessions; pi-casebook reports each rename), ""
+	// when it has none (Claude Code, an unnamed pi session). The page shows
+	// the folder then.
+	Name string `json:"name"`
+	// Worker: a session whose parent session is live in the same harness
+	// process (a pi-subagents worker). Server-computed; see sessionCols.
+	Worker bool `json:"worker"`
+	// Eligible: the page may offer this session to Court, attach to it on
+	// its own when it is the only one, and send to it: live and not a
+	// worker. Server-computed.
+	Eligible bool `json:"eligible"`
+}
+
+// SessionInfo is what the session's harness side (pi-casebook, in pi's own
+// process) says about a session beyond presence: its name, its parent
+// session, and that it ended. PID is the harness process (pi's), the same
+// one the channel reports as its parent.
+type SessionInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Harness string `json:"harness"`
+	CWD     string `json:"cwd"`
+	PID     int    `json:"pid"`
+	// Parent is the session this one was started from: the session id
+	// named by the header's parentSession (pi-subagents writes it into a
+	// worker's header; a fork carries it too), or, for a pi-subagents
+	// worker kept in memory (no header parent), the session it runs under.
+	// "" when none. A session is a worker only while its parent is live in
+	// the same pi process (see sessionCols).
+	Parent string `json:"parent"`
+	// Ended: the harness says the session has ended (pi replaced it in
+	// its process: /fork, /new, /resume; or pi quit). Only ended_at
+	// changes; nothing else in the report is read.
+	Ended bool `json:"ended"`
 }
 
 // Thread is a conversation with one session.
@@ -189,37 +224,128 @@ func tm(v int64) time.Time {
 }
 
 // Touch records a session's presence (insert or refresh).
+//
+// A session the harness said ended stays ended through a beat that lands
+// within LeftAfter of the end: its channel's last beats, sent before pi
+// replaced it. A beat after that is the session back (a resume in another
+// process) and clears the end.
 func (q *Queue) Touch(ctx context.Context, s Session) error {
 	now := ms(q.Now())
-	_, err := q.DB.ExecContext(ctx, `INSERT INTO sessions(id, harness, label, cwd, pid, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(id) DO UPDATE SET harness=excluded.harness, label=excluded.label, cwd=excluded.cwd, pid=excluded.pid, last_seen=excluded.last_seen`,
-		s.ID, s.Harness, s.Label, s.CWD, s.PID, now, now)
+	_, err := q.DB.ExecContext(ctx, `INSERT INTO sessions(id, harness, label, cwd, pid, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+		ON CONFLICT(id) DO UPDATE SET harness=excluded.harness, label=excluded.label, cwd=excluded.cwd, pid=excluded.pid, last_seen=excluded.last_seen,
+			ended_at=CASE WHEN ended_at != 0 AND ?6 - ended_at <= ?7 THEN ended_at ELSE 0 END`,
+		s.ID, s.Harness, s.Label, s.CWD, s.PID, now, q.leftAfter().Milliseconds())
 	return err
 }
+
+// SetInfo records what the harness says about a session: its name (a
+// rename replaces it; "" clears it) and its parent, and refreshes the pid,
+// harness and cwd when given. The session is running (pi-casebook reports
+// from inside it), so any end is cleared. It makes the row when the channel
+// hasn't announced the session yet, seen now.
+//
+// An Ended report only marks the session ended (it is left from now on; see
+// Touch), and only a session serve knows.
+func (q *Queue) SetInfo(ctx context.Context, in SessionInfo) error {
+	now := ms(q.Now())
+	if in.Ended {
+		_, err := q.DB.ExecContext(ctx, `UPDATE sessions SET ended_at = ? WHERE id = ?`, now, in.ID)
+		return err
+	}
+	_, err := q.DB.ExecContext(ctx, `INSERT INTO sessions(id, harness, label, cwd, pid, first_seen, last_seen, name, parent) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET name=excluded.name, parent=excluded.parent, ended_at=0,
+			harness=CASE WHEN excluded.harness != '' THEN excluded.harness ELSE harness END,
+			cwd=CASE WHEN excluded.cwd != '' THEN excluded.cwd ELSE cwd END,
+			pid=CASE WHEN excluded.pid != 0 THEN excluded.pid ELSE pid END,
+			last_seen=excluded.last_seen`,
+		in.ID, in.Harness, in.CWD, in.PID, now, now, in.Name, in.Parent)
+	return err
+}
+
+// Prune deletes sessions that exited longer than keep ago and that nothing
+// refers to, and returns how many went. The sessions table otherwise only
+// grows: every pi session, subagent worker and Claude Code session that ever
+// announced itself stays.
+//
+// A reference is any place a session id is held (db.go's schema): a thread,
+// a delivery, a progress line or its log, a message it wrote (a reply stays
+// in a thread that moved on), a job approved for it, a proposal or evidence
+// it made ("<harness>:<id>"), an event in the live log that names it; and
+// spare, the ids the caller knows of outside the database (serve: rule
+// drafts' created_by). batches and needs_you hold no session id; they reach
+// one only through a thread or a job.
+func (q *Queue) Prune(ctx context.Context, keep time.Duration, spare ...string) (int, error) {
+	cutoff := ms(q.Now().Add(-keep))
+	if spare == nil {
+		spare = []string{}
+	}
+	spareJSON, err := json.Marshal(spare)
+	if err != nil {
+		return 0, err
+	}
+	res, err := q.DB.ExecContext(ctx, pruneSQL, cutoff, string(spareJSON))
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// pruneSQL deletes the sessions Prune may: ?1 is the cutoff (unix ms), ?2
+// the spare ids as a JSON array. A "<harness>:<id>" source matches on what
+// follows its first colon (harness names have none).
+const pruneSQL = `DELETE FROM sessions WHERE id IN (SELECT s.id FROM sessions s WHERE s.last_seen < ?1
+	AND s.id NOT IN (SELECT value FROM json_each(?2))
+	AND NOT EXISTS(SELECT 1 FROM threads t WHERE t.session_id = s.id)
+	AND NOT EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id)
+	AND NOT EXISTS(SELECT 1 FROM progress p WHERE p.session_id = s.id)
+	AND NOT EXISTS(SELECT 1 FROM progress_log p WHERE p.session_id = s.id)
+	AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.author = s.id)
+	AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.session = s.id)
+	AND NOT EXISTS(SELECT 1 FROM proposals p WHERE substr(p.source, instr(p.source, ':') + 1) = s.id)
+	AND NOT EXISTS(SELECT 1 FROM evidence e WHERE substr(e.author, instr(e.author, ':') + 1) = s.id)
+	AND NOT EXISTS(SELECT 1 FROM events e WHERE instr(e.payload, '"' || s.id || '"') > 0 OR instr(e.payload, ':' || s.id || '"') > 0))`
+
+// sessionCols selects a session row with its server-computed facts. Its
+// one parameter is the left cutoff (unix ms): a session last seen before
+// it, or one the harness said ended, has left.
+//
+// worker: the session's parent session is live in the same harness process
+// (same pid, above 1: 0 is unknown, 1 an orphaned channel's parent).
+// pi-subagents runs its workers inside the parent's pi process and names
+// the parent in each worker's header. A fork names its parent too, but its
+// parent runs in another pi process (a fork started with --fork), or has
+// ended (pi's in-process /fork replaces it: pi-casebook reports the old
+// session ended, so its last heartbeat window doesn't count). So a fork,
+// even one running subagents of its own, is not a worker; its subagents
+// are. Measured 2026-10-06 on Court's machine: pi 92602 hosted 01a10e0b
+// (no parentSession) and four worker#<hex> sessions whose parentSession
+// named it; the forked bettor-help-workspace/platform ran alone in pi 24023.
+const sessionCols = `s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at, s.name, s.ended_at != 0,
+		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight'),
+		(s.parent != '' AND s.pid > 1 AND EXISTS(SELECT 1 FROM sessions p WHERE p.id = s.parent AND p.pid = s.pid AND p.last_seen >= ?1 AND p.ended_at = 0))`
 
 // Sessions lists every known session, most recently seen first.
 // Left is computed server-side: a session is left when its last_seen is older
 // than the configured LeftAfter threshold (default 60 s, spec §2.1).
 func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
-	rows, err := q.DB.QueryContext(ctx, `SELECT s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at,
-		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight'),
+	now := q.Now()
+	rows, err := q.DB.QueryContext(ctx, `SELECT `+sessionCols+`,
 		COALESCE((SELECT count(*) FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.session_id = s.id AND m.state = 'queued'), 0)
-		FROM sessions s ORDER BY s.last_seen DESC`)
+		FROM sessions s ORDER BY s.last_seen DESC`, q.leftCutoff(now))
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	leftThreshold := q.leftAfter()
-	now := q.Now()
 	var out []Session
 	for rows.Next() {
 		var s Session
 		var fs, ls, la int64
-		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy, &s.Queued); err != nil {
+		var ended bool
+		if err := rows.Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Name, &ended, &s.Busy, &s.Worker, &s.Queued); err != nil {
 			return nil, err
 		}
-		s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
-		s.Left = now.Sub(s.LastSeen) > leftThreshold
+		q.facts(&s, fs, ls, la, ended, now)
 		out = append(out, s)
 	}
 	return out, rows.Err()
@@ -890,15 +1016,26 @@ func (q *Queue) Thread(ctx context.Context, id int64) (Thread, error) {
 func (q *Queue) Session(ctx context.Context, id string) (Session, error) {
 	var s Session
 	var fs, ls, la int64
-	err := q.DB.QueryRowContext(ctx, `SELECT s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.last_seen, s.looked_at,
-		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight') FROM sessions s WHERE s.id = ?`, id).
-		Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Busy)
+	var ended bool
+	now := q.Now()
+	err := q.DB.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM sessions s WHERE s.id = ?2`, q.leftCutoff(now), id).
+		Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Name, &ended, &s.Busy, &s.Worker)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Session{}, ErrNotFound
 		}
 		return Session{}, err
 	}
-	s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
+	q.facts(&s, fs, ls, la, ended, now)
 	return s, nil
+}
+
+// leftCutoff is the last_seen (unix ms) before which a session has left.
+func (q *Queue) leftCutoff(now time.Time) int64 { return ms(now.Add(-q.leftAfter())) }
+
+// facts fills a scanned session's times and its server-computed flags.
+func (q *Queue) facts(s *Session, fs, ls, la int64, ended bool, now time.Time) {
+	s.FirstSeen, s.LastSeen, s.LookedAt = tm(fs), tm(ls), tm(la)
+	s.Left = ended || now.Sub(s.LastSeen) > q.leftAfter()
+	s.Eligible = !s.Left && !s.Worker
 }

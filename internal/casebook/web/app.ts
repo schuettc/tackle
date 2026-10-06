@@ -53,9 +53,10 @@ export interface Ctx {
   setAgentName(name: string): void;
   onAgentName(cb: (name: string) => void): void;
   /**
-   * The session Court picked in the dock ('' until he picks one there; the
-   * dock showing the first session on its own is not a choice). To apply
-   * offers it for a plan's outward steps.
+   * The dock's session when it was chosen: the session that opened the page
+   * (the URL's ?session=) or the one Court picked in the dock ('' until
+   * then; the dock attaching to the only session here on its own is not a
+   * choice). To apply offers it for a plan's outward steps.
    */
   dockSession(): string;
   setDockSession(id: string): void;

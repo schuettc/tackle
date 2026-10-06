@@ -185,6 +185,8 @@ type StatusView struct {
 // OpenResult is the response body of POST /api/agent/open.
 type OpenResult struct {
 	Opened string `json:"opened"`
+	// Session is the session the page opened attached to ("" for none).
+	Session string `json:"session,omitempty"`
 }
 
 // SettledResult is the response body of POST /api/agent/settled.

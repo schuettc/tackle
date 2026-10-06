@@ -413,6 +413,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -899,12 +900,22 @@
 
 .cb-comp-foot {
   display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   justify-content: space-between;
   align-items: center;
   border-top: 1px solid var(--kit-line);
   padding: 7px 10px 7px 12px;
   font: 11.5px var(--kit-mono);
   color: var(--kit-muted);
+}
+/* The key hint and the note each stay whole: when both don't fit, the
+   note drops to a second line instead of breaking mid-phrase. */
+.cb-comp-foot > span {
+  white-space: nowrap;
+}
+.cb-comp-note {
+  margin-left: auto;
 }
 
 /* ---- history entries ----------------------------------------------------- */
@@ -1678,4 +1689,85 @@ textarea.cb-needs-edit:focus {
 .kit-app > .cb-down .kit-btn {
   background: var(--kit-bg);
   border-color: var(--kit-muted);
+}
+
+/* ---- the dock's session (the page belongs to the session that opened it)
+ * The header names the attached session: its name (or folder) in the
+ * foreground, and below it, muted, its folder and harness. The chooser shows
+ * when no session is attached or the attached one left. No new colours:
+ * agent amber for the dot, muted text for the rest. */
+.cb-dock-meta-row {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  padding-left: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cb-dock-meta-row:empty {
+  display: none;
+}
+
+.cb-dock-header[data-attach='none'] .cb-dock-session-label {
+  color: var(--kit-muted);
+}
+
+.cb-dock-chooser {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 12px 10px;
+  border-bottom: 1px solid var(--kit-line);
+  flex: none;
+  max-height: 50%;
+  overflow: auto;
+}
+
+/* With no session the chooser is the whole panel (the threads and messages
+   hide): it takes their place, so the composer stays at the bottom. */
+.cb-dock-chooser[data-state='none'] {
+  flex: 1;
+  max-height: none;
+  border-bottom: 0;
+}
+
+.cb-dock-chooser[hidden] {
+  display: none;
+}
+
+.cb-dock-chooser-lead {
+  font: 12.5px/1.45 var(--kit-sans);
+  color: var(--kit-muted);
+  margin: 0 4px 6px;
+}
+
+/* A session in a list (the chooser, the picker, the move sheets): the dot,
+   its name, and below the name its folder and harness, muted. */
+.cb-dock-pick-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+}
+
+.cb-dock-pick-title,
+.cb-dock-pick-meta {
+  grid-column: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cb-dock-pick-meta {
+  color: var(--kit-muted);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.cb-dock-threads[hidden],
+.cb-dock-messages[hidden] {
+  display: none;
 }

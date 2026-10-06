@@ -1,7 +1,8 @@
 // Package db is casebook serve's working-state database: SQLite at
 // StateDir/casebook.db, written only by casebook serve. It holds sessions,
 // threads, messages, deliveries, batches, proposals, evidence, progress,
-// the live event log, and (from schema v2) jobs and steps. Durable intent
+// the live event log, (from schema v2) jobs and steps, and (from v3) a
+// session's name, parent and end. Durable intent
 // (decisions, rules) lives in the casebook repo, never here.
 //
 // This package is a thin wrapper over github.com/schuettc/tools-common/sqlitedb,
@@ -20,7 +21,7 @@ import (
 type DB = sqlitedb.DB
 
 // SchemaVersion is the schema version this binary targets.
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // schemaV1 is P1a's migration-1 SQL verbatim.
 const schemaV1 = `
@@ -174,11 +175,25 @@ CREATE TABLE needs_you (
 CREATE UNIQUE INDEX deliveries_one_inflight ON deliveries(session_id) WHERE state = 'inflight';
 `
 
+// schemaV3 gives a session the name its harness knows it by (pi's session
+// name; "" for Claude Code), its parent session (the session it was started
+// from: pi-subagents' worker header names its parent, a fork's names the
+// session it forked), and when the harness said it ended (pi replaced it
+// in its process, or quit). Whether a session is a worker is decided when
+// sessions are read: its parent is live in the same process
+// (deliver.Queue.Sessions).
+const schemaV3 = `
+ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN parent TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0;
+`
+
 // Migrations is the ordered list of schema steps for this binary.
 // Migrations[i] moves the database from user_version i to i+1.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
 	sqlitedb.SQL(schemaV2),
+	sqlitedb.SQL(schemaV3),
 }
 
 // Open opens (creating if needed) the database at path and migrates it to
