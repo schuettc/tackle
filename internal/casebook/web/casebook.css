@@ -900,12 +900,22 @@
 
 .cb-comp-foot {
   display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   justify-content: space-between;
   align-items: center;
   border-top: 1px solid var(--kit-line);
   padding: 7px 10px 7px 12px;
   font: 11.5px var(--kit-mono);
   color: var(--kit-muted);
+}
+/* The key hint and the note each stay whole: when both don't fit, the
+   note drops to a second line instead of breaking mid-phrase. */
+.cb-comp-foot > span {
+  white-space: nowrap;
+}
+.cb-comp-note {
+  margin-left: auto;
 }
 
 /* ---- history entries ----------------------------------------------------- */

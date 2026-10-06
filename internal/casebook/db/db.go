@@ -2,7 +2,7 @@
 // StateDir/casebook.db, written only by casebook serve. It holds sessions,
 // threads, messages, deliveries, batches, proposals, evidence, progress,
 // the live event log, (from schema v2) jobs and steps, and (from v3) a
-// session's name and child mark. Durable intent
+// session's name, parent and end. Durable intent
 // (decisions, rules) lives in the casebook repo, never here.
 //
 // This package is a thin wrapper over github.com/schuettc/tools-common/sqlitedb,
@@ -176,13 +176,16 @@ CREATE UNIQUE INDEX deliveries_one_inflight ON deliveries(session_id) WHERE stat
 `
 
 // schemaV3 gives a session the name its harness knows it by (pi's session
-// name; "" for Claude Code) and the harness's mark that it is a child
-// session (pi-subagents: a parentSession in its header, or no session file).
-// Whether a child is a worker is decided when sessions are read: a child
-// sharing a live session's process (deliver.Queue.Sessions).
+// name; "" for Claude Code), its parent session (the session it was started
+// from: pi-subagents' worker header names its parent, a fork's names the
+// session it forked), and when the harness said it ended (pi replaced it
+// in its process, or quit). Whether a session is a worker is decided when
+// sessions are read: its parent is live in the same process
+// (deliver.Queue.Sessions).
 const schemaV3 = `
 ALTER TABLE sessions ADD COLUMN name TEXT NOT NULL DEFAULT '';
-ALTER TABLE sessions ADD COLUMN child INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN parent TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0;
 `
 
 // Migrations is the ordered list of schema steps for this binary.

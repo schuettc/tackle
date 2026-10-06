@@ -854,15 +854,29 @@ func Start(exe string, port int) (Advert, error) {
 	return Advert{}, fmt.Errorf("casebook serve (pid %d) didn't start; see %s", pid, logPath)
 }
 
-// SessionRetention is how long serve keeps an exited session that holds
-// nothing (no threads, no deliveries) before pruning it: long enough that a
-// session that left for a weekend is still there to come back to.
+// SessionRetention is how long serve keeps an exited session that nothing
+// refers to before pruning it: long enough that a session that left for a
+// weekend is still there to come back to.
 const SessionRetention = 7 * 24 * time.Hour
 
-// pruneSessions drops long-gone empty sessions (deliver.Queue.Prune), at
-// start and daily. A failure is a diagnostic: the table just keeps them.
+// pruneSessions drops long-gone sessions nothing refers to
+// (deliver.Queue.Prune), at start and daily. The rule drafts' authors are
+// references Prune can't see (they live in the casebook repo); a rule file
+// serve can't read might name one, so with any unreadable rule nothing is
+// pruned this time. A failure is a diagnostic: the table just keeps them.
 func (s *Server) pruneSessions(ctx context.Context) {
-	n, err := s.Queue.Prune(ctx, SessionRetention)
+	all, errs := s.App.Repo.Rules()
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "casebook serve: prune sessions skipped: %d rule(s) unreadable\n", len(errs))
+		return
+	}
+	var spare []string
+	for _, r := range all {
+		if _, id, ok := strings.Cut(r.CreatedBy, ":"); ok && id != "" {
+			spare = append(spare, id)
+		}
+	}
+	n, err := s.Queue.Prune(ctx, SessionRetention, spare...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "casebook serve: prune sessions: %v\n", err)
 		return

@@ -17,7 +17,7 @@
 // keys, rules or jobs are dropped, and the line re-renders from what was
 // parsed, so the value shown is exactly what is sent.
 
-import { h } from '/_kit/kit.js';
+import { h, ApiError } from '/_kit/kit.js';
 import type { Attached, Thread } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import {
@@ -40,6 +40,21 @@ export interface ComposerDock {
   blocked(): string;
   /** Called after a message is posted into a thread the composer created. */
   threadCreated(t: Thread): void;
+  /**
+   * serve refused a send because the thread belongs to another session
+   * now (moved behind the page's back): the dock reloads its threads.
+   */
+  threadMoved(): void;
+}
+
+/**
+ * The note for a send serve refused because its thread moved to another
+ * session (409 thread_moved), or '' for any other failure.
+ */
+export function movedNote(err: unknown): string {
+  return err instanceof ApiError && err.status === 409
+    ? 'that thread moved to another session; not sent'
+    : '';
 }
 
 export interface ComposerHandle {
@@ -237,17 +252,23 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         note.textContent = 'no agent session';
         return;
       }
+      // The page's session goes with it: serve refuses a thread that is
+      // another session's now, so a send never reaches a session the
+      // header doesn't name.
       await ctx.api.post('/messages', {
         thread,
         body,
         attached: effective(),
         batch,
+        session: dock.currentSession(),
       });
       posted = true;
       override = null;
       renderAttached();
     } catch (err) {
-      note.textContent = 'not sent';
+      const moved = movedNote(err);
+      note.textContent = moved || 'not sent';
+      if (moved) dock.threadMoved();
       console.error('[composer] send:', err);
     } finally {
       if (!posted) restoreSent(sent);

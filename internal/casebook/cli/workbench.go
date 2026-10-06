@@ -72,13 +72,14 @@ func settledFlags() *flag.FlagSet {
 }
 
 func sessionInfoFlags() *flag.FlagSet {
-	return flags("session-info", "casebook session-info --session ID [--name NAME] [--cwd DIR] [--pid N] [--child] [--harness pi]",
-		"Tells casebook serve what the harness knows about a session: its name (the page shows it; a rename sends it again) and whether it is a child session (a pi-subagents worker's header names a parentSession; an in-memory worker has no session file). Called by pi-casebook. Never fails, never prints, never starts serve.", func(fs *flag.FlagSet) {
+	return flags("session-info", "casebook session-info --session ID [--name NAME] [--cwd DIR] [--pid N] [--parent ID] [--harness pi] | --session ID --ended",
+		"Tells casebook serve what the harness knows about a session: its name (the page shows it; a rename sends it again) and its parent session (a pi-subagents worker's header names its parent; serve calls a session whose parent is live in the same pi process a worker). With --ended, that the session ended (pi replaced it, or quit). Called by pi-casebook. Never fails, never prints, never starts serve.", func(fs *flag.FlagSet) {
 			fs.String("session", "", "the session")
 			fs.String("name", "", "its name (empty: none)")
 			fs.String("cwd", "", "its working directory")
 			fs.Int("pid", 0, "the harness process (pi's pid)")
-			fs.Bool("child", false, "the harness marked it a child session")
+			fs.String("parent", "", "the session it was started from (empty: none)")
+			fs.Bool("ended", false, "the session ended")
 			fs.String("harness", "pi", "the harness")
 		})()
 }
@@ -203,7 +204,7 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "session-info", Group: "plumbing", Summary: "report a session's name and child mark (never fails)", NewFlags: sessionInfoFlags,
+			Name: "session-info", Group: "plumbing", Summary: "report a session's name, parent, or end (never fails)", NewFlags: sessionInfoFlags,
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := sessionInfoFlags()
 				if _, err := parse(fs, args, io.Discard); err != nil {
@@ -218,7 +219,7 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				c := newSettledClient() // finds serve, never starts it
 				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/session-info", deliver.SessionInfo{
 					ID: session, Name: strFlag(fs, "name"), Harness: strFlag(fs, "harness"), CWD: strFlag(fs, "cwd"),
-					PID: intFlag(fs, "pid"), Child: boolFlag(fs, "child")}, nil)
+					PID: intFlag(fs, "pid"), Parent: strFlag(fs, "parent"), Ended: boolFlag(fs, "ended")}, nil)
 				return nil
 			},
 		},

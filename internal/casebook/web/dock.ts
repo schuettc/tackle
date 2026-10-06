@@ -527,6 +527,9 @@ export function makeDock(ctx: Ctx): DockHandle {
   // The URL's session is read once, at the first load: after that the
   // attachment is what Court (or the lone-session rule) made it.
   let urlRead = false;
+  // auto: the attachment is the lone-session guess, not a choice. It holds
+  // only while that session is the only eligible one here.
+  let auto = false;
 
   // ---- DOM elements --------------------------------------------------------
 
@@ -612,6 +615,8 @@ export function makeDock(ctx: Ctx): DockHandle {
   const batchTray = makeBatchTray(ctx, {
     blocked,
     say: (text) => composer.say(text),
+    currentSession: () => currentSessionId,
+    threadMoved: () => void loadThreads(),
   });
   const progLine = makeProgressLine();
   const waitStrip = makeWaitingStrip();
@@ -619,6 +624,7 @@ export function makeDock(ctx: Ctx): DockHandle {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
     blocked,
+    threadMoved: () => void loadThreads(),
     threadCreated(t: Thread) {
       threads = [...threads, t];
       currentThreadId = t.id;
@@ -820,6 +826,11 @@ export function makeDock(ctx: Ctx): DockHandle {
           await attach(r.id, !r.auto);
           return;
         }
+      } else if (auto && pickable(sessions).length > 1) {
+        // A second session arrived: the lone-session guess no longer
+        // holds. The dock goes back to asking (Court's text stays).
+        detach();
+        return;
       } else {
         // Refresh the session data for the current one, including the delivery
         // so the dock detects stuck state and the left flag without a reload.
@@ -838,6 +849,7 @@ export function makeDock(ctx: Ctx): DockHandle {
   // not a choice: it shows in the header but isn't written anywhere, so a
   // reload with more sessions here asks again.
   async function attach(id: string, explicit: boolean) {
+    auto = !explicit;
     if (explicit) {
       const next = urlWithSession(location.href, id);
       if (next !== location.href) {
@@ -859,8 +871,10 @@ export function makeDock(ctx: Ctx): DockHandle {
         session: currentSessionId,
       });
       threads = tv.threads ?? [];
-      if (!currentThreadId && threads.length > 0) {
-        currentThreadId = threads[0].id;
+      // A thread moved to another session (a stuck delivery moved, "move
+      // to…") is no longer this session's: it stops being the open one.
+      if (!threads.some((t) => t.id === currentThreadId)) {
+        currentThreadId = threads.length > 0 ? threads[0].id : 0;
       }
       renderThreadChips();
       await loadMessages();
@@ -950,9 +964,28 @@ export function makeDock(ctx: Ctx): DockHandle {
     ctx.setAgentName(sess?.harness ?? '');
   }
 
+  // detach drops a lone-session guess: no session, so the chooser asks.
+  function detach() {
+    auto = false;
+    currentSessionId = '';
+    currentThreadId = 0;
+    threads = [];
+    messages = [];
+    currentDelivery = null;
+    void batchTray.load(0);
+    progLine.clear();
+    renderHeader();
+    renderThreadChips();
+    renderMessages();
+    updateSessionParts();
+  }
+
   async function switchSession(id: string) {
     currentSessionId = id;
     currentThreadId = 0;
+    // The tray holds the previous session's batch until the new threads
+    // load: empty it now, so it can never send that batch here.
+    void batchTray.load(0);
     threads = [];
     messages = [];
     currentDelivery = null;
@@ -978,7 +1011,11 @@ export function makeDock(ctx: Ctx): DockHandle {
   async function newThread() {
     // A thread is opened with the attached session, and only while it is here.
     const sessId = currentSessionId;
-    if (attachedState(sessId, sessions) !== 'here') return;
+    const why = blocked();
+    if (why) {
+      composer.say(why);
+      return;
+    }
     try {
       const t = await ctx.api.post<Thread>('/threads', {
         session: sessId,
@@ -998,8 +1035,14 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // ---- live events ---------------------------------------------------------
 
-  ctx.on('sessions', () => {
+  ctx.on('sessions', (data: unknown) => {
     void loadSessions();
+    // "move to…" took this session's threads to another one: they are no
+    // longer this session's, so the dock drops them.
+    const d = data as { moved_from?: string } | null;
+    if (d?.moved_from && d.moved_from === currentSessionId) {
+      void loadThreads();
+    }
   });
 
   ctx.on('thread', (data: unknown) => {
@@ -1032,7 +1075,13 @@ export function makeDock(ctx: Ctx): DockHandle {
       d.session === currentSessionId ||
       d.from === currentSessionId ||
       (d.id !== undefined && currentDelivery?.id === d.id);
-    if (isOurs) {
+    if (d.from && d.from === currentSessionId && d.session !== d.from) {
+      // A delivery moved away from this session took its thread with it:
+      // reload the threads, so the moved one is no longer shown (or sent
+      // to) as this session's.
+      void loadThreads();
+      void loadSessions();
+    } else if (isOurs) {
       void loadMessages().then(() => loadDelivery());
       // Also refresh sessions to update queued count for the waiting strip.
       void loadSessions();

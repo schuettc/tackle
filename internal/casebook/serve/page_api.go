@@ -508,6 +508,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		Body     string           `json:"body"`
 		Attached deliver.Attached `json:"attached"`
 		Batch    bool             `json:"batch"`
+		// Session is the session the page is attached to (its header). A
+		// thread that belongs to another one now (moved behind the page's
+		// back) is refused: see ownedBy.
+		Session string `json:"session"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -516,6 +520,10 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	t, err := s.Queue.Thread(ctx, in.Thread)
 	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if err := ownedBy(t, in.Session); err != nil {
 		reply(w, nil, err)
 		return
 	}
@@ -529,6 +537,20 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		s.wake(t.SessionID)
 	}
 	reply(w, m, nil)
+}
+
+// ownedBy refuses a page's send into a thread that belongs to a session
+// other than the one the page is attached to (session, from its header):
+// a move (a stuck delivery moved, or "move to…") re-homes a thread, and a
+// page that hasn't caught up must not send to a session it doesn't show.
+// 409 thread_moved; the page reloads its threads. An empty session (a
+// caller that isn't the page: tests, scripts) is not checked.
+func ownedBy(t deliver.Thread, session string) error {
+	if session == "" || t.SessionID == session {
+		return nil
+	}
+	return httpError{code: http.StatusConflict, errCode: "thread_moved",
+		msg: fmt.Sprintf("thread %d belongs to session %q now, not %q; nothing was sent", t.ID, t.SessionID, session)}
 }
 
 func (s *Server) sessionsOf(ctx context.Context, ids []int64) []string {
@@ -616,6 +638,8 @@ func (s *Server) postReorder(w http.ResponseWriter, r *http.Request) {
 func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Batch int64 `json:"batch"`
+		// Session: the page's session, as on POST /api/messages.
+		Session string `json:"session"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -625,6 +649,13 @@ func (s *Server) postSendBatch(w http.ResponseWriter, r *http.Request) {
 	var thread int64
 	if err := s.DB.QueryRowContext(ctx, "SELECT thread_id FROM batches WHERE id = ?", in.Batch).Scan(&thread); err != nil {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: "no such batch"})
+		return
+	}
+	if t, err := s.Queue.Thread(ctx, thread); err != nil {
+		reply(w, nil, err)
+		return
+	} else if err := ownedBy(t, in.Session); err != nil {
+		reply(w, nil, err)
 		return
 	}
 	n, err := s.Queue.SendBatch(ctx, in.Batch)

@@ -3460,7 +3460,7 @@ function threadOrder(ms) {
 }
 
 // composer.ts
-import { h as h8 } from "/_kit/kit.js";
+import { h as h8, ApiError as ApiError2 } from "/_kit/kit.js";
 
 // attached.ts
 var KIND_PLURAL = { branch: "branches" };
@@ -3527,6 +3527,9 @@ function sameAttached(a, b) {
 }
 
 // composer.ts
+function movedNote(err) {
+  return err instanceof ApiError2 && err.status === 409 ? "that thread moved to another session; not sent" : "";
+}
 function threadName(body) {
   const words = body.split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
   return words.length > 40 ? words.slice(0, 39) + "…" : words;
@@ -3667,13 +3670,16 @@ function makeComposer(ctx, dock) {
         thread,
         body,
         attached: effective(),
-        batch
+        batch,
+        session: dock.currentSession()
       });
       posted = true;
       override = null;
       renderAttached();
     } catch (err) {
-      note.textContent = "not sent";
+      const moved = movedNote(err);
+      note.textContent = moved || "not sent";
+      if (moved) dock.threadMoved();
       console.error("[composer] send:", err);
     } finally {
       if (!posted) restoreSent(sent);
@@ -3859,18 +3865,26 @@ function makeBatchTray(ctx, dock) {
   }
   async function sendBatch() {
     if (!batch || !drafts.length) return;
-    const why = dock?.blocked() ?? "";
+    const why = dock.blocked();
     if (why) {
-      dock?.say(why);
+      dock.say(why);
       return;
     }
     const sent = batch;
     drafts = [];
     render();
     try {
-      await ctx.api.post("/batches/send", { batch: sent });
+      await ctx.api.post("/batches/send", {
+        batch: sent,
+        session: dock.currentSession()
+      });
     } catch (err) {
       console.error("[batch] send:", err);
+      const moved = movedNote(err);
+      if (moved) {
+        dock.say(moved);
+        dock.threadMoved();
+      }
       await reload();
     }
   }
@@ -4353,6 +4367,7 @@ function makeDock(ctx) {
   let messages = [];
   let currentDelivery = null;
   let urlRead = false;
+  let auto = false;
   const sessionDot = h10("span", { class: "cb-dock-dot" });
   const sessionLabelEl = h10("span", {
     class: "cb-dock-session-label",
@@ -4414,7 +4429,9 @@ function makeDock(ctx) {
   };
   const batchTray = makeBatchTray(ctx, {
     blocked,
-    say: (text) => composer.say(text)
+    say: (text) => composer.say(text),
+    currentSession: () => currentSessionId,
+    threadMoved: () => void loadThreads()
   });
   const progLine = makeProgressLine();
   const waitStrip = makeWaitingStrip();
@@ -4422,6 +4439,7 @@ function makeDock(ctx) {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
     blocked,
+    threadMoved: () => void loadThreads(),
     threadCreated(t) {
       threads = [...threads, t];
       currentThreadId = t.id;
@@ -4575,6 +4593,9 @@ function makeDock(ctx) {
           await attach(r.id, !r.auto);
           return;
         }
+      } else if (auto && pickable(sessions).length > 1) {
+        detach();
+        return;
       } else {
         await loadDelivery();
       }
@@ -4585,6 +4606,7 @@ function makeDock(ctx) {
     }
   }
   async function attach(id, explicit) {
+    auto = !explicit;
     if (explicit) {
       const next = urlWithSession(location.href, id);
       if (next !== location.href) {
@@ -4605,8 +4627,8 @@ function makeDock(ctx) {
         session: currentSessionId
       });
       threads = tv.threads ?? [];
-      if (!currentThreadId && threads.length > 0) {
-        currentThreadId = threads[0].id;
+      if (!threads.some((t) => t.id === currentThreadId)) {
+        currentThreadId = threads.length > 0 ? threads[0].id : 0;
       }
       renderThreadChips();
       await loadMessages();
@@ -4674,9 +4696,24 @@ function makeDock(ctx) {
     composer.setAgent(sess?.harness ?? "");
     ctx.setAgentName(sess?.harness ?? "");
   }
+  function detach() {
+    auto = false;
+    currentSessionId = "";
+    currentThreadId = 0;
+    threads = [];
+    messages = [];
+    currentDelivery = null;
+    void batchTray.load(0);
+    progLine.clear();
+    renderHeader();
+    renderThreadChips();
+    renderMessages();
+    updateSessionParts();
+  }
   async function switchSession(id) {
     currentSessionId = id;
     currentThreadId = 0;
+    void batchTray.load(0);
     threads = [];
     messages = [];
     currentDelivery = null;
@@ -4699,7 +4736,11 @@ function makeDock(ctx) {
   }
   async function newThread() {
     const sessId = currentSessionId;
-    if (attachedState(sessId, sessions) !== "here") return;
+    const why = blocked();
+    if (why) {
+      composer.say(why);
+      return;
+    }
     try {
       const t = await ctx.api.post("/threads", {
         session: sessId,
@@ -4716,8 +4757,12 @@ function makeDock(ctx) {
       console.error("[dock] newThread:", err);
     }
   }
-  ctx.on("sessions", () => {
+  ctx.on("sessions", (data) => {
     void loadSessions();
+    const d = data;
+    if (d?.moved_from && d.moved_from === currentSessionId) {
+      void loadThreads();
+    }
   });
   ctx.on("thread", (data) => {
     void loadThreads();
@@ -4735,7 +4780,10 @@ function makeDock(ctx) {
   ctx.on("delivery", (data) => {
     const d = data;
     const isOurs = !d.session || d.session === currentSessionId || d.from === currentSessionId || d.id !== void 0 && currentDelivery?.id === d.id;
-    if (isOurs) {
+    if (d.from && d.from === currentSessionId && d.session !== d.from) {
+      void loadThreads();
+      void loadSessions();
+    } else if (isOurs) {
       void loadMessages().then(() => loadDelivery());
       void loadSessions();
     }
@@ -4815,7 +4863,7 @@ import {
   buttons as buttons2,
   card as card5,
   sheet as sheet3,
-  ApiError as ApiError2
+  ApiError as ApiError3
 } from "/_kit/kit.js";
 
 // conditions.ts
@@ -5205,7 +5253,7 @@ var VIEWS3 = [
 function message2(err) {
   return err instanceof Error ? err.message : String(err);
 }
-var isConflict = (err) => err instanceof ApiError2 && err.status === 409;
+var isConflict = (err) => err instanceof ApiError3 && err.status === 409;
 function slug(name) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
 }
@@ -5748,7 +5796,7 @@ ${dispositions.join(" ")}`;
       if (mine === seq) setPreview({ ...p, page: rows });
     } catch (err) {
       if (mine !== seq) return;
-      if (err instanceof ApiError2 && err.status === 400)
+      if (err instanceof ApiError3 && err.status === 400)
         setInvalid(err.message);
       else note.textContent = `preview failed: ${message2(err)}`;
     }
@@ -6006,7 +6054,7 @@ ${dispositions.join(" ")}`;
       return true;
     } catch (err) {
       if (isConflict(err)) void afterConflict("saved");
-      else if (err instanceof ApiError2 && err.status === 400) {
+      else if (err instanceof ApiError3 && err.status === 400) {
         if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
         else note.textContent = err.message;
       } else note.textContent = `not saved: ${message2(err)}`;

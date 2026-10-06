@@ -30,9 +30,9 @@ func TestFreshDatabaseMigratesToVersion3(t *testing.T) {
 	if v != 3 {
 		t.Fatalf("expected version 3, got %d", v)
 	}
-	// v3: a session has a name and a child mark.
-	if _, err := d.ExecContext(ctx, `INSERT INTO sessions(id, first_seen, last_seen, name, child) VALUES ('s', 1, 1, 'tools-workspace/casebook', 1)`); err != nil {
-		t.Fatalf("sessions.name/child: %v", err)
+	// v3: a session has a name, a parent and an end.
+	if _, err := d.ExecContext(ctx, `INSERT INTO sessions(id, first_seen, last_seen, name, parent, ended_at) VALUES ('s', 1, 1, 'tools-workspace/casebook', 'p', 2)`); err != nil {
+		t.Fatalf("sessions.name/parent/ended_at: %v", err)
 	}
 	// jobs table exists; insert a row
 	now := int64(1000000)

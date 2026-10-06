@@ -4,6 +4,26 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook] - Unreleased
+
+### Changed
+- The page belongs to the agent session that opened it: `casebook_open` and
+  `casebook serve` run by a session open it attached to that session, and
+  it never sends anywhere else. With no session it asks which one, unless
+  exactly one is here. pi-subagents workers are not offered; pi sessions
+  show by name (`pi-casebook` 0.3.0 reports names and parent sessions).
+- serve refuses (409) a page's message or batch into a thread that now
+  belongs to another session, and the page drops a thread moved away.
+- serve prunes sessions gone for 7 days that nothing refers to.
+
+### Upgrading
+- Restart casebook serve after installing (`casebook serve --stop`; the next
+  `casebook_open` or `casebook serve` starts the new one). Neither kempt nor
+  anything in casebook restarts a serve that is already running, and an old
+  serve can't attach the page: until it restarts, `casebook_open` opens the
+  page unattached and says a restart is needed. The working database moves
+  to schema v3, which older casebook binaries refuse.
+
 ## [sift 0.1.0] - Unreleased
 
 ### Added

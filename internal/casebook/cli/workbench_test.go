@@ -392,8 +392,8 @@ func TestSettledClaudeHungStdinReturns(t *testing.T) {
 	}
 }
 
-// `casebook session-info` is how pi-casebook tells serve a pi session's name
-// and child mark. Like settled it never fails, never prints, and never
+// `casebook session-info` is how pi-casebook tells serve a pi session's name,
+// its parent session, and that it ended. Like settled it never fails, never prints, and never
 // starts serve.
 func TestSessionInfoReachesServe(t *testing.T) {
 	wbSetup(t)
@@ -416,7 +416,7 @@ func TestSessionInfoReachesServe(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"session-info", "--session", "p1", "--name", "tools-workspace/casebook", "--cwd", "/w/tools-workspace", "--pid", "4242"},
-		{"session-info", "--session", "w1", "--name", "worker#40c0f7e1", "--cwd", "/w/tools-workspace", "--pid", "4242", "--child"},
+		{"session-info", "--session", "w1", "--name", "worker#40c0f7e1", "--cwd", "/w/tools-workspace", "--pid", "4242", "--parent", "p1"},
 	} {
 		if code, out := runIn("", args...); code != 0 || out != "" {
 			t.Fatalf("%v: %d %q", args, code, out)
@@ -435,6 +435,18 @@ func TestSessionInfoReachesServe(t *testing.T) {
 	}
 	if p := sessions()["p1"]; p["name"] != "tools-workspace/owner" {
 		t.Fatalf("after the rename p1 = %v", p)
+	}
+	// pi replaced p1 in its process (/fork): it ended, so it has left, and
+	// w1 is no worker of a live parent any more.
+	if code, out := runIn("", "session-info", "--session", "p1", "--ended"); code != 0 || out != "" {
+		t.Fatalf("ended: %d %q", code, out)
+	}
+	ss = sessions()
+	if p := ss["p1"]; p["left"] != true || p["name"] != "tools-workspace/owner" {
+		t.Fatalf("after the end p1 = %v", p)
+	}
+	if w := ss["w1"]; w["worker"] != false {
+		t.Fatalf("after its parent ended w1 = %v", w)
 	}
 }
 

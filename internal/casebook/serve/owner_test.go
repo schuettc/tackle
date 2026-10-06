@@ -29,7 +29,7 @@ func (r *rig) sessionView(t *testing.T, id string) (deliver.Session, bool) {
 	return deliver.Session{}, false
 }
 
-// pi-casebook reports a session's name and child mark on
+// pi-casebook reports a session's name and parent on
 // POST /api/agent/session-info; the page's session list carries them, and
 // whether each session is a worker and eligible.
 func TestSessionInfoNamesASessionAndMarksWorkers(t *testing.T) {
@@ -41,7 +41,7 @@ func TestSessionInfoNamesASessionAndMarksWorkers(t *testing.T) {
 	if c := r.do(t, "POST", "/api/agent/session-info", map[string]any{"id": "parent", "name": "luminary-meridian/site", "harness": "pi", "cwd": "/lm", "pid": 92602}, nil); c != http.StatusOK {
 		t.Fatalf("session-info: %d", c)
 	}
-	if c := r.do(t, "POST", "/api/agent/session-info", map[string]any{"id": "w", "name": "worker#40c0f7e1", "harness": "pi", "cwd": "/lm", "pid": 92602, "child": true}, nil); c != http.StatusOK {
+	if c := r.do(t, "POST", "/api/agent/session-info", map[string]any{"id": "w", "name": "worker#40c0f7e1", "harness": "pi", "cwd": "/lm", "pid": 92602, "parent": "parent"}, nil); c != http.StatusOK {
 		t.Fatalf("session-info (worker): %d", c)
 	}
 	p, ok := r.sessionView(t, "parent")

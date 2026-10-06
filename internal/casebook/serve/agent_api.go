@@ -57,7 +57,8 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 
 // agentSessionInfo is pi-casebook telling serve what pi knows about a
 // session that the channel can't: its name (sent at session start and on
-// every rename) and whether it is a child session. See deliver.SessionInfo.
+// every rename) and its parent session, or that it ended (pi replaced it in
+// its process, or quit). See deliver.SessionInfo.
 func (s *Server) agentSessionInfo(w http.ResponseWriter, r *http.Request) {
 	var in deliver.SessionInfo
 	if err := decode(r, &in); err != nil {

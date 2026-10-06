@@ -100,30 +100,40 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		// The page opens attached to this channel's session (galley_open's
 		// rule: what's opened belongs to the session that opened it), so
 		// Court's messages from it come here. No session: nobody's page.
-		open := func() (string, error) {
-			body := map[string]any{"key": a.Key, "view": a.View}
-			if ch.ID.Session != "" {
-				body["session"] = ch.ID.Session
+		open := func(session string) func() (string, error) {
+			return func() (string, error) {
+				body := map[string]any{"key": a.Key, "view": a.View}
+				if session != "" {
+					body["session"] = session
+				}
+				_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", body, nil)
+				return "", err
 			}
-			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", body, nil)
-			return "", err
 		}
 		var err error
+		note := ""
 		if ch.ID.Session != "" {
-			_, err = ch.callSessionBound(ctx, open)
+			_, err = ch.callSessionBound(ctx, open(ch.ID.Session))
+			if oldServe(err) {
+				// A serve started before pages could belong to a session
+				// refuses the field. Open the page anyway; it asks Court
+				// which session to talk to.
+				_, err = open("")()
+				note = "; it is not attached to this session: the running casebook serve is older than this casebook, so it needs a restart first (run `casebook serve --stop`, then casebook_open again, to attach it)"
+			}
 		} else {
-			_, err = open()
+			_, err = open("")()
 		}
 		if err != nil {
 			return "", err
 		}
 		switch {
 		case a.Key != "":
-			return "opened the casebook page at " + a.Key, nil
+			return "opened the casebook page at " + a.Key + note, nil
 		case a.View != "":
-			return "opened the casebook page at the " + a.View + " view", nil
+			return "opened the casebook page at the " + a.View + " view" + note, nil
 		}
-		return "opened the casebook page", nil
+		return "opened the casebook page" + note, nil
 	case "casebook_attention":
 		return ch.attention(ctx, serve.Query{View: a.View, Kind: a.Kind, Repo: a.Repo, Text: a.Q, Offset: a.Offset, Limit: a.Limit})
 	case "casebook_show":
@@ -341,4 +351,11 @@ func (ch *Channel) history(ctx context.Context, key string) (string, error) {
 		return "", err
 	}
 	return pretty(map[string]any{"decisions": out.Decisions, "events": out.History}), nil
+}
+
+// oldServe reports whether err is a serve older than this channel refusing
+// casebook_open's "session" field (400, unknown field "session").
+func oldServe(err error) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == http.StatusBadRequest && strings.Contains(se.Msg, `unknown field "session"`)
 }

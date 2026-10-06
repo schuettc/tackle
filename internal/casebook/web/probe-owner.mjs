@@ -21,8 +21,9 @@ export function stopOwnerServes() {
   serves = [];
 }
 
-// A fake pi-casebook: what `casebook session-info` posts.
-function sessionInfo(agent, id, name, cwd, child = false) {
+// A fake pi-casebook: what `casebook session-info` posts. parent: the
+// session it was started from ('' for none).
+function sessionInfo(agent, id, name, cwd, parent = '') {
   return agent.api('POST', '/api/agent/session-info', {
     id,
     name,
@@ -31,7 +32,7 @@ function sessionInfo(agent, id, name, cwd, child = false) {
     // The probe's sessions all announce process.pid (agent.mjs): one "pi
     // process", like a parent and its pi-subagents workers.
     pid: process.pid,
-    child,
+    parent,
   });
 }
 
@@ -140,19 +141,20 @@ export async function ownerScenarios(context, t) {
     await new Promise((r) => setTimeout(r, 3500));
 
     // Live: three named pi sessions, a Claude Code session (no pi name), and
-    // a pi-subagents worker in the same process as the named ones.
+    // a pi-subagents worker of B's, in the same process (its parent is live
+    // there).
     const stopLive = keepHere(agent, [
       [A, cwdA, 'pi'],
       [B, cwdB, 'pi'],
       [C, cwdC, 'pi'],
       [CC, cwdCC, 'claude'],
-      [W, cwdA, 'pi'],
+      [W, cwdB, 'pi'],
     ]);
     stops.push(stopLive);
     await sessionInfo(agent, A, 'tools-workspace/casebook', cwdA);
     await sessionInfo(agent, B, 'luminary-meridian/site', cwdB);
     await sessionInfo(agent, C, 'bettor-help-workspace/coordinator', cwdC);
-    await sessionInfo(agent, W, 'worker#40c0f7e1', cwdA, true);
+    await sessionInfo(agent, W, 'worker#40c0f7e1', cwdB, B);
     const threadA = await agent.newThread(A, 'owner');
 
     // ---- opening attached to a given session ------------------------------
@@ -259,6 +261,130 @@ export async function ownerScenarios(context, t) {
       }
     }
 
+    // ---- a move away takes the thread out of the dock ---------------------
+    console.log(
+      '\nscenario: after a stuck delivery moves to B, the page attached to A never sends to B',
+    );
+    {
+      const pg = await lightPage(context);
+      try {
+        await pg.goto(`${s.url}&session=${encodeURIComponent(A)}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15000,
+        });
+        await until(
+          pg,
+          (id) =>
+            !!document.querySelector(
+              `.cb-dock-threads [data-thread="${id}"].on`,
+            ),
+          threadA.id,
+          10000,
+        );
+        await pg.click('[data-testid="composer-input"]');
+        await pg.keyboard.type('before the move');
+        await pg.keyboard.press('Enter');
+        const d = await agent.wait(A);
+        // A doesn't answer: the delivery goes stuck (2 s in the probe) while
+        // A is still here, and Court moves it to B from its card.
+        const stuck = await until(
+          pg,
+          () => !!document.querySelector('.cb-dock-stuck [data-action="move"]'),
+          undefined,
+          12000,
+        );
+        if (stuck) {
+          await pg.click('.cb-dock-stuck [data-action="move"]');
+          await pg
+            .click(
+              `.cb-dock-pick-sheet .cb-dock-pick-item[data-session="${B}"]`,
+              { timeout: 5000 },
+            )
+            .catch(() => {});
+        }
+        const moved = await eventually(async () => {
+          const v = await agent.api(
+            'GET',
+            `/api/threads?session=${encodeURIComponent(B)}`,
+          );
+          return (v.threads ?? []).some((x) => x.id === threadA.id);
+        }, 8000);
+        check(
+          `the stuck delivery moved to B, and its thread with it (stuck ${stuck})`,
+          moved,
+        );
+        check(
+          'the dock stops showing the moved thread as the attached session\u2019s',
+          await until(
+            pg,
+            (id) =>
+              !document.querySelector(`.cb-dock-threads [data-thread="${id}"]`),
+            threadA.id,
+            8000,
+          ),
+        );
+        check(
+          'the header still names A, and A is still here',
+          (await header(pg)).name === 'tools-workspace/owner' &&
+            (await header(pg)).attach === 'here',
+        );
+        // Court's next message: to A's own thread, or refused; never to B.
+        await pg.click('[data-testid="composer-input"]');
+        await pg.keyboard.type('after the move');
+        await pg.keyboard.press('Enter');
+        await pg.waitForTimeout(800);
+        const inMoved = (
+          (await agent.messages(threadA.id)).messages ?? []
+        ).some((m) => m.body === 'after the move');
+        const dA = await agent.wait(A);
+        const toA = (dA?.delivery?.messages ?? []).some(
+          (m) => m.body === 'after the move',
+        );
+        const refused = await pg.evaluate(
+          () =>
+            !!document.querySelector('.cb-comp-note')?.textContent &&
+            document.querySelector('[data-testid="composer-input"]').value ===
+              'after the move',
+        );
+        check(
+          `the next send goes to A's own thread or is refused, never to B (in B's thread ${inMoved}, to A ${toA}, refused ${refused})`,
+          !inMoved && (toA || refused),
+        );
+        // Settle what's out, so later scenarios start clean.
+        if (dA?.delivery) {
+          await agent.reply(
+            A,
+            dA.delivery.messages.map((m) => m.id),
+            'answered',
+            'ok',
+          );
+        }
+        if (!moved && d?.delivery) {
+          await agent.reply(
+            A,
+            d.delivery.messages.map((m) => m.id),
+            'answered',
+            'ok',
+          );
+        }
+        const dB = await agent.wait(B);
+        if (dB?.delivery) {
+          await agent.reply(
+            B,
+            dB.delivery.messages.map((m) => m.id),
+            'answered',
+            'ok',
+          );
+        }
+        await pg.evaluate(() => {
+          const i = document.querySelector('[data-testid="composer-input"]');
+          if (i) i.value = '';
+        });
+      } finally {
+        await pg.close();
+      }
+    }
+
     // ---- no auto-pick with 2+ eligible; workers and exited hidden ---------
     console.log(
       '\nscenario: a page opened by no session asks Court to choose (2+ here)',
@@ -345,6 +471,23 @@ export async function ownerScenarios(context, t) {
                 'to whom?',
           ),
         );
+        // The composer's foot at 1600×900: the key hint and the note each
+        // stay on one line (the note drops whole to a second line rather
+        // than breaking mid-phrase).
+        const foot = await pg.evaluate(() =>
+          [...document.querySelectorAll('.cb-comp-foot > span')].map((e) => {
+            const r = e.getBoundingClientRect();
+            const lh = parseFloat(getComputedStyle(e).lineHeight) || 0;
+            const fs = parseFloat(getComputedStyle(e).fontSize) || 0;
+            const line = lh || fs * 1.4;
+            return { text: e.textContent, h: r.height, line };
+          }),
+        );
+        check(
+          `nothing in the composer's foot wraps mid-phrase (${foot.map((f) => `"${f.text}" ${f.h.toFixed(1)}/${f.line.toFixed(1)}px`).join(', ')})`,
+          foot.length === 2 &&
+            foot.every((f) => f.text && f.h > 0 && f.h < f.line * 1.5),
+        );
         check('the screenshot is light', await isLight(pg));
         await pg.screenshot({ path: '/tmp/owner-chooser.png' });
         console.log('  screenshot: /tmp/owner-chooser.png');
@@ -395,7 +538,7 @@ export async function ownerScenarios(context, t) {
         [A, cwdA, 'pi'],
         [B, cwdB, 'pi'],
         [CC, cwdCC, 'claude'],
-        [W, cwdA, 'pi'],
+        [W, cwdB, 'pi'],
       ]);
       stops.push(stopRest);
       const threadC = await agent.newThread(C, 'coordination');
@@ -466,6 +609,30 @@ export async function ownerScenarios(context, t) {
             .sort()
             .join(',');
         const before = await queuedAll();
+        // "+ thread" opens nothing for a session that left, and says why.
+        const nThreads = async () =>
+          (
+            (
+              await agent.api(
+                'GET',
+                `/api/threads?session=${encodeURIComponent(C)}`,
+              )
+            ).threads ?? []
+          ).length;
+        const threadsBefore = await nThreads();
+        await pg.click('[data-testid="dock-add-thread"]');
+        check(
+          '"+" opens no thread for a session that left, and says why',
+          (await until(
+            pg,
+            () =>
+              document.querySelector('.cb-comp-note')?.textContent ===
+              'your session left',
+          )) && (await nThreads()) === threadsBefore,
+        );
+        await pg.evaluate(() => {
+          document.querySelector('.cb-comp-note').textContent = '';
+        });
         await pg.click('[data-testid="composer-input"]');
         await pg.keyboard.type('are you there?');
         await pg.keyboard.press('Enter');
@@ -531,10 +698,10 @@ export async function ownerScenarios(context, t) {
     );
     {
       for (const stop of stops) stop();
-      // Only B stays (W, the worker, stays too: it doesn't count).
+      // Only B stays (W, its worker, stays too: it doesn't count).
       const stopB = keepHere(agent, [
         [B, cwdB, 'pi'],
-        [W, cwdA, 'pi'],
+        [W, cwdB, 'pi'],
       ]);
       stops.push(stopB);
       check(
@@ -566,6 +733,28 @@ export async function ownerScenarios(context, t) {
         check(
           'the lone-session attachment is not written to the URL (not a choice)',
           !new URL(pg.url()).searchParams.has('session'),
+        );
+        // A second session arrives: the guess no longer holds, so the
+        // page goes back to asking.
+        const stopA = keepHere(agent, [[A, cwdA, 'pi']]);
+        stops.push(stopA);
+        check(
+          'when a second session arrives, the lone-session attachment drops back to the chooser',
+          await until(
+            pg,
+            () => {
+              const c = document.querySelector('[data-testid="dock-chooser"]');
+              return (
+                document.querySelector('[data-testid="dock-session-name"]')
+                  ?.textContent === 'no session' &&
+                !!c &&
+                !c.hidden &&
+                c.querySelectorAll('.cb-dock-pick-item').length === 2
+              );
+            },
+            undefined,
+            10000,
+          ),
         );
       } finally {
         await pg.close();

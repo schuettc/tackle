@@ -1,6 +1,7 @@
 package deliver
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -58,48 +59,120 @@ func TestSessionNameSurvivesPresenceAndFollowsARename(t *testing.T) {
 	}
 }
 
-// A worker is a child session (pi-subagents marks it: a parentSession in its
-// header, or no session file at all) that runs inside a process another live
-// session is also in. A fork carries parentSession too, but runs in its own
-// pi process, so it is not a worker.
-func TestWorkerIsAChildSharingALiveSessionsProcess(t *testing.T) {
-	q, c := newQueue(t) // s1: pid 42, no child mark
+// A worker is a session whose parent session (pi-casebook reports it: the
+// session named by its header's parentSession) is live in the same pi
+// process. pi-subagents runs its workers inside the parent's pi process;
+// a fork's parent is elsewhere, or gone.
+func TestWorkerIsASessionWhoseParentIsLiveInItsProcess(t *testing.T) {
+	q, c := newQueue(t) // s1: pid 42
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
+	worker := func(id string) bool { t.Helper(); return sessionByID(t, q, id).Worker }
+
+	// A pi-subagents child: its parent is live in its own pi process.
 	must(q.SetInfo(ctx, SessionInfo{ID: "s1", Name: "luminary-meridian/site", Harness: "pi", CWD: "/w", PID: 42}))
-	must(q.SetInfo(ctx, SessionInfo{ID: "w1", Name: "worker#40c0f7e1", Harness: "pi", CWD: "/w", PID: 42, Child: true}))
-	must(q.SetInfo(ctx, SessionInfo{ID: "fork", Name: "bettor-help-workspace/platform", Harness: "pi", CWD: "/b", PID: 77, Child: true}))
-	must(q.Touch(ctx, Session{ID: "cc", Harness: "claude", CWD: "/c", PID: 42})) // a channel beat, no child mark
-	for id, want := range map[string]bool{"s1": false, "w1": true, "fork": false, "cc": false} {
-		if got := sessionByID(t, q, id).Worker; got != want {
-			t.Errorf("%s worker = %v, want %v", id, got, want)
+	must(q.SetInfo(ctx, SessionInfo{ID: "w1", Name: "worker#40c0f7e1", Harness: "pi", CWD: "/w", PID: 42, Parent: "s1"}))
+	if !worker("w1") {
+		t.Error("a pi-subagents child of a live parent in its process is not a worker")
+	}
+	if worker("s1") {
+		t.Error("the parent is a worker")
+	}
+	// A channel beat (which knows nothing of parents) doesn't clear it.
+	must(q.Touch(ctx, Session{ID: "w1", Harness: "pi", CWD: "/w", PID: 42}))
+	if !worker("w1") {
+		t.Error("a presence beat cleared the worker's parent")
+	}
+	if one, err := q.Session(ctx, "w1"); err != nil || !one.Worker {
+		t.Errorf("Session(w1) = %+v, %v (Session(id) must agree with the list)", one, err)
+	}
+
+	// A fork that runs subagents of its own: its parent (s1) is live, but in
+	// another pi process; its workers share ITS process. The fork is not a
+	// worker; its workers are.
+	must(q.SetInfo(ctx, SessionInfo{ID: "fork", Name: "bettor-help-workspace/platform", Harness: "pi", CWD: "/b", PID: 77, Parent: "s1"}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "fw1", Name: "worker#2d08dfa1", Harness: "pi", CWD: "/b", PID: 77, Parent: "fork"}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "fw2", Name: "worker#cd4c04f2", Harness: "pi", CWD: "/b", PID: 77, Parent: "fork"}))
+	if worker("fork") {
+		t.Error("a fork running its own subagents is a worker")
+	}
+	if !worker("fw1") || !worker("fw2") {
+		t.Error("the fork's subagents are not workers")
+	}
+	// A fork whose parent has exited, in a process of its own.
+	must(q.SetInfo(ctx, SessionInfo{ID: "gone-parent", Harness: "pi", CWD: "/g", PID: 90}))
+	c.add(2 * DefaultLeftAfter)
+	for _, id := range []string{"s1", "w1", "fork", "fw1", "fw2"} {
+		must(q.Touch(ctx, Session{ID: id, Harness: "pi", PID: map[bool]int{true: 42, false: 77}[id == "s1" || id == "w1"]}))
+	}
+	must(q.SetInfo(ctx, SessionInfo{ID: "orphan-fork", Harness: "pi", CWD: "/g", PID: 91, Parent: "gone-parent"}))
+	if worker("orphan-fork") {
+		t.Error("a fork whose parent exited is a worker")
+	}
+
+	// An in-process /fork: pi replaced session "old" with "new" in the same
+	// process (pid 50). pi-casebook reports "old" ended (its
+	// session_shutdown); "new" names "old" as its parent. "old" was seen a
+	// moment ago, so by last_seen alone it is still here for LeftAfter: its
+	// last heartbeat window. Ended, it is not live, and "new" is no worker.
+	must(q.SetInfo(ctx, SessionInfo{ID: "old", Name: "tools-workspace/owner", Harness: "pi", CWD: "/w", PID: 50}))
+	must(q.Touch(ctx, Session{ID: "old", Harness: "pi", CWD: "/w", PID: 50}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "old", Ended: true}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "new", Name: "tools-workspace/owner", Harness: "pi", CWD: "/w", PID: 50, Parent: "old"}))
+	if worker("new") {
+		t.Error("an in-process /fork is a worker in its old session's last heartbeat window")
+	}
+	if o := sessionByID(t, q, "old"); !o.Left || o.Eligible {
+		t.Errorf("the ended session is still here: %+v", o)
+	}
+	// A late presence beat from old's channel (sent before pi replaced it)
+	// lands inside the window: old stays ended.
+	c.add(DefaultLeftAfter / 2)
+	must(q.Touch(ctx, Session{ID: "old", Harness: "pi", CWD: "/w", PID: 50}))
+	if worker("new") || !sessionByID(t, q, "old").Left {
+		t.Error("a late beat inside the window brought the ended session back")
+	}
+	// The old session's ended report naming no name doesn't clear it.
+	if o := sessionByID(t, q, "old"); o.Name != "tools-workspace/owner" {
+		t.Errorf("ending cleared the name: %q", o.Name)
+	}
+	// Resumed later (its channel beats again past the window, or pi-casebook
+	// reports it running): it is here again.
+	c.add(DefaultLeftAfter)
+	must(q.Touch(ctx, Session{ID: "old", Harness: "pi", CWD: "/w", PID: 60}))
+	if sessionByID(t, q, "old").Left {
+		t.Error("a session that came back after the window is still left")
+	}
+	must(q.SetInfo(ctx, SessionInfo{ID: "old", Ended: true}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "old", Name: "tools-workspace/owner", Harness: "pi", CWD: "/w", PID: 60}))
+	if sessionByID(t, q, "old").Left {
+		t.Error("a session pi-casebook reports running is still left")
+	}
+
+	// A Claude session sharing a pid with a live session, with no parent.
+	must(q.Touch(ctx, Session{ID: "cc", Harness: "claude", CWD: "/c", PID: 60}))
+	if worker("cc") {
+		t.Error("a session with no parent is a worker")
+	}
+	// pid 0 (unknown) and 1 (an orphaned channel's parent) never pair.
+	for _, pid := range []int{0, 1} {
+		p, ch := fmt.Sprintf("p%d", pid), fmt.Sprintf("ch%d", pid)
+		must(q.SetInfo(ctx, SessionInfo{ID: p, Harness: "pi", CWD: "/z", PID: pid}))
+		must(q.SetInfo(ctx, SessionInfo{ID: ch, Harness: "pi", CWD: "/z", PID: pid, Parent: p}))
+		if worker(ch) {
+			t.Errorf("two sessions with pid %d were paired", pid)
 		}
 	}
-	// A channel beat (which knows nothing of children) doesn't clear the mark.
-	must(q.Touch(ctx, Session{ID: "w1", Harness: "pi", CWD: "/w", PID: 42}))
-	if !sessionByID(t, q, "w1").Worker {
-		t.Error("a presence beat cleared the worker's child mark")
-	}
-	// Session(id) agrees with the list.
-	if one, err := q.Session(ctx, "w1"); err != nil || !one.Worker {
-		t.Errorf("Session(w1) = %+v, %v", one, err)
-	}
-	// pid 0 (unknown) never pairs two sessions.
-	must(q.SetInfo(ctx, SessionInfo{ID: "z1", Harness: "pi", CWD: "/z"}))
-	must(q.SetInfo(ctx, SessionInfo{ID: "z2", Harness: "pi", CWD: "/z", Child: true}))
-	if sessionByID(t, q, "z2").Worker {
-		t.Error("two sessions with no pid were paired")
-	}
-	// The process's other session leaving (only the child still beats) makes
-	// the child stand alone: no live sibling, so not a worker.
+	// The parent leaving (only the child still beats) makes the child stand
+	// alone: not a worker.
 	c.add(2 * DefaultLeftAfter)
-	must(q.Touch(ctx, Session{ID: "w1", Harness: "pi", CWD: "/w", PID: 42}))
-	if sessionByID(t, q, "w1").Worker {
-		t.Error("a child whose process has no other live session is still a worker")
+	must(q.Touch(ctx, Session{ID: "fw1", Harness: "pi", CWD: "/b", PID: 77}))
+	if worker("fw1") {
+		t.Error("a child whose parent left is still a worker")
 	}
 }
 
@@ -117,7 +190,7 @@ func TestEligibleIsLiveAndNotAWorker(t *testing.T) {
 	must(q.SetInfo(ctx, SessionInfo{ID: "gone", Name: "old", Harness: "pi", CWD: "/g", PID: 9}))
 	c.add(2 * DefaultLeftAfter)
 	must(q.Touch(ctx, Session{ID: "s1", Harness: "pi", CWD: "/w", PID: 42}))
-	must(q.SetInfo(ctx, SessionInfo{ID: "w1", Name: "worker#ab0b4c89", Harness: "pi", CWD: "/w", PID: 42, Child: true}))
+	must(q.SetInfo(ctx, SessionInfo{ID: "w1", Name: "worker#ab0b4c89", Harness: "pi", CWD: "/w", PID: 42, Parent: "s1"}))
 	must(q.Touch(ctx, Session{ID: "cc", Harness: "claude", CWD: "/c", PID: 5}))
 	want := map[string]bool{"s1": true, "cc": true, "w1": false, "gone": false}
 	ss, err := q.Sessions(ctx)
@@ -145,12 +218,8 @@ func TestPruneDropsOnlyLongGoneEmptySessions(t *testing.T) {
 		}
 	}
 	const keep = 7 * 24 * time.Hour
-	// old-empty: gone long ago, nothing in it, a stale progress line.
+	// old-empty: gone long ago, nothing refers to it.
 	must(q.Touch(ctx, Session{ID: "old-empty", Harness: "pi", CWD: "/o", PID: 1}))
-	_, err := q.DB.ExecContext(ctx, `INSERT INTO progress(session_id, text, started_at, updated_at) VALUES ('old-empty', 'x', 1, 1)`)
-	must(err)
-	_, err = q.DB.ExecContext(ctx, `INSERT INTO progress_log(session_id, text, at) VALUES ('old-empty', 'x', 1)`)
-	must(err)
 	// old-thread: gone long ago, but it has a thread (readable via move-to).
 	must(q.Touch(ctx, Session{ID: "old-thread", Harness: "pi", CWD: "/o", PID: 2}))
 	thread(t, q, "old-thread")
@@ -194,11 +263,6 @@ func TestPruneDropsOnlyLongGoneEmptySessions(t *testing.T) {
 		if got[id] != want {
 			t.Errorf("%s present = %v, want %v", id, got[id], want)
 		}
-	}
-	var rows int
-	must(q.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM progress WHERE session_id = 'old-empty') + (SELECT count(*) FROM progress_log WHERE session_id = 'old-empty')`).Scan(&rows))
-	if rows != 0 {
-		t.Errorf("%d progress rows of the pruned session remain", rows)
 	}
 	// Idempotent.
 	if n, err := q.Prune(ctx, keep); err != nil || n != 0 {

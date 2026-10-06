@@ -17,6 +17,7 @@ import { h, card, fold, noteField } from '/_kit/kit.js';
 import type { Ctx } from './app.ts';
 import type { Message, MessagesView, MessageView, Progress } from './wire.d.ts';
 import { pluralize } from './decide-math.ts';
+import { movedNote } from './composer.ts';
 
 // ---- batch tray ------------------------------------------------------------
 
@@ -34,9 +35,13 @@ export interface BatchTrayDock {
   blocked(): string;
   /** Say it where Court looks (the composer's note). */
   say(text: string): void;
+  /** The session the page is attached to: serve refuses another's thread. */
+  currentSession(): string;
+  /** serve refused the send: the thread moved (see ComposerDock.threadMoved). */
+  threadMoved(): void;
 }
 
-export function makeBatchTray(ctx: Ctx, dock?: BatchTrayDock): BatchTrayHandle {
+export function makeBatchTray(ctx: Ctx, dock: BatchTrayDock): BatchTrayHandle {
   let thread = 0;
   let batch = 0;
   let drafts: Message[] = [];
@@ -215,18 +220,26 @@ export function makeBatchTray(ctx: Ctx, dock?: BatchTrayDock): BatchTrayHandle {
     if (!batch || !drafts.length) return;
     // A batch goes to the attached session while it is here, and nowhere
     // else: the drafts stay until Court chooses.
-    const why = dock?.blocked() ?? '';
+    const why = dock.blocked();
     if (why) {
-      dock?.say(why);
+      dock.say(why);
       return;
     }
     const sent = batch;
     drafts = [];
     render();
     try {
-      await ctx.api.post('/batches/send', { batch: sent });
+      await ctx.api.post('/batches/send', {
+        batch: sent,
+        session: dock.currentSession(),
+      });
     } catch (err) {
       console.error('[batch] send:', err);
+      const moved = movedNote(err);
+      if (moved) {
+        dock.say(moved);
+        dock.threadMoved();
+      }
       await reload();
     }
   }
