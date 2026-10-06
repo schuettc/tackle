@@ -133,7 +133,7 @@ func devRepos(roots []config.Root) []string {
 			case ".git", "node_modules", "vendor", "testdata", ".worktrees":
 				return filepath.SkipDir
 			}
-			if st, err := os.Stat(filepath.Join(p, ".git")); err != nil || !st.IsDir() || seen[p] {
+			if !gitDir(p) || seen[p] {
 				return nil
 			}
 			seen[p] = true
@@ -144,6 +144,13 @@ func devRepos(roots []config.Root) []string {
 		})
 	}
 	return out
+}
+
+// gitDir reports whether dir holds a .git directory (a clone, not a linked
+// worktree).
+func gitDir(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && st.IsDir()
 }
 
 // proposeRoot is the git toplevel of the current directory, else the
