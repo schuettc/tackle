@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/schuettc/tackle/internal/sift/rec"
@@ -69,6 +71,11 @@ const (
 // recommending.
 var ErrNotReady = errors.New("store: the round is still being recommended")
 
+// ErrNoteNeeded is returned for a disagreement (a reject of a file with
+// nothing to change) without a note: the note is what the agent
+// recommends again from.
+var ErrNoteNeeded = errors.New("store: disagreeing takes a note: say what should change")
+
 // PerItem reports whether a round of this kind is decided one row at a time
 // (backlog and intake) rather than one file at a time (an audit).
 func PerItem(kind string) bool { return kind == "backlog" || kind == "intake" }
@@ -85,6 +92,13 @@ type FileItem struct {
 	// Group is the files decided with this one (rec.Group), itself
 	// included.
 	Group []string
+	// Unchanged: the recommendation leaves this file, and every file
+	// decided with it, as it is (every finding kept). Such a file is agreed
+	// with (an accept, which mutes its findings) or disagreed with (a
+	// reject, which takes a note and goes back to the agent).
+	Unchanged bool
+	// Muted: each of the file's findings is muted.
+	Muted bool
 }
 
 // Progress is a round's state and how far the recommending got.
@@ -150,14 +164,88 @@ func filesIn(ctx context.Context, tx *sql.Tx, roundID int64) ([]FileItem, error)
 	if err := q.Err(); err != nil {
 		return nil, err
 	}
+	muted, err := mutedIn(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	recs, edits := recsOf(out), editsOf(out)
+	same := map[string]bool{}
+	for _, it := range out {
+		same[it.Key] = it.Rec != nil && rec.Hash(it.Rec.Content) == it.Base
+	}
 	for i := range out {
 		out[i].Group = rec.Group(recs, out[i].Key)
 		if out[i].Rec != nil {
 			out[i].Fingerprint = printOf(recs, edits, *out[i].Rec)
 		}
+		out[i].Unchanged = true
+		for _, k := range out[i].Group {
+			out[i].Unchanged = out[i].Unchanged && same[k]
+		}
+		out[i].Muted = len(out[i].Rows) > 0
+		for _, id := range out[i].Rows {
+			out[i].Muted = out[i].Muted && muted[id]
+		}
 	}
 	return out, nil
+}
+
+// mutedIn is the muted row ids.
+func mutedIn(ctx context.Context, tx *sql.Tx) (map[string]bool, error) {
+	q, err := tx.QueryContext(ctx, `SELECT row_id FROM mutes`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = q.Close() }()
+	out := map[string]bool{}
+	for q.Next() {
+		var id string
+		if err := q.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, q.Err()
+}
+
+// syncMutes makes the mutes of keys' findings follow their decisions: a
+// file with nothing to change that is agreed with (accepted) has its
+// findings muted, until their passage changes (a row id hashes it); any
+// other file of keys has them unmuted. A finding in a round was not muted
+// when the round was checked, so unmuting one undoes only this round's
+// agreement.
+func syncMutes(ctx context.Context, tx *sql.Tx, roundID int64, keys []string) error {
+	items, err := filesIn(ctx, tx, roundID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UnixMilli()
+	for _, it := range items {
+		if !slices.Contains(keys, it.Key) {
+			continue
+		}
+		agreed := it.Unchanged && it.Decision != nil && it.Decision.Action == "accept"
+		for _, id := range it.Rows {
+			if agreed {
+				_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO mutes(row_id, muted_at) VALUES (?,?)`, id, now)
+			} else {
+				_, err = tx.ExecContext(ctx, `DELETE FROM mutes WHERE row_id = ?`, id)
+			}
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// needsNote is ErrNoteNeeded when d disagrees with a file that has
+// nothing to change (a reject) and gives no note.
+func needsNote(it FileItem, d rec.Decision) error {
+	if it.Unchanged && d.Action == "reject" && strings.TrimSpace(d.Note) == "" {
+		return fmt.Errorf("%w (%s)", ErrNoteNeeded, it.Source.File)
+	}
+	return nil
 }
 
 // editsOf is the edits in force, by file.
@@ -394,6 +482,9 @@ func (s *Store) Propose(ctx context.Context, roundID int64, batch []rec.Rec) (Pr
 				res.Left++
 			}
 		}
+		if err := syncMutes(ctx, tx, roundID, slices.Collect(maps.Keys(drop))); err != nil {
+			return err
+		}
 		return bump(ctx, tx, roundID)
 	})
 	if err != nil {
@@ -481,6 +572,9 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 		if err := checkSeen(group, by, seen); err != nil {
 			return err
 		}
+		if err := needsNote(by[key], d); err != nil {
+			return err
+		}
 		now := time.Now().UnixMilli()
 		// Each decision put is a new one, with a new id, even when it
 		// equals the one it replaces.
@@ -514,6 +608,9 @@ func (s *Store) DecideFile(ctx context.Context, roundID int64, key string, d rec
 				}
 			}
 		}
+		if err := syncMutes(ctx, tx, roundID, group); err != nil {
+			return err
+		}
 		after, err = groupNow(ctx, tx, roundID, group)
 		return err
 	})
@@ -544,8 +641,16 @@ func (s *Store) NoteFile(ctx context.Context, roundID int64, key, note string) e
 		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		if _, _, err := groupFor(ctx, tx, roundID, key); err != nil {
+		_, items, err := groupFor(ctx, tx, roundID, key)
+		if err != nil {
 			return err
+		}
+		for _, it := range items {
+			if it.Key == key && it.Decision != nil {
+				if err := needsNote(it, rec.Decision{Action: it.Decision.Action, Note: note}); err != nil {
+					return err
+				}
+			}
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE file_decisions SET note = ?, sent_at = 0 WHERE round_id = ? AND key = ?`, note, roundID, key)
 		if err != nil {
@@ -637,6 +742,9 @@ func (s *Store) UndecideFile(ctx context.Context, roundID int64, key string, see
 			if _, err := tx.ExecContext(ctx, `DELETE FROM file_decisions WHERE round_id = ? AND key = ?`, roundID, k); err != nil {
 				return err
 			}
+		}
+		if err := syncMutes(ctx, tx, roundID, group); err != nil {
+			return err
 		}
 		after, err = groupNow(ctx, tx, roundID, group)
 		return err

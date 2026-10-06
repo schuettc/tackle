@@ -224,6 +224,9 @@ func (c Counts) Total() int { return c.Accept + c.Edit + c.Reject }
 type Note struct {
 	Row  string `json:"row"` // file:line · check, or the file
 	Note string `json:"note"`
+	// Again: the user disagrees that the file needs no change; the agent
+	// recommends it again.
+	Again bool `json:"again,omitempty"`
 }
 
 // Send is one press of Send. ID is 0 when nothing was new (nothing is
@@ -290,7 +293,7 @@ func (s *Store) Send(ctx context.Context, roundID int64, owner string, shown *Sh
 			sd.Files = append(sd.Files, it.Key)
 			count(d.Action)
 			if d.Note != "" {
-				sd.Notes = append(sd.Notes, Note{Row: it.Source.File, Note: d.Note})
+				sd.Notes = append(sd.Notes, Note{Row: it.Source.File, Note: d.Note, Again: it.Unchanged && d.Action == "reject"})
 			}
 		}
 		rows, err := rowsOf(ctx, tx, roundID)

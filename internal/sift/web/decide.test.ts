@@ -833,3 +833,61 @@ test('a file editor is bound to its snapshot too: re-recommended underneath, its
   assert.equal(await redo, 'saved');
   assert.equal(fake.dec.m?.content, 'mine\n');
 });
+
+test('picking recommended over your version: the page takes your edit back and accepts the recommendation, in one turn bound to what it showed', async () => {
+  const fake = new Fake();
+  const { p, d } = page(fake);
+  const edit = d.file('m', { action: 'edit', content: 'mine\n' });
+  await fake.run();
+  assert.equal(await edit, true);
+  const pick = d.recommend('m');
+  assert.equal(d.busy(['f:g']), true, 'the group waits while it picks');
+  assert.equal(await d.file('g', { action: 'reject' }), false);
+  await fake.run();
+  // The clear's answer brings the accept's request.
+  await fake.run();
+  assert.equal(await pick, true);
+  assert.deepEqual(
+    fake.calls.map((c) => c.what),
+    ['decide m edit', 'clear m', 'decide m accept'],
+  );
+  assert.equal(
+    fake.dec.m?.action,
+    'accept',
+    'the recommendation, not the edit',
+  );
+  assert.equal(shown(p.review, 'm').content, fake.recs.m);
+  assert.deepEqual(shown(p.review, 'm'), shown(fake.review(), 'm'));
+  // With no edit shown, it is one accept.
+  const again = d.recommend('q');
+  await fake.run();
+  assert.equal(await again, true);
+  assert.equal(fake.calls.at(-1)?.what, 'decide q accept');
+});
+
+test('picking recommended over an edit another page changed: the clear gets 409 and nothing is accepted', async () => {
+  const fake = new Fake();
+  const a = page(fake);
+  const edit = a.d.file('m', { action: 'edit', content: 'mine\n' });
+  await fake.run();
+  assert.equal(await edit, true);
+  const b = page(fake);
+  const other = b.d.file('m', { action: 'reject' });
+  await fake.run();
+  assert.equal(await other, true);
+  const pick = a.d.recommend('m');
+  await fake.run();
+  assert.equal(await pick, false);
+  assert.equal(fake.calls.at(-1)?.what, 'clear m', 'no accept followed');
+  assert.equal(fake.dec.m?.action, 'reject');
+  assert.deepEqual(shown(a.p.review, 'm'), shown(fake.review(), 'm'));
+});
+
+test('a disagreement carries its own note', async () => {
+  const fake = new Fake();
+  const { d } = page(fake);
+  const reject = d.file('q', { action: 'reject', note: 'y is gone: say z' });
+  await fake.run();
+  assert.equal(await reject, true);
+  assert.equal(fake.dec.q?.note, 'y is gone: say z');
+});

@@ -170,12 +170,17 @@ type fileJSON struct {
 	Decision    *rec.Decision `json:"decision"`
 	Fingerprint string        `json:"fingerprint"`
 	Group       []string      `json:"group"`
+	// Unchanged: the recommendation leaves the file (and its group) as it
+	// is; the page lists it under nothing to change. Muted: its findings
+	// are muted (it was agreed with).
+	Unchanged bool `json:"unchanged"`
+	Muted     bool `json:"muted"`
 }
 
 func fileOf(it store.FileItem) fileJSON {
 	f := fileJSON{Key: it.Key, Path: it.Source.File, Source: it.Source, Commit: it.Commit, Class: it.Class, Budget: it.Budget,
 		Base: it.Base, Size: it.Size, After: it.Size, Rows: append([]string{}, it.Rows...), Rec: it.Rec, Decision: it.Decision,
-		Fingerprint: it.Fingerprint, Group: append([]string{}, it.Group...)}
+		Fingerprint: it.Fingerprint, Group: append([]string{}, it.Group...), Unchanged: it.Unchanged, Muted: it.Muted}
 	if it.Rec != nil {
 		f.After = len(it.Rec.Content)
 		if d := it.Decision; d != nil && d.Action == "edit" {
@@ -392,6 +397,8 @@ func fileErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, "changed: this file's recommendation or edit changed since the page showed it; look again")
 	case errors.Is(err, store.ErrNotReady):
 		writeErr(w, http.StatusConflict, "the agent is still recommending: decisions open once every file has a recommendation")
+	case errors.Is(err, store.ErrNoteNeeded):
+		writeErr(w, http.StatusBadRequest, "disagreeing takes a note: say what should change, for the agent to recommend it again")
 	default:
 		writeErr(w, http.StatusInternalServerError, err.Error())
 	}
@@ -542,6 +549,9 @@ func (s *Server) putNote(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, store.ErrNotReady):
 		writeErr(w, http.StatusConflict, "the agent is still recommending")
+		return
+	case errors.Is(err, store.ErrNoteNeeded):
+		writeErr(w, http.StatusBadRequest, "a disagreement keeps its note: say what should change")
 		return
 	case err != nil:
 		writeErr(w, http.StatusInternalServerError, err.Error())

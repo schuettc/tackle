@@ -35,14 +35,20 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   JSON lines, into a backlog or intake round, decided per item. A changed
   proposal drops its decision, and a changed merge target drops every merge
   into it.
-- `sift serve`: the review page. An audit round lists one entry per file
-  (sizes before and after, findings, decision), linked files together; a
-  file shows its summary, a wrapping diff with the certain fixes marked,
-  accept, edit (the whole file) or reject on 1–3, the findings with what the
-  rewrite did, and a note. Linked files are decided together. A backlog
-  round lists its items, grouped as issues by repo, decisions and closes.
-  A file or an item shows your edit once you make one, and accepting it
-  keeps the edit; u reverts to the proposal. Each decision and clear
+- `sift serve`: the review page. An audit round has two sections. To
+  change lists one entry per file the recommendation changes (sizes before
+  and after, findings, the version picked), linked files together; a file
+  asks which version it should have, side by side: 1 current, 2
+  recommended, or your own (e writes it; it is then a third choice, 3),
+  then the findings with what the chosen version does, a note, and a
+  wrapping diff with the certain fixes marked. Linked files are picked
+  together. Nothing to change lists the files the agent keeps as they are,
+  with its reason for each finding: agree (one file, or a for all) mutes
+  their findings until the text changes; disagree takes a note, and Send
+  asks the agent to recommend the file again. A backlog round lists its
+  items, grouped as issues by repo, decisions and closes, each with accept,
+  edit or reject; an item shows your edit once you make one, and
+  accepting it keeps the edit; u reverts to the proposal. Each decision and clear
   carries the fingerprints of what the page showed (an edit included), and
   one the agent or another page has changed since is refused, and the page
   reloads what changed. A decision shows once the server has it, and while

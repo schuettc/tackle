@@ -69,6 +69,11 @@ interface FileView {
   decision: FileDecision | null;
   fingerprint: string;
   group: string[];
+  /** The recommendation leaves this file (and its linked files) as it is:
+   * it is listed under nothing to change, to agree or disagree with. */
+  unchanged: boolean;
+  /** Each of its findings is muted (it was agreed with). */
+  muted: boolean;
 }
 
 interface Progress {

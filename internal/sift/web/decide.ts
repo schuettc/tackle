@@ -132,6 +132,12 @@ export interface Decider {
    * when there is none. */
   snapRow(id: string): RowSnap | null;
   snapFile(key: string): FileSnap | null;
+  /** Picks the recommended version of a file: an accept. When the page
+   * shows the person's own version (an edit), which an accept would keep,
+   * it first takes the edit back (a clear, bound to what the page shows),
+   * then accepts the recommendation the clear's snapshot shows, in one
+   * turn: the group waits for both. */
+  recommend(key: string): Promise<boolean>;
   /** Saves an edit against the snapshot its editor opened on. */
   editRow(snap: RowSnap, d: Decision): Promise<Saved>;
   editFile(snap: FileSnap, content: string): Promise<Saved>;
@@ -319,9 +325,11 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
     const keys = groupKeys(f);
     if (busy(keys)) return Promise.resolve('busy');
     const k = `f:${key}`;
+    // A disagreement brings its own note; any other decision the one given
+    // in the note field, else the decision's.
     const full: FileDecision = {
       ...d,
-      note: notes.get(k) ?? fileOf(key)?.decision?.note ?? '',
+      note: d.note ?? notes.get(k) ?? fileOf(key)?.decision?.note ?? '',
     };
     return run(round, keys, async () => {
       const snap = await server.decideFile(round, key, full, seen);
@@ -397,6 +405,35 @@ export function createDecider(server: DecisionServer, hooks: Hooks): Decider {
         run(round, groupKeys(f), async () => {
           const snap = await server.clearFile(round, key, seen);
           const cur = shownRound(round);
+          if (cur) holdFiles(cur.files, snap);
+        }),
+      );
+    },
+
+    recommend(key) {
+      const r = hooks.review();
+      const round = r?.round?.id;
+      const f = fileOf(key);
+      if (!r || !round || !f) return Promise.resolve(false);
+      const seen = seenFor(r.files, key);
+      if (f.decision?.action !== 'edit')
+        return saved(decideFile(key, { action: 'accept' }, seen, f));
+      const k = `f:${key}`;
+      const note = notes.get(k) ?? f.decision.note ?? '';
+      return saved(
+        run(round, groupKeys(f), async () => {
+          const cleared = await server.clearFile(round, key, seen);
+          let cur = shownRound(round);
+          if (cur) holdFiles(cur.files, cleared);
+          // The recommendation, as the clear's snapshot shows it.
+          const snap = await server.decideFile(
+            round,
+            key,
+            { action: 'accept', note },
+            seenFor(cleared, key),
+          );
+          if (notes.get(k) === note) notes.delete(k);
+          cur = shownRound(round);
           if (cur) holdFiles(cur.files, snap);
         }),
       );

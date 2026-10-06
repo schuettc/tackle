@@ -8,7 +8,9 @@
   "shop/CLAUDE.md": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n\n## Layout\n\nSee `docs/architecture.md` for the layout.\nThe old runbook lives in `docs/runbook-v1.md`.\n\n## Status\n\n- Waiting on the payments migration before the checkout rewrite can start.\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.\n\n## Style\n\n- Waiting on the style migration for pattern 1 (#101) before new code uses its replacement.\n- Waiting on the style migration for pattern 2 (#102) before new code uses its replacement.\n- Waiting on the style migration for pattern 3 (#103) before new code uses its replacement.\n- Waiting on the style migration for pattern 4 (#104) before new code uses its replacement.\n- Waiting on the style migration for pattern 5 (#105) before new code uses its replacement.\n- Waiting on the style migration for pattern 6 (#106) before new code uses its replacement.\n- Waiting on the style migration for pattern 7 (#107) before new code uses its replacement.\n- Waiting on the style migration for pattern 8 (#108) before new code uses its replacement.\n- Waiting on the style migration for pattern 9 (#109) before new code uses its replacement.\n- Waiting on the style migration for pattern 10 (#110) before new code uses its replacement.\n- Waiting on the style migration for pattern 11 (#111) before new code uses its replacement.\n- Waiting on the style migration for pattern 12 (#112) before new code uses its replacement.\n- Waiting on the style migration for pattern 13 (#113) before new code uses its replacement.\n- Waiting on the style migration for pattern 14 (#114) before new code uses its replacement.\n- Waiting on the style migration for pattern 15 (#115) before new code uses its replacement.\n- Waiting on the style migration for pattern 16 (#116) before new code uses its replacement.\n- Waiting on the style migration for pattern 17 (#117) before new code uses its replacement.\n- Waiting on the style migration for pattern 18 (#118) before new code uses its replacement.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
   "shop/docs/AGENTS.md": "# docs\n\n- Waiting on the generator rewrite (#88): until it merges, edit the generated reference by hand.\n- Write in the second person.\n",
   "tools/skills/release/SKILL.md": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\nRead `~/.notes/memory.md` before you start.\n\n- Tag from main.\n",
-  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n- Prefer small commits.\n"
+  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n- Prefer small commits.\n",
+  "tools/CLAUDE.md": "# tools\n\nShared scripts for the release and the docs.\n\n- Keep the scripts POSIX sh: the release runner has no bash.\n- Waiting on the runner upgrade (#57) before a script may use `local`.\n",
+  "tools/cli/AGENTS.md": "# cli\n\n- Waiting on the flag parser rewrite (#61) before new commands take long options.\n- Every command prints its usage on -h.\n"
  },
  "rows": [
   {
@@ -598,6 +600,60 @@
     }
    ],
    "certain": true
+  },
+  {
+   "id": "a1c0de0000000001",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "tools/CLAUDE.md",
+    "start": 6,
+    "end": 6
+   },
+   "passage": "- Waiting on the runner upgrade (#57) before a script may use `local`.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "a1c0de0000000002",
+   "check": "duplicate",
+   "summary": "a rule the global file also has",
+   "source": {
+    "rel": "tools/CLAUDE.md",
+    "start": 5,
+    "end": 5
+   },
+   "passage": "- Keep the scripts POSIX sh: the release runner has no bash.",
+   "evidence": [
+    {
+     "name": "also in",
+     "value": "home/.agent/AGENTS.md"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "a1c0de0000000003",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "tools/cli/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- Waiting on the flag parser rewrite (#61) before new commands take long options.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
   }
  ],
  "recs": {
@@ -655,6 +711,21 @@
    "summary": "Drops the pointer to a memory store that has been retired.",
    "content": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\n- Tag from main.\n",
    "fixed": "the pointer to the retired store is removed"
+  },
+  "tools/CLAUDE.md": {
+   "summary": "Nothing to change: #57 is still open, and every rule here is the scripts'.",
+   "content": "# tools\n\nShared scripts for the release and the docs.\n\n- Keep the scripts POSIX sh: the release runner has no bash.\n- Waiting on the runner upgrade (#57) before a script may use `local`.\n",
+   "kept": {
+    "a1c0de0000000001": "#57 is still open",
+    "a1c0de0000000002": "the global rule is about shell in general; this one names the runner"
+   }
+  },
+  "tools/cli/AGENTS.md": {
+   "summary": "Nothing to change: the flag parser rewrite is still in review.",
+   "content": "# cli\n\n- Waiting on the flag parser rewrite (#61) before new commands take long options.\n- Every command prints its usage on -h.\n",
+   "kept": {
+    "a1c0de0000000003": "#61 is still in review"
+   }
   }
  }
 }

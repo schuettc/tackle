@@ -6,9 +6,13 @@ import {
   fileEntries,
   fileMeta,
   filesProgress,
+  chosen,
+  didFor,
   holdFiles,
   hunks,
+  noChangeFiles,
   seenFor,
+  snippet,
   unsentFiles,
 } from './files.ts';
 
@@ -38,6 +42,8 @@ function mk(
     decision: null,
     fingerprint: 'fp-' + key,
     group: [key],
+    unchanged: false,
+    muted: false,
     ...extra,
   };
 }
@@ -120,11 +126,80 @@ test('fileEntries: files with findings or a recommendation, linked files togethe
   );
 });
 
-test('fileMeta: sizes before and after, findings, decision', () => {
+test('fileMeta: sizes before and after, findings, the version picked', () => {
   const f = mk('a', '/w/a/AGENTS.md', { rows: ['1', '2', '3'] });
-  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 ·');
+  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · not chosen');
   f.decision = { action: 'edit', content: 'mine' };
-  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · edited');
+  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · yours');
+  f.decision = { action: 'accept' };
+  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · recommended');
+  f.decision = { action: 'reject' };
+  assert.equal(fileMeta(f), '4.2 → 3.1 KB · 3 · current');
+});
+
+test('a file with nothing to change is not listed to change; it is listed under nothing to change, in order', () => {
+  const a = mk('a', '/w/a/AGENTS.md');
+  const n = mk('n', '/w/n/AGENTS.md', { unchanged: true });
+  const g = mk('g', '/home/u/.agent/AGENTS.md', {
+    unchanged: true,
+    class: 'global',
+  });
+  const files = [n, a, g];
+  assert.deepEqual(
+    fileEntries(files, '/home/u').map((e) => e.file.key),
+    ['a'],
+  );
+  assert.deepEqual(
+    noChangeFiles(files, '/home/u').map((f) => f.key),
+    ['g', 'n'],
+  );
+});
+
+test('chosen: the version a decision picks; current is reject, recommended accept, yours edit', () => {
+  const f = mk('a', '/a');
+  assert.equal(chosen(f), null);
+  f.decision = { action: 'reject' };
+  assert.equal(chosen(f), 'current');
+  f.decision = { action: 'accept' };
+  assert.equal(chosen(f), 'recommended');
+  f.decision = { action: 'edit', content: 'mine\n' };
+  assert.equal(chosen(f), 'yours');
+});
+
+test('didFor: what the chosen version does about a finding', () => {
+  const f = mk('a', '/a', {
+    rows: ['r1', 'r2'],
+    rec: {
+      file: 'a',
+      base: 'b-a',
+      content: 'x\n',
+      findings: [
+        { row: 'r1', did: 'fixed', how: 'removed the dead path' },
+        { row: 'r2', did: 'kept', how: 'still true' },
+      ],
+      summary: 's',
+    },
+  });
+  // Undecided, a finding shows what the recommendation does.
+  assert.equal(didFor(f, 'r1'), 'fixed: removed the dead path');
+  f.decision = { action: 'accept' };
+  assert.equal(didFor(f, 'r1'), 'fixed: removed the dead path');
+  assert.equal(didFor(f, 'r2'), 'kept: still true');
+  f.decision = { action: 'reject' };
+  assert.equal(didFor(f, 'r1'), 'left as it is');
+  f.decision = { action: 'edit', content: 'mine\n' };
+  assert.equal(
+    didFor(f, 'r1'),
+    'your version (the recommendation: fixed: removed the dead path)',
+  );
+});
+
+test("snippet: a choice's first changed lines, cut short", () => {
+  const base = 'a\nb\nc\nd\ne\nf\n';
+  const after = 'a\nB\nC\nD\nE\nF\n';
+  assert.deepEqual(snippet(base, after, '-', 3), ['b', 'c', 'd', '…']);
+  assert.deepEqual(snippet(base, after, '+', 10), ['B', 'C', 'D', 'E', 'F']);
+  assert.deepEqual(snippet(base, base, '+', 3), []);
 });
 
 test('filesProgress and unsentFiles', () => {

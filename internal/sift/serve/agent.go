@@ -331,9 +331,23 @@ func SendText(sd store.Send) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "The user sent their decisions for sift round %d: %d accepted, %d edited, %d rejected.\n",
 		sd.Round, c.Accept, c.Edit, c.Reject)
-	if len(sd.Notes) > 0 {
+	var notes, again []store.Note
+	for _, n := range sd.Notes {
+		if n.Again {
+			again = append(again, n)
+		} else {
+			notes = append(notes, n)
+		}
+	}
+	if len(notes) > 0 {
 		b.WriteString("Notes:\n")
-		for _, n := range sd.Notes {
+		for _, n := range notes {
+			fmt.Fprintf(&b, "- %s: %s\n", n.Row, n.Note)
+		}
+	}
+	if len(again) > 0 {
+		b.WriteString("Recommend again: the user disagrees that these files need no change. Read each note, then propose a rewrite of each file with sift_propose (or `sift propose`):\n")
+		for _, n := range again {
 			fmt.Fprintf(&b, "- %s: %s\n", n.Row, n.Note)
 		}
 	}

@@ -177,11 +177,14 @@ const order = (f: FileView, home: string): [number, string] => [
 const before = (a: [number, string], b: [number, string]) =>
   a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 
-/** The list: every file with findings or a recommendation, global files
- * first, then repo files and skills by path; linked files sit together at
- * the place of the first of them. */
+/** The list of files to change: every file with findings or a
+ * recommendation, except those with nothing to change (noChangeFiles),
+ * global files first, then repo files and skills by path; linked files sit
+ * together at the place of the first of them. */
 export function fileEntries(files: FileView[], home: string): FileEntry[] {
-  const shown = files.filter((f) => f.rows.length > 0 || f.rec);
+  const shown = files.filter(
+    (f) => (f.rows.length > 0 || f.rec) && !f.unchanged,
+  );
   const by = new Map(shown.map((f) => [f.key, f]));
   const groups = new Map<string, FileView[]>();
   for (const f of shown) {
@@ -204,20 +207,63 @@ export function fileEntries(files: FileView[], home: string): FileEntry[] {
 
 const kb = (n: number) => (n / 1000).toFixed(1);
 
-const word: Record<string, string> = {
-  accept: 'accepted',
-  edit: 'edited',
-  reject: 'rejected',
+/** The files whose recommendation leaves them as they are, in the list's
+ * order: agreed or disagreed with, not picked between. */
+export function noChangeFiles(files: FileView[], home: string): FileView[] {
+  return files
+    .filter((f) => f.rec && f.unchanged)
+    .sort((a, b) => before(order(a, home), order(b, home)));
+}
+
+/** A version of a file to change: as it is (current), the agent's
+ * (recommended), or the person's own (yours). */
+export type Choice = 'current' | 'recommended' | 'yours';
+
+const choiceOf: Record<FileDecision['action'], Choice> = {
+  reject: 'current',
+  accept: 'recommended',
+  edit: 'yours',
 };
 
+/** The version a file's decision picks: current is a reject, recommended
+ * an accept, yours an edit; null undecided. */
+export function chosen(f: FileView): Choice | null {
+  return f.decision ? choiceOf[f.decision.action] : null;
+}
+
+/** What the version picked (the recommendation, undecided) does about
+ * the finding row. */
+export function didFor(f: FileView, row: string): string {
+  const a = f.rec?.findings.find((x) => x.row === row);
+  const rec = a ? `${a.did}: ${a.how}` : '—';
+  switch (chosen(f)) {
+    case 'current':
+      return 'left as it is';
+    case 'yours':
+      return `your version (the recommendation: ${rec})`;
+    default:
+      return rec;
+  }
+}
+
+/** The first n lines a version removes ('-') or adds ('+') against base,
+ * with '…' when there are more. */
+export function snippet(
+  base: string,
+  after: string,
+  kind: '-' | '+',
+  n: number,
+): string[] {
+  const ls = diffLines(base, after)
+    .filter((o) => o.kind === kind)
+    .map((o) => o.text);
+  return ls.length > n ? [...ls.slice(0, n), '…'] : ls;
+}
+
 /** The list's right-hand words: sizes before and after, findings, the
- * decision. */
+ * version picked. */
 export function fileMeta(f: FileView): string {
-  const d = f.decision ? word[f.decision.action] : '·';
-  return `${kb(f.size)} → ${kb(f.after)} KB · ${f.rows.length} · ${d}`.replace(
-    / · ·$/,
-    ' ·',
-  );
+  return `${kb(f.size)} → ${kb(f.after)} KB · ${f.rows.length} · ${chosen(f) ?? 'not chosen'}`;
 }
 
 /** What a decision on key carries: each file of its group as files show

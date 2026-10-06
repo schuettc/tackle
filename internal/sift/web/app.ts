@@ -1,11 +1,16 @@
 // app.ts — the sift review page: the bar, the list, the reading column, the
 // route (#/open[/<entry>]), the live client and every decision.
 //
-// An audit round is decided one file at a time: the list has one entry per
-// file (linked files together), and the reading column shows the file's
-// recommendation as a diff. While the agent is still recommending, the
-// page says how far it got and takes no decision. A backlog round is
-// decided one item at a time, in groups.
+// An audit round is decided one file at a time, in two sections. To
+// change: one list entry per file the recommendation changes (linked files
+// together), and the reading column asks which version the file should
+// have: 1 current (a reject), 2 recommended (an accept), or the person's
+// own (e writes it, an edit; 3 picks it again). Nothing to change: one list
+// entry for the files the agent keeps as they are, each agreed with (an
+// accept, which mutes its findings) or disagreed with (a reject with a
+// note, which goes back to the agent). While the agent is still
+// recommending, the page says how far it got and takes no decision. A
+// backlog round is decided one item at a time, in groups.
 //
 // State lives here; doc.ts only draws; decide.ts makes the decisions:
 // every decision, clear, note and Send goes through it. A decision shows
@@ -38,15 +43,19 @@ import {
   fileDoc,
   groupDoc,
   message,
+  noChangeDoc,
   rowDoc,
   type Ctx,
   type FileCtx,
+  type NoChangeCtx,
 } from './doc.ts';
 import {
   fileEntries,
   fileMeta,
   filesProgress,
+  noChangeFiles,
   unsentFiles,
+  type Choice,
   type FileEntry,
 } from './files.ts';
 import {
@@ -67,7 +76,16 @@ import {
 const qs = new URLSearchParams(location.search);
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
-type Item = Entry | (FileEntry & { kind: 'file' });
+/** The nothing-to-change section: one entry for all its files. */
+interface NoChangeEntry {
+  kind: 'nochange';
+  key: string;
+  files: FileView[];
+}
+
+type Item = Entry | (FileEntry & { kind: 'file' }) | NoChangeEntry;
+
+const NOCHANGE = 'nochange';
 
 function frag(key?: string | null): string {
   return `#/open${key ? `/${encodeURIComponent(key)}` : ''}`;
@@ -115,6 +133,11 @@ export function boot(): void {
   let rowSnap: RowSnap | null = null;
   let fileSnap: FileSnap | null = null;
   let editGen = 0;
+  // The file whose disagree form is open (nothing to change).
+  let disagreeing: string | null = null;
+  // Each file's own version, as last saved or shown: it stays a choice
+  // (yours) after another version is picked.
+  const mine = new Map<string, string>();
   let filter = '';
   let search = '';
   let lastFrag = '';
@@ -179,12 +202,14 @@ export function boot(): void {
         openKey,
       );
     const q = search.toLowerCase();
-    return fileEntries(files(), home())
-      .filter(
-        (e) =>
-          !q || displayPath(e.file.source, home()).toLowerCase().includes(q),
-      )
+    const hit = (f: FileView) =>
+      !q || displayPath(f.source, home()).toLowerCase().includes(q);
+    const out: Item[] = fileEntries(files(), home())
+      .filter((e) => hit(e.file))
       .map((e) => ({ ...e, kind: 'file' as const }));
+    const same = noChangeFiles(files(), home()).filter(hit);
+    if (same.length) out.push({ kind: 'nochange', key: NOCHANGE, files: same });
+    return out;
   };
   const rowById = (id: string) => review?.rows.find((r) => r.id === id);
   const current = (): Item | undefined => shown.find((e) => e.key === openKey);
@@ -268,6 +293,30 @@ export function boot(): void {
       },
     },
     row(e) {
+      if (e.kind === 'nochange') {
+        const n = e.files.length;
+        const kept = e.files.reduce((t, f) => t + f.rows.length, 0);
+        const agreed = e.files.filter(
+          (f) => f.decision?.action === 'accept',
+        ).length;
+        const disagreed = e.files.filter(
+          (f) => f.decision?.action === 'reject',
+        ).length;
+        return {
+          id: e.key,
+          key: `nothing to change · ${plural(n, 'file')}`,
+          title: `${plural(n, 'file')}, ${plural(kept, 'finding')} kept`,
+          meta:
+            agreed + disagreed
+              ? [
+                  agreed ? `${agreed} agreed` : '',
+                  disagreed ? `${disagreed} disagreed` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ')
+              : 'reasons given · not reviewed',
+        };
+      }
       if (e.kind === 'file') {
         const f = e.file;
         return {
@@ -338,7 +387,16 @@ export function boot(): void {
       els[i]?.classList.toggle('sift-group', e.kind === 'group');
       els[i]?.classList.toggle('sift-member', e.kind === 'row' && e.member);
       els[i]?.classList.toggle('sift-linked', e.kind === 'file' && e.linked);
+      els[i]?.classList.toggle('sift-nochange-row', e.kind === 'nochange');
     });
+    // The list's heading counts the files to change; nothing to change
+    // heads its own entry.
+    const eyebrow = l.el.querySelector('.kit-eyebrow');
+    if (eyebrow)
+      eyebrow.textContent =
+        perItem(review) || !review?.round
+          ? 'items'
+          : `to change · ${plural(fileEntries(files(), home()).length, 'file')}`;
   }
 
   // ---- reading column contexts -----------------------------------------------
@@ -394,10 +452,14 @@ export function boot(): void {
       if (v === undefined) loadBase(f);
       return v;
     },
+    yours(f) {
+      if (f.decision?.action === 'edit' && f.decision.content !== undefined)
+        mine.set(f.key, f.decision.content);
+      return mine.get(f.key);
+    },
     noteOf: (f) => decider.noteOf(`f:${f.key}`) ?? f.decision?.note ?? '',
     setNote: (f, text) => decider.noteFile(f.key, text),
-    accept: (f) => putFile(f, { action: 'accept' }),
-    reject: (f) => putFile(f, { action: 'reject' }),
+    pick: (f, c) => pick(f, c),
     startEdit(f) {
       if (fctx.busy(f)) return;
       openEdit(f.key, true);
@@ -415,17 +477,61 @@ export function boot(): void {
         return 'the file is empty: reject it to leave it as it is';
       const was =
         f.decision?.action === 'edit' ? f.decision.content : f.rec?.content;
-      if (content === was)
-        return 'nothing changed: accept the recommendation instead';
+      if (content === f.rec?.content)
+        return 'this is the recommended version: pick it with 2';
+      if (content === was) return 'nothing changed';
       if (fctx.busy(f)) return 'the last decision on this file is saving';
       const at = openKey;
-      void decider
-        .editFile(snap, content)
-        .then((out) => edited(out, f.key, true, at));
+      void decider.editFile(snap, content).then((out) => {
+        if (out === 'saved') mine.set(f.key, content);
+        edited(out, f.key, true, at);
+      });
       return null;
     },
     clear: (f) => void decider.clearFile(f.key),
     busy: (f) => decider.busy(f.group.map((k) => `f:${k}`)),
+  };
+
+  const nctx: NoChangeCtx = {
+    get home() {
+      return home();
+    },
+    rowsOf: (f) => fctx.rowsOf(f),
+    get disagreeing() {
+      return disagreeing;
+    },
+    agree(f) {
+      if (disagreeing === f.key) disagreeing = null;
+      void decider.file(f.key, { action: 'accept' }).then(() => render());
+    },
+    agreeAll() {
+      for (const f of noChangeFiles(files(), home()))
+        if (!f.decision && !fctx.busy(f))
+          void decider.file(f.key, { action: 'accept' });
+    },
+    startDisagree(f) {
+      if (fctx.busy(f)) return;
+      disagreeing = f.key;
+      render();
+    },
+    cancelDisagree() {
+      disagreeing = null;
+      render();
+    },
+    disagree(f, note) {
+      if (!note.trim())
+        return 'say what should change: the agent rewrites the file from your note';
+      if (fctx.busy(f)) return 'the last decision on this file is saving';
+      void decider
+        .file(f.key, { action: 'reject', note: note.trim() })
+        .then((ok) => {
+          if (ok && disagreeing === f.key) disagreeing = null;
+          render();
+        });
+      return null;
+    },
+    clear: (f) => void decider.clearFile(f.key),
+    busy: (f) => fctx.busy(f),
   };
 
   const loadingBases = new Set<string>();
@@ -499,16 +605,20 @@ export function boot(): void {
       l.open(shown.indexOf(e));
       syncing = false;
       decorate();
-      // A half-typed note or edit survives a re-render (another tab, a reload).
+      // A half-typed note, edit or disagreement survives a re-render
+      // (another tab, a reload).
       const oldNote = read.querySelector<HTMLInputElement>('.kit-note');
+      const oldWhy = read.querySelector<HTMLFormElement>('.sift-disagree');
       const oldEdit = read.querySelector<HTMLFormElement>('.sift-edit');
       const focus = document.activeElement;
       const doc =
-        e.kind === 'file'
-          ? fileDoc(fctx, e.file)
-          : e.kind === 'group'
-            ? groupDoc(ctx, e.group)
-            : rowDoc(ctx, e.row);
+        e.kind === 'nochange'
+          ? noChangeDoc(nctx, e.files)
+          : e.kind === 'file'
+            ? fileDoc(fctx, e.file)
+            : e.kind === 'group'
+              ? groupDoc(ctx, e.group)
+              : rowDoc(ctx, e.row);
       const noteNow =
         e.kind === 'file'
           ? fctx.noteOf(e.file)
@@ -532,6 +642,15 @@ export function boot(): void {
         oldEdit.dataset.gen === String(editGen)
       )
         doc.querySelector('.sift-edit')?.replaceWith(oldEdit);
+      const why = doc.querySelector<HTMLFormElement>('.sift-disagree');
+      if (
+        oldWhy &&
+        why &&
+        lastView === vkey &&
+        oldWhy.closest<HTMLElement>('.sift-nc')?.dataset.key ===
+          why.closest<HTMLElement>('.sift-nc')?.dataset.key
+      )
+        why.replaceWith(oldWhy);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
     } else {
@@ -566,10 +685,11 @@ export function boot(): void {
           : 'This round found nothing to change.',
       );
     const linked = shown.filter((e) => e.kind === 'file' && e.linked).length;
+    const same = noChangeFiles(files(), home()).length;
     return message(
       'needs you',
       `${p.total - p.decided} of ${plural(p.total, 'file')} to decide`,
-      `Each file has one recommendation covering all its findings. Open one (↵) to read its diff, then 1 accept, 2 edit (the whole file), 3 reject.${linked ? ' Linked files move text between them and are decided together.' : ''} Send returns your decisions to the agent.`,
+      `Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? ' Linked files move text between them and are picked together.' : ''}${same ? ` The agent recommends no change to ${plural(same, 'file')}: agree, or disagree and say why.` : ''} Send returns your decisions to the agent.`,
     );
   }
 
@@ -578,7 +698,10 @@ export function boot(): void {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
     const key = parseRoute(f);
-    if (key !== openKey) closeEdit();
+    if (key !== openKey) {
+      closeEdit();
+      disagreeing = null;
+    }
     openKey = key;
     render();
   }
@@ -740,14 +863,29 @@ export function boot(): void {
     return shown[i + 1]?.key ?? key;
   }
 
-  /** A file decision, with its linked files: shown once saved, and then
-   * the page moves to the next file (an edit stays). */
-  function putFile(f: FileView, d: FileDecision): void {
+  /** Picks a file's version, with its linked files: shown once saved;
+   * current or recommended then moves to the next file, yours stays.
+   * Recommended over the person's own version takes the edit back first
+   * (decider.recommend); yours saves the remembered version again, as an
+   * edit against the file as shown. */
+  function pick(f: FileView, c: Choice): void {
     const at = `f:${f.key}`;
-    void decider.file(f.key, d).then((ok) => {
+    const was = f.decision;
+    if (was?.action === 'edit' && was.content !== undefined)
+      mine.set(f.key, was.content);
+    let p: Promise<boolean>;
+    if (c === 'current') p = decider.file(f.key, { action: 'reject' });
+    else if (c === 'recommended') p = decider.recommend(f.key);
+    else {
+      const content = mine.get(f.key);
+      const snap = decider.snapFile(f.key);
+      if (content === undefined || !snap || was?.action === 'edit') return;
+      p = decider.editFile(snap, content).then((s) => s === 'saved');
+    }
+    void p.then((ok) => {
       if (!ok) return;
       if (editing === f.key) closeEdit();
-      if (openKey === at && d.action !== 'edit') go(frag(nextFile(at)));
+      if (openKey === at && c !== 'yours') go(frag(nextFile(at)));
       else render();
     });
   }
@@ -825,9 +963,11 @@ export function boot(): void {
   // A decision key does nothing while its item's last decision saves, or
   // while Send is in flight.
   const busyNow = (e: Item) =>
-    e.kind === 'file'
-      ? fctx.busy(e.file)
-      : ctx.busy(e.kind === 'row' ? [e.row] : e.group.rows);
+    e.kind === 'nochange'
+      ? e.files.some((f) => fctx.busy(f))
+      : e.kind === 'file'
+        ? fctx.busy(e.file)
+        : ctx.busy(e.kind === 'row' ? [e.row] : e.group.rows);
   const on =
     (
       onFile: (f: FileView) => void,
@@ -836,40 +976,61 @@ export function boot(): void {
     ) =>
     () => {
       const e = current();
-      if (!e || busyNow(e)) return;
+      if (!e || e.kind === 'nochange' || busyNow(e)) return;
       if (e.kind === 'file') onFile(e.file);
       else if (e.kind === 'row') onRow(e.row);
       else onGroup?.(e.group.rows);
     };
   keys.register({
     keys: '1',
-    label: 'accept (a group: every undecided item)',
+    label: 'a file: current · an item: accept (a group: every undecided item)',
     group,
     run: on(
-      (f) => fctx.accept(f),
+      (f) => fctx.pick(f, 'current'),
       (r) => decide([r], 'accept'),
       (rows) => decide(groupTargets(rows, 'accept'), 'accept'),
     ),
   });
   keys.register({
     keys: '2',
-    label: 'edit (a file: the whole file)',
+    label: 'a file: recommended · an item: edit',
     group,
     run: on(
-      (f) => fctx.startEdit(f),
+      (f) => fctx.pick(f, 'recommended'),
       (r) => ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`),
     ),
   });
   keys.register({
     keys: '3',
-    label: 'reject (a group: every undecided item)',
+    label:
+      'a file: yours, once written · an item: reject (a group: every undecided item)',
     group,
     run: on(
-      (f) => fctx.reject(f),
+      (f) => {
+        if (fctx.yours(f) !== undefined) fctx.pick(f, 'yours');
+      },
       (r) => decide([r], 'reject'),
       (rows) => decide(groupTargets(rows, 'reject'), 'reject'),
     ),
+  });
+  keys.register({
+    keys: 'e',
+    label: 'a file: write your own version (the whole file)',
+    group,
+    run: on(
+      (f) => fctx.startEdit(f),
+      () => {},
+    ),
+  });
+  keys.register({
+    keys: 'a',
+    label: 'nothing to change: agree with all',
+    group,
+    run() {
+      const e = current();
+      if (e?.kind === 'nochange') nctx.agreeAll();
+    },
   });
   keys.register({
     keys: 'u',

@@ -394,7 +394,9 @@ var order = (f, home) => [
 ];
 var before = (a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 function fileEntries(files, home) {
-  const shown = files.filter((f) => f.rows.length > 0 || f.rec);
+  const shown = files.filter(
+    (f) => (f.rows.length > 0 || f.rec) && !f.unchanged
+  );
   const by = new Map(shown.map((f) => [f.key, f]));
   const groups = /* @__PURE__ */ new Map();
   for (const f of shown) {
@@ -415,17 +417,35 @@ function fileEntries(files, home) {
   );
 }
 var kb = (n) => (n / 1e3).toFixed(1);
-var word = {
-  accept: "accepted",
-  edit: "edited",
-  reject: "rejected"
+function noChangeFiles(files, home) {
+  return files.filter((f) => f.rec && f.unchanged).sort((a, b) => before(order(a, home), order(b, home)));
+}
+var choiceOf = {
+  reject: "current",
+  accept: "recommended",
+  edit: "yours"
 };
+function chosen(f) {
+  return f.decision ? choiceOf[f.decision.action] : null;
+}
+function didFor(f, row) {
+  const a = f.rec?.findings.find((x) => x.row === row);
+  const rec = a ? `${a.did}: ${a.how}` : "—";
+  switch (chosen(f)) {
+    case "current":
+      return "left as it is";
+    case "yours":
+      return `your version (the recommendation: ${rec})`;
+    default:
+      return rec;
+  }
+}
+function snippet(base, after, kind, n) {
+  const ls = diffLines(base, after).filter((o) => o.kind === kind).map((o) => o.text);
+  return ls.length > n ? [...ls.slice(0, n), "…"] : ls;
+}
 function fileMeta(f) {
-  const d = f.decision ? word[f.decision.action] : "·";
-  return `${kb(f.size)} → ${kb(f.after)} KB · ${f.rows.length} · ${d}`.replace(
-    / · ·$/,
-    " ·"
-  );
+  return `${kb(f.size)} → ${kb(f.after)} KB · ${f.rows.length} · ${chosen(f) ?? "not chosen"}`;
 }
 function seenFor(files, key) {
   const f = files.find((x) => x.key === key);
@@ -598,7 +618,7 @@ function createDecider(server, hooks) {
     const k = `f:${key}`;
     const full = {
       ...d,
-      note: notes.get(k) ?? fileOf(key)?.decision?.note ?? ""
+      note: d.note ?? notes.get(k) ?? fileOf(key)?.decision?.note ?? ""
     };
     return run(round, keys, async () => {
       const snap = await server.decideFile(round, key, full, seen);
@@ -665,6 +685,33 @@ function createDecider(server, hooks) {
         run(round, groupKeys(f), async () => {
           const snap = await server.clearFile(round, key, seen);
           const cur = shownRound(round);
+          if (cur) holdFiles(cur.files, snap);
+        })
+      );
+    },
+    recommend(key) {
+      const r = hooks.review();
+      const round = r?.round?.id;
+      const f = fileOf(key);
+      if (!r || !round || !f) return Promise.resolve(false);
+      const seen = seenFor(r.files, key);
+      if (f.decision?.action !== "edit")
+        return saved(decideFile(key, { action: "accept" }, seen, f));
+      const k = `f:${key}`;
+      const note = notes.get(k) ?? f.decision.note ?? "";
+      return saved(
+        run(round, groupKeys(f), async () => {
+          const cleared = await server.clearFile(round, key, seen);
+          let cur = shownRound(round);
+          if (cur) holdFiles(cur.files, cleared);
+          const snap = await server.decideFile(
+            round,
+            key,
+            { action: "accept", note },
+            seenFor(cleared, key)
+          );
+          if (notes.get(k) === note) notes.delete(k);
+          cur = shownRound(round);
           if (cur) holdFiles(cur.files, snap);
         })
       );
@@ -1073,11 +1120,7 @@ function message(kick, title, body) {
   );
 }
 var kb2 = (n) => `${(n / 1e3).toFixed(1)} KB`;
-var word2 = {
-  accept: "accepted",
-  edit: "edited",
-  reject: "rejected"
-};
+var plural2 = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 function diffView(base, after, certain) {
   const hs = hunks(diffLines(base, after), 3);
   if (!hs.length)
@@ -1118,13 +1161,12 @@ function diffView(base, after, certain) {
   );
 }
 function fileEdit(ctx, f) {
-  const d = f.decision?.action === "edit" ? f.decision : void 0;
   const text = h2("textarea", {
     class: "sift-field sift-text sift-whole",
-    "aria-label": "the whole recommended file",
+    "aria-label": "your version of the whole file",
     spellcheck: false
   });
-  text.value = d?.content ?? f.rec?.content ?? "";
+  text.value = ctx.yours(f) ?? f.rec?.content ?? "";
   text.rows = Math.min(40, Math.max(12, splitLines(text.value).length + 2));
   const err = h2("p", { class: "sift-err", role: "alert" });
   const save = () => {
@@ -1143,7 +1185,7 @@ function fileEdit(ctx, f) {
     h2(
       "div",
       { class: "kit-label" },
-      "edit · the whole file as it will be written"
+      "your version · the whole file as it will be written"
     ),
     text,
     err,
@@ -1154,7 +1196,6 @@ function fileEdit(ctx, f) {
   );
 }
 function findingsTable(f, rows) {
-  const did = new Map((f.rec?.findings ?? []).map((a) => [a.row, a]));
   return h2(
     "table",
     { class: "sift-rows sift-findings" },
@@ -1163,10 +1204,16 @@ function findingsTable(f, rows) {
       null,
       h2("th", null, "line"),
       h2("th", null, "finding"),
-      h2("th", null, "what the rewrite did")
+      h2("th", null, "what the chosen version does")
     ),
     rows.map((r) => {
-      const a = did.get(r.id);
+      const a = f.rec?.findings.find((x) => x.row === r.id);
+      const did = didFor(f, r.id);
+      const mark = a && did.startsWith(`${a.did}: `) ? [
+        h2("span", { class: `sift-did ${a.did}` }, a.did),
+        " ",
+        did.slice(a.did.length + 2)
+      ] : did;
       return h2(
         "tr",
         { class: r.certain ? "cert" : "" },
@@ -1185,13 +1232,40 @@ function findingsTable(f, rows) {
           ),
           rowTitle(r)
         ),
-        h2(
-          "td",
-          { class: "p" },
-          a ? [h2("span", { class: `sift-did ${a.did}` }, a.did), " ", a.how] : "—"
-        )
+        h2("td", { class: "p" }, mark)
       );
     })
+  );
+}
+function choice(ctx, f, c, key, what, lines, sign) {
+  const on = chosen(f) === c;
+  const busy = ctx.busy(f);
+  return h2(
+    "div",
+    {
+      class: `sift-choice ${c}${on ? " chosen" : ""}`,
+      role: "button",
+      tabindex: 0,
+      "aria-pressed": on ? "true" : "false",
+      "aria-disabled": busy ? "true" : void 0,
+      onclick: () => !busy && ctx.pick(f, c),
+      onkeydown: (e) => {
+        if ((e.key === "Enter" || e.key === " ") && !busy) {
+          e.preventDefault();
+          e.stopPropagation();
+          ctx.pick(f, c);
+        }
+      }
+    },
+    h2("div", { class: "sift-ck" }, `${key} · ${c}${on ? " · chosen" : ""}`),
+    h2("b", null, what),
+    lines === null ? h2("div", { class: "sift-snip kit-muted" }, "loading…") : lines.length ? h2(
+      "div",
+      { class: `sift-snip ${sign === "-" ? "del" : "add"}` },
+      lines.map(
+        (l) => h2("div", null, l === "…" ? l : `${sign} ${l || " "}`)
+      )
+    ) : h2("div", { class: "sift-snip kit-muted" }, "no change")
   );
 }
 function fileDoc(ctx, f) {
@@ -1217,19 +1291,89 @@ function fileDoc(ctx, f) {
       f.commit ? `${f.source.ref} (${f.commit.slice(0, 10)})` : f.source.ref
     ]);
   const parts = [
-    h2("div", { class: "kit-kick" }, `${f.class} file · ${where2}`),
-    h2("h1", { class: "kit-h1" }, where2),
+    h2(
+      "div",
+      { class: "kit-kick" },
+      `${f.class} file · ${plural2(rows.length, "finding")} · ${where2}`
+    ),
+    h2("h1", { class: "kit-h1" }, "Which version should this file have?"),
     h2("p", { class: "sift-lead sift-summary" }, f.rec?.summary ?? ""),
     facts(ev)
   ];
-  const edited = f.decision?.action === "edit";
-  const after = edited ? f.decision?.content ?? "" : f.rec?.content ?? "";
   const base = ctx.baseOf(f);
+  const rec = f.rec?.content ?? "";
+  const mine = ctx.yours(f);
+  const snip = (after, sign) => typeof base === "string" ? snippet(base, after, sign, 4) : null;
+  const pick = h2(
+    "div",
+    { class: `sift-pick${mine !== void 0 ? " three" : ""}` },
+    choice(ctx, f, "current", "1", "Keep it as it is", snip(rec, "-"), "-"),
+    choice(
+      ctx,
+      f,
+      "recommended",
+      "2",
+      "Use the agent's version",
+      snip(rec, "+"),
+      "+"
+    ),
+    mine !== void 0 ? choice(
+      ctx,
+      f,
+      "yours",
+      "3",
+      "Use your own version",
+      snip(mine, "+"),
+      "+"
+    ) : ""
+  );
+  parts.push(pick);
+  const busy = ctx.busy(f);
+  const bs = [
+    {
+      label: mine !== void 0 ? "e · edit your version" : "e · write my own version",
+      disabled: busy,
+      run: () => ctx.startEdit(f)
+    }
+  ];
+  if (f.decision)
+    bs.push({ label: "clear (u)", disabled: busy, run: () => ctx.clear(f) });
+  const decide = buttons(bs);
+  decide.classList.add("sift-decide");
+  parts.push(decide);
+  const said = [];
+  if (f.decision?.sent) said.push("sent");
+  if (others.length)
+    said.push(
+      `picked together with ${others.map((o) => displayPath(o.source, ctx.home)).join(", ")}: the recommendation moves text between them`
+    );
+  if (busy) said.push("saving");
+  if (said.length)
+    parts.push(h2("p", { class: "sift-why" }, said.join(". ") + "."));
+  if (ctx.editing === f.key) parts.push(fileEdit(ctx, ctx.edited ?? f));
   parts.push(
     h2(
       "div",
       { class: "kit-label" },
-      edited ? "the change · your edit" : "the change"
+      "findings, and what the chosen version does about them"
+    ),
+    findingsTable(f, rows)
+  );
+  const field = noteField({
+    value: ctx.noteOf(f),
+    placeholder: "note to the agent (n)",
+    onCommit: (v) => ctx.setNote(f, v)
+  });
+  field.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) field.blur();
+  });
+  parts.push(h2("div", { class: "kit-label" }, "note"), field);
+  const showMine = chosen(f) === "yours" && mine !== void 0;
+  parts.push(
+    h2(
+      "div",
+      { class: "kit-label" },
+      showMine ? "the change · your version" : chosen(f) === "current" ? "the change · recommended, not picked" : "the change · recommended"
     )
   );
   if (base instanceof Error)
@@ -1242,71 +1386,163 @@ function fileDoc(ctx, f) {
     );
   else if (base === void 0)
     parts.push(h2("p", { class: "kit-muted sift-loading" }, "loading…"));
-  else parts.push(diffView(base, after, certainLines(rows)));
-  const a = f.decision?.action;
-  const busy = ctx.busy(f);
-  const bs = [
-    {
-      label: edited ? "1 accept your edit" : "1 accept",
-      fill: a === "accept",
-      disabled: busy,
-      run: () => ctx.accept(f)
-    },
-    {
-      label: "2 edit",
-      fill: a === "edit",
-      disabled: busy,
-      run: () => ctx.startEdit(f)
-    },
-    {
-      label: "3 reject",
-      fill: a === "reject",
-      danger: true,
-      disabled: busy,
-      run: () => ctx.reject(f)
-    }
-  ];
-  if (f.decision)
-    bs.push({
-      label: edited ? "revert to the recommendation (u)" : "clear (u)",
-      disabled: busy,
-      run: () => ctx.clear(f)
-    });
-  const decide = buttons(bs);
-  decide.classList.add("sift-decide");
-  parts.push(decide);
-  const said = [];
-  if (f.decision)
-    said.push(
-      `your decision: ${word2[f.decision.action]}${f.decision.sent ? " · sent" : ""}`
-    );
-  if (others.length)
-    said.push(
-      `decided together with ${others.map((o) => displayPath(o.source, ctx.home)).join(", ")}: the recommendation moves text between them`
-    );
-  if (busy) said.push("saving");
-  if (said.length)
-    parts.push(h2("p", { class: "sift-why" }, said.join(". ") + "."));
-  if (ctx.editing === f.key) parts.push(fileEdit(ctx, ctx.edited ?? f));
-  parts.push(
-    h2("div", { class: "kit-label" }, "findings"),
-    findingsTable(f, rows)
-  );
-  const field = noteField({
-    value: ctx.noteOf(f),
-    placeholder: "why (n)",
-    onCommit: (v) => ctx.setNote(f, v)
-  });
-  field.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.isComposing) field.blur();
-  });
-  parts.push(h2("div", { class: "kit-label" }, "note"), field);
+  else parts.push(diffView(base, showMine ? mine : rec, certainLines(rows)));
   return h2("div", { class: "kit-doc sift-file" }, ...parts);
+}
+function noChangeDoc(ctx, files) {
+  const open = files.filter((f) => !f.decision);
+  const parts = [
+    h2(
+      "div",
+      { class: "kit-kick" },
+      `nothing to change · ${plural2(files.length, "file")}`
+    ),
+    h2(
+      "h1",
+      { class: "kit-h1" },
+      "The agent recommends no change to these files"
+    ),
+    h2(
+      "p",
+      { class: "sift-lead" },
+      'Each finding below has its reason. Agree, and they stop showing until the text changes. Disagree on any file and say why: it moves to "to change" once the agent has rewritten it.'
+    )
+  ];
+  for (const f of files) {
+    const rows = ctx.rowsOf(f);
+    const busy = ctx.busy(f);
+    const a = f.decision?.action;
+    const state = a === "accept" ? `agreed${f.muted ? " · muted" : ""}` : a === "reject" ? "disagreed: goes back to the agent" : "";
+    const bs = [
+      {
+        label: "agree",
+        fill: a === "accept",
+        disabled: busy,
+        run: () => ctx.agree(f)
+      },
+      {
+        label: "disagree…",
+        fill: a === "reject",
+        danger: true,
+        disabled: busy,
+        run: () => ctx.startDisagree(f)
+      }
+    ];
+    if (f.decision)
+      bs.push({ label: "clear", disabled: busy, run: () => ctx.clear(f) });
+    const head = h2(
+      "div",
+      { class: "sift-nc-head" },
+      h2(
+        "div",
+        { class: "sift-nc-what" },
+        h2("div", { class: "sift-nc-path" }, displayPath(f.source, ctx.home)),
+        h2(
+          "div",
+          { class: "sift-check" },
+          [
+            plural2(rows.length, "finding"),
+            state,
+            f.decision?.sent ? "sent" : ""
+          ].filter(Boolean).join(" · ")
+        )
+      ),
+      buttons(bs)
+    );
+    const block = h2(
+      "section",
+      { class: `sift-nc${a ? ` ${a}` : ""}`, dataset: { key: f.key } },
+      head
+    );
+    if (a === "reject" && f.decision?.note && ctx.disagreeing !== f.key)
+      block.append(
+        h2("p", { class: "sift-why" }, `your note: ${f.decision.note}`)
+      );
+    if (ctx.disagreeing === f.key) block.append(disagreeForm(ctx, f));
+    block.append(
+      h2(
+        "table",
+        { class: "sift-rows sift-findings" },
+        h2(
+          "tr",
+          null,
+          h2("th", null, "line"),
+          h2("th", null, "finding"),
+          h2("th", null, "why the agent keeps it")
+        ),
+        rows.map(
+          (r) => h2(
+            "tr",
+            null,
+            h2(
+              "td",
+              { class: "n" },
+              r.source.start ? String(r.source.start) : "file"
+            ),
+            h2(
+              "td",
+              { class: "p" },
+              h2("div", { class: "sift-check" }, r.check),
+              rowTitle(r)
+            ),
+            h2(
+              "td",
+              { class: "p" },
+              f.rec?.findings.find((x) => x.row === r.id)?.how ?? "—"
+            )
+          )
+        )
+      )
+    );
+    parts.push(block);
+  }
+  const all = buttons([
+    {
+      label: `a · agree with all ${open.length}`,
+      fill: true,
+      disabled: !open.length,
+      run: () => ctx.agreeAll()
+    }
+  ]);
+  all.classList.add("sift-agree-all");
+  parts.push(all);
+  return h2("div", { class: "kit-doc sift-nochange" }, ...parts);
+}
+function disagreeForm(ctx, f) {
+  const note = h2("input", {
+    class: "sift-field sift-disagree-note",
+    type: "text",
+    value: f.decision?.action === "reject" ? f.decision.note ?? "" : "",
+    placeholder: "what should change? (the agent rewrites the file from this)",
+    "aria-label": "why you disagree"
+  });
+  const err = h2("p", { class: "sift-err", role: "alert" });
+  const send = () => {
+    err.textContent = ctx.disagree(f, note.value) ?? "";
+  };
+  queueMicrotask(() => note.focus());
+  return h2(
+    "form",
+    {
+      class: "sift-disagree",
+      onsubmit: (e) => {
+        e.preventDefault();
+        send();
+      }
+    },
+    note,
+    err,
+    buttons([
+      { label: "disagree (↵)", danger: true, fill: true, run: send },
+      { label: "cancel", run: () => ctx.cancelDisagree() }
+    ])
+  );
 }
 
 // app.ts
 var qs = new URLSearchParams(location.search);
-var plural2 = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+var plural3 = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+var NOCHANGE = "nochange";
 function frag(key) {
   return `#/open${key ? `/${encodeURIComponent(key)}` : ""}`;
 }
@@ -1336,6 +1572,8 @@ function boot() {
   let rowSnap = null;
   let fileSnap = null;
   let editGen = 0;
+  let disagreeing = null;
+  const mine = /* @__PURE__ */ new Map();
   let filter = "";
   let search = "";
   let lastFrag = "";
@@ -1389,9 +1627,11 @@ function boot() {
         openKey
       );
     const q = search.toLowerCase();
-    return fileEntries(files(), home()).filter(
-      (e) => !q || displayPath(e.file.source, home()).toLowerCase().includes(q)
-    ).map((e) => ({ ...e, kind: "file" }));
+    const hit = (f) => !q || displayPath(f.source, home()).toLowerCase().includes(q);
+    const out = fileEntries(files(), home()).filter((e) => hit(e.file)).map((e) => ({ ...e, kind: "file" }));
+    const same = noChangeFiles(files(), home()).filter(hit);
+    if (same.length) out.push({ kind: "nochange", key: NOCHANGE, files: same });
+    return out;
   };
   const rowById = (id) => review?.rows.find((r) => r.id === id);
   const current = () => shown.find((e) => e.key === openKey);
@@ -1459,12 +1699,31 @@ function boot() {
       }
     },
     row(e) {
+      if (e.kind === "nochange") {
+        const n = e.files.length;
+        const kept = e.files.reduce((t, f) => t + f.rows.length, 0);
+        const agreed = e.files.filter(
+          (f) => f.decision?.action === "accept"
+        ).length;
+        const disagreed = e.files.filter(
+          (f) => f.decision?.action === "reject"
+        ).length;
+        return {
+          id: e.key,
+          key: `nothing to change · ${plural3(n, "file")}`,
+          title: `${plural3(n, "file")}, ${plural3(kept, "finding")} kept`,
+          meta: agreed + disagreed ? [
+            agreed ? `${agreed} agreed` : "",
+            disagreed ? `${disagreed} disagreed` : ""
+          ].filter(Boolean).join(" · ") : "reasons given · not reviewed"
+        };
+      }
       if (e.kind === "file") {
         const f = e.file;
         return {
           id: e.key,
           key: displayPath(f.source, home()),
-          title: f.rec?.summary.split(/(?<=\.)\s/)[0] || `${plural2(f.rows.length, "finding")}`,
+          title: f.rec?.summary.split(/(?<=\.)\s/)[0] || `${plural3(f.rows.length, "finding")}`,
           meta: fileMeta(f)
         };
       }
@@ -1516,7 +1775,11 @@ function boot() {
       els[i]?.classList.toggle("sift-group", e.kind === "group");
       els[i]?.classList.toggle("sift-member", e.kind === "row" && e.member);
       els[i]?.classList.toggle("sift-linked", e.kind === "file" && e.linked);
+      els[i]?.classList.toggle("sift-nochange-row", e.kind === "nochange");
     });
+    const eyebrow = l.el.querySelector(".kit-eyebrow");
+    if (eyebrow)
+      eyebrow.textContent = perItem(review) || !review?.round ? "items" : `to change · ${plural3(fileEntries(files(), home()).length, "file")}`;
   }
   const ctx = {
     get home() {
@@ -1565,10 +1828,14 @@ function boot() {
       if (v === void 0) loadBase(f);
       return v;
     },
+    yours(f) {
+      if (f.decision?.action === "edit" && f.decision.content !== void 0)
+        mine.set(f.key, f.decision.content);
+      return mine.get(f.key);
+    },
     noteOf: (f) => decider.noteOf(`f:${f.key}`) ?? f.decision?.note ?? "",
     setNote: (f, text) => decider.noteFile(f.key, text),
-    accept: (f) => putFile(f, { action: "accept" }),
-    reject: (f) => putFile(f, { action: "reject" }),
+    pick: (f, c) => pick(f, c),
     startEdit(f) {
       if (fctx.busy(f)) return;
       openEdit(f.key, true);
@@ -1584,15 +1851,58 @@ function boot() {
       if (!content.trim())
         return "the file is empty: reject it to leave it as it is";
       const was = f.decision?.action === "edit" ? f.decision.content : f.rec?.content;
-      if (content === was)
-        return "nothing changed: accept the recommendation instead";
+      if (content === f.rec?.content)
+        return "this is the recommended version: pick it with 2";
+      if (content === was) return "nothing changed";
       if (fctx.busy(f)) return "the last decision on this file is saving";
       const at = openKey;
-      void decider.editFile(snap, content).then((out) => edited(out, f.key, true, at));
+      void decider.editFile(snap, content).then((out) => {
+        if (out === "saved") mine.set(f.key, content);
+        edited(out, f.key, true, at);
+      });
       return null;
     },
     clear: (f) => void decider.clearFile(f.key),
     busy: (f) => decider.busy(f.group.map((k) => `f:${k}`))
+  };
+  const nctx = {
+    get home() {
+      return home();
+    },
+    rowsOf: (f) => fctx.rowsOf(f),
+    get disagreeing() {
+      return disagreeing;
+    },
+    agree(f) {
+      if (disagreeing === f.key) disagreeing = null;
+      void decider.file(f.key, { action: "accept" }).then(() => render());
+    },
+    agreeAll() {
+      for (const f of noChangeFiles(files(), home()))
+        if (!f.decision && !fctx.busy(f))
+          void decider.file(f.key, { action: "accept" });
+    },
+    startDisagree(f) {
+      if (fctx.busy(f)) return;
+      disagreeing = f.key;
+      render();
+    },
+    cancelDisagree() {
+      disagreeing = null;
+      render();
+    },
+    disagree(f, note) {
+      if (!note.trim())
+        return "say what should change: the agent rewrites the file from your note";
+      if (fctx.busy(f)) return "the last decision on this file is saving";
+      void decider.file(f.key, { action: "reject", note: note.trim() }).then((ok) => {
+        if (ok && disagreeing === f.key) disagreeing = null;
+        render();
+      });
+      return null;
+    },
+    clear: (f) => void decider.clearFile(f.key),
+    busy: (f) => fctx.busy(f)
   };
   const loadingBases = /* @__PURE__ */ new Set();
   function loadBase(f) {
@@ -1636,11 +1946,11 @@ function boot() {
       read.replaceChildren(
         perItem(review) ? message(
           "recommending",
-          `The agent is recommending: ${p.recommended} of ${plural2(p.files, "item")}`,
+          `The agent is recommending: ${p.recommended} of ${plural3(p.files, "item")}`,
           "Every item arrives with what the agent recommends doing about it. This page opens for review when the last one is in."
         ) : message(
           "recommending",
-          `The agent is recommending: ${p.recommended} of ${plural2(p.files, "file")}`,
+          `The agent is recommending: ${p.recommended} of ${plural3(p.files, "file")}`,
           "Every file arrives with a recommendation: one revised version covering all its findings. This page opens for review when the last one is in."
         )
       );
@@ -1661,15 +1971,19 @@ function boot() {
       syncing = false;
       decorate();
       const oldNote = read.querySelector(".kit-note");
+      const oldWhy = read.querySelector(".sift-disagree");
       const oldEdit = read.querySelector(".sift-edit");
       const focus = document.activeElement;
-      const doc = e.kind === "file" ? fileDoc(fctx, e.file) : e.kind === "group" ? groupDoc(ctx, e.group) : rowDoc(ctx, e.row);
+      const doc = e.kind === "nochange" ? noChangeDoc(nctx, e.files) : e.kind === "file" ? fileDoc(fctx, e.file) : e.kind === "group" ? groupDoc(ctx, e.group) : rowDoc(ctx, e.row);
       const noteNow = e.kind === "file" ? fctx.noteOf(e.file) : e.kind === "row" ? ctx.noteOf(e.row) : "";
       if (oldNote && lastView === vkey && (focus === oldNote || oldNote.value !== noteNow))
         doc.querySelector(".kit-note")?.replaceWith(oldNote);
       doc.querySelector(".sift-edit")?.setAttribute("data-gen", String(editGen));
       if (oldEdit && lastView === vkey && oldEdit.dataset.gen === String(editGen))
         doc.querySelector(".sift-edit")?.replaceWith(oldEdit);
+      const why = doc.querySelector(".sift-disagree");
+      if (oldWhy && why && lastView === vkey && oldWhy.closest(".sift-nc")?.dataset.key === why.closest(".sift-nc")?.dataset.key)
+        why.replaceWith(oldWhy);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
     } else {
@@ -1689,7 +2003,7 @@ function boot() {
         );
       return message(
         "needs you",
-        `${p2.total - p2.decided} of ${plural2(p2.total, "item")} to decide`,
+        `${p2.total - p2.decided} of ${plural3(p2.total, "item")} to decide`,
         "Open a group (↵) to decide it whole, or an item to decide it alone: 1 accept, 2 edit, 3 reject. Send returns your decisions to the agent."
       );
     }
@@ -1701,17 +2015,21 @@ function boot() {
         search ? "Nothing matches the search." : "This round found nothing to change."
       );
     const linked = shown.filter((e) => e.kind === "file" && e.linked).length;
+    const same = noChangeFiles(files(), home()).length;
     return message(
       "needs you",
-      `${p.total - p.decided} of ${plural2(p.total, "file")} to decide`,
-      `Each file has one recommendation covering all its findings. Open one (↵) to read its diff, then 1 accept, 2 edit (the whole file), 3 reject.${linked ? " Linked files move text between them and are decided together." : ""} Send returns your decisions to the agent.`
+      `${p.total - p.decided} of ${plural3(p.total, "file")} to decide`,
+      `Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? " Linked files move text between them and are picked together." : ""}${same ? ` The agent recommends no change to ${plural3(same, "file")}: agree, or disagree and say why.` : ""} Send returns your decisions to the agent.`
     );
   }
   function go(f) {
     lastFrag = f;
     if (location.hash !== f) location.hash = f;
     const key = parseRoute(f);
-    if (key !== openKey) closeEdit();
+    if (key !== openKey) {
+      closeEdit();
+      disagreeing = null;
+    }
     openKey = key;
     render();
   }
@@ -1848,12 +2166,24 @@ function boot() {
     }
     return shown[i + 1]?.key ?? key;
   }
-  function putFile(f, d) {
+  function pick(f, c) {
     const at = `f:${f.key}`;
-    void decider.file(f.key, d).then((ok) => {
+    const was = f.decision;
+    if (was?.action === "edit" && was.content !== void 0)
+      mine.set(f.key, was.content);
+    let p;
+    if (c === "current") p = decider.file(f.key, { action: "reject" });
+    else if (c === "recommended") p = decider.recommend(f.key);
+    else {
+      const content = mine.get(f.key);
+      const snap = decider.snapFile(f.key);
+      if (content === void 0 || !snap || was?.action === "edit") return;
+      p = decider.editFile(snap, content).then((s) => s === "saved");
+    }
+    void p.then((ok) => {
       if (!ok) return;
       if (editing === f.key) closeEdit();
-      if (openKey === at && d.action !== "edit") go(frag(nextFile(at)));
+      if (openKey === at && c !== "yours") go(frag(nextFile(at)));
       else render();
     });
   }
@@ -1896,7 +2226,7 @@ function boot() {
       const { sent, to } = out;
       refreshBar();
       flash(
-        sent === 0 ? "Nothing to send." : to ? `Sent ${plural2(sent, "decision")} to ${to}.` : `Sent ${plural2(sent, "decision")}. The next agent session that opens sift gets them.`
+        sent === 0 ? "Nothing to send." : to ? `Sent ${plural3(sent, "decision")} to ${to}.` : `Sent ${plural3(sent, "decision")}. The next agent session that opens sift gets them.`
       );
     } catch (err) {
       if (!(err instanceof ApiError && err.isStale))
@@ -1905,43 +2235,64 @@ function boot() {
   }
   const keys = createKeys({ list: l });
   const group = "decide";
-  const busyNow = (e) => e.kind === "file" ? fctx.busy(e.file) : ctx.busy(e.kind === "row" ? [e.row] : e.group.rows);
+  const busyNow = (e) => e.kind === "nochange" ? e.files.some((f) => fctx.busy(f)) : e.kind === "file" ? fctx.busy(e.file) : ctx.busy(e.kind === "row" ? [e.row] : e.group.rows);
   const on = (onFile, onRow, onGroup) => () => {
     const e = current();
-    if (!e || busyNow(e)) return;
+    if (!e || e.kind === "nochange" || busyNow(e)) return;
     if (e.kind === "file") onFile(e.file);
     else if (e.kind === "row") onRow(e.row);
     else onGroup?.(e.group.rows);
   };
   keys.register({
     keys: "1",
-    label: "accept (a group: every undecided item)",
+    label: "a file: current · an item: accept (a group: every undecided item)",
     group,
     run: on(
-      (f) => fctx.accept(f),
+      (f) => fctx.pick(f, "current"),
       (r) => decide([r], "accept"),
       (rows) => decide(groupTargets(rows, "accept"), "accept")
     )
   });
   keys.register({
     keys: "2",
-    label: "edit (a file: the whole file)",
+    label: "a file: recommended · an item: edit",
     group,
     run: on(
-      (f) => fctx.startEdit(f),
+      (f) => fctx.pick(f, "recommended"),
       (r) => ctx.startEdit(r),
       (rows) => ctx.open(`r:${rows[0].id}`)
     )
   });
   keys.register({
     keys: "3",
-    label: "reject (a group: every undecided item)",
+    label: "a file: yours, once written · an item: reject (a group: every undecided item)",
     group,
     run: on(
-      (f) => fctx.reject(f),
+      (f) => {
+        if (fctx.yours(f) !== void 0) fctx.pick(f, "yours");
+      },
       (r) => decide([r], "reject"),
       (rows) => decide(groupTargets(rows, "reject"), "reject")
     )
+  });
+  keys.register({
+    keys: "e",
+    label: "a file: write your own version (the whole file)",
+    group,
+    run: on(
+      (f) => fctx.startEdit(f),
+      () => {
+      }
+    )
+  });
+  keys.register({
+    keys: "a",
+    label: "nothing to change: agree with all",
+    group,
+    run() {
+      const e = current();
+      if (e?.kind === "nochange") nctx.agreeAll();
+    }
   });
   keys.register({
     keys: "u",
