@@ -646,7 +646,7 @@ func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, err
 	if r, ok := f.repos[dir]; ok {
 		return r, nil
 	}
-	ref := resolveRef(ctx, dir, base)
+	ref := ResolveRef(ctx, dir, base)
 	if ref == "" {
 		return nil, errors.New("no commits")
 	}
@@ -692,10 +692,10 @@ type repoTree struct {
 	files map[string]bool
 }
 
-// resolveRef picks what a repo is read at: origin/<base> or <base> when
+// ResolveRef picks what a repo is read at: origin/<base> or <base> when
 // configured and present, else origin/HEAD, else the upstream, else HEAD.
 // "" means the repo has no commits.
-func resolveRef(ctx context.Context, dir, base string) string {
+func ResolveRef(ctx context.Context, dir, base string) string {
 	exists := func(ref string) bool {
 		_, err := git(ctx, dir, "rev-parse", "--verify", "-q", ref+"^{commit}")
 		return err == nil

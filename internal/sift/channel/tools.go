@@ -175,6 +175,7 @@ func (ch *Channel) apply(ctx context.Context, round int64, dry bool) (string, er
 		o.Gh = apply.Gh
 	}
 	if cfg, err := ch.LoadConfig(); err == nil {
+		o.Repos = cfg.Repos
 		if ps, err := cfg.Enabled(); err == nil {
 			o.Instructions = apply.InstructionNames(ps)
 		}

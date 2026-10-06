@@ -2,6 +2,7 @@ package apply_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	"github.com/schuettc/tackle/internal/sift/audit"
 	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/rec"
+	"github.com/schuettc/tackle/internal/sift/reconcile"
+	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 	"github.com/schuettc/tackle/internal/sift/store"
 )
@@ -82,5 +85,51 @@ func TestARepoBaseOverrideIsReadAndAppliedThere(t *testing.T) {
 	}
 	if got := st.Git(t, bare, "rev-parse", r.Branch+"^"); got != st.Git(t, bare, "rev-parse", "dev") {
 		t.Errorf("the branch's parent is %s, not dev", got)
+	}
+}
+
+// reconcile finds a file apply wrote in the repo its symlink points into on
+// that repo's branch, at its path there.
+func TestReconcileFindsASymlinkedFileOnItsRepoBranch(t *testing.T) {
+	ctx := context.Background()
+	st.Env(t)
+	t.Setenv("SIFT_HOME", t.TempDir())
+	dots := st.Repo(t, filepath.Join(t.TempDir(), "dotfiles"), map[string]string{"skills/x/SKILL.md": "# X\n\n- waiting on it\n"})
+	st.Publish(t, dots)
+	p := filepath.Join(t.TempDir(), "x", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dots, "skills/x/SKILL.md"), p); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "sift.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	f := rec.NewFile(row.Source{File: p, Canon: row.Resolve(p)}, "skill", 10000, "# X\n\n- waiting on it\n")
+	f.Rows = []string{"n"}
+	round, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, []row.Row{{ID: "n", Check: "stale-status", Source: f.Source}}, []rec.File{f})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Propose(ctx, round, []rec.Rec{{File: f.Key, Base: f.Base, Content: "# X\n", Summary: "s",
+		Findings: []rec.Account{{Row: "n", Did: "fixed", How: "removed"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DecideFile(ctx, round, f.Key, rec.Decision{Action: "accept"}, map[string]store.Seen{f.Key: {Fingerprint: printOf(t, s, round, f.Key)}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Send(ctx, round, "", nil); err != nil {
+		t.Fatal(err)
+	}
+	res, err := apply.Run(ctx, apply.Options{Store: s, WorktreeDir: t.TempDir()})
+	if err != nil || len(res.Repos) != 1 || res.Repos[0].State != "branch" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	_, reps, err := reconcile.Run(ctx, s, round)
+	if err != nil || len(reps) != 1 || reps[0].Problems() != 0 || reps[0].Files[0].Path != "skills/x/SKILL.md" {
+		t.Fatalf("reconcile %+v %v", reps, err)
 	}
 }

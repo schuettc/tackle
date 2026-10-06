@@ -66,6 +66,13 @@ func Run(ctx context.Context, st *store.Store, round int64) (int64, []Report, er
 	}
 	approved := map[string]apply.Approved{}
 	for _, a := range apply.Select(items).Files {
+		// A file read from disk that apply wrote in the repo it links
+		// into is at its path there.
+		if a.Source.Path == "" {
+			if _, rel, ok := apply.Locate(ctx, a); ok {
+				a.Source.Path = rel
+			}
+		}
 		approved[a.Key] = a
 	}
 	applies, err := st.Applies(ctx, round)
