@@ -667,18 +667,25 @@ export function makeDock(ctx: Ctx): DockHandle {
   }
 
   function renderMessages() {
-    messageArea.replaceChildren();
+    // The draft batch is the last card (it hides itself when empty). It
+    // stays put while the cards before it are drawn again: moved out and
+    // back, a draft Court is editing in it would lose his focus, and the
+    // edit would commit what he had typed so far.
+    for (const c of [...messageArea.children]) {
+      if (c !== batchTray.el) c.remove();
+    }
+    if (batchTray.el.parentNode !== messageArea) {
+      messageArea.append(batchTray.el);
+    }
+    const cards: HTMLElement[] = [];
     if (messages.length === 0) {
-      const empty = h('p', { class: 'cb-dock-empty' }, 'no messages');
-      messageArea.append(empty);
+      cards.push(h('p', { class: 'cb-dock-empty' }, 'no messages'));
     }
     const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
-      messageArea.append(el);
+      cards.push(renderMsgCard(msg, currentDelivery, sessions, ctx, name));
     }
-    // The draft batch is the last card (it hides itself when empty).
-    messageArea.append(batchTray.el);
+    batchTray.el.before(...cards);
     // Auto-scroll to the latest message.
     messageArea.scrollTop = messageArea.scrollHeight;
   }
@@ -763,8 +770,17 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // loadProgress shows the session's current progress line on load (the
   // live 'progress' event keeps it current afterwards).
+  //
+  // A live progress or settled event is newer than any load asked before
+  // it: a load whose answer lands after one (serve answered before the
+  // agent reported, the reply came late) is dropped, never shown over it.
+  // serve's line carries its own clock (now): the line's age is now −
+  // updated_at by serve's clock, counted on in the page's, so a page whose
+  // clock differs from serve's still reads the right age.
+  let progSeq = 0;
   async function loadProgress() {
     const sid = currentSessionId;
+    const mine = ++progSeq;
     if (!sid) {
       progLine.clear();
       return;
@@ -773,9 +789,10 @@ export function makeDock(ctx: Ctx): DockHandle {
       const pv = await ctx.api.get<SessionProgressView>('/session/progress', {
         session: sid,
       });
-      if (sid !== currentSessionId) return;
+      if (sid !== currentSessionId || mine !== progSeq) return;
       if (pv.progress) {
-        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+        const age = Date.parse(pv.now) - Date.parse(pv.progress.updated_at);
+        progLine.set(pv.progress, Date.now() - Math.max(0, age));
       } else {
         progLine.clear();
       }
@@ -891,7 +908,9 @@ export function makeDock(ctx: Ctx): DockHandle {
   // counts from now in page time.
   ctx.on('progress', (data: unknown) => {
     const p = data as Progress;
-    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+    if (p.session_id !== currentSessionId) return;
+    progSeq++; // a load in flight is older than this
+    progLine.set(p, Date.now());
   });
 
   // settled: the turn ended. The line clears; serve has folded it into the
@@ -899,6 +918,7 @@ export function makeDock(ctx: Ctx): DockHandle {
   ctx.on('settled', (data: unknown) => {
     const d = data as SettledResult;
     if (d.session !== currentSessionId) return;
+    progSeq++; // a load in flight is older than this
     progLine.clear();
     void loadMessages();
     void loadSessions();

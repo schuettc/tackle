@@ -229,6 +229,7 @@ export interface PushEvent {
 
 export interface SessionProgressView {
   progress: Progress | null;
+  now: string;
 }
 
 export interface ItemView {

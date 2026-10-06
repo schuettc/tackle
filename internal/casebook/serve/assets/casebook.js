@@ -3681,7 +3681,10 @@ function makeBatchTray(ctx) {
   el.classList.add("cb-batch");
   el.setAttribute("data-testid", "batch-tray");
   el.hidden = true;
+  let editing = null;
   function render() {
+    if (editing?.isConnected) return;
+    editing = null;
     el.hidden = drafts.length === 0;
     if (!drafts.length) {
       list4.replaceChildren();
@@ -3744,28 +3747,35 @@ function makeBatchTray(ctx) {
     return row;
   }
   function editDraft(d, text) {
+    const done = () => {
+      if (editing === field) editing = null;
+      render();
+    };
     const field = noteField3({
       value: d.body,
       onCommit(v) {
         const body = v.trim();
         if (body && body !== d.body) {
           d.body = body;
+          const now = drafts.find((x) => x.id === d.id);
+          if (now) now.body = body;
           void ctx.api.post("/drafts/edit", { id: d.id, body }).catch((err) => {
             console.error("[batch] edit:", err);
             void reload();
           });
         }
-        render();
+        done();
       }
     });
     field.classList.add("cb-batch-edit");
     field.setAttribute("aria-label", "edit draft");
     field.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") render();
+      if (e.key === "Escape") done();
     });
     field.addEventListener("blur", () => {
-      if (field.isConnected) render();
+      if (field.isConnected) done();
     });
+    editing = field;
     text.replaceWith(field);
     field.focus();
     field.select();
@@ -4411,17 +4421,21 @@ function makeDock(ctx) {
     threadChips.append(addChip);
   }
   function renderMessages() {
-    messageArea.replaceChildren();
+    for (const c of [...messageArea.children]) {
+      if (c !== batchTray.el) c.remove();
+    }
+    if (batchTray.el.parentNode !== messageArea) {
+      messageArea.append(batchTray.el);
+    }
+    const cards = [];
     if (messages.length === 0) {
-      const empty = h10("p", { class: "cb-dock-empty" }, "no messages");
-      messageArea.append(empty);
+      cards.push(h10("p", { class: "cb-dock-empty" }, "no messages"));
     }
     const name = agentName();
     for (const msg of messages) {
-      const el = renderMsgCard(msg, currentDelivery, sessions, ctx, name);
-      messageArea.append(el);
+      cards.push(renderMsgCard(msg, currentDelivery, sessions, ctx, name));
     }
-    messageArea.append(batchTray.el);
+    batchTray.el.before(...cards);
     messageArea.scrollTop = messageArea.scrollHeight;
   }
   async function loadSessions() {
@@ -4490,8 +4504,10 @@ function makeDock(ctx) {
       console.error("[dock] loadDelivery:", err);
     }
   }
+  let progSeq = 0;
   async function loadProgress() {
     const sid = currentSessionId;
+    const mine = ++progSeq;
     if (!sid) {
       progLine.clear();
       return;
@@ -4500,9 +4516,10 @@ function makeDock(ctx) {
       const pv = await ctx.api.get("/session/progress", {
         session: sid
       });
-      if (sid !== currentSessionId) return;
+      if (sid !== currentSessionId || mine !== progSeq) return;
       if (pv.progress) {
-        progLine.set(pv.progress, Date.parse(pv.progress.updated_at));
+        const age = Date.parse(pv.now) - Date.parse(pv.progress.updated_at);
+        progLine.set(pv.progress, Date.now() - Math.max(0, age));
       } else {
         progLine.clear();
       }
@@ -4585,11 +4602,14 @@ function makeDock(ctx) {
   });
   ctx.on("progress", (data) => {
     const p = data;
-    if (p.session_id === currentSessionId) progLine.set(p, Date.now());
+    if (p.session_id !== currentSessionId) return;
+    progSeq++;
+    progLine.set(p, Date.now());
   });
   ctx.on("settled", (data) => {
     const d = data;
     if (d.session !== currentSessionId) return;
+    progSeq++;
     progLine.clear();
     void loadMessages();
     void loadSessions();
@@ -5161,6 +5181,11 @@ function renderRule(ctx, detail, hooks) {
   }
   function drawPropose() {
     const p = workPropose;
+    if (editable() && refreshPropose) {
+      refreshPropose();
+      return;
+    }
+    refreshPropose = null;
     const tr = (label, value) => h12(
       "div",
       { class: "kit-tr" },
@@ -5217,7 +5242,9 @@ function renderRule(ctx, detail, hooks) {
       h12("span"),
       h12("span", { class: "cb-disp-col" }, menuChips, whyEl)
     );
-    menuNav(menu, ".cb-disp-opt", pick, () => setMenu(false));
+    menuNav(menu, ".cb-disp-opt", pick, () => {
+      if (!redrawing) setMenu(false);
+    });
     const onEsc = (e) => {
       if (e.key !== "Escape" || e.isComposing) return;
       if (!menu.isConnected) {
@@ -5260,24 +5287,44 @@ function renderRule(ctx, detail, hooks) {
 ${dispositions.join(" ")}`;
       if (sig === chipsFor) return;
       chipsFor = sig;
-      menuChips.replaceChildren(
-        ...dispositions.map(
-          (d) => h12(
-            "button",
-            {
-              type: "button",
-              role: "menuitemradio",
-              "aria-checked": String(d === cur),
-              class: "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : ""),
-              "data-disp": d,
-              onclick() {
-                choose(d);
-              }
-            },
-            d
-          )
+      const have = new Map(
+        [...menuChips.querySelectorAll(".cb-disp-opt")].map(
+          (e) => [e.dataset.disp ?? "", e]
         )
       );
+      const chips = dispositions.map((d) => {
+        const chip = have.get(d) ?? h12(
+          "button",
+          {
+            type: "button",
+            role: "menuitemradio",
+            "data-disp": d,
+            onclick() {
+              choose(d);
+            }
+          },
+          d
+        );
+        chip.setAttribute("aria-checked", String(d === cur));
+        chip.className = "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : "");
+        return chip;
+      });
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && menuChips.contains(focused) && !chips.includes(focused)) {
+        (chips.find((c) => c.classList.contains("on")) ?? chips[0] ?? pick).focus();
+      }
+      keepFocus(() => {
+        for (const [d, chip] of have) {
+          if (!chips.includes(chip)) {
+            have.delete(d);
+            chip.remove();
+          }
+        }
+        chips.forEach((chip, i) => {
+          const at2 = menuChips.children[i];
+          if (at2 !== chip) menuChips.insertBefore(chip, at2 ?? null);
+        });
+      });
     };
     const text = (field, placeholder2) => {
       const input = h12("input", {
@@ -5339,6 +5386,12 @@ ${dispositions.join(" ")}`;
       );
     }).catch(() => {
     });
+    refreshPropose = () => {
+      untilIn.value = workPropose.until ?? "";
+      noteIn.value = workPropose.note ?? "";
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      drawChoices();
+    };
     proposeEl.replaceChildren(
       h12(
         "div",
@@ -5356,6 +5409,20 @@ ${dispositions.join(" ")}`;
   }
   let drawChoices = () => {
   };
+  let refreshPropose = null;
+  let redrawing = false;
+  function keepFocus(redraw) {
+    const focused = document.activeElement;
+    redrawing = true;
+    try {
+      redraw();
+    } finally {
+      redrawing = false;
+    }
+    if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) {
+      focused.focus();
+    }
+  }
   let allDispositions = [];
   function drawProposeErr() {
     let msg = "";
@@ -5779,12 +5846,15 @@ ${dispositions.join(" ")}`;
       refuseActivate();
       return false;
     }
+    const sentMatch = work.map((c) => ({ ...c }));
+    const sentPropose = { ...workPropose };
     try {
       const d = await ctx.api.post(
         `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        body()
+        { ...body(), match: sentMatch, propose: sentPropose }
       );
-      draw(d);
+      const later = !sameConditions(work, sentMatch) || !sameAction(workPropose, sentPropose);
+      draw(d, later ? { match: work, propose: workPropose } : void 0);
       hooks.saved();
       if (conflict) {
         const { detail: newer, by } = conflict;
@@ -5914,20 +5984,26 @@ ${dispositions.join(" ")}`;
       onEdit
     );
     factsEl = h12("div");
-    doc.replaceChildren(
-      kickEl,
-      titleEl,
-      factsEl,
-      proseEl,
-      invalidEl,
-      conflictEl,
-      h12("h3", { class: "kit-label" }, "when an undecided item matches all of"),
-      editor,
-      h12("h3", { class: "kit-label" }, "propose"),
-      proposeEl,
-      h12("div", { class: "cb-matches-head" }, heading, groupChips),
-      matchesEl,
-      actionsEl
+    keepFocus(
+      () => doc.replaceChildren(
+        kickEl,
+        titleEl,
+        factsEl,
+        proseEl,
+        invalidEl,
+        conflictEl,
+        h12(
+          "h3",
+          { class: "kit-label" },
+          "when an undecided item matches all of"
+        ),
+        editor,
+        h12("h3", { class: "kit-label" }, "propose"),
+        proposeEl,
+        h12("div", { class: "cb-matches-head" }, heading, groupChips),
+        matchesEl,
+        actionsEl
+      )
     );
     note.textContent = "";
     drawProse();

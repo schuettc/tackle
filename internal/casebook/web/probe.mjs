@@ -275,7 +275,10 @@ const T7_SEED = [
 async function openDock(context, serveHandle, fx, opts = {}) {
   const pg = await context.newPage();
   await pg.setViewportSize({ width: 1600, height: 900 });
-  if (opts.clock) await pg.clock.install({ time: Date.now() });
+  // opts.clock fakes the page's clock (from opts.clockAt, else now).
+  if (opts.clock) await pg.clock.install({ time: opts.clockAt ?? Date.now() });
+  // opts.before runs on the page before it loads (e.g. to route its calls).
+  if (opts.before) await opts.before(pg);
   // opts.search adds query parameters (e.g. the Attention search, q=…).
   await pg.goto(serveHandle.url + (opts.search ?? '') + (opts.hash ?? ''), {
     waitUntil: 'domcontentloaded',
@@ -662,10 +665,45 @@ async function composerScenariosOn(context, serveHandle) {
         'charlie',
       ]);
 
-      // Edit bravo.
+      // Edit bravo. Halfway through his typing the tray reloads (a drafts
+      // event: here charlie saved unchanged; on a slow runner, the late
+      // event of a draft just added): his field, focus and typing stay,
+      // and nothing half-typed is saved.
       await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
       await pg.keyboard.press('ControlOrMeta+a');
-      await pg.keyboard.type('bravo, edited');
+      await pg.keyboard.type('bravo, ed');
+      const editField = await pg.$('.cb-batch-edit');
+      const charlie = (await fx.agent.messages(fx.thread.id)).drafts.find(
+        (m) => m.body === 'charlie',
+      );
+      const reloaded = pg.waitForResponse((r) =>
+        r.url().includes('/api/messages?'),
+      );
+      await fx.agent.api('POST', '/api/drafts/edit', {
+        id: charlie.id,
+        body: 'charlie',
+      });
+      await reloaded;
+      const fieldLeft =
+        !editField ||
+        (await until(
+          pg,
+          (f) => !f.isConnected || document.activeElement !== f,
+          editField,
+          1500,
+        ));
+      check(
+        'a tray reload while he edits a draft leaves his field, focused, with what he typed, and saves none of it',
+        !!editField &&
+          !fieldLeft &&
+          (await editField.evaluate((f) => f.value)) === 'bravo, ed' &&
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
+            'alpha',
+            'bravo',
+            'charlie',
+          ]),
+      );
+      await pg.keyboard.type('ited');
       await pg.keyboard.press('Enter');
       check(
         'edit: the tray shows the edited draft',
@@ -788,6 +826,71 @@ async function composerScenariosOn(context, serveHandle) {
         text.indexOf('charlie') >= 0 &&
           text.indexOf('charlie') < text.indexOf('bravo, edited') &&
           !text.includes('alpha'),
+      );
+    } finally {
+      await pg.close();
+    }
+  }
+
+  // ---- scenario: the thread drawn again under an edit in the tray ---------
+  console.log(
+    '\nscenario: a message arriving while a draft is edited leaves the edit',
+  );
+  {
+    const fx = await dockFixture(serveHandle, 'batch-msg');
+    const pg = await openDock(context, serveHandle, fx);
+    try {
+      for (const [i, text] of ['one', 'two'].entries()) {
+        await compose(pg, text, 'Meta+Enter');
+        await until(
+          pg,
+          (n) => document.querySelectorAll('.cb-batch-draft').length === n,
+          i + 1,
+        );
+      }
+      // Court edits "two"; halfway through, a message goes into the
+      // thread (from another tab): the thread's cards are drawn again, the
+      // tray after them.
+      await pg.click('.cb-batch-draft:nth-child(2) [data-action="edit"]');
+      await pg.keyboard.press('ControlOrMeta+a');
+      await pg.keyboard.type('two, ed');
+      const editField = await pg.$('.cb-batch-edit');
+      const redrawn = until(
+        pg,
+        () =>
+          [...document.querySelectorAll('.cb-dock-card')].some((c) =>
+            c.textContent.includes('from another tab'),
+          ),
+        undefined,
+        8000,
+      );
+      await fx.agent.postMessage(fx.thread.id, 'from another tab');
+      const shown = await redrawn;
+      const fieldLeft =
+        !editField ||
+        (await until(
+          pg,
+          (f) => !f.isConnected || document.activeElement !== f,
+          editField,
+          1500,
+        ));
+      check(
+        'the thread drawn again while he edits a draft leaves his field, focused, with what he typed, and saves none of it',
+        shown &&
+          !fieldLeft &&
+          (await editField.evaluate((f) => f.value)) === 'two, ed' &&
+          sameList(await draftBodies(fx.agent, fx.thread.id), ['one', 'two']),
+      );
+      await pg.keyboard.type('ited');
+      await pg.keyboard.press('Enter');
+      check(
+        'his edit, finished, is what serve holds',
+        await eventually(async () =>
+          sameList(await draftBodies(fx.agent, fx.thread.id), [
+            'one',
+            'two, edited',
+          ]),
+        ),
       );
     } finally {
       await pg.close();
@@ -1014,7 +1117,22 @@ async function composerScenariosOn(context, serveHandle) {
     // Playwright's clock belongs to the whole browser context, so the
     // advancing clock gets a context of its own.
     const clockContext = await context.browser().newContext();
-    const pg = await openDock(clockContext, serveHandle, fx, { clock: true });
+    // The page loads the session's line as it opens. serve answers that load
+    // before the agent reports (nothing yet), and the answer is held until
+    // the live update has shown, so it lands after it, as it can on a slow
+    // runner: an older answer must not clear a newer line.
+    const held = [];
+    let reported = false;
+    const pg = await openDock(clockContext, serveHandle, fx, {
+      clock: true,
+      before: (p) =>
+        p.route('**/api/session/progress?*', async (route) => {
+          if (reported) return route.continue();
+          const answered = route.fetch();
+          held.push(answered.then((res) => ({ route, res })));
+          await answered;
+        }),
+    });
     try {
       const line = () =>
         pg.$eval('[data-testid="progress-line"]', (el) => {
@@ -1036,6 +1154,25 @@ async function composerScenariosOn(context, serveHandle) {
           };
         });
       check('no progress line before the agent reports', (await line()).hidden);
+      // The fake clock runs on with real time until paused: paused, the
+      // line's age is only the time the probe moves it on, however long a
+      // slow runner takes between the update and the fastForward.
+      await pg.clock.pauseAt((await pg.evaluate(() => Date.now())) + 1000);
+      // The page has asked for its line, and serve has answered: none yet.
+      const asked = await eventually(async () => held.length > 0, 10000);
+      const stale = await Promise.all(held);
+      const staleBodies = await Promise.all(stale.map((h) => h.res.json()));
+      check(
+        `the page asked for its line before the agent reported, and serve said none (${stale.length} held)`,
+        asked && staleBodies.every((b) => b.progress === null),
+      );
+      // PROBE_PROGRESS_DELAY=<ms> (opt-in stress): serve's clock runs on
+      // that long past the page's, paused, before the agent reports, as a
+      // slow runner leaves it. Nothing the page shows may hang on the two
+      // clocks agreeing.
+      if (progressDelay > 0) {
+        await new Promise((r) => setTimeout(r, progressDelay));
+      }
 
       await fx.agent.progress(fx.sid, 'checking CI on #671', 2, 4);
       check(
@@ -1046,6 +1183,23 @@ async function composerScenariosOn(context, serveHandle) {
             document.querySelector('.cb-prog-text')?.textContent ===
             'checking CI on #671 \u00b7 2 of 4',
         ),
+      );
+      // The held answers (no line) land now, after the update.
+      reported = true;
+      const release = await Promise.all(held);
+      const landed = pg.waitForResponse((r) =>
+        r.url().includes('/api/session/progress?'),
+      );
+      for (const h of release) await h.route.fulfill({ response: h.res });
+      await landed;
+      check(
+        'an older load landing after the update leaves the line showing',
+        !(await until(
+          pg,
+          () => document.querySelector('[data-testid="progress-line"]').hidden,
+          undefined,
+          1500,
+        )),
       );
       let l = await line();
       check(
@@ -1139,6 +1293,32 @@ async function composerScenariosOn(context, serveHandle) {
       );
     } finally {
       await pg2.close();
+    }
+
+    // A page whose clock runs 10 minutes ahead of serve's (a skewed or
+    // fake clock) ages the line by serve's clock: seconds, not "no
+    // progress for 10m".
+    const skewContext = await context.browser().newContext();
+    try {
+      const pg4 = await openDock(skewContext, serveHandle, fx, {
+        clock: true,
+        clockAt: Date.now() + 10 * 60 * 1000,
+      });
+      const age = await until(
+        pg4,
+        () =>
+          document.querySelector('.cb-prog-text')?.textContent ===
+            'writing the summary' &&
+          /^\d+s ago$/.test(
+            document.querySelector('.cb-prog-age')?.textContent ?? '',
+          ),
+      );
+      check(
+        `a page whose clock is 10m ahead of serve's ages the line by serve's clock (${await pg4.$eval('.cb-prog-age', (e) => e.textContent)})`,
+        age,
+      );
+    } finally {
+      await skewContext.close();
     }
   }
 
@@ -1296,8 +1476,11 @@ async function composerScenariosOn(context, serveHandle) {
       );
       if (!seeded) break attachedScenario;
       const plural = kind === 'branch' ? 'branches' : `${kind}s`;
-      const boxes = await pg.$$('.kit-row .kit-box');
-      for (const i of pick.slice(0, 4)) await boxes[i].click();
+      // Each box is found as it is clicked (a locator): a live redraw
+      // (events replayed on connect) replaces the rows, so a box looked up
+      // first can be detached by its click.
+      const boxes = pg.locator('.kit-row .kit-box');
+      for (const i of pick.slice(0, 4)) await boxes.nth(i).click();
       const want4 = `4 ${plural} selected`;
       check(
         `selecting 4 shows "attached: ${want4}"`,
@@ -1342,7 +1525,7 @@ async function composerScenariosOn(context, serveHandle) {
         `↵ commits the edit: "attached: ${want2}"`,
         (await value()).text === want2 && (await value()).edited,
       );
-      await boxes[pick[4]].click();
+      await boxes.nth(pick[4]).click();
       await pg.waitForTimeout(200);
       check(
         'the edit holds while the selection changes',
@@ -1400,9 +1583,12 @@ async function composerScenariosOn(context, serveHandle) {
       );
 
       // The open item, with nothing selected.
-      for (const b of await pg.$$('.kit-row .kit-box[aria-checked="true"]')) {
-        await b.click();
-      }
+      const ticked = await pg.$$eval('.kit-row .kit-box', (els) =>
+        els.flatMap((e, i) =>
+          e.getAttribute('aria-checked') === 'true' ? [i] : [],
+        ),
+      );
+      for (const i of ticked) await boxes.nth(i).click();
       const openKey = items[pick[0]].key;
       await pg.click(`.kit-row:nth-child(${pick[0] + 1}) .kit-title`);
       const wantOpen = openKey.slice(openKey.indexOf(':') + 1);
@@ -1535,11 +1721,19 @@ async function composerScenariosOn(context, serveHandle) {
     try {
       await pg.waitForSelector('.kit-row .kit-box');
       // The mock's "4 prs selected": the seeded t7-attached PRs.
-      const rows = await pg.$$('.kit-row');
-      for (const row of rows) {
-        const kicker = await row.$eval('.kit-kicker', (e) => e.textContent);
+      // Each row is found again as it is clicked: a live redraw (events
+      // replayed on connect) replaces the rows, so a row looked up first
+      // can be gone by its click.
+      const kickers = await pg.$$eval('.kit-row .kit-kicker', (els) =>
+        els.map((e) => e.textContent),
+      );
+      for (const kicker of kickers) {
         if (/^pr .*t7-attached#67\d$/.test(kicker)) {
-          await (await row.$('.kit-box')).click();
+          await pg
+            .locator('.kit-row')
+            .filter({ has: pg.getByText(kicker, { exact: true }) })
+            .locator('.kit-box')
+            .click();
         }
       }
       check(
@@ -1614,7 +1808,10 @@ async function composerScenariosOn(context, serveHandle) {
         listed,
       );
       if (!listed) break hiddenScenario;
-      for (const b of await pg.$$('.kit-row .kit-box')) await b.click();
+      const hiddenBoxes = pg.locator('.kit-row .kit-box');
+      for (let i = 0, n = await hiddenBoxes.count(); i < n; i++) {
+        await hiddenBoxes.nth(i).click();
+      }
       check(
         'Attention active: "attached: 2 prs selected"',
         await until(
@@ -2140,7 +2337,11 @@ async function rulesScenariosOn(context, serveHandle) {
       ],
       propose: { disposition: 'close' },
     });
-    const pg = await openDock(context, serveHandle, fx, {
+    // Playwright's clock belongs to the whole browser context: the faked,
+    // paused one gets a context of its own, or every later page of the
+    // shared one runs on it (seconds ahead of serve, or stopped).
+    const clockContext = await context.browser().newContext();
+    const pg = await openDock(clockContext, serveHandle, fx, {
       hash: '#/rules/r8-landed',
       clock: true,
     });
@@ -2321,14 +2522,15 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.click(
         `[data-testid="matches"] .cb-mr.x[data-key="${a1}"] .kit-box`,
       );
+      const retick = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-matches-label')?.textContent ===
+          'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
+      );
       check(
-        're-ticking includes it: the count is 6 again',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-matches-label')?.textContent ===
-            'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
-        ),
+        `re-ticking includes it: the count is 6 again${retick ? '' : ` (shows "${await pg.$eval('.cb-matches-label', (e) => e.textContent)}")`}`,
+        retick,
       );
       const afterIn = await ruleOf('r8-landed');
       check(
@@ -2832,6 +3034,7 @@ async function rulesScenariosOn(context, serveHandle) {
     } finally {
       stopPresent();
       await pg.close();
+      await clockContext.close();
     }
   }
 
@@ -2839,7 +3042,9 @@ async function rulesScenariosOn(context, serveHandle) {
   console.log('\nscenario: rules — a long match list pages at 200');
   {
     await agent.api('POST', '/api/rules/draft', R8_MANY);
-    const pg = await context.newPage();
+    // Its faked clock in a context of its own (see r8-landed's above).
+    const clockContext = await context.browser().newContext();
+    const pg = await clockContext.newPage();
     try {
       await pg.setViewportSize({ width: 1600, height: 900 });
       await pg.clock.install({ time: Date.now() });
@@ -2961,6 +3166,28 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.clock.resume();
     } finally {
       await pg.close();
+      await clockContext.close();
+    }
+    // The shared context's pages still run on the real clock: its timers
+    // fire, and its time is serve's.
+    const after = await context.newPage();
+    try {
+      await after.goto(serveHandle.url, { waitUntil: 'domcontentloaded' });
+      const skew = (await after.evaluate(() => Date.now())) - Date.now();
+      // A paused fake clock never fires the page's timer: node's own
+      // timer ends the wait.
+      const fired = await Promise.race([
+        after
+          .evaluate(() => new Promise((r) => setTimeout(() => r(true), 50)))
+          .catch(() => false), // the page closed with it waiting
+        sleep(2000).then(() => false),
+      ]);
+      check(
+        `the clocked rules pages leave the shared context's clock real (skew ${skew}ms, timer ${fired ? 'fired' : 'stood still'})`,
+        fired && Math.abs(skew) < 1500,
+      );
+    } finally {
+      await after.close();
     }
   }
 
@@ -3750,6 +3977,17 @@ async function rulesScenariosOn(context, serveHandle) {
         'the until row showed for wait, not for archive',
         withWait && !(await untilShown()),
       );
+      // serve's reply to the save is held until Court has changed a
+      // condition after it (as a slow runner delivers it late): his change
+      // is newer than the copy saved, and stays.
+      let releaseSave;
+      const saveReleased = new Promise((r) => (releaseSave = r));
+      const holdSave = async (route) => {
+        const res = await route.fetch();
+        await saveReleased;
+        await route.fulfill({ response: res });
+      };
+      await pg.route('**/api/rules/draft?*', holdSave);
       await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
       check(
         'saved: serve has the disposition and the conditions, and it is valid',
@@ -3769,6 +4007,24 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.selectOption(
         '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
         'branch',
+      );
+      const saveReplied = pg.waitForResponse((r) =>
+        r.url().includes('/api/rules/draft?'),
+      );
+      releaseSave();
+      await saveReplied;
+      await pg.unroute('**/api/rules/draft?*', holdSave);
+      check(
+        'a condition changed while the save was in flight stays changed once its reply lands',
+        !(await until(
+          pg,
+          () =>
+            document.querySelector(
+              '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
+            )?.value !== 'branch',
+          undefined,
+          1500,
+        )),
       );
       const branchDisps = (
         await agent.api('POST', '/api/rules/preview', {
@@ -4325,6 +4581,59 @@ async function rulesScenariosOn(context, serveHandle) {
               'Race repos, renamed',
         ),
       );
+
+      // Nothing of his unsaved: a change of serve's draws the rule again.
+      // With the disposition menu open, it stays open, its chips (and his
+      // focus) the same elements, so his click on one lands.
+      await pg.click('[data-testid="propose"] button.cb-disp');
+      const keepChip = await pg.waitForSelector(
+        '.cb-disp-menu:not([hidden]) .cb-disp-opt[data-disp="keep"]',
+        { timeout: 4000 },
+      );
+      const focused = await pg.evaluateHandle(() => document.activeElement);
+      await agent.api('POST', '/api/rules/draft', {
+        id: 'r8-race',
+        name: 'Race repos, renamed again',
+        status: 'draft',
+        match: [
+          { field: 'kind', op: 'is', value: 'repo' },
+          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
+        ],
+        propose: { disposition: 'archive' },
+      });
+      const redrawn = await until(
+        pg,
+        () =>
+          document.querySelector('.cb-rule .kit-h1')?.textContent ===
+          'Race repos, renamed again',
+      );
+      check(
+        "serve's copy drawn again while the menu is open leaves it open, its chips and Court's focus where they were",
+        redrawn &&
+          (await pg.evaluate(
+            ([k, f]) =>
+              !document.querySelector('.cb-disp-menu').hidden &&
+              k.isConnected &&
+              f.matches('.cb-disp-opt') &&
+              f.isConnected &&
+              document.activeElement === f,
+            [keepChip, focused],
+          )),
+      );
+      const clicked = await keepChip
+        .click({ timeout: 5000 })
+        .then(() => true)
+        .catch(() => false);
+      check(
+        'and his click on a chip chooses it',
+        clicked &&
+          (await until(
+            pg,
+            () =>
+              document.querySelector('[data-testid="propose"] button.cb-disp')
+                ?.dataset.value === 'keep',
+          )),
+      );
     } finally {
       await pg.close();
     }
@@ -4606,12 +4915,84 @@ async function invalidRulesScenariosOn(context, serveHandle) {
         document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
         'true',
     );
+    // The condition he adds is previewed (debounced) and the preview offers
+    // the dispositions it allows, a different list. Here it lands while
+    // the disposition menu is open, as it can on a slow runner: the preview
+    // is held until the menu is open, then let through. The chips that
+    // stay offered stay the same elements, so his click lands, and his
+    // focus stays where it was.
+    let previewAsked;
+    const asked = new Promise((r) => (previewAsked = r));
+    let releasePreview;
+    const release = new Promise((r) => (releasePreview = r));
+    const holdPreview = async (route) => {
+      previewAsked();
+      await release;
+      await route.continue();
+    };
+    await pg.route('**/api/rules/preview*', holdPreview);
     await pg.click('.cb-cond-add');
     await pg.click(
       '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
     );
+    await asked;
     await pg.click('[data-testid="propose"] button.cb-disp');
-    await pg.click('.cb-disp-opt[data-disp="keep"]');
+    const chipsNow = () =>
+      pg.$$eval('.cb-disp-opt', (els) => els.map((e) => e.dataset.disp));
+    const before = await chipsNow();
+    const keepChip = await pg.$('.cb-disp-opt[data-disp="keep"]');
+    const focused = await pg.evaluateHandle(() => document.activeElement);
+    const previewed = pg.waitForResponse((r) =>
+      r.url().includes('/api/rules/preview'),
+    );
+    releasePreview();
+    await previewed;
+    await pg.unroute('**/api/rules/preview*', holdPreview);
+    const changed = await until(
+      pg,
+      (b) =>
+        [...document.querySelectorAll('.cb-disp-opt')]
+          .map((e) => e.dataset.disp)
+          .join(' ') !== b,
+      before.join(' '),
+    );
+    const after = await chipsNow();
+    check(
+      `a preview offering other dispositions (${before.join(',')} → ${after.join(',')}) while the menu is open leaves it open, the "keep" chip and Court's focus where they were`,
+      changed &&
+        !!keepChip &&
+        (await pg.evaluate(
+          ([k, f]) =>
+            !document.querySelector('.cb-disp-menu').hidden &&
+            k.isConnected &&
+            f.matches('.cb-disp-opt') &&
+            f.isConnected &&
+            document.activeElement === f,
+          [keepChip, focused],
+        )),
+    );
+    // His click on the chip he saw lands on it (were it replaced, the
+    // click fails, and the menu is reopened for the rest of the scenario).
+    const clicked = await keepChip
+      .click({ timeout: 5000 })
+      .then(() => true)
+      .catch(() => false);
+    if (!clicked) {
+      if (await pg.$eval('.cb-disp-menu', (m) => m.hidden)) {
+        await pg.click('[data-testid="propose"] button.cb-disp');
+      }
+      await pg.click('.cb-disp-opt[data-disp="keep"]');
+    }
+    check(
+      'the click on that chip chooses it',
+      clicked &&
+        (await until(
+          pg,
+          () =>
+            document.querySelector('[data-testid="propose"] button.cb-disp')
+              ?.dataset.value === 'keep',
+        )),
+    );
     await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
     check(
       'saving replaces it with a valid rule',
@@ -4650,6 +5031,21 @@ const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
 const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell'];
+const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
+const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
+
+// throttlePage slows a page's CPU by PROBE_THROTTLE (see run()).
+async function throttlePage(c, pg) {
+  try {
+    const cdp = await c.newCDPSession(pg);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    throttled++;
+  } catch (err) {
+    // A page closed before its session opened is no page to slow.
+    if (!pg.isClosed()) throw err;
+  }
+}
+let throttled = 0;
 
 async function run() {
   if (only && !PROBE_GROUPS.includes(only)) {
@@ -4704,6 +5100,9 @@ async function run() {
 
   // Every context the probe opens watches its pages' consoles for a section
   // key clash (app.ts reports one there rather than failing to show).
+  // PROBE_THROTTLE=<rate> (opt-in, e.g. 4) slows every page's CPU that
+  // many times (CDP Emulation.setCPUThrottlingRate), as a busy CI runner
+  // does: the stress the probe's races are checked under.
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => {
     const c = await newContext(...args);
@@ -4712,6 +5111,7 @@ async function run() {
         keyClashes.push(msg.text());
       }
     });
+    if (throttle > 1) c.on('page', (pg) => void throttlePage(c, pg));
     return c;
   };
   const context = await browser.newContext();
@@ -5156,9 +5556,11 @@ async function run() {
     {
       // Select every visible row in 'new' view (repo:, pr:, issue:, branch: kinds).
       // Intersection of their allowed dispositions excludes 'merge' (pr-only).
-      const boxes = await page.$$('.kit-row .kit-box');
-      for (let i = 0; i < boxes.length; i++) {
-        await boxes[i].click();
+      // A locator, so each box is found as it is clicked (a live redraw
+      // can replace the rows between two clicks).
+      const boxes = page.locator('.kit-row .kit-box');
+      for (let i = 0, n = await boxes.count(); i < n; i++) {
+        await boxes.nth(i).click();
         await page.waitForTimeout(40);
       }
       await page.waitForTimeout(300);
@@ -5189,9 +5591,12 @@ async function run() {
         )
         .catch(() => {});
       await page.waitForTimeout(200);
-      const selBoxes = await page.$$('.kit-row .kit-box');
-      for (const b of selBoxes) {
-        await b.click().catch(() => {});
+      const selBoxes = page.locator('.kit-row .kit-box');
+      for (let i = 0, n = await selBoxes.count(); i < n; i++) {
+        await selBoxes
+          .nth(i)
+          .click()
+          .catch(() => {});
         await page.waitForTimeout(30);
       }
       await page.waitForTimeout(200);
@@ -5226,11 +5631,11 @@ async function run() {
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
 
-        const newBoxes = await partialPage.$$('.kit-row .kit-box');
-        if (newBoxes.length >= 2) {
-          await newBoxes[0].click();
+        const newBoxes = partialPage.locator('.kit-row .kit-box');
+        if ((await newBoxes.count()) >= 2) {
+          await newBoxes.nth(0).click();
           await partialPage.waitForTimeout(50);
-          await newBoxes[1].click();
+          await newBoxes.nth(1).click();
           await partialPage.waitForTimeout(300);
 
           // Intercept /api/decide to simulate a partial success:
@@ -5327,12 +5732,12 @@ async function run() {
       await page.waitForTimeout(600);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
-      const boxes = await page.$$('.kit-row .kit-box');
+      const boxes = page.locator('.kit-row .kit-box');
       // Select only 2 items to leave enough items alive for subsequent tests.
-      const selectCount = Math.min(2, boxes.length);
+      const selectCount = Math.min(2, await boxes.count());
 
       for (let i = 0; i < selectCount; i++) {
-        await boxes[i].click();
+        await boxes.nth(i).click();
         await page.waitForTimeout(50);
       }
 
@@ -5442,9 +5847,9 @@ async function run() {
       await page.waitForTimeout(600);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
-      const newBoxes = await page.$$('.kit-row .kit-box');
-      if (newBoxes.length > 0) {
-        await newBoxes[0].click();
+      const newBoxes = page.locator('.kit-row .kit-box');
+      if ((await newBoxes.count()) > 0) {
+        await newBoxes.first().click();
         await page.waitForTimeout(300);
         const primaryText = await page
           .$eval('.kit-primary', (el) => el.textContent ?? '')
@@ -5455,7 +5860,7 @@ async function run() {
           primaryText.trim() === 'Decide 1',
         );
         // Clean up: deselect.
-        await newBoxes[0].click();
+        await newBoxes.first().click();
         await page.waitForTimeout(100);
       } else {
         // If no 'new' items remain (all are decided), primary must be hidden.
@@ -7440,9 +7845,10 @@ async function run() {
           await footPage.waitForTimeout(400);
 
           // Select all visible rows to trigger the bulk/sel-count display.
-          const boxes = await footPage.$$('.kit-row .kit-box');
-          for (const box of boxes) {
-            await box.click();
+          const boxes = footPage.locator('.kit-row .kit-box');
+          const nBoxes = await boxes.count();
+          for (let i = 0; i < nBoxes; i++) {
+            await boxes.nth(i).click();
             await footPage.waitForTimeout(30);
           }
           await footPage.waitForTimeout(300);
@@ -7451,7 +7857,7 @@ async function run() {
           // Only assert for views where this behaviour is expected (opt-in via
           // assertSelAllHidden): the proposed view hides the button once every
           // listed item is checked.
-          if (assertSelAllHidden && boxes.length > 0) {
+          if (assertSelAllHidden && nBoxes > 0) {
             const selAllHidden = await footPage.evaluate(() => {
               const el = document.querySelector('.cb-sel-all');
               if (!el) return true; // absent → hidden for this view
@@ -9353,6 +9759,9 @@ async function run() {
 let ran = false; // a browser ran the scenarios (not the no-Chrome skip)
 
 void run().then(() => {
+  if (throttle > 1) {
+    console.log(`\nprobe: ${throttled} pages ran at ${throttle}x CPU throttle`);
+  }
   console.log(`\nprobe: ${passes} passed, ${fails} failed`);
   if (ran && !only && passes < MIN_CHECKS) {
     console.error(
