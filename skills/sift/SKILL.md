@@ -1,6 +1,6 @@
 ---
 name: sift
-description: Runs a sift round end to end through the sift channel tools, from the audit through recommending each file, the user's review, apply, the pull requests and the cleanup. Use when the user asks to audit or tidy their agent instruction files (global files, repo instruction files, skills), or when a scheduled `sift due` reports a round is due.
+description: Runs a sift round end to end through the sift channel tools, from the audit through recommending each file, the user's review, apply, the pull requests and the cleanup. Use when the user asks to audit or tidy their agent instruction files (global files, repo instruction files, skills).
 ---
 
 # Running a sift round
@@ -12,7 +12,6 @@ The channel tools are `sift_check`, `sift_next`, `sift_propose`, `sift_review`, 
 ## When to run one
 
 - The user asks for an audit, or asks you to tidy their instruction files.
-- A scheduled `sift due` reports that a round is due. Run the round as below, and leave the review for the user to open when they are ready.
 
 Run one round at a time. If `sift_status` shows a round still being recommended, or one the user has not sent yet, finish that one first.
 
