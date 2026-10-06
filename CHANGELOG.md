@@ -4,7 +4,7 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [casebook] - Unreleased
+## [casebook 0.3.0] - 2026-10-06
 
 ### Changed
 - The page belongs to the agent session that opened it: `casebook_open` and
