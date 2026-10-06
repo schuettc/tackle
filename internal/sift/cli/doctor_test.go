@@ -132,7 +132,7 @@ func TestDoctorPageServerAndChannels(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte("[mcp_servers.sift]\ncommand = \"sift\"\nargs = [\"channel\"]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".pi", "agent", "channels.json"), []byte(`{"channels":{"sift":{"command":"sift"}}}`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".pi", "agent", "channels.json"), []byte(`{"channelServers":{"sift":{"command":"sift","args":["channel"]}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, out, _ = run(t, "", "doctor")

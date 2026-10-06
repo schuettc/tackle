@@ -157,7 +157,7 @@ func channelRegistered(p profile.Profile) (where string, ok bool) {
 		return where + " [mcp_servers]", err == nil && has
 	case "pi":
 		where = filepath.Join(p.HomeDir(), "channels.json")
-		return where, jsonHas(where, "") || jsonHas(where, "channels")
+		return where + " channelServers", jsonHas(where, "channelServers")
 	}
 	return "", false
 }
