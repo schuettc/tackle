@@ -423,13 +423,14 @@ func TestSymlinkedSkillDirectories(t *testing.T) {
 		t.Fatalf("files %v; %+v", keys(m), src)
 	}
 
-	// Only the installed link: read from disk, once.
+	// Only the installed link: read once, at the base of the repo it
+	// links into, as that repo's file.
 	res = run(t, Options{Profiles: profiles(t, "claude-code", "pi")})
 	if len(res.Files) != 1 {
 		t.Fatalf("files %v", keys(byRel(res)))
 	}
 	f := res.Files[0]
-	if f.Content != "delta\n" || f.Class != ClassSkill || f.Repo != nil || len(f.Profiles) != 2 {
+	if f.Content != "delta\n" || f.Class != ClassSkill || f.Repo == nil || f.Rel != "skills/delta/SKILL.md" || len(f.Profiles) != 2 {
 		t.Fatalf("%+v", f)
 	}
 }

@@ -10,5 +10,5 @@ func writeAt(root, rel, content string) error {
 		return err
 	}
 	defer func() { _ = r.Close() }()
-	return writeFile(r, rel, content)
+	return WriteFile(r, rel, content)
 }

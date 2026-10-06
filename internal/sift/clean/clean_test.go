@@ -206,3 +206,124 @@ func TestCleanCrossesOffWhatIsGoneAndKeepsAReusedName(t *testing.T) {
 		t.Errorf("left on record %+v", made)
 	}
 }
+
+// recordOld records a branch as the v6 migration did: no commit.
+func (g *rig) recordOld(name string, pushed bool, pr string) {
+	g.t.Helper()
+	if _, err := g.s.AddCreated(ctx, store.Created{Kind: "branch", Round: 1, Repo: g.repo, Name: name, Base: "origin/main", Pushed: pushed, PR: pr}); err != nil {
+		g.t.Fatal(err)
+	}
+}
+
+// A record with no commit can't tell sift's branch from another under the
+// same name: a local branch by its name is kept, not deleted on its tip.
+// One gone already is only crossed off.
+func TestCleanKeepsAReusedNameRecordedWithoutACommitLocal(t *testing.T) {
+	g := newRig(t)
+	g.recordOld("sift/round-1", false, "https://github.com/o/app/pull/1")
+	st.Git(t, g.repo, "branch", "-q", "sift/round-1", "main")
+	g.recordOld("sift/round-2", true, "https://github.com/o/app/pull/2")
+	steps, err := Run(ctx, Options{Store: g.s, Gh: gh(map[string]string{"https://github.com/o/app/pull/1": "MERGED", "https://github.com/o/app/pull/2": "MERGED"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := find(steps, "sift/round-1"); s == nil || s.Action != "keep" || !g.has("refs/heads/sift/round-1") {
+		t.Errorf("round-1 %+v", s)
+	}
+	if s := find(steps, "sift/round-2"); s == nil || !s.Done {
+		t.Errorf("round-2 %+v", s)
+	}
+	made, _ := g.s.Created(ctx)
+	if len(made) != 1 || made[0].Name != "sift/round-1" {
+		t.Errorf("left on record %+v", made)
+	}
+}
+
+// The same on origin alone: no lease to delete with, so it is kept.
+func TestCleanKeepsAReusedNameRecordedWithoutACommitRemote(t *testing.T) {
+	g := newRig(t)
+	g.branch("sift/round-1")
+	st.Git(t, g.repo, "branch", "-q", "-D", "sift/round-1")
+	g.recordOld("sift/round-1", true, "https://github.com/o/app/pull/1")
+	steps, err := Run(ctx, Options{Store: g.s, Gh: gh(map[string]string{"https://github.com/o/app/pull/1": "MERGED"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := find(steps, "sift/round-1"); s == nil || s.Action != "keep" || !g.remoteHas("sift/round-1") {
+		t.Errorf("round-1 %+v", s)
+	}
+}
+
+// A local branch that moves between the plan and the delete is not
+// deleted, and stays on the record.
+func TestCleanKeepsALocalBranchThatMovedAfterThePlan(t *testing.T) {
+	g := newRig(t)
+	st.Git(t, g.repo, "checkout", "-q", "-b", "sift/round-1", "main")
+	st.Commit(t, g.repo, map[string]string{"CLAUDE.md": "# App\n\nsift's\n"})
+	sha := st.Git(t, g.repo, "rev-parse", "HEAD")
+	st.Git(t, g.repo, "checkout", "-q", "main")
+	if _, err := g.s.AddCreated(ctx, store.Created{Kind: "branch", Round: 1, Repo: g.repo, Name: "sift/round-1", Base: "origin/main", Commit: sha, PR: "https://github.com/o/app/pull/1"}); err != nil {
+		t.Fatal(err)
+	}
+	o := Options{Store: g.s, Gh: gh(map[string]string{"https://github.com/o/app/pull/1": "MERGED"})}
+	steps, err := Plan(ctx, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := find(steps, "sift/round-1"); s == nil || s.Action != "remove" || !s.Local {
+		t.Fatalf("planned %+v", s)
+	}
+	st.Git(t, g.repo, "checkout", "-q", "sift/round-1")
+	st.Commit(t, g.repo, map[string]string{"CLAUDE.md": "# App\n\nsomeone's\n"})
+	moved := st.Git(t, g.repo, "rev-parse", "HEAD")
+	st.Git(t, g.repo, "checkout", "-q", "main")
+	steps = Do(ctx, o, steps)
+	if s := find(steps, "sift/round-1"); s == nil || s.Done || s.Error == "" {
+		t.Errorf("done %+v", s)
+	}
+	if got := st.Git(t, g.repo, "rev-parse", "sift/round-1"); got != moved {
+		t.Errorf("the moved branch is at %q", got)
+	}
+	if made, _ := g.s.Created(ctx); len(made) != 1 {
+		t.Errorf("left on record %+v", made)
+	}
+}
+
+// Clean removes only the recorded worktree's registration: another stale
+// registration in the repo survives, whether the recorded worktree is
+// still there or gone already.
+func TestCleanLeavesAnUnrelatedStaleWorktree(t *testing.T) {
+	g := newRig(t)
+	other := filepath.Join(t.TempDir(), "other")
+	st.Git(t, g.repo, "worktree", "add", "-q", "--detach", other, "main")
+	if err := os.RemoveAll(other); err != nil {
+		t.Fatal(err)
+	}
+	here := filepath.Join(t.TempDir(), "here")
+	gone := filepath.Join(t.TempDir(), "gone")
+	for _, wt := range []string{here, gone} {
+		st.Git(t, g.repo, "worktree", "add", "-q", "--detach", wt, "main")
+		if _, err := g.s.AddCreated(ctx, store.Created{Kind: "worktree", Round: 1, Repo: g.repo, Name: wt}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	steps, err := Run(ctx, Options{Store: g.s})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, wt := range []string{here, gone} {
+		if s := find(steps, wt); s == nil || !s.Done {
+			t.Errorf("%s %+v", wt, s)
+		}
+	}
+	list := st.Git(t, g.repo, "worktree", "list", "--porcelain")
+	if !strings.Contains(list, filepath.Base(other)) {
+		t.Errorf("the unrelated stale worktree was pruned:\n%s", list)
+	}
+	if strings.Contains(list, filepath.Base(here)) || strings.Contains(list, filepath.Base(gone)) {
+		t.Errorf("a recorded worktree is still registered:\n%s", list)
+	}
+}

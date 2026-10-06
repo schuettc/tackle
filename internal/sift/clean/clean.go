@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/schuettc/tackle/internal/sift/apply"
@@ -101,23 +102,25 @@ func planBranch(ctx context.Context, o Options, c store.Created, s *Step) {
 		}
 		remote, _, _ = strings.Cut(out, "\t")
 	}
+	if local == "" && remote == "" {
+		s.Action, s.Why = "remove", "gone already: only crossed off the record"
+		return
+	}
+	// Recorded before commits were (the v6 migration): nothing proves the
+	// branch by that name is the one sift made, so it is kept.
 	if s.commit == "" {
-		// Recorded before commits were: the branch's own tip stands in.
-		s.commit = local
+		s.Action, s.Why = "keep", "recorded without its commit: sift can't tell it is the branch it made"
+		return
 	}
 	// A branch now at another commit than the one apply made is someone
 	// else's under the same name.
 	for _, at := range []string{local, remote} {
-		if at != "" && s.commit != "" && at != s.commit {
+		if at != "" && at != s.commit {
 			s.Action, s.Why = "keep", "now at "+short(at)+", not the commit sift made ("+short(s.commit)+")"
 			return
 		}
 	}
 	s.Local, s.Remote = local != "", remote != ""
-	if !s.Local && !s.Remote {
-		s.Action, s.Why = "remove", "gone already: only crossed off the record"
-		return
-	}
 	if o.Gh != nil && c.PR != "" {
 		out, err := o.Gh(ctx, c.Repo, "pr", "view", c.PR, "--json", "state", "--jq", ".state")
 		if err != nil {
@@ -135,10 +138,6 @@ func planBranch(ctx context.Context, o Options, c store.Created, s *Step) {
 	why := "no gh"
 	if o.Gh != nil {
 		why = "no pull request"
-	}
-	if s.commit == "" {
-		s.Action, s.Why = "keep", why+", and no commit to look for in "+c.Base
-		return
 	}
 	base := c.Base
 	if base == "" {
@@ -178,20 +177,65 @@ func Do(ctx context.Context, o Options, steps []Step) []Step {
 	return steps
 }
 
+// removeWorktree removes the recorded worktree and its registration only
+// (git worktree remove drops a registration whose directory is gone too),
+// never pruning the repo's other registrations.
 func removeWorktree(ctx context.Context, s *Step) error {
-	if _, err := os.Stat(s.Name); err == nil {
-		if _, err := git(ctx, s.Repo, "worktree", "remove", "--force", s.Name); err != nil {
-			return err
-		}
+	if _, err := os.Stat(s.Repo); err != nil {
+		return nil //nolint:nilerr // the repo is gone, and its registrations with it
 	}
-	if _, err := os.Stat(s.Repo); err == nil {
-		_, _ = git(ctx, s.Repo, "worktree", "prune")
+	if !registered(ctx, s.Repo, s.Name) {
+		return nil
 	}
-	return nil
+	_, err := git(ctx, s.Repo, "worktree", "remove", "--force", s.Name)
+	return err
 }
 
+// registered reports whether repo has a worktree registered at path (by
+// its path as given or with symlinks resolved).
+func registered(ctx context.Context, repo, path string) bool {
+	out, err := git(ctx, repo, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return true // can't tell: let worktree remove decide
+	}
+	want := map[string]bool{filepath.Clean(path): true, realish(path): true}
+	for _, field := range strings.Split(out, "\x00") {
+		if p, ok := strings.CutPrefix(field, "worktree "); ok && (want[filepath.Clean(p)] || want[realish(p)]) {
+			return true
+		}
+	}
+	return false
+}
+
+// realish is p with the symlinks in its longest existing prefix resolved.
+func realish(p string) string {
+	rest := ""
+	for d := filepath.Clean(p); ; d = filepath.Dir(d) {
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(d) == d {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
+	}
+}
+
+// removeBranch deletes a branch only while it is at the commit sift made:
+// locally, checked again just before the delete; on origin, with that
+// commit as the lease.
 func removeBranch(ctx context.Context, s *Step) error {
+	if !s.Local && !s.Remote {
+		return nil
+	}
+	if s.commit == "" {
+		return fmt.Errorf("no recorded commit for %s", s.Name)
+	}
 	if s.Local {
+		at, _ := git(ctx, s.Repo, "rev-parse", "--verify", "-q", "refs/heads/"+s.Name)
+		if at != s.commit {
+			return fmt.Errorf("%s moved to %s since the plan, off the commit sift made (%s)", s.Name, short(at), short(s.commit))
+		}
 		if _, err := git(ctx, s.Repo, "branch", "-D", s.Name); err != nil {
 			return err
 		}
@@ -201,11 +245,7 @@ func removeBranch(ctx context.Context, s *Step) error {
 		// on it (some run a full test gate, minutes long): --no-verify,
 		// for this delete only. The lease refuses the delete if the remote
 		// branch moved off the commit sift made.
-		args := []string{"push", "--no-verify", "-q"}
-		if s.commit != "" {
-			args = append(args, "--force-with-lease=refs/heads/"+s.Name+":"+s.commit)
-		}
-		if _, err := git(ctx, s.Repo, append(args, "origin", "--delete", s.Name)...); err != nil {
+		if _, err := git(ctx, s.Repo, "push", "--no-verify", "-q", "--force-with-lease=refs/heads/"+s.Name+":"+s.commit, "origin", "--delete", s.Name); err != nil {
 			return err
 		}
 	}

@@ -326,7 +326,7 @@ the config, and both the audit and apply use it:
     base = "dev"
 
 A skill or global file that is a symlink into a git repo (a dotfiles repo, say)
-is written in that repo, on its own branch.
+is read at that repo's base and written in that repo, on its own branch.
 
 **Hearing the channel.** Claude Code only listens to Send when launched with
 `claude --dangerously-load-development-channels server:sift`. pi gets it

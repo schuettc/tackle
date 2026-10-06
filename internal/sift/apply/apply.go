@@ -31,7 +31,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/discover"
 	"github.com/schuettc/tackle/internal/sift/host"
 	"github.com/schuettc/tackle/internal/sift/profile"
@@ -73,9 +72,6 @@ type Options struct {
 	// load (nil: every shipped profile's, see InstructionNames). An
 	// untracked one holds its repo.
 	Instructions []string
-	// Repos are the config's per-repo bases, for a file found outside the
-	// audited repos whose real path is in one (Locate).
-	Repos []config.Repo
 }
 
 // Item is one file (or, in a backlog round, one row) in the result.
@@ -211,9 +207,6 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	var outside []*plan
 	all := map[string]*plan{}
 	for _, a := range sel.Files {
-		if a.Source.Repo == "" {
-			a = place(ctx, a, o.Repos, byRepo)
-		}
 		p := &plan{a: a, it: fileItem(a)}
 		all[a.Key] = p
 		if a.Source.Repo == "" {
@@ -276,59 +269,6 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		res.Repos = append(res.Repos, rp)
 	}
 	return res, nil
-}
-
-// Locate finds the repo that owns a file read from disk: where its path
-// resolves (a skill or global installed as a symlink into a dotfiles repo,
-// say), when that is a file tracked in a git repo. It returns the repo's
-// top and the file's path in it, both with symlinks resolved; ok is false
-// for a file in no repo, untracked, or no longer resolving where it did at
-// the audit.
-func Locate(ctx context.Context, a Approved) (top, rel string, ok bool) {
-	real, err := filepath.EvalSymlinks(a.Source.File)
-	if err != nil || (a.Source.Canon != "" && a.Source.Canon != real) {
-		return "", "", false
-	}
-	out, err := git(ctx, filepath.Dir(real), "rev-parse", "--show-toplevel")
-	if err != nil || out == "" {
-		return "", "", false
-	}
-	if top, err = filepath.EvalSymlinks(out); err != nil {
-		return "", "", false
-	}
-	r, err := filepath.Rel(top, real)
-	if err != nil || r == "." || strings.HasPrefix(r, "..") {
-		return "", "", false
-	}
-	rel = filepath.ToSlash(r)
-	if _, err := git(ctx, top, "ls-files", "--error-unmatch", "--", rel); err != nil {
-		return "", "", false
-	}
-	return top, rel, true
-}
-
-// place puts a file read from disk in the repo that owns it (Locate), read
-// at that repo's base as the audit would read it, so it goes on that
-// repo's branch like any repo file; one of byRepo's repos when it is the
-// same repo by another path. A file Locate finds no repo for is returned
-// as it is.
-func place(ctx context.Context, a Approved, repos []config.Repo, byRepo map[string][]*plan) Approved {
-	top, rel, ok := Locate(ctx, a)
-	if !ok {
-		return a
-	}
-	for r := range byRepo {
-		if real, err := filepath.EvalSymlinks(r); err == nil && real == top {
-			top = r
-			break
-		}
-	}
-	ref := discover.ResolveRef(ctx, top, config.RepoBase(repos, top))
-	if ref == "" {
-		return a
-	}
-	a.Source.Repo, a.Source.Ref, a.Source.Path = top, ref, rel
-	return a
 }
 
 // plan is one approved file on its way: why it can't be written ("" when
@@ -666,7 +606,7 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 		if p.why != "" {
 			continue
 		}
-		if err := writeFile(root, p.a.Source.Path, p.a.Content); err != nil {
+		if err := WriteFile(root, p.a.Source.Path, p.a.Content); err != nil {
 			return fail(err)
 		}
 	}

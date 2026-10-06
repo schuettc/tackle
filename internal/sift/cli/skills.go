@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/schuettc/tackle/internal/sift/apply"
 	"github.com/schuettc/tackle/internal/sift/profile"
 	"github.com/schuettc/tackle/skills"
 	tools "github.com/schuettc/tools-common"
@@ -123,12 +124,9 @@ func installSkill(dir, name string, body []byte) (string, error) {
 			return "", fmt.Errorf("%s is another skill (name: %q), not sift's to replace", dest, skillName(old))
 		}
 	}
-	tmp := rel + ".sift-new"
-	if err := root.WriteFile(tmp, body, 0o644); err != nil {
-		return "", err
-	}
-	if err := root.Rename(tmp, rel); err != nil {
-		_ = root.Remove(tmp)
+	// A fresh temporary file (O_EXCL, random name) renamed into place:
+	// nothing already beside SKILL.md is written through.
+	if err := apply.WriteFile(root, filepath.ToSlash(rel), string(body)); err != nil {
 		return "", err
 	}
 	return dest, nil

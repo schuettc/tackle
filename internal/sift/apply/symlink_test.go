@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/rec"
+	"github.com/schuettc/tackle/internal/sift/row"
 	st "github.com/schuettc/tackle/internal/sift/sifttest"
 )
 
@@ -27,15 +27,29 @@ func link(t *testing.T, target string) string {
 	return p
 }
 
-// A skill (or a global) whose path is a symlink into a git repo is written
-// in the repo that owns it: on that repo's round branch, at the file's path
-// there, cut from the repo's base, as any repo file is.
+// linked is a file found at link whose real path is rel in repo, as the
+// audit records it: read at origin/main there.
+func (g *rig) linked(link, repo, rel string) rec.File {
+	g.t.Helper()
+	f := g.in(repo, rel)
+	real, err := filepath.EvalSymlinks(repo)
+	if err != nil {
+		g.t.Fatal(err)
+	}
+	f = rec.NewFile(row.Source{File: link, Repo: real, Ref: "origin/main", Path: rel}, "skill", 10000, f.Content)
+	f.Commit = st.Git(g.t, repo, "rev-parse", "origin/main")
+	return f
+}
+
+// A skill (or a global) whose path is a symlink into a git repo, recorded
+// by the audit in the repo that owns it, is written there: on that repo's
+// round branch, at the file's path there, cut from the ref the audit read.
 func TestASymlinkIntoARepoIsWrittenInThatRepo(t *testing.T) {
 	g := newRig(t)
 	dots := st.Repo(t, filepath.Join(t.TempDir(), "dotfiles"), map[string]string{"config/pi/skills/dispatch/SKILL.md": skill})
 	st.Publish(t, dots)
 	p := link(t, filepath.Join(dots, "config/pi/skills/dispatch/SKILL.md"))
-	f := g.disk(p)
+	f := g.linked(p, dots, "config/pi/skills/dispatch/SKILL.md")
 	g.audit(f)
 	want := "---\nname: dispatch\n---\n\n# Dispatch\n"
 	g.propose(g.rec(f, want))
@@ -57,21 +71,20 @@ func TestASymlinkIntoARepoIsWrittenInThatRepo(t *testing.T) {
 	}
 }
 
-// The real path's repo takes its base from a [[repo]] like any other.
-func TestASymlinkIntoARepoUsesItsBase(t *testing.T) {
+// A symlinked file a round recorded as read from disk (before the audit
+// placed such files in their repo) is left for the user: apply never works
+// out a repo or base the audit did not read.
+func TestASymlinkRecordedFromDiskIsLeft(t *testing.T) {
 	g := newRig(t)
-	dots := st.Repo(t, filepath.Join(t.TempDir(), "dotfiles"), map[string]string{"SKILL.md": "main\n"})
+	dots := st.Repo(t, filepath.Join(t.TempDir(), "dotfiles"), map[string]string{"SKILL.md": skill})
 	st.Publish(t, dots)
-	st.Git(t, dots, "checkout", "-q", "-b", "dev")
-	st.Commit(t, dots, map[string]string{"SKILL.md": skill})
-	st.Git(t, dots, "push", "-q", "-u", "origin", "dev")
 	f := g.disk(link(t, filepath.Join(dots, "SKILL.md")))
 	g.audit(f)
 	g.propose(g.rec(f, "# Dispatch\n"))
 	g.decide(f, rec.Decision{Action: "accept"})
-	r := one(t, g.run(Options{DryRun: true, Repos: []config.Repo{{Path: dots, Base: "dev"}}}))
-	if r.State != "planned" || r.Base != "origin/dev" {
-		t.Fatalf("%+v", r)
+	res := g.run(Options{})
+	if len(res.Repos) != 0 || len(res.Left) != 1 || !strings.Contains(res.Left[0].Why, "not in a git repo") {
+		t.Fatalf("%+v", res)
 	}
 }
 

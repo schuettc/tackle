@@ -176,6 +176,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		f.root(ctx, root)
 	}
 	f.skillDirs()
+	f.owners(ctx)
 	f.collapseCopies()
 	f.derive()
 	f.chains()
@@ -370,6 +371,69 @@ func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
 		case regular && e.Name() == profile.SkillFile:
 			f.add(fp, ClassSkill, RoleSkill, prof)
 		}
+	}
+}
+
+// owners reads each file found on disk whose real path is tracked in a
+// git repo (a global or skill installed as a symlink into a dotfiles repo,
+// say) at that repo's base, as a repo file: the repo's [[repo]] base, else
+// the base of a root it is under. A file the base does not have, or in a
+// fork (unless forks are included), stays a disk file.
+func (f *finder) owners(ctx context.Context) {
+	reals := make([]string, 0, len(f.real))
+	for real, file := range f.real {
+		if file.Repo == nil && !file.Context {
+			reals = append(reals, real)
+		}
+	}
+	sort.Strings(reals)
+	for _, real := range reals {
+		file := f.real[real]
+		out, err := git(ctx, filepath.Dir(real), "rev-parse", "--show-toplevel")
+		if err != nil {
+			continue
+		}
+		top, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(top, real)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		dir, base := top, ""
+		for d := range f.repos {
+			if realish(d) == top {
+				dir = d
+				break
+			}
+		}
+		if _, read := f.repos[dir]; !read {
+			if !f.opt.Include.Forks {
+				if u, err := git(ctx, top, "config", "--get", "remote.upstream.url"); err == nil && strings.TrimSpace(string(u)) != "" {
+					continue
+				}
+			}
+			for _, root := range f.opt.Roots {
+				if rr := realish(root.Path); top == rr || strings.HasPrefix(top, rr+string(filepath.Separator)) {
+					base = root.Base
+				}
+			}
+			if b := config.RepoBase(f.opt.Repos, top); b != "" {
+				base = b
+			}
+		}
+		r, err := f.readRepo(ctx, dir, base)
+		if err != nil || !r.files[rel] {
+			continue
+		}
+		body, err := git(ctx, dir, "show", r.Commit+":"+rel)
+		if err != nil {
+			f.warn("%s: %v", file.Path, err)
+			continue
+		}
+		file.Repo, file.Rel, file.Content = r.Repo, rel, string(body)
 	}
 }
 

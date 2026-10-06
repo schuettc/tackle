@@ -119,7 +119,9 @@ func TestReconcileFindsASymlinkedFileOnItsRepoBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	f := rec.NewFile(row.Source{File: p, Canon: row.Resolve(p)}, "skill", 10000, "# X\n\n- waiting on it\n")
+	real, _ := filepath.EvalSymlinks(dots)
+	f := rec.NewFile(row.Source{File: p, Repo: real, Ref: "origin/main", Path: "skills/x/SKILL.md"}, "skill", 10000, "# X\n\n- waiting on it\n")
+	f.Commit = st.Git(t, dots, "rev-parse", "origin/main")
 	f.Rows = []string{"n"}
 	round, err := s.RecordAudit(ctx, store.Round{Kind: "on-demand"}, []row.Row{{ID: "n", Check: "stale-status", Source: f.Source}}, []rec.File{f})
 	if err != nil {

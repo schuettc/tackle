@@ -75,15 +75,19 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   audit reads that repo at `origin/dev`, and apply cuts its branch from it
   and opens its pull request against `dev`. `sift init` lists the repos
   that have an `origin/dev` for you to confirm, and never sets a base itself.
-- A skill or global file that is a symlink into a git repo is written in the
-  repo that owns it, on that repo's branch, with the same checks and holds
-  as any repo file. A symlink to a file outside every repo is still left to
+- A skill or global file that is a symlink into a git repo is audited at
+  the base of the repo that owns it and written there, on that repo's
+  branch from the ref the audit read, with the same checks and holds as any
+  repo file. A symlink to a file outside every repo is still left to
   you, its approved content saved.
 - `sift clean` (and `sift_clean`): removes what apply recorded creating, and
   nothing found by name or author. Each round branch goes, local and remote,
   once its pull request is merged or closed (checked with `gh`; without
   `gh`, once its commit is in the base), and so does any worktree apply left
-  behind. A branch now at another commit than the one apply made is kept.
+  behind (only its own registration: no blanket prune). A branch is
+  deleted only while it is at the commit apply made: checked again just
+  before a local delete, and leased on that commit for the remote one; a
+  branch now elsewhere, or recorded without its commit, is kept.
   It prints the plan first; `--dry-run` stops there. Branch deletes skip
   the repo's pre-push hook, since they push no code.
 - The sift skill: how an agent runs a round end to end through the channel
