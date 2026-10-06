@@ -118,6 +118,7 @@ var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV3),
 	sqlitedb.SQL(schemaV4),
 	sqlitedb.SQL(schemaV5),
+	sqlitedb.SQL(schemaV6),
 }
 
 // Seen is what the page showed of one file or row when the person decided:

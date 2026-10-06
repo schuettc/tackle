@@ -241,6 +241,7 @@ func TestToolSchemasArePinned(t *testing.T) {
 		"sift_review":  `{"type":"object","properties":{}}`,
 		"sift_apply":   `{"type":"object","properties":{"round":{"type":"integer","description":"the round to apply (default: the latest)"},"dry_run":{"type":"boolean","description":"work out what would change and touch nothing"}}}`,
 		"sift_status":  `{"type":"object","properties":{}}`,
+		"sift_clean":   `{"type":"object","properties":{"dry_run":{"type":"boolean","description":"show the plan and remove nothing"}}}`,
 	}
 	var names []string
 	for _, tl := range Tools() {
@@ -252,7 +253,7 @@ func TestToolSchemasArePinned(t *testing.T) {
 			t.Errorf("%s: invalid", tl.Name)
 		}
 	}
-	if strings.Join(names, ",") != "sift_check,sift_next,sift_propose,sift_review,sift_apply,sift_status" {
+	if strings.Join(names, ",") != "sift_check,sift_next,sift_propose,sift_review,sift_apply,sift_status,sift_clean" {
 		t.Fatalf("tools %v", names)
 	}
 }
@@ -285,7 +286,7 @@ func TestInitializeListsTheTools(t *testing.T) {
 		Tools []struct{ Name string } `json:"tools"`
 	}
 	_ = json.Unmarshal(m.Result, &r)
-	if len(r.Tools) != 6 {
+	if len(r.Tools) != 7 {
 		t.Fatalf("%s", m.Result)
 	}
 }
@@ -416,6 +417,16 @@ func TestCheckWithoutConfigSaysWhatToRun(t *testing.T) {
 	c.ch.LoadConfig = func() (config.Config, error) { return config.Config{}, config.ErrMissing }
 	text, isErr := c.tool("sift_check", map[string]any{})
 	if !isErr || !strings.Contains(text, "sift init") {
+		t.Fatalf("%v %s", isErr, text)
+	}
+}
+
+// sift_clean plans from the record: with nothing recorded, nothing to do.
+func TestCleanWithNothingRecorded(t *testing.T) {
+	e := newEnv(t)
+	c := e.connect("s1")
+	text, isErr := c.tool("sift_clean", map[string]any{"dry_run": true})
+	if isErr || !strings.Contains(text, `"steps": []`) || !strings.Contains(text, `"dry_run": true`) {
 		t.Fatalf("%v %s", isErr, text)
 	}
 }

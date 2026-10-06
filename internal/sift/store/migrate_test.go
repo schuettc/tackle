@@ -93,3 +93,44 @@ func mustJSON(t *testing.T, v any) string {
 	}
 	return string(b)
 }
+
+// The branches a v5 database records as applied are what sift created, so
+// v6 records them for sift clean: pushed when a pull request was opened or
+// the detail says the branch was pushed; held and failed applies made
+// nothing.
+func TestMigrateRecordsTheAppliedBranchesAsCreated(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sift.db")
+	v5, err := sqlitedb.Open(ctx, p, sqlitedb.Options{Migrations: Migrations[:5]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, at) VALUES (1, '/r/a', 'origin/main', 'sift/round-1', 'https://github.com/o/a/pull/1', 'pr', '', 1)`,
+		`INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, at) VALUES (1, '/r/b', 'origin/main', 'sift/round-1', '', 'branch', 'no gh: the branch is committed and left local', 2)`,
+		`INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, at) VALUES (1, '/r/c', 'origin/main', 'sift/round-1', '', 'branch', 'the branch is pushed but gh pr create failed: x', 3)`,
+		`INSERT INTO applies(round_id, repo, base, branch, pr, state, detail, at) VALUES (1, '/r/d', 'origin/main', '', '', 'held', 'uncommitted changes', 4)`,
+	} {
+		if _, err := v5.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = v5.Close()
+	s, err := Open(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	made, err := s.Created(ctx)
+	if err != nil || len(made) != 3 {
+		t.Fatalf("%+v %v", made, err)
+	}
+	for i, want := range []struct {
+		repo   string
+		pushed bool
+		pr     string
+	}{{"/r/a", true, "https://github.com/o/a/pull/1"}, {"/r/b", false, ""}, {"/r/c", true, ""}} {
+		if c := made[i]; c.Kind != "branch" || c.Repo != want.repo || c.Name != "sift/round-1" || c.Pushed != want.pushed || c.PR != want.pr {
+			t.Errorf("%d: %+v", i, c)
+		}
+	}
+}

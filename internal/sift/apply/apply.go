@@ -635,10 +635,20 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	if _, err := git(ctx, repo, "worktree", "add", "-q", "-b", branch, wt, base); err != nil {
 		return fail(err)
 	}
+	// What apply creates is recorded, so sift clean removes exactly that.
+	note := func(err error) {
+		if err != nil {
+			rp.Detail = joinDetail(rp.Detail, "not recorded for sift clean: "+oneLine(err.Error()))
+		}
+	}
+	wtID, err := o.Store.AddCreated(ctx, store.Created{Kind: "worktree", Round: round, Repo: repo, Name: wt})
+	note(err)
 	defer func() {
 		bg := context.WithoutCancel(ctx)
 		if _, err := git(bg, repo, "worktree", "remove", "--force", wt); err != nil {
 			rp.Detail = strings.TrimSpace(rp.Detail + "; worktree left at " + wt)
+		} else if wtID != 0 {
+			note(o.Store.RemovedCreated(bg, wtID))
 		}
 		if !committed {
 			// Nothing was committed: the branch is the base, and would only
@@ -673,6 +683,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	}
 	committed = true
 	rp.Branch, rp.State = branch, "branch"
+	sha, _ := git(ctx, wt, "rev-parse", "HEAD")
+	branchID, err := o.Store.AddCreated(ctx, store.Created{Kind: "branch", Round: round, Repo: repo, Name: branch, Base: base, Commit: sha})
+	note(err)
 
 	remote, _ := git(ctx, repo, "config", "--get", "remote.origin.url")
 	slug, github := host.Slug(remote)
@@ -687,6 +700,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	if _, err := git(ctx, repo, "push", "-q", "-u", "origin", branch); err != nil {
 		rp.Detail = joinDetail(rp.Detail, "push failed, the branch is left local: "+oneLine(err.Error()))
 		return rp
+	}
+	if branchID != 0 {
+		note(o.Store.PushedCreated(ctx, branchID, ""))
 	}
 	body, err := tempFile(prBody(round, pr, rp))
 	if err != nil {
@@ -704,6 +720,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 		return rp
 	}
 	rp.State, rp.PR = "pr", lastLine(string(out))
+	if branchID != 0 {
+		note(o.Store.PushedCreated(ctx, branchID, rp.PR))
+	}
 	return rp
 }
 

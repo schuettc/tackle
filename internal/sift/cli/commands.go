@@ -59,6 +59,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: applyFlags, Run: runApply,
 		},
 		{
+			Name: "clean", Group: "review", Synopsis: "[--dry-run] [--json]",
+			Summary:  "remove the branches and worktrees apply recorded, once their pull requests are merged or closed",
+			NewFlags: cleanFlags, Run: runClean,
+		},
+		{
 			Name: "reconcile", Group: "review", Synopsis: "[--round N] [--json]",
 			Summary:  "check each apply branch: every file as approved, nothing else changed",
 			NewFlags: reconcileFlags, Run: runReconcile,

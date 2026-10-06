@@ -86,6 +86,17 @@ func TestARepoBaseOverrideIsReadAndAppliedThere(t *testing.T) {
 	if got := st.Git(t, bare, "rev-parse", r.Branch+"^"); got != st.Git(t, bare, "rev-parse", "dev") {
 		t.Errorf("the branch's parent is %s, not dev", got)
 	}
+	// apply records what it created, for sift clean: the branch, pushed,
+	// with its commit and pull request; its worktree is removed already.
+	made, err := s.Created(ctx)
+	if err != nil || len(made) != 1 {
+		t.Fatalf("created %+v %v", made, err)
+	}
+	b := made[0]
+	if b.Kind != "branch" || b.Repo != repo || b.Name != r.Branch || b.Base != "origin/dev" || !b.Pushed ||
+		b.PR != "https://github.com/owner/muster/pull/7" || b.Commit != st.Git(t, bare, "rev-parse", r.Branch) {
+		t.Errorf("branch record %+v", b)
+	}
 }
 
 // reconcile finds a file apply wrote in the repo its symlink points into on

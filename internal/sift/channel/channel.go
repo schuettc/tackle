@@ -35,6 +35,7 @@ const Instructions = `sift audits the instruction files coding agents read (glob
 - Recommend every file: sift_next gives one file with its content, findings and the guidance for the rewrite; sift_propose stores the whole revised file. Repeat until sift_next says done. Recommend files that move text between them in one sift_propose call, each linking the other.
 - Then run sift_review once to open the page for the user, tell them how many files wait, and carry on with other work. The page opens only once every file has a recommendation.
 - The user's decisions arrive as a channel event from sift. Follow its steps: sift_apply writes a branch per repo; then run ` + "`sift reconcile`" + ` and review each branch.
+- The pull requests are the user's to merge. Once they are merged or closed, run sift_clean to remove the branches and worktrees apply made.
 - sift_status tells you the round's state and what is open, decided and sent.
 - When sift reports an error, say what failed and leave the files as they are.`
 
