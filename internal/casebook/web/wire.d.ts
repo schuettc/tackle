@@ -109,6 +109,7 @@ export interface StatusView {
 
 export interface OpenResult {
   opened: string;
+  session?: string;
 }
 
 export interface SettledResult {
@@ -317,6 +318,9 @@ export interface Session {
   busy: boolean;
   queued: number;
   left?: boolean;
+  name: string;
+  worker: boolean;
+  eligible: boolean;
 }
 
 export interface Delivery {

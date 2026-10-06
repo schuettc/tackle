@@ -104,9 +104,15 @@ func (ch *Channel) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 	return ch.Server.Run(r, w)
 }
 
+// presence announces the session. pid is the HARNESS process's (the
+// channel's parent: pi's channels.tools and Claude Code spawn the channel
+// directly), not the channel's own: pi-subagents runs worker sessions
+// inside their parent's pi process, each with its own channel, so a shared
+// harness pid is how serve tells a worker from a fork (which runs in a pi
+// process of its own). pi-casebook reports the same pid (pi's process.pid).
 func (ch *Channel) presence(ctx context.Context, c *Client) error {
 	_, err := c.Do(ctx, http.MethodPost, "/api/agent/presence", map[string]any{
-		"id": ch.ID.Session, "harness": ch.ID.Harness, "label": ch.ID.Label, "cwd": ch.ID.CWD, "pid": os.Getpid()}, nil)
+		"id": ch.ID.Session, "harness": ch.ID.Harness, "label": ch.ID.Label, "cwd": ch.ID.CWD, "pid": os.Getppid()}, nil)
 	return err
 }
 

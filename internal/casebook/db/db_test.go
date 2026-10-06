@@ -14,7 +14,7 @@ import (
 
 var ctx = context.Background()
 
-func TestFreshDatabaseMigratesToVersion2(t *testing.T) {
+func TestFreshDatabaseMigratesToVersion3(t *testing.T) {
 	d, err := Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -27,8 +27,12 @@ func TestFreshDatabaseMigratesToVersion2(t *testing.T) {
 	if v != SchemaVersion {
 		t.Fatalf("user_version %d, want %d", v, SchemaVersion)
 	}
-	if v != 2 {
-		t.Fatalf("expected version 2, got %d", v)
+	if v != 3 {
+		t.Fatalf("expected version 3, got %d", v)
+	}
+	// v3: a session has a name and a child mark.
+	if _, err := d.ExecContext(ctx, `INSERT INTO sessions(id, first_seen, last_seen, name, child) VALUES ('s', 1, 1, 'tools-workspace/casebook', 1)`); err != nil {
+		t.Fatalf("sessions.name/child: %v", err)
 	}
 	// jobs table exists; insert a row
 	now := int64(1000000)
@@ -86,8 +90,8 @@ func TestAdoptsAP1aVersion1Database(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != 2 {
-		t.Fatalf("version %d, want 2", v)
+	if v != 3 {
+		t.Fatalf("version %d, want 3", v)
 	}
 	// sessions table from schemaV1 still intact
 	var n int
@@ -102,13 +106,13 @@ func TestAdoptsAP1aVersion1Database(t *testing.T) {
 
 func TestNewerDatabaseIsRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "casebook.db")
-	// Create a db with user_version=3 (future version).
+	// Create a db one version newer than this binary knows.
 	sdb, err := sql.Open("sqlite", "file:"+path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sdb.SetMaxOpenConns(1)
-	_, _ = sdb.ExecContext(ctx, "PRAGMA user_version = 3")
+	_, _ = sdb.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", SchemaVersion+1))
 	_ = sdb.Close()
 
 	_, err = Open(ctx, path)

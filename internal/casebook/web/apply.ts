@@ -100,6 +100,7 @@ import {
   type StepGroup,
 } from './apply-text.ts';
 import { fmtAge } from './time-utils.ts';
+import { pickable, sessionMeta, sessionTitle } from './sessions.ts';
 
 // Decided items are fetched 200 at a time (serve's cap, like Attention).
 const PAGE = 200;
@@ -260,7 +261,9 @@ export function makeApply(ctx: Ctx): Section {
   const listSeq = makeSeq();
   const jobSeq = makeSeq();
 
-  const present = () => sessions.filter((s) => !s.left);
+  // The sessions here that may take outward steps: the dock's eligible ones
+  // (live, not subagent workers), by name.
+  const present = () => pickable(sessions);
   // The session a plan's outward steps go to: Court's pick while it is here;
   // else the one he picked in the dock, if it is here; else the only session
   // here. With two or more here and none picked, none: Court chooses.
@@ -1116,6 +1119,7 @@ export function makeApply(ctx: Ctx): Section {
                   class: 'kit-chip cb-session' + (s.id === chosen ? ' on' : ''),
                   'aria-checked': String(s.id === chosen),
                   'data-session': s.id,
+                  title: sessionMeta(s),
                   onclick() {
                     courtSession = s.id;
                     note = '';
@@ -1123,7 +1127,7 @@ export function makeApply(ctx: Ctx): Section {
                     if (active) ctx.setPrimary(primary());
                   },
                 },
-                s.label || s.id,
+                sessionTitle(s),
               ),
             ),
           ),

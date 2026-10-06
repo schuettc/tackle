@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/channel"
+	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/serve"
 	"github.com/schuettc/tackle/internal/version"
 	tools "github.com/schuettc/tools-common"
@@ -42,6 +43,12 @@ func init() {
 	}
 }
 
+// callerSession is the session `casebook serve` was run from (an agent's
+// shell: pi sets AGENT_SESSION_ID per command, Claude Code sets
+// CLAUDE_CODE_SESSION_ID; the family rule in tools-common/harness picks), or
+// "" from a plain terminal. The page it opens belongs to that session.
+func callerSession() string { return harness.FromEnv().SessionID }
+
 // defaultStartDetached starts serve in the background from this binary.
 func defaultStartDetached(port int) (serve.Advert, error) { return serve.Start(executable(), port) }
 
@@ -61,6 +68,18 @@ func settledFlags() *flag.FlagSet {
 			fs.String("session", "", "the session whose turn ended")
 			fs.String("harness", "", "claude: read the session id from the Stop hook payload on stdin")
 			fs.String("shown", "", "comma-separated delivery ids the agent was shown this turn (bad values ignored)")
+		})()
+}
+
+func sessionInfoFlags() *flag.FlagSet {
+	return flags("session-info", "casebook session-info --session ID [--name NAME] [--cwd DIR] [--pid N] [--child] [--harness pi]",
+		"Tells casebook serve what the harness knows about a session: its name (the page shows it; a rename sends it again) and whether it is a child session (a pi-subagents worker's header names a parentSession; an in-memory worker has no session file). Called by pi-casebook. Never fails, never prints, never starts serve.", func(fs *flag.FlagSet) {
+			fs.String("session", "", "the session")
+			fs.String("name", "", "its name (empty: none)")
+			fs.String("cwd", "", "its working directory")
+			fs.Int("pid", 0, "the harness process (pi's pid)")
+			fs.Bool("child", false, "the harness marked it a child session")
+			fs.String("harness", "pi", "the harness")
 		})()
 }
 
@@ -96,8 +115,15 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 					return serve.Run(sctx, a, serve.Options{Version: version.Number(), Port: port, Idle: 8 * time.Hour, Log: errw,
 						// A restart reopens a page that was open: its tab's
 						// token died with the old serve.
+						// The open Court asked for is attached to the session
+						// that asked (if any); a reopen after a restart is not
+						// anyone's: whoever started this serve isn't the
+						// session the old tab belonged to, so the page asks.
 						Ready: func(url string, pageWasOpen bool) {
-							if !boolFlag(fs, "no-open") || pageWasOpen {
+							switch {
+							case !boolFlag(fs, "no-open"):
+								_ = openBrowser(url + serve.SessionQuery(callerSession()))
+							case pageWasOpen:
 								_ = openBrowser(url)
 							}
 						},
@@ -119,7 +145,7 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 					_, _ = fmt.Fprintf(out, "casebook serve is running: %s\n", adv.Base)
 				}
 				if !boolFlag(fs, "no-open") {
-					_ = openBrowser(adv.URL)
+					_ = openBrowser(adv.URL + serve.SessionQuery(callerSession()))
 				}
 				return nil
 			},
@@ -173,6 +199,26 @@ func workbenchCommands(stdin io.Reader) []tools.Command {
 				}
 				c := newSettledClient()
 				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/settled", map[string]any{"session": session, "shown": shownIDs}, nil)
+				return nil
+			},
+		},
+		{
+			Name: "session-info", Group: "plumbing", Summary: "report a session's name and child mark (never fails)", NewFlags: sessionInfoFlags,
+			Run: func(args []string, out, errw io.Writer) error {
+				fs := sessionInfoFlags()
+				if _, err := parse(fs, args, io.Discard); err != nil {
+					return nil
+				}
+				session := strFlag(fs, "session")
+				if session == "" {
+					return nil
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				c := newSettledClient() // finds serve, never starts it
+				_, _ = c.Do(ctx, http.MethodPost, "/api/agent/session-info", deliver.SessionInfo{
+					ID: session, Name: strFlag(fs, "name"), Harness: strFlag(fs, "harness"), CWD: strFlag(fs, "cwd"),
+					PID: intFlag(fs, "pid"), Child: boolFlag(fs, "child")}, nil)
 				return nil
 			},
 		},

@@ -105,8 +105,9 @@ func (b *Bus) Trim(ctx context.Context, age time.Duration) error {
 		return err
 	}
 	// Remove orphaned progress_log rows for sessions that have been absent
-	// longer than the trim window (sessions are never deleted, but their log
-	// rows can accumulate if a session died without settling its turn).
+	// longer than the trim window (serve prunes only empty sessions, so a
+	// kept one's log rows can accumulate if it died without settling its
+	// turn).
 	_, err := b.db.ExecContext(ctx,
 		"DELETE FROM progress_log WHERE session_id IN (SELECT id FROM sessions WHERE last_seen < ?)", cutoff)
 	return err

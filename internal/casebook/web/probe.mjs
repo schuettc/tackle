@@ -20,6 +20,7 @@ import { startServe, gitGuard } from './serve.mjs';
 import { createAgent } from './agent.mjs';
 import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
 import { shellScenarios, stopShellServes } from './probe-shell.mjs';
+import { ownerScenarios, stopOwnerServes } from './probe-owner.mjs';
 
 const { chromium } = pkg;
 
@@ -80,6 +81,7 @@ function cleanup() {
   }
   stopApplyServes();
   stopShellServes();
+  stopOwnerServes();
 }
 
 process.on('SIGTERM', () => {
@@ -189,21 +191,26 @@ function workedText(ms) {
 }
 
 // dockFixture creates a session with one thread; each scenario owns its own.
-// present() keeps the session from going left (serve's left threshold is 3s
-// in the probe) by re-announcing it every second; it returns the stop.
+// The session stays present (serve's left threshold is 3s in the probe) by
+// re-announcing itself every second from the start: the dock refuses to send
+// to a session that left. present() returns the stop, for a scenario that
+// makes the session leave; the beat is unref'd and its errors ignored, so a
+// scenario that never stops it ends with its serve.
 async function dockFixture(serveHandle, name, harness = 'pi') {
   const agent = createAgent(serveHandle.base, serveHandle.token);
   const sid = `probe-t7-${name}-${Date.now()}`;
-  const label = `${harness} \u00b7 ${name}`;
+  // The dock names an unnamed session by its folder.
+  const label = name;
   const cwd = `/home/court/${name}`;
-  await agent.presence(sid, label, cwd, harness);
+  const announce = () =>
+    agent.presence(sid, `${harness} \u00b7 ${name}`, cwd, harness);
+  await announce();
   const thread = await agent.newThread(sid, name);
-  const present = () => {
-    const t = setInterval(() => {
-      void agent.presence(sid, label, cwd, harness);
-    }, 1000);
-    return () => clearInterval(t);
-  };
+  const beat = setInterval(() => {
+    announce().catch(() => {});
+  }, 1000);
+  beat.unref();
+  const present = () => () => clearInterval(beat);
   return { agent, sid, label, thread, present };
 }
 
@@ -270,8 +277,9 @@ const T7_SEED = [
   ),
 ];
 
-// openDock opens the page (at an optional hash) and waits until the dock
-// shows the fixture's session with its thread loaded.
+// openDock opens the page attached to the fixture's session (?session=, as
+// casebook_open opens it; at an optional hash) and waits until the dock
+// shows that session with its thread loaded.
 async function openDock(context, serveHandle, fx, opts = {}) {
   const pg = await context.newPage();
   await pg.setViewportSize({ width: 1600, height: 900 });
@@ -280,10 +288,16 @@ async function openDock(context, serveHandle, fx, opts = {}) {
   // opts.before runs on the page before it loads (e.g. to route its calls).
   if (opts.before) await opts.before(pg);
   // opts.search adds query parameters (e.g. the Attention search, q=…).
-  await pg.goto(serveHandle.url + (opts.search ?? '') + (opts.hash ?? ''), {
-    waitUntil: 'domcontentloaded',
-    timeout: 15000,
-  });
+  await pg.goto(
+    serveHandle.url +
+      `&session=${encodeURIComponent(fx.sid)}` +
+      (opts.search ?? '') +
+      (opts.hash ?? ''),
+    {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000,
+    },
+  );
   const shown = await until(
     pg,
     ([label, thread]) =>
@@ -5018,7 +5032,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 665;
+const MIN_CHECKS = 700;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5030,7 +5044,7 @@ const only = process.env.PROBE_ONLY ?? '';
 const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
-const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell'];
+const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell', 'owner'];
 const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
 const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
 
@@ -5144,6 +5158,12 @@ async function run() {
     // (probe-shell.mjs, their own serves).
     if (process.env.PROBE_ONLY === 'shell') {
       await shellScenarios(context, applyHelpers);
+      return;
+    }
+    // PROBE_ONLY=owner runs only the session-ownership scenarios
+    // (probe-owner.mjs, their own serve).
+    if (process.env.PROBE_ONLY === 'owner') {
+      await ownerScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -8272,10 +8292,14 @@ async function run() {
           },
         );
 
-        await dockPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await dockPage.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sessId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await dockPage.waitForSelector('.kit-bar', { timeout: 8000 });
 
         // Wait for the dock to load the session and render its header.
@@ -8551,10 +8575,14 @@ async function run() {
         );
         void msgQ; // suppress unused
 
-        await statePage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await statePage.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sessId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await statePage.waitForSelector('.kit-bar', { timeout: 8000 });
         await statePage.waitForTimeout(2000);
 
@@ -8613,10 +8641,14 @@ async function run() {
             .catch(() => {});
         }, 800);
 
-        await stuckPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await stuckPage.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sessId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await stuckPage.waitForSelector('.kit-bar', { timeout: 8000 });
         // Wait for the dock to load the session (initial loadSessions → loadDelivery).
         await stuckPage.waitForTimeout(2000);
@@ -8884,6 +8916,7 @@ async function run() {
 
     {
       const leftPage = await context.newPage();
+      let leftTargetHB = null;
       try {
         await leftPage.setViewportSize({ width: 1600, height: 900 });
 
@@ -8914,10 +8947,14 @@ async function run() {
         check('queued count is 2 in sessions API', thisSess?.queued === 2);
 
         // Navigate to page: dock picks sessId as current (most recently seen).
-        await leftPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await leftPage.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sessId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await leftPage.waitForSelector('.kit-bar', { timeout: 8000 });
         await leftPage.waitForTimeout(1500);
 
@@ -8925,12 +8962,19 @@ async function run() {
         await leftPage.waitForTimeout(3500);
 
         // Trigger dock refresh: send presence for sessId2 (NOT sessId, so
-        // sessId's last_seen stays old => remains left).
+        // sessId's last_seen stays old => remains left). sessId2 keeps
+        // announcing itself: the move sheet offers only sessions that are
+        // here.
         await agent.presence(
           sessId2,
           'pi · left-target',
           '/home/court/left-target',
         );
+        leftTargetHB = setInterval(() => {
+          agent
+            .presence(sessId2, 'pi · left-target', '/home/court/left-target')
+            .catch(() => {});
+        }, 800);
         // The sessions event causes loadSessions => left=true for sessId.
         // Wait for [data-left] on the dock header.
         const leftHeaderVisible = await leftPage
@@ -9061,8 +9105,10 @@ async function run() {
           );
 
           if (sheetItems.length > 0) {
-            // Click the first target session.
-            await sheetItems[0].click();
+            // Click the target session.
+            await leftPage.click(
+              `.cb-dock-pick-sheet .cb-dock-pick-item[data-session="${sessId2}"]`,
+            );
             await leftPage.waitForTimeout(1000);
             // Verify via API: sessId has 0 queued, sessId2 has 2.
             const afterResp = await fetch(`${serveHandle.base}/api/sessions`, {
@@ -9102,6 +9148,7 @@ async function run() {
           check('after move: target session has 2 queued messages', false);
         }
       } finally {
+        if (leftTargetHB) clearInterval(leftTargetHB);
         await leftPage.close();
       }
     }
@@ -9130,10 +9177,14 @@ async function run() {
         await agent.newThread(sId, 'silent-thread');
 
         // Navigate to the page (dock picks sId as current).
-        await silentPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await silentPage.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await silentPage.waitForSelector('.kit-bar', { timeout: 8000 });
         // Let the dock finish initial loading.
         await silentPage.waitForTimeout(1500);
@@ -9193,6 +9244,7 @@ async function run() {
 
     {
       const pickPage = await context.newPage();
+      let pickHB = null;
       try {
         await pickPage.setViewportSize({ width: 1600, height: 900 });
 
@@ -9202,6 +9254,15 @@ async function run() {
         await agent.presence(sessA, 'pi · session-a', '/home/court/a');
         await agent.presence(sessB, 'pi · session-b', '/home/court/b');
         await agent.newThread(sessA, 'thread-in-a');
+        // Both stay here: the picker offers only sessions that are.
+        pickHB = setInterval(() => {
+          agent
+            .presence(sessA, 'pi · session-a', '/home/court/a')
+            .catch(() => {});
+          agent
+            .presence(sessB, 'pi · session-b', '/home/court/b')
+            .catch(() => {});
+        }, 800);
 
         await pickPage.goto(serveHandle.url, {
           waitUntil: 'domcontentloaded',
@@ -9224,31 +9285,24 @@ async function run() {
 
         // The picker shows sessions; select the one for sessB.
         const pickerItems = await pickPage
-          .$$('.cb-dock-pick-item')
+          .$$('.cb-dock-picker .cb-dock-pick-item')
           .catch(() => []);
         check('session picker shows sessions', pickerItems.length > 0);
 
-        // Click the session-b entry: find the item whose text contains 'session-b'.
-        // Use evaluate to avoid :has-text which is Playwright-specific.
-        const bItemIdx = await pickPage.evaluate((label) => {
-          const items = document.querySelectorAll('.cb-dock-pick-item');
-          for (let i = 0; i < items.length; i++) {
-            if ((items[i].textContent ?? '').includes(label)) return i;
-          }
-          return -1;
-        }, 'session-b');
-        const pickerAll = await pickPage.$$('.cb-dock-pick-item');
-        if (bItemIdx >= 0 && pickerAll[bItemIdx]) {
-          await pickerAll[bItemIdx].click();
+        const bItem = await pickPage.$(
+          `.cb-dock-picker .cb-dock-pick-item[data-session="${sessB}"]`,
+        );
+        if (bItem) {
+          await bItem.click();
           await pickPage.waitForTimeout(600);
-          // After switching, the header should reflect session B.
-          const headerText = await pickPage
-            .$eval('.cb-dock-header', (el) => el.textContent ?? '')
+          // After switching, the header names session B (by its folder: it
+          // has no pi name).
+          const headerName = await pickPage
+            .$eval('[data-testid="dock-session-name"]', (el) => el.textContent)
             .catch(() => '');
           check(
-            'switching session updates the header',
-            headerText.includes('session-b') ||
-              headerText.includes('session-b'.split('-').pop()),
+            `switching session updates the header (${headerName})`,
+            headerName === 'b',
           );
           // Now click + to create a new thread; it should go to session B.
           await pickPage
@@ -9272,6 +9326,7 @@ async function run() {
           check('new thread chip appears after +', false);
         }
       } finally {
+        if (pickHB) clearInterval(pickHB);
         await pickPage.close();
       }
     }
@@ -9319,10 +9374,14 @@ async function run() {
           await agent.reply(sessId, [msgB.id], 'working', '');
         }
 
-        await t6Page.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
+        // Opened by its session (casebook_open puts ?session= in the URL).
+        await t6Page.goto(
+          `${serveHandle.url}&session=${encodeURIComponent(sessId)}`,
+          {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          },
+        );
         await t6Page.waitForSelector('.kit-bar', { timeout: 8000 });
 
         // Navigate to an item so the reading column is populated.
@@ -9393,6 +9452,9 @@ async function run() {
 
     // ---- Task 10: the keyboard layer, the failure states (their own serves)
     await shellScenarios(context, applyHelpers);
+
+    // ---- the page belongs to the session that opened it (its own serve) ---
+    await ownerScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

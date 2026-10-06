@@ -1,7 +1,16 @@
 // dock.ts — the agent dock (Task 6): session, threads, message cards, delivery state.
 //
+// The dock belongs to ONE session, the one that opened the page (see
+// sessions.ts): casebook_open and `casebook serve` from a session put
+// ?session=<id> in the URL. With none, the dock asks Court to choose (and
+// attaches on its own only when exactly one eligible session is here). If
+// the attached session leaves, the dock says so and asks again: it never
+// re-targets on its own.
+//
 // The .kit-rail is filled with (in order from the spec §3.5):
-//   1. Session header  — agent-coloured dot · label · AGENT ▾ picker
+//   1. Session header  — agent-coloured dot · name · folder · harness · AGENT ▾
+//      picker; the chooser below it when no session is attached or the
+//      attached one left
 //   2. Thread chips    — one per thread + "+"  (active chip filled)
 //   3. Message cards   — rust edge for you, amber for the agent;
 //                        mono header YOU/PI with age on right;
@@ -35,6 +44,15 @@ import { fmtAge } from './time-utils.ts';
 import { go } from './router.ts';
 import { threadOrder } from './thread.ts';
 import { makeComposer } from './composer.ts';
+import {
+  attachedState,
+  pickable,
+  resolveAttachment,
+  sessionMeta,
+  sessionTitle,
+  urlSession,
+  urlWithSession,
+} from './sessions.ts';
 import {
   makeBatchTray,
   makeProgressLine,
@@ -73,12 +91,18 @@ function stateLabel(msg: MessageView): string {
 
 // ---- session label -----------------------------------------------------------
 
-function sessionLabel(s: Session): string {
-  if (s.label) return s.label;
-  // Fallback: harness · cwd basename
-  const harness = s.harness || 'agent';
-  const cwd = s.cwd ? (s.cwd.split('/').filter(Boolean).pop() ?? s.cwd) : '';
-  return cwd ? `${harness} · ${cwd}` : harness;
+// sessionItem is a session as a list entry (the picker, the chooser, the
+// move sheets): the agent dot, its name (or folder), and the muted rest.
+function sessionItem(s: Session, extra = ''): HTMLElement {
+  const el = h(
+    'button',
+    { class: 'cb-dock-pick-item', 'data-session': s.id },
+    h('span', { class: 'cb-dock-dot' }),
+    h('span', { class: 'cb-dock-pick-title' }, sessionTitle(s)),
+  );
+  const meta = [sessionMeta(s), extra].filter(Boolean).join(' \u00b7 ');
+  if (meta) el.append(h('span', { class: 'cb-dock-pick-meta' }, meta));
+  return el;
 }
 
 // ---- agent card link rendering ----------------------------------------------
@@ -283,7 +307,9 @@ function renderMsgCard(
     });
     releaseBtn.textContent = 'release';
 
-    const otherSessions = sessions.filter((s) => s.id !== d.session_id);
+    const otherSessions = pickable(sessions).filter(
+      (s) => s.id !== d.session_id,
+    );
     const moveBtn = h('button', {
       class: 'kit-btn',
       'data-action': 'move',
@@ -336,8 +362,7 @@ function openMoveSheet(
 ): Promise<void> {
   // Build a small inline list of target sessions.
   const items = targets.map((s) => {
-    const el = h('button', { class: 'cb-dock-pick-item' });
-    el.textContent = sessionLabel(s);
+    const el = sessionItem(s);
     el.onclick = () => {
       void moveDelivery(ctx, delivery.id, s.id);
       sheet.close();
@@ -400,8 +425,7 @@ function openSessionMoveSheet(
   targets: Session[],
 ): Promise<void> {
   const items = targets.map((s) => {
-    const el = h('button', { class: 'cb-dock-pick-item' });
-    el.textContent = sessionLabel(s);
+    const el = sessionItem(s);
     el.onclick = () => {
       void moveSession(ctx, fromSession, s.id);
       sheet.close();
@@ -442,27 +466,26 @@ function openSessionMoveSheet(
 
 // ---- session picker ---------------------------------------------------------
 
+// The picker offers the eligible sessions only (live, not workers), by name.
 function buildSessionPicker(
   sessions: Session[],
   currentId: string,
   onSelect: (id: string) => void,
 ): HTMLElement {
-  const items = sessions.map((s) => {
-    const busy = s.busy ? ' · busy' : ' · idle';
-    const stale = s.left ? ' · left' : '';
-    const label = sessionLabel(s) + busy + stale;
-    const el = h('button', {
-      class:
-        'cb-dock-pick-item' +
-        (s.id === currentId ? ' cb-dock-pick-item--on' : ''),
-    });
-    el.textContent = label;
+  const items: HTMLElement[] = pickable(sessions).map((s) => {
+    const el = sessionItem(s, s.busy ? 'busy' : '');
+    if (s.id === currentId) el.classList.add('cb-dock-pick-item--on');
     el.onclick = () => {
       onSelect(s.id);
       picker.remove();
     };
     return el;
   });
+  if (items.length === 0) {
+    items.push(
+      h('p', { class: 'cb-dock-pick-empty' }, 'no agent sessions are here'),
+    );
+  }
 
   const picker = h(
     'div',
@@ -501,24 +524,30 @@ export function makeDock(ctx: Ctx): DockHandle {
   let currentThreadId = 0;
   let messages: MessageView[] = [];
   let currentDelivery: Delivery | null = null;
-  // The last session explicitly chosen by the user — new threads default to it.
-  let lastUsedSessionId = '';
+  // The URL's session is read once, at the first load: after that the
+  // attachment is what Court (or the lone-session rule) made it.
+  let urlRead = false;
 
   // ---- DOM elements --------------------------------------------------------
 
-  // Session header: top row [● label] [AGENT ▾], optional second row for left status.
+  // Session header: top row [● name] [AGENT ▾]; below it, muted, the
+  // session's folder · harness; then the left status row when it left.
   const sessionDot = h('span', { class: 'cb-dock-dot' });
-  const sessionLabelEl = h('span', { class: 'cb-dock-session-label' });
+  const sessionLabelEl = h('span', {
+    class: 'cb-dock-session-label',
+    'data-testid': 'dock-session-name',
+  });
+  const sessionMetaEl = h('div', {
+    class: 'cb-dock-meta-row',
+    'data-testid': 'dock-session-meta',
+  });
   const sessionPickerBtn = h('button', {
     class: 'cb-dock-agent-btn',
     'aria-label': 'pick agent session',
     onclick(e: Event) {
       e.stopPropagation();
-      if (!sessions.length) return;
       const p = buildSessionPicker(sessions, currentSessionId, (id) => {
-        lastUsedSessionId = id;
-        ctx.setDockSession(id);
-        void switchSession(id);
+        void attach(id, true);
       });
       const btn = e.currentTarget as HTMLElement;
       const rect = btn.getBoundingClientRect();
@@ -542,8 +571,17 @@ export function makeDock(ctx: Ctx): DockHandle {
       h('span', { class: 'cb-dock-who' }, sessionDot, sessionLabelEl),
       sessionPickerBtn,
     ),
+    sessionMetaEl,
     leftStatusRow,
   );
+
+  // The chooser: shown when no session is attached, or the attached one
+  // left. It never picks for Court.
+  const chooser = h('div', {
+    class: 'cb-dock-chooser',
+    'data-testid': 'dock-chooser',
+  });
+  chooser.hidden = true;
 
   // Thread chips row.
   const threadChips = h('div', { class: 'cb-dock-threads' });
@@ -563,6 +601,16 @@ export function makeDock(ctx: Ctx): DockHandle {
   const composer = makeComposer(ctx, {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
+    blocked: () => {
+      switch (attachedState(currentSessionId, sessions)) {
+        case 'none':
+          return 'choose a session first';
+        case 'left':
+        case 'unknown':
+          return 'your session left';
+      }
+      return '';
+    },
     threadCreated(t: Thread) {
       threads = [...threads, t];
       currentThreadId = t.id;
@@ -576,6 +624,7 @@ export function makeDock(ctx: Ctx): DockHandle {
   const rail = h('div', { class: 'cb-dock-inner' });
   rail.append(
     sessionHeader,
+    chooser,
     threadChips,
     messageArea,
     progLine.el,
@@ -591,12 +640,21 @@ export function makeDock(ctx: Ctx): DockHandle {
   // ---- render helpers -------------------------------------------------------
 
   function renderHeader() {
+    const state = attachedState(currentSessionId, sessions);
+    sessionHeader.setAttribute('data-attach', state);
     const sess = sessions.find((s) => s.id === currentSessionId);
     if (!sess) {
+      // No session, or one serve no longer knows: the dot is muted and the
+      // header says which.
       sessionDot.style.background = 'var(--kit-muted)';
-      sessionLabelEl.textContent = 'no session';
+      sessionLabelEl.textContent =
+        state === 'unknown' ? 'session not here' : 'no session';
+      sessionMetaEl.textContent = '';
+      sessionHeader.removeAttribute('title');
       leftStatusRow.hidden = true;
-      sessionHeader.removeAttribute('data-left');
+      if (state === 'unknown') sessionHeader.setAttribute('data-left', '1');
+      else sessionHeader.removeAttribute('data-left');
+      renderChooser(state, null);
       return;
     }
 
@@ -607,8 +665,10 @@ export function makeDock(ctx: Ctx): DockHandle {
     //   .cb-dock-header[data-left] .cb-dock-dot { background: var(--kit-muted) } // left
     // Clear any prior inline style so the CSS cascade applies cleanly.
     sessionDot.style.removeProperty('background');
-    // Always show the session label on the top row (CSS truncates it).
-    sessionLabelEl.textContent = sessionLabel(sess);
+    // The session's name (or folder), then its folder and harness, muted.
+    sessionLabelEl.textContent = sessionTitle(sess);
+    sessionMetaEl.textContent = sessionMeta(sess);
+    sessionHeader.title = sess.id;
 
     if (stale) {
       // Second row: "left · N queued · move to…" with flex-gap spacing (finding 4).
@@ -619,17 +679,17 @@ export function makeDock(ctx: Ctx): DockHandle {
         'data-testid': 'dock-move-link',
         onclick(e: Event) {
           e.stopPropagation();
-          const others = sessions.filter((s) => s.id !== sess.id);
+          const others = pickable(sessions).filter((s) => s.id !== sess.id);
           void openSessionMoveSheet(ctx, sess.id, others);
         },
       });
-      moveLink.textContent = 'move to…';
+      moveLink.textContent = 'move to\u2026';
       const parts: Node[] = [h('span', {}, 'left')];
       if (sess.queued > 0) {
-        parts.push(h('span', { class: 'cb-dock-sep' }, '·'));
+        parts.push(h('span', { class: 'cb-dock-sep' }, '\u00b7'));
         parts.push(h('span', {}, `${sess.queued} queued`));
       }
-      parts.push(h('span', { class: 'cb-dock-sep' }, '·'));
+      parts.push(h('span', { class: 'cb-dock-sep' }, '\u00b7'));
       parts.push(moveLink);
       leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
@@ -638,6 +698,52 @@ export function makeDock(ctx: Ctx): DockHandle {
       leftStatusRow.hidden = true;
       leftStatusRow.textContent = '';
       sessionHeader.removeAttribute('data-left');
+    }
+    renderChooser(state, sess);
+  }
+
+  // renderChooser shows the chooser when there is no session to talk to:
+  // none attached (the threads and messages hide: there are none), or the
+  // attached one left (its threads stay readable below). Choosing attaches
+  // the page to that session; nothing is chosen for Court.
+  function renderChooser(
+    state: 'none' | 'here' | 'left' | 'unknown',
+    sess: Session | null,
+  ) {
+    const none = state === 'none';
+    threadChips.hidden = none;
+    messageArea.hidden = none;
+    chooser.textContent = '';
+    if (state === 'here') {
+      chooser.hidden = true;
+      return;
+    }
+    chooser.hidden = false;
+    chooser.setAttribute('data-state', state);
+    const offered = pickable(sessions).filter((s) => s.id !== currentSessionId);
+    const lead = h('p', {
+      class: 'cb-dock-chooser-lead',
+      'data-testid': 'dock-chooser-lead',
+    });
+    if (none) {
+      lead.textContent =
+        offered.length > 0
+          ? 'Choose the session your messages go to.'
+          : 'No agent session is here. Ask one to casebook_open this page.';
+    } else {
+      const who = sess ? sessionTitle(sess) : 'This page\u2019s session';
+      lead.textContent =
+        offered.length > 0
+          ? `${who} left. Messages wait for it; choose a session to keep talking.`
+          : `${who} left. Messages wait for it; no other session is here.`;
+    }
+    chooser.append(lead);
+    for (const s of offered) {
+      const el = sessionItem(s, s.busy ? 'busy' : '');
+      el.onclick = () => {
+        void attach(s.id, true);
+      };
+      chooser.append(el);
     }
   }
 
@@ -696,26 +802,46 @@ export function makeDock(ctx: Ctx): DockHandle {
     try {
       const sv = await ctx.api.get<SessionsView>('/sessions');
       sessions = sv.sessions ?? [];
-      if (!currentSessionId && sessions.length > 0) {
-        currentSessionId = lastUsedSessionId
-          ? (sessions.find((s) => s.id === lastUsedSessionId)?.id ??
-            sessions[0].id)
-          : sessions[0].id;
-        updateSessionParts();
-        await loadThreads();
-        await loadProgress();
+      if (!currentSessionId) {
+        // The URL's session (read once), else the lone eligible session,
+        // else none: Court chooses.
+        const fromUrl = urlRead ? '' : urlSession(location.href);
+        urlRead = true;
+        const r = resolveAttachment(fromUrl, sessions);
+        if (r.id) {
+          await attach(r.id, !r.auto);
+          return;
+        }
       } else {
         // Refresh the session data for the current one, including the delivery
         // so the dock detects stuck state and the left flag without a reload.
-        renderHeader();
         await loadDelivery();
-        updateSessionParts();
       }
       renderHeader();
       updateSessionParts();
     } catch (err) {
       console.error('[dock] loadSessions:', err);
     }
+  }
+
+  // attach makes id the page's session. explicit: the session opened the
+  // page (the URL) or Court chose it: the URL carries it, so a reload keeps
+  // it, and To apply offers it for a plan. The lone-session attachment is
+  // not a choice: it shows in the header but isn't written anywhere, so a
+  // reload with more sessions here asks again.
+  async function attach(id: string, explicit: boolean) {
+    if (explicit) {
+      const next = urlWithSession(location.href, id);
+      if (next !== location.href) {
+        history.replaceState(history.state, '', next);
+      }
+      ctx.setDockSession(id);
+    }
+    if (id === currentSessionId) {
+      renderHeader();
+      return;
+    }
+    await switchSession(id);
   }
 
   async function loadThreads() {
@@ -842,8 +968,9 @@ export function makeDock(ctx: Ctx): DockHandle {
   }
 
   async function newThread() {
-    const sessId = lastUsedSessionId || currentSessionId;
-    if (!sessId) return;
+    // A thread is opened with the attached session, and only while it is here.
+    const sessId = currentSessionId;
+    if (attachedState(sessId, sessions) !== 'here') return;
     try {
       const t = await ctx.api.post<Thread>('/threads', {
         session: sessId,

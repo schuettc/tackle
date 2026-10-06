@@ -55,6 +55,26 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 	reply(w, nil, err)
 }
 
+// agentSessionInfo is pi-casebook telling serve what pi knows about a
+// session that the channel can't: its name (sent at session start and on
+// every rename) and whether it is a child session. See deliver.SessionInfo.
+func (s *Server) agentSessionInfo(w http.ResponseWriter, r *http.Request) {
+	var in deliver.SessionInfo
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if in.ID == "" {
+		reply(w, nil, bad("id required"))
+		return
+	}
+	err := s.Queue.SetInfo(r.Context(), in)
+	if err == nil {
+		s.publish(r.Context(), "sessions", map[string]string{"id": in.ID})
+	}
+	reply(w, nil, err)
+}
+
 // userName names the person casebook works for in what serve says to an
 // agent: the configured user (the login decisions are recorded "by"), or
 // "the user" when none is configured.
@@ -344,14 +364,27 @@ var openViews = map[string]bool{ViewWaiting: true, ViewNew: true, ViewDue: true,
 
 // agentOpen is casebook_open: open the page in Court's browser, at one item
 // (key), at an Attention view (view), or at the front (neither).
+//
+// The page belongs to the session that opened it (galley's rule: an editor
+// belongs to the one session that opened it). The channel sends its session,
+// and the page opens attached to it: the URL carries ?session=<id>, so a
+// reload keeps it. A channel with no session opens a page that belongs to
+// no one; the page then asks Court to choose.
 func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Key  string `json:"key"`
-		View string `json:"view"`
+		Session string `json:"session"`
+		Key     string `json:"key"`
+		View    string `json:"view"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
 		return
+	}
+	if in.Session != "" {
+		if _, err := s.session(r.Context(), in.Session); err != nil {
+			reply(w, nil, err)
+			return
+		}
 	}
 	fragment := ""
 	switch {
@@ -383,11 +416,11 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, httpError{code: http.StatusConflict, msg: "this casebook serve can't open a browser"})
 		return
 	}
-	if err := openFn(fragment); err != nil {
+	if err := openFn(SessionQuery(in.Session) + fragment); err != nil {
 		reply(w, nil, err)
 		return
 	}
-	reply(w, OpenResult{Opened: fragment}, nil)
+	reply(w, OpenResult{Opened: fragment, Session: in.Session}, nil)
 }
 
 func (s *Server) agentSettled(w http.ResponseWriter, r *http.Request) {

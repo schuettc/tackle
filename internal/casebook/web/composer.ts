@@ -32,6 +32,12 @@ import {
 export interface ComposerDock {
   currentThread(): number;
   currentSession(): string;
+  /**
+   * Why nothing can be sent now ('' when it can): no session is attached,
+   * or the attached one left. The composer says so and keeps the text; it
+   * never sends to another session in its place.
+   */
+  blocked(): string;
   /** Called after a message is posted into a thread the composer created. */
   threadCreated(t: Thread): void;
 }
@@ -210,6 +216,11 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     const sent = input.value;
     const body = sent.trim();
     if (!body || sending) return;
+    const why = dock.blocked();
+    if (why) {
+      note.textContent = why;
+      return;
+    }
     sending = true;
     note.textContent = '';
     // The field clears as the send starts, so it never holds sent text:

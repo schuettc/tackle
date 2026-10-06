@@ -21,7 +21,7 @@ func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
 		{Name: "casebook_status", Description: "The attention counts, whether the user has the casebook page open, and what changed since you last looked: how many of your proposals the user accepted, and each one they changed or rejected with their reason.",
 			InputSchema: schema(`{"type":"object","properties":{}}`)},
-		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. Only when they ask, or when you hand them something to review; never repeatedly.",
+		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. The page opens attached to this session: the user's messages from it come to you. Only when they ask, or when you hand them something to review; never repeatedly.",
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"},"view":{"type":"string","enum":["waiting","new","due","proposed","all","board"],"description":"open at this Attention view"}}}`)},
 		{Name: "casebook_attention", Description: "List items needing attention. view: waiting (incoming, no reply from the user), new (undecided), due (due/drift/conflict), proposed (a proposal is pending), all.",
 			InputSchema: schema(`{"type":"object","properties":{"view":{"type":"string","enum":["waiting","new","due","proposed","all"]},"kind":{"type":"string","enum":["repo","pr","issue","branch","worktree"]},"repo":{"type":"string","description":"owner/name or owner"},"q":{"type":"string","description":"substring of key or title"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}`)},
@@ -97,7 +97,23 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			return pretty(out), err
 		})
 	case "casebook_open":
-		_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", map[string]any{"key": a.Key, "view": a.View}, nil)
+		// The page opens attached to this channel's session (galley_open's
+		// rule: what's opened belongs to the session that opened it), so
+		// Court's messages from it come here. No session: nobody's page.
+		open := func() (string, error) {
+			body := map[string]any{"key": a.Key, "view": a.View}
+			if ch.ID.Session != "" {
+				body["session"] = ch.ID.Session
+			}
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/open", body, nil)
+			return "", err
+		}
+		var err error
+		if ch.ID.Session != "" {
+			_, err = ch.callSessionBound(ctx, open)
+		} else {
+			_, err = open()
+		}
 		if err != nil {
 			return "", err
 		}
