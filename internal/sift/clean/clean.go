@@ -11,7 +11,9 @@ package clean
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,8 +183,10 @@ func Do(ctx context.Context, o Options, steps []Step) []Step {
 // (git worktree remove drops a registration whose directory is gone too),
 // never pruning the repo's other registrations.
 func removeWorktree(ctx context.Context, s *Step) error {
-	if _, err := os.Stat(s.Repo); err != nil {
-		return nil //nolint:nilerr // the repo is gone, and its registrations with it
+	if _, err := os.Stat(s.Repo); errors.Is(err, fs.ErrNotExist) {
+		return nil // the repo is gone, and its registrations with it
+	} else if err != nil {
+		return err // keep the record so the next clean retries
 	}
 	if !registered(ctx, s.Repo, s.Name) {
 		return nil
