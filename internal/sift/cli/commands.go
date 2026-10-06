@@ -14,6 +14,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: initFlags, Run: runInit(stdin),
 		},
 		{
+			Name: "skills", Group: "setup", Synopsis: "install [--agent NAME]…", Subcommands: []string{"install"},
+			Summary:  "install the sift skill for each agent harness, the version this binary was built with",
+			NewFlags: skillsFlags, Run: runSkills,
+		},
+		{
 			Name: "doctor", Group: "setup", Synopsis: "",
 			Summary:  "check what sift needs: config, profiles, roots, state; gh, the page server and channels are optional",
 			NewFlags: doctorFlags, Run: runDoctor,
@@ -57,6 +62,11 @@ func commands(stdin io.Reader) []tools.Command {
 			Name: "apply", Group: "review", Synopsis: "[--round N] [--dry-run] [--json]",
 			Summary:  "write each approved file whole, a branch per repo; a pull request with gh",
 			NewFlags: applyFlags, Run: runApply,
+		},
+		{
+			Name: "clean", Group: "review", Synopsis: "[--dry-run] [--json]",
+			Summary:  "remove the branches and worktrees apply recorded, once their pull requests are merged or closed",
+			NewFlags: cleanFlags, Run: runClean,
 		},
 		{
 			Name: "reconcile", Group: "review", Synopsis: "[--round N] [--json]",

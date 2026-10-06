@@ -64,7 +64,7 @@ func Run(ctx context.Context, o Options) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
-	found, err := discover.Run(ctx, discover.Options{Profiles: profiles, Roots: o.Config.Roots, Include: o.Config.Include})
+	found, err := discover.Run(ctx, discover.Options{Profiles: profiles, Roots: o.Config.Roots, Repos: o.Config.Repos, Include: o.Config.Include})
 	if err != nil {
 		return Report{}, err
 	}

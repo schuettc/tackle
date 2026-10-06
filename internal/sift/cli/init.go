@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,8 @@ func (r *roots) Set(v string) error { *r = append(*r, v); return nil }
 var initFlags = flags("init", "sift init [--root DIR]… [--yes] [--force]",
 	"Detects which agent harnesses are installed (Claude Code, Codex, pi: by their home\n"+
 		"directories) and writes sift's config with their profiles on, the roots to audit and the\n"+
-		"default budgets and windows. Roots are directories holding repos at any depth, or one repo;\n"+
+		"default budgets and windows. Lists the repos under the roots that have an origin/dev, for you\n"+
+		"to give a [[repo]] base where pull requests go to dev; it never sets one itself. Roots are directories holding repos at any depth, or one repo;\n"+
 		"without --root, the repo you are in (else the current directory). The profiles' global files\n"+
 		"and skill directories are always audited. Asks before writing unless --yes; keeps an\n"+
 		"existing config unless --force.",
@@ -84,6 +86,14 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			_, _ = fmt.Fprintln(out, "no harness found: only the roots will be audited")
 		}
 		_, _ = fmt.Fprintf(out, "budgets:     global %d, repo %d, skill %d bytes\n", c.Budgets.Global, c.Budgets.Repo, c.Budgets.Skill)
+		if dev := devRepos(c.Roots); len(dev) > 0 {
+			_, _ = fmt.Fprintln(out, "note:        these repos have an origin/dev. sift reads each repo at its default branch and opens\n"+
+				"             its pull requests there; for one whose pull requests go to dev, add to the config:\n"+
+				"               [[repo]]\n               path = \"<the repo>\"\n               base = \"dev\"")
+			for _, d := range dev {
+				_, _ = fmt.Fprintf(out, "             %s\n", d)
+			}
+		}
 
 		if !boolFlag(fs, "yes") {
 			if !isTerminal(stdin) {
@@ -105,6 +115,42 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		_, _ = fmt.Fprintf(out, "config: written to %s\n", path)
 		return nil
 	}
+}
+
+// devRepos lists the repos under roots with an origin/dev branch. It is a
+// note for the user only: a dev branch doesn't say where a repo's pull
+// requests go, so init never sets a base from it.
+func devRepos(roots []config.Root) []string {
+	ctx := context.Background()
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range roots {
+		_ = filepath.WalkDir(r.Path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil //nolint:nilerr // an unreadable directory is skipped
+			}
+			switch d.Name() {
+			case ".git", "node_modules", "vendor", "testdata", ".worktrees":
+				return filepath.SkipDir
+			}
+			if !gitDir(p) || seen[p] {
+				return nil
+			}
+			seen[p] = true
+			if discover.Git(ctx, p, "rev-parse", "--verify", "-q", "refs/remotes/origin/dev").Run() == nil {
+				out = append(out, p)
+			}
+			return nil
+		})
+	}
+	return out
+}
+
+// gitDir reports whether dir holds a .git directory (a clone, not a linked
+// worktree).
+func gitDir(dir string) bool {
+	st, err := os.Stat(filepath.Join(dir, ".git"))
+	return err == nil && st.IsDir()
 }
 
 // proposeRoot is the git toplevel of the current directory, else the

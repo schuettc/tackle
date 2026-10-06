@@ -273,3 +273,12 @@ func TestReconcileWithNothingApplied(t *testing.T) {
 		t.Fatalf("%d %q", code, out)
 	}
 }
+
+// sift clean prints its plan first; --dry-run stops there.
+func TestCleanPrintsThePlan(t *testing.T) {
+	siftEnv(t)
+	code, out, errw := run(t, "", "clean", "--dry-run")
+	if code != 0 || !strings.Contains(out, "nothing sift created is left to clean") {
+		t.Fatalf("code %d: %s %s", code, out, errw)
+	}
+}

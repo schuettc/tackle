@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/schuettc/tackle/internal/sift/config"
+	st "github.com/schuettc/tackle/internal/sift/sifttest"
 )
 
 func termSeam(t *testing.T, term bool) {
@@ -149,5 +150,31 @@ func TestInitIgnoresRepoSelectingVariables(t *testing.T) {
 	real, _ := filepath.EvalSymlinks(here)
 	if len(c.Roots) != 1 || (c.Roots[0].Path != here && c.Roots[0].Path != real) {
 		t.Fatalf("roots %+v, want %s", c.Roots, here)
+	}
+}
+
+// init lists the repos under the roots that have an origin/dev, for the user
+// to confirm which take their pull requests there, and sets no base itself:
+// a dev branch alone doesn't say where a repo's pull requests go.
+func TestInitListsReposWithADevBranchAndSetsNoBase(t *testing.T) {
+	siftEnv(t)
+	termSeam(t, false)
+	ws := t.TempDir()
+	dev := st.Repo(t, filepath.Join(ws, "muster"), nil)
+	st.Publish(t, dev)
+	st.Git(t, dev, "push", "-q", "origin", "main:dev")
+	st.Git(t, dev, "fetch", "-q", "origin")
+	plain := st.Repo(t, filepath.Join(ws, "kempt"), nil)
+	st.Publish(t, plain)
+	code, out, errw := run(t, "", "init", "--yes", "--root", ws)
+	if code != 0 {
+		t.Fatalf("code %d: %s %s", code, out, errw)
+	}
+	if !strings.Contains(out, dev) || strings.Contains(out, plain) || !strings.Contains(out, `base = "dev"`) {
+		t.Errorf("output:\n%s", out)
+	}
+	c, err := config.Load(config.Path())
+	if err != nil || len(c.Repos) != 0 {
+		t.Fatalf("init set a base: %+v %v", c.Repos, err)
 	}
 }

@@ -34,7 +34,7 @@ func TestCommandsJSONListsWhatIsImplemented(t *testing.T) {
 		got = append(got, c.Name)
 	}
 	sort.Strings(got)
-	want := []string{"apply", "channel", "check", "commands", "doctor", "help", "init", "man", "next", "propose", "reconcile", "rows", "serve", "update", "version", "wait"}
+	want := []string{"apply", "channel", "check", "clean", "commands", "doctor", "help", "init", "man", "next", "propose", "reconcile", "rows", "serve", "skills", "update", "version", "wait"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands %v, want %v", got, want)
 	}

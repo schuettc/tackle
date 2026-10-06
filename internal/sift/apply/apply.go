@@ -8,7 +8,9 @@
 // that work. Every path is confined to the repo, and written through an
 // os.Root on the worktree (confine.go). With gh and a GitHub remote the
 // branch is pushed and a pull request opened; otherwise the committed
-// branch is left for the user. A file outside any repo has no branch: its
+// branch is left for the user. A file read from disk whose real path is
+// tracked in a git repo (a skill symlinked into a dotfiles repo) goes on
+// that repo's branch; a file outside every repo has no branch: its
 // approved content is saved for the user. A backlog round writes nothing:
 // its approved rows are left for the agent. Every git command goes through
 // discover.Git, so a hook's variables never point it at another
@@ -573,10 +575,20 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	if _, err := git(ctx, repo, "worktree", "add", "-q", "-b", branch, wt, base); err != nil {
 		return fail(err)
 	}
+	// What apply creates is recorded, so sift clean removes exactly that.
+	note := func(err error) {
+		if err != nil {
+			rp.Detail = joinDetail(rp.Detail, "not recorded for sift clean: "+oneLine(err.Error()))
+		}
+	}
+	wtID, err := o.Store.AddCreated(ctx, store.Created{Kind: "worktree", Round: round, Repo: repo, Name: wt})
+	note(err)
 	defer func() {
 		bg := context.WithoutCancel(ctx)
 		if _, err := git(bg, repo, "worktree", "remove", "--force", wt); err != nil {
 			rp.Detail = strings.TrimSpace(rp.Detail + "; worktree left at " + wt)
+		} else if wtID != 0 {
+			note(o.Store.RemovedCreated(bg, wtID))
 		}
 		if !committed {
 			// Nothing was committed: the branch is the base, and would only
@@ -594,7 +606,7 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 		if p.why != "" {
 			continue
 		}
-		if err := writeFile(root, p.a.Source.Path, p.a.Content); err != nil {
+		if err := WriteFile(root, p.a.Source.Path, p.a.Content); err != nil {
 			return fail(err)
 		}
 	}
@@ -611,6 +623,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	}
 	committed = true
 	rp.Branch, rp.State = branch, "branch"
+	sha, _ := git(ctx, wt, "rev-parse", "HEAD")
+	branchID, err := o.Store.AddCreated(ctx, store.Created{Kind: "branch", Round: round, Repo: repo, Name: branch, Base: base, Commit: sha})
+	note(err)
 
 	remote, _ := git(ctx, repo, "config", "--get", "remote.origin.url")
 	slug, github := host.Slug(remote)
@@ -625,6 +640,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 	if _, err := git(ctx, repo, "push", "-q", "-u", "origin", branch); err != nil {
 		rp.Detail = joinDetail(rp.Detail, "push failed, the branch is left local: "+oneLine(err.Error()))
 		return rp
+	}
+	if branchID != 0 {
+		note(o.Store.PushedCreated(ctx, branchID, ""))
 	}
 	body, err := tempFile(prBody(round, pr, rp))
 	if err != nil {
@@ -642,6 +660,9 @@ func write(ctx context.Context, o Options, round int64, pr *prep) (rp Repo) {
 		return rp
 	}
 	rp.State, rp.PR = "pr", lastLine(string(out))
+	if branchID != 0 {
+		note(o.Store.PushedCreated(ctx, branchID, rp.PR))
+	}
 	return rp
 }
 

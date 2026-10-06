@@ -130,13 +130,13 @@ func openSeen(dir *os.Root, leaf, rel string, flag int, fi fs.FileInfo) (*os.Fil
 	return f, nil
 }
 
-// writeFile writes content to rel (checked by RepoPath) under root. It
+// WriteFile writes content to rel (checked by RepoPath) under root. It
 // never writes into an existing inode: the content goes to a new temporary
 // file beside the leaf, made with O_EXCL (which never follows a symlink),
 // synced, given the old file's mode, then renamed over the leaf through the
 // same directory. A leaf hard-linked to a file outside the worktree is
 // replaced, and the outside file keeps its bytes.
-func writeFile(root *os.Root, rel, content string) error {
+func WriteFile(root *os.Root, rel, content string) error {
 	clean, err := RepoPath(rel)
 	if err != nil {
 		return err

@@ -1,0 +1,41 @@
+# kempt manifest for sift — kept separate from any dotfiles manifest.
+#
+#   kempt apply   -manifest cmd/sift/kempt.toml -packages sift
+#   kempt upgrade -manifest cmd/sift/kempt.toml -packages sift
+#
+# -packages sift is required: without it kempt applies the selection saved by
+# your dotfiles `kempt init`, which does not contain "sift".
+# After the first apply, and after each upgrade: `sift skills install` (the
+# skill is embedded in the binary, as muda's are, and kempt runs no commands),
+# then `sift init --root DIR` once. Launch Claude Code with
+# `claude --dangerously-load-development-channels server:sift` to hear Send.
+
+[kempt]
+spec = 1
+
+[packages.sift]
+description = "sift: instruction-file audits reviewed per file, one pull request per repo, with an agent channel"
+only = { os = "darwin" }
+notes = [
+  "Run `sift skills install` after each apply or upgrade: it installs the sift skill this binary was built with for each agent harness found.",
+  "Then, once: `sift init --root DIR` (the directories to audit), and `sift doctor` to check the setup.",
+]
+
+  # The binary, from the family download contract (verified against .sha256).
+  [[packages.sift.download]]
+  site = "tackle.tools"
+  tool = "sift"
+  bin = "sift"
+
+  # Claude Code: the sift channel (the user's Send arrives as a channel event).
+  [[packages.sift.json-merge]]
+  file = "~/.claude.json"
+  merge = { mcpServers = { sift = { type = "stdio", command = "sift", args = ["channel"], env = {} } } }
+
+  # pi: the same channel through channels.tools.
+  [[packages.sift.json-merge]]
+  file = "~/.pi/agent/channels.json"
+  merge = { channelServers = { sift = { command = "sift", args = ["channel"] } } }
+
+  [[packages.sift.verify]]
+  command-exists = "sift"

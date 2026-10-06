@@ -79,8 +79,8 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 - `sift wait`: returns when you press Send and prints what to do, for
   sessions without the channel.
 - `sift channel`: the MCP server for an agent session, with `sift_check`,
-  `sift_next`, `sift_propose`, `sift_review`, `sift_apply` and
-  `sift_status`, and Send as a channel event.
+  `sift_next`, `sift_propose`, `sift_review`, `sift_apply`, `sift_status`
+  and `sift_clean`, and Send as a channel event.
 - `sift apply`: each file accepted or edited and sent, written whole, as one
   branch per repo cut from the fetched base in a worktree; a file whose base
   changed since the audit is held, with the files linked to it; every path
@@ -91,6 +91,30 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   GitHub remote, a pull request (`--body-file`). A file outside any repo is
   left to you with its approved content saved; a backlog round's approved
   rows are left to the agent.
+- A repo's own base: `[[repo]] path = …, base = "dev"` in the config. The
+  audit reads that repo at `origin/dev`, and apply cuts its branch from it
+  and opens its pull request against `dev`. `sift init` lists the repos
+  that have an `origin/dev` for you to confirm, and never sets a base itself.
+- A skill or global file that is a symlink into a git repo is audited at
+  the base of the repo that owns it and written there, on that repo's
+  branch from the ref the audit read, with the same checks and holds as any
+  repo file. A symlink to a file outside every repo is still left to
+  you, its approved content saved.
+- `sift clean` (and `sift_clean`): removes what apply recorded creating, and
+  nothing found by name or author. Each round branch goes, local and remote,
+  once its pull request is merged or closed (checked with `gh`; without
+  `gh`, once its commit is in the base), and so does any worktree apply left
+  behind (only its own registration: no blanket prune). A branch is
+  deleted only while it is at the commit apply made: checked again just
+  before a local delete, and leased on that commit for the remote one; a
+  branch now elsewhere, or recorded without its commit, is kept.
+  It prints the plan first; `--dry-run` stops there. Branch deletes skip
+  the repo's pre-push hook, since they push no code.
+- The sift skill: how an agent runs a round end to end through the channel
+  tools. Embedded in the binary; `sift skills install` installs it for each
+  harness found.
+- `cmd/sift/kempt.toml`: the binary from tackle.tools and the channel for
+  Claude Code and pi.
 - `sift reconcile`: each file on an apply branch equals its approved
   content; any other file the branch changes is extra.
 

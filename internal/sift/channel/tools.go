@@ -10,6 +10,7 @@ import (
 
 	"github.com/schuettc/tackle/internal/sift/apply"
 	"github.com/schuettc/tackle/internal/sift/audit"
+	"github.com/schuettc/tackle/internal/sift/clean"
 	"github.com/schuettc/tackle/internal/sift/config"
 	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/recommend"
@@ -47,6 +48,8 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"round":{"type":"integer","description":"the round to apply (default: the latest)"},"dry_run":{"type":"boolean","description":"work out what would change and touch nothing"}}}`)},
 		{Name: "sift_status", Description: "The latest round: its state (recommending, ready, sent, applied), files recommended, open, decided and sent, who the review goes to, and any sends not yet delivered.",
 			InputSchema: schema(`{"type":"object","properties":{}}`)},
+		{Name: "sift_clean", Description: "Remove what sift apply recorded creating, and nothing else: each round branch, local and on origin, once its pull request is merged or closed (without gh, once its commit is in the base), and any worktree apply left behind. Returns the plan, each step remove or keep with why, and with dry_run removes nothing. Run it after the user has merged or closed the round's pull requests.",
+			InputSchema: schema(`{"type":"object","properties":{"dry_run":{"type":"boolean","description":"show the plan and remove nothing"}}}`)},
 	}
 }
 
@@ -93,6 +96,8 @@ func (ch *Channel) call(ctx context.Context, name string, args json.RawMessage) 
 		return ch.apply(ctx, a.Round, a.DryRun)
 	case "sift_status":
 		return ch.status(ctx)
+	case "sift_clean":
+		return ch.clean(ctx, a.DryRun)
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
@@ -184,6 +189,26 @@ func (ch *Channel) apply(ctx context.Context, round int64, dry bool) (string, er
 		return "", err
 	}
 	return pretty(res), nil
+}
+
+func (ch *Channel) clean(ctx context.Context, dry bool) (string, error) {
+	s, err := store.Open(ctx, store.Path())
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = s.Close() }()
+	o := clean.Options{Store: s, DryRun: dry}
+	if _, err := ch.LookPath("gh"); err == nil {
+		o.Gh = apply.Gh
+	}
+	steps, err := clean.Run(ctx, o)
+	if err != nil {
+		return "", err
+	}
+	if steps == nil {
+		steps = []clean.Step{}
+	}
+	return pretty(map[string]any{"dry_run": dry, "steps": steps}), nil
 }
 
 func (ch *Channel) status(ctx context.Context) (string, error) {

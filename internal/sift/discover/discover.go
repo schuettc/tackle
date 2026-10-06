@@ -135,6 +135,8 @@ type Skip struct {
 type Options struct {
 	Profiles []profile.Profile
 	Roots    []config.Root
+	// Repos are the repos with a base of their own, over their root's.
+	Repos []config.Repo
 	// Include audits forks and what is under vendor directories too.
 	Include config.Include
 }
@@ -174,6 +176,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		f.root(ctx, root)
 	}
 	f.skillDirs()
+	f.owners(ctx)
 	f.collapseCopies()
 	f.derive()
 	f.chains()
@@ -371,6 +374,69 @@ func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
 	}
 }
 
+// owners reads each file found on disk whose real path is tracked in a
+// git repo (a global or skill installed as a symlink into a dotfiles repo,
+// say) at that repo's base, as a repo file: the repo's [[repo]] base, else
+// the base of a root it is under. A file the base does not have, or in a
+// fork (unless forks are included), stays a disk file.
+func (f *finder) owners(ctx context.Context) {
+	reals := make([]string, 0, len(f.real))
+	for real, file := range f.real {
+		if file.Repo == nil && !file.Context {
+			reals = append(reals, real)
+		}
+	}
+	sort.Strings(reals)
+	for _, real := range reals {
+		file := f.real[real]
+		out, err := git(ctx, filepath.Dir(real), "rev-parse", "--show-toplevel")
+		if err != nil {
+			continue
+		}
+		top, err := filepath.EvalSymlinks(strings.TrimSpace(string(out)))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(top, real)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		dir, base := top, ""
+		for d := range f.repos {
+			if realish(d) == top {
+				dir = d
+				break
+			}
+		}
+		if _, read := f.repos[dir]; !read {
+			if !f.opt.Include.Forks {
+				if u, err := git(ctx, top, "config", "--get", "remote.upstream.url"); err == nil && strings.TrimSpace(string(u)) != "" {
+					continue
+				}
+			}
+			for _, root := range f.opt.Roots {
+				if rr := realish(root.Path); top == rr || strings.HasPrefix(top, rr+string(filepath.Separator)) {
+					base = root.Base
+				}
+			}
+			if b := config.RepoBase(f.opt.Repos, top); b != "" {
+				base = b
+			}
+		}
+		r, err := f.readRepo(ctx, dir, base)
+		if err != nil || !r.files[rel] {
+			continue
+		}
+		body, err := git(ctx, dir, "show", r.Commit+":"+rel)
+		if err != nil {
+			f.warn("%s: %v", file.Path, err)
+			continue
+		}
+		file.Repo, file.Rel, file.Content = r.Repo, rel, string(body)
+	}
+}
+
 // root walks one root on disk: every directory holding a .git directory is
 // a repo, read at its base; a .git file (a linked worktree or submodule) is
 // skipped; files outside any repo are read from disk. A root inside a repo is
@@ -532,7 +598,11 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			return nil
 		}
 	}
-	r, err := f.readRepo(ctx, dir, root.Base)
+	base := root.Base
+	if b := config.RepoBase(f.opt.Repos, dir); b != "" {
+		base = b
+	}
+	r, err := f.readRepo(ctx, dir, base)
 	if err != nil {
 		return err
 	}
@@ -640,7 +710,7 @@ func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, err
 	if r, ok := f.repos[dir]; ok {
 		return r, nil
 	}
-	ref := resolveRef(ctx, dir, base)
+	ref := ResolveRef(ctx, dir, base)
 	if ref == "" {
 		return nil, errors.New("no commits")
 	}
@@ -686,10 +756,10 @@ type repoTree struct {
 	files map[string]bool
 }
 
-// resolveRef picks what a repo is read at: origin/<base> or <base> when
+// ResolveRef picks what a repo is read at: origin/<base> or <base> when
 // configured and present, else origin/HEAD, else the upstream, else HEAD.
 // "" means the repo has no commits.
-func resolveRef(ctx context.Context, dir, base string) string {
+func ResolveRef(ctx context.Context, dir, base string) string {
 	exists := func(ref string) bool {
 		_, err := git(ctx, dir, "rev-parse", "--verify", "-q", ref+"^{commit}")
 		return err == nil

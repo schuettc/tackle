@@ -26,9 +26,11 @@ var applyFlags = flags("apply", "sift apply [--round N] [--dry-run] [--json]",
 		"reason. Paths are confined to the repo: no .., no .git, no symlinks, and every write goes\n"+
 		"through an os.Root on the worktree. With gh and a GitHub remote the branch is pushed and a\n"+
 		"pull request opened (gh pr create --body-file); otherwise the committed branch is left. A\n"+
-		"file outside any repo is left to you, its approved content saved under sift's state; a\n"+
-		"backlog round's approved rows are left to the agent. Exit 0 all applied, 1 something was\n"+
-		"held, skipped or failed, 2 error.",
+		"file whose real path is tracked in a git repo (a symlinked skill, say) was read at that\n"+
+		"repo's base by the audit and goes on that repo's branch; one outside every repo is left to\n"+
+		"you, its approved content saved under sift's state; a backlog round's approved rows are left\n"+
+		"to the agent. Exit 0 all applied, 1\n"+
+		"something was held, skipped or failed, 2 error.",
 	func(fs *flag.FlagSet) {
 		fs.Int64("round", 0, "the round to apply (default: the latest)")
 		fs.Bool("dry-run", false, "work out what would change and touch nothing")
