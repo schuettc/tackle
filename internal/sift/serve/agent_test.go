@@ -1,11 +1,11 @@
 package serve
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -78,20 +78,47 @@ func TestOwnerGoneAnySessionClaims(t *testing.T) {
 	}
 }
 
+// Two sessions wait, one send: exactly one of them gets it. The waits
+// outlast the send however slow the machine (a 50 ms wait lost the race to
+// a busy CI runner's send, and both timed out); once one has it, the other
+// is still waiting with nothing, and is ended.
 func TestTwoWaitersOneSend(t *testing.T) {
 	f := newFixture(t)
-	f.srv.waitUnit = 50 * time.Millisecond
-	var wg sync.WaitGroup
-	codes := make([]int, 2)
-	for i := range codes {
-		wg.Add(1)
-		go func() { defer wg.Done(); codes[i] = f.wait(fmt.Sprintf("s%d", i)).Code }()
+	f.srv.waitUnit = 500 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type got struct {
+		i int
+		w *httptest.ResponseRecorder
 	}
-	time.Sleep(20 * time.Millisecond)
+	done := make(chan got, 2)
+	for i := range 2 {
+		go func() {
+			req := httptest.NewRequestWithContext(ctx, "GET", fmt.Sprintf("/api/agent/wait?session=s%d&timeout=60", i), nil)
+			w := httptest.NewRecorder()
+			f.h.ServeHTTP(w, req)
+			done <- got{i, w}
+		}()
+	}
+	for !f.srv.present("s0") || !f.srv.present("s1") {
+		time.Sleep(time.Millisecond)
+	}
 	f.sendNow()
-	wg.Wait()
-	if codes[0]+codes[1] != 200+204 {
-		t.Fatalf("codes %v", codes)
+	first := <-done
+	if first.w.Code != 200 || !strings.Contains(first.w.Body.String(), "keep it") {
+		t.Fatalf("s%d: %d %s", first.i, first.w.Code, first.w.Body)
+	}
+	select {
+	case other := <-done:
+		t.Fatalf("s%d ended too: %d %s", other.i, other.w.Code, other.w.Body)
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if other := <-done; other.w.Body.Len() != 0 {
+		t.Fatalf("s%d got a send too: %s", other.i, other.w.Body)
+	}
+	if left, err := f.st.Undelivered(context.Background()); err != nil || len(left) != 0 {
+		t.Fatalf("undelivered %v %v", left, err)
 	}
 }
 
