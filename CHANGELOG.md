@@ -24,7 +24,7 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   page unattached and says a restart is needed. The working database moves
   to schema v3, which older casebook binaries refuse.
 
-## [sift 0.1.0] - Unreleased
+## [sift 0.1.0] - 2026-10-06
 
 ### Added
 - `sift init`: detects the agent harnesses you use (Claude Code, Codex, pi)
