@@ -44,7 +44,6 @@ var All = []Check{
 	{"stale-status", staleStatus},
 	{"retired-store", retiredStore},
 	{"misplaced", misplaced},
-	{"negative-rule", negativeRule},
 	{"secret", secret},
 }
 

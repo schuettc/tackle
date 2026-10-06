@@ -12,9 +12,9 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 
 func TestRowJSONGolden(t *testing.T) {
 	r := Row{
-		ID:      ID("/w/repo/CLAUDE.md", "negative-rule", "- Never push to main."),
-		Check:   "negative-rule",
-		Summary: "a rule phrased as a prohibition",
+		ID:      ID("/w/repo/CLAUDE.md", "stale-status", "- Never push to main."),
+		Check:   "stale-status",
+		Summary: "status that may be stale",
 		Source:  Source{File: "/w/repo/CLAUDE.md", Repo: "/w/repo", Ref: "origin/main", Path: "CLAUDE.md", Start: 4, End: 4},
 		Passage: "- Never push to main.",
 		Evidence: []Fact{
@@ -23,6 +23,7 @@ func TestRowJSONGolden(t *testing.T) {
 		Verdict:     "rewrite",
 		Destination: "CLAUDE.md#Git",
 		Text:        "- Push to a branch and open a pull request.",
+		Reason:      "says what to do instead of what to avoid",
 		Decision:    &Decision{Action: "edit", Verdict: "rewrite", Text: "- Push to a branch; open a pull request.", Note: "fine"},
 	}
 	got, err := json.MarshalIndent(r, "", "  ")
@@ -124,6 +125,8 @@ func TestDecisionValidate(t *testing.T) {
 		{Action: "edit", Verdict: "close:done"},
 		{Action: "edit", Title: "a better title"},
 		{Action: "edit", Text: "new text"},
+		{Action: "edit", Cleared: []string{"text"}},
+		{Action: "edit", Verdict: "issue", Cleared: []string{"title", "text"}},
 	} {
 		if err := d.Validate(); err != nil {
 			t.Errorf("%+v: %v", d, err)
@@ -136,6 +139,10 @@ func TestDecisionValidate(t *testing.T) {
 		{Action: "edit", Verdict: "cut"},
 		{Action: "accept", Verdict: "keep"},
 		{Action: "reject", Text: "x"},
+		{Action: "accept", Cleared: []string{"text"}},
+		{Action: "edit", Cleared: []string{"verdict"}},
+		{Action: "edit", Text: "x", Cleared: []string{"text"}},
+		{Action: "edit", Cleared: []string{"text", "text"}},
 	} {
 		if d.Validate() == nil {
 			t.Errorf("%+v: want an error", d)
@@ -147,14 +154,111 @@ func TestDecisionValidate(t *testing.T) {
 // one (whitespace aside) is told apart by its ordinal, and the same ordinal
 // always gives the same id.
 func TestNthTellsRepeatsApart(t *testing.T) {
-	id := ID("/f", "negative-rule", "Never  push.")
+	id := ID("/f", "stale-status", "Never  push.")
 	if Nth(id, 0) != id {
 		t.Error("the first occurrence must keep the plain id")
 	}
 	if Nth(id, 1) == id || Nth(id, 1) == Nth(id, 2) {
 		t.Error("repeats share an id")
 	}
-	if Nth(ID("/f", "negative-rule", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
+	if Nth(ID("/f", "stale-status", "Never push."), 1) != Nth(id, 1) || len(Nth(id, 1)) != 16 {
 		t.Error("an ordinal id is not stable")
+	}
+}
+
+// Effective is what the user approved of a row: the proposal, an edit's
+// changes over it, nothing when it is rejected or undecided. A certain row
+// is no exception: it is decided like any other.
+func TestEffective(t *testing.T) {
+	base := Row{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}
+	with := func(r Row, d *Decision) Row { r.Decision = d; return r }
+	for name, c := range map[string]struct {
+		r    Row
+		want Change
+		ok   bool
+	}{
+		"undecided":            {base, Change{}, false},
+		"accepted":             {with(base, &Decision{Action: "accept"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"edited text":          {with(base, &Decision{Action: "edit", Text: "mine"}), Change{Verdict: "rewrite", Title: "t", Destination: "CLAUDE.md#Git", Text: "mine"}, true},
+		"edited verdict":       {with(base, &Decision{Action: "edit", Verdict: "delete"}), Change{Verdict: "delete", Title: "t", Destination: "CLAUDE.md#Git", Text: "new"}, true},
+		"rejected":             {with(base, &Decision{Action: "reject"}), Change{}, false},
+		"accepted, no verdict": {with(Row{}, &Decision{Action: "accept"}), Change{}, false},
+		"certain, undecided":   {Row{Certain: true, Verdict: "delete"}, Change{}, false},
+		"certain, accepted":    {with(Row{Certain: true, Verdict: "delete"}, &Decision{Action: "accept"}), Change{Verdict: "delete"}, true},
+	} {
+		got, ok := c.r.Effective()
+		if ok != c.ok || got != c.want {
+			t.Errorf("%s: %+v %v, want %+v %v", name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// Print changes with every field that says what applying the row does, as
+// the page shows it (an edit in force over the proposal included), and
+// with a merge target's print; not with the reason, the note, or an accept
+// or reject.
+func TestPrint(t *testing.T) {
+	base := Row{ID: "a", Check: "duplicate", Verdict: "merge:b", Text: "t", Passage: "p", Source: Source{File: "/r/x.md", Repo: "/r", Path: "x.md", Start: 1, End: 1}}
+	target := Row{ID: "b", Passage: "q", Source: Source{Path: "y.md", Start: 2}}
+	in := func(tg *Row) func(string) *Row {
+		return func(id string) *Row {
+			if id == tg.ID {
+				return tg
+			}
+			return nil
+		}
+	}
+	want := base.Print(in(&target))
+	for name, change := range map[string]func(r, t *Row){
+		"verdict":        func(r, _ *Row) { r.Verdict = "delete" },
+		"title":          func(r, _ *Row) { r.Title = "x" },
+		"destination":    func(r, _ *Row) { r.Destination = "d.md#S" },
+		"text":           func(r, _ *Row) { r.Text = "u" },
+		"path":           func(r, _ *Row) { r.Source.Path = "z.md" },
+		"lines":          func(r, _ *Row) { r.Source.Start = 9 },
+		"passage":        func(r, _ *Row) { r.Passage = "p2" },
+		"an edit":        func(r, _ *Row) { r.Decision = &Decision{Action: "edit", Text: "mine"} },
+		"target path":    func(_, t *Row) { t.Source.Path = "w.md" },
+		"target passage": func(_, t *Row) { t.Passage = "q2" },
+		"target's edit":  func(_, t *Row) { t.Decision = &Decision{Action: "edit", Text: "theirs"} },
+	} {
+		r, tg := base, target
+		change(&r, &tg)
+		if r.Print(in(&tg)) == want {
+			t.Errorf("%s: print unchanged", name)
+		}
+	}
+	for _, d := range []*Decision{{Action: "accept", Note: "n"}, {Action: "reject"}} {
+		r := base
+		r.Reason, r.Decision, r.Fingerprint = "why", d, "x"
+		if r.Print(in(&target)) != want {
+			t.Errorf("the reason or %s changed the print", d.Action)
+		}
+	}
+	if base.Print(nil) == want {
+		t.Error("the target is not in the print")
+	}
+	// An edit's own merge target is the one printed.
+	r := base
+	r.Verdict, r.Decision = "keep", &Decision{Action: "edit", Verdict: "merge:b"}
+	tg := target
+	p := r.Print(in(&tg))
+	tg.Passage = "q3"
+	if r.Print(in(&tg)) == p {
+		t.Error("an edited merge does not cover its target")
+	}
+	// A merge cycle ends.
+	a, b := base, Row{ID: "b", Verdict: "merge:a"}
+	both := func(id string) *Row {
+		switch id {
+		case "a":
+			return &a
+		case "b":
+			return &b
+		}
+		return nil
+	}
+	if a.Print(both) == "" || b.Print(both) == "" {
+		t.Error("no print for a cycle")
 	}
 }

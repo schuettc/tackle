@@ -41,9 +41,9 @@ func TestSecret(t *testing.T) {
 // the original text, so a rotated secret is a new row.
 func TestSecretIsRedactedInEveryRow(t *testing.T) {
 	tok := "ghp_" + strings.Repeat("aB3", 12)
-	para := "Never paste the deploy token " + tok + " into a chat, an issue or a pull request description, ever."
+	para := "Waiting on the vault move: until then the deploy token " + tok + " stays out of chats, issues and pull request descriptions."
 	f := &discover.File{Path: "/r/CLAUDE.md", Class: discover.ClassRepo,
-		Content: "- Never commit password = \"hunter2hunter2\" here.\n\n" + para + "\n\n" + para + "\n"}
+		Content: "- Waiting on rotation: password = \"hunter2hunter2\" here.\n\n" + para + "\n\n" + para + "\n"}
 	rows := Run(ctx, input(f))
 	checks := map[string]int{}
 	for _, r := range rows {
@@ -59,11 +59,11 @@ func TestSecretIsRedactedInEveryRow(t *testing.T) {
 			}
 		}
 	}
-	if checks["secret"] != 3 || checks["negative-rule"] != 3 || checks["duplicate"] != 2 {
+	if checks["secret"] != 3 || checks["stale-status"] != 3 || checks["duplicate"] != 2 {
 		t.Fatalf("checks %v", checks)
 	}
-	if rows[0].Check != "negative-rule" || rows[1].Check != "secret" ||
-		rows[1].ID != row.ID(f.Path, "secret", "- Never commit password = \"hunter2hunter2\" here.") ||
+	if rows[0].Check != "stale-status" || rows[1].Check != "secret" ||
+		rows[1].ID != row.ID(f.Path, "secret", "- Waiting on rotation: password = \"hunter2hunter2\" here.") ||
 		!strings.Contains(rows[1].Passage, "hunt… (14 chars)") || rows[0].Passage != rows[1].Passage {
 		t.Fatalf("%+v\n%+v", rows[0], rows[1])
 	}

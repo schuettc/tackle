@@ -1,0 +1,731 @@
+{
+ "kind": "on-demand",
+ "repos": [
+  "shop",
+  "tools"
+ ],
+ "files": {
+  "shop/CLAUDE.md": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n\n## Layout\n\nSee `docs/architecture.md` for the layout.\nThe old runbook lives in `docs/runbook-v1.md`.\n\n## Status\n\n- Waiting on the payments migration before the checkout rewrite can start.\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.\n\n## Style\n\n- Waiting on the style migration for pattern 1 (#101) before new code uses its replacement.\n- Waiting on the style migration for pattern 2 (#102) before new code uses its replacement.\n- Waiting on the style migration for pattern 3 (#103) before new code uses its replacement.\n- Waiting on the style migration for pattern 4 (#104) before new code uses its replacement.\n- Waiting on the style migration for pattern 5 (#105) before new code uses its replacement.\n- Waiting on the style migration for pattern 6 (#106) before new code uses its replacement.\n- Waiting on the style migration for pattern 7 (#107) before new code uses its replacement.\n- Waiting on the style migration for pattern 8 (#108) before new code uses its replacement.\n- Waiting on the style migration for pattern 9 (#109) before new code uses its replacement.\n- Waiting on the style migration for pattern 10 (#110) before new code uses its replacement.\n- Waiting on the style migration for pattern 11 (#111) before new code uses its replacement.\n- Waiting on the style migration for pattern 12 (#112) before new code uses its replacement.\n- Waiting on the style migration for pattern 13 (#113) before new code uses its replacement.\n- Waiting on the style migration for pattern 14 (#114) before new code uses its replacement.\n- Waiting on the style migration for pattern 15 (#115) before new code uses its replacement.\n- Waiting on the style migration for pattern 16 (#116) before new code uses its replacement.\n- Waiting on the style migration for pattern 17 (#117) before new code uses its replacement.\n- Waiting on the style migration for pattern 18 (#118) before new code uses its replacement.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+  "shop/docs/AGENTS.md": "# docs\n\n- Waiting on the generator rewrite (#88): until it merges, edit the generated reference by hand.\n- Write in the second person.\n",
+  "tools/skills/release/SKILL.md": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\nRead `~/.notes/memory.md` before you start.\n\n- Tag from main.\n",
+  "home/.agent/AGENTS.md": "# Global\n\n- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n- Prefer small commits.\n",
+  "tools/CLAUDE.md": "# tools\n\nShared scripts for the release and the docs.\n\n- Keep the scripts POSIX sh: the release runner has no bash.\n- Waiting on the runner upgrade (#57) before a script may use `local`.\n",
+  "tools/cli/AGENTS.md": "# cli\n\n- Waiting on the flag parser rewrite (#61) before new commands take long options.\n- Every command prints its usage on -h.\n"
+ },
+ "rows": [
+  {
+   "id": "f3582c497c90a5db",
+   "check": "misplaced",
+   "summary": "a line about one root in the global file",
+   "source": {
+    "rel": "home/.agent/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- In shop, run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.",
+   "evidence": [
+    {
+     "name": "names",
+     "value": "shop"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "c3141af60b8b7c71",
+   "check": "size",
+   "summary": "over its budget",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 0,
+    "end": 0
+   },
+   "passage": "",
+   "evidence": [
+    {
+     "name": "size",
+     "value": "7.1 KB"
+    },
+    {
+     "name": "budget",
+     "value": "6.0 KB (repo instruction file)"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "f2bd5dd90fa29c0e",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 19,
+    "end": 19
+   },
+   "passage": "See `docs/architecture.md` for the layout.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/architecture.md"
+    },
+    {
+     "name": "certain",
+     "value": "deleted at the audited commit"
+    }
+   ],
+   "certain": true
+  },
+  {
+   "id": "ff8d0c4ae38de2ec",
+   "check": "dead-path",
+   "summary": "a path that does not resolve",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 20,
+    "end": 20
+   },
+   "passage": "The old runbook lives in `docs/runbook-v1.md`.",
+   "evidence": [
+    {
+     "name": "path",
+     "value": "docs/runbook-v1.md"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "0a3b4551207c7805",
+   "check": "stale-status",
+   "summary": "status that may have gone stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 24,
+    "end": 24
+   },
+   "passage": "- Waiting on the payments migration before the checkout rewrite can start.",
+   "evidence": [
+    {
+     "name": "phrase",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "33d5391a08af8c44",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 25,
+    "end": 25
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "74e83fc84eb4cc09",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 26,
+    "end": 26
+   },
+   "passage": "- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ]
+  },
+  {
+   "id": "549aa2640703a341",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 30,
+    "end": 30
+   },
+   "passage": "- Waiting on the style migration for pattern 1 (#101) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#101"
+    }
+   ]
+  },
+  {
+   "id": "e241f69842a6d518",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 31,
+    "end": 31
+   },
+   "passage": "- Waiting on the style migration for pattern 2 (#102) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#102"
+    }
+   ]
+  },
+  {
+   "id": "b54e15165df5b0d4",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 32,
+    "end": 32
+   },
+   "passage": "- Waiting on the style migration for pattern 3 (#103) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#103"
+    }
+   ]
+  },
+  {
+   "id": "fc1d9f7e3e30977f",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 33,
+    "end": 33
+   },
+   "passage": "- Waiting on the style migration for pattern 4 (#104) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#104"
+    }
+   ]
+  },
+  {
+   "id": "62ce620f836cf945",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 34,
+    "end": 34
+   },
+   "passage": "- Waiting on the style migration for pattern 5 (#105) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#105"
+    }
+   ]
+  },
+  {
+   "id": "c6d7b6a73d1fe12c",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 35,
+    "end": 35
+   },
+   "passage": "- Waiting on the style migration for pattern 6 (#106) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#106"
+    }
+   ]
+  },
+  {
+   "id": "f5cdcdec1859c5d8",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 36,
+    "end": 36
+   },
+   "passage": "- Waiting on the style migration for pattern 7 (#107) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#107"
+    }
+   ]
+  },
+  {
+   "id": "cca5eaa9e2452efe",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 37,
+    "end": 37
+   },
+   "passage": "- Waiting on the style migration for pattern 8 (#108) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#108"
+    }
+   ]
+  },
+  {
+   "id": "63f90a1474683deb",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 38,
+    "end": 38
+   },
+   "passage": "- Waiting on the style migration for pattern 9 (#109) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#109"
+    }
+   ]
+  },
+  {
+   "id": "09b597d23b75555b",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 39,
+    "end": 39
+   },
+   "passage": "- Waiting on the style migration for pattern 10 (#110) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#110"
+    }
+   ]
+  },
+  {
+   "id": "d297e559478c44e6",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 40,
+    "end": 40
+   },
+   "passage": "- Waiting on the style migration for pattern 11 (#111) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#111"
+    }
+   ]
+  },
+  {
+   "id": "d211f2c3c6e63435",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 41,
+    "end": 41
+   },
+   "passage": "- Waiting on the style migration for pattern 12 (#112) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#112"
+    }
+   ]
+  },
+  {
+   "id": "c193e6911367997f",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 42,
+    "end": 42
+   },
+   "passage": "- Waiting on the style migration for pattern 13 (#113) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#113"
+    }
+   ]
+  },
+  {
+   "id": "0f6f1928af799321",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 43,
+    "end": 43
+   },
+   "passage": "- Waiting on the style migration for pattern 14 (#114) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#114"
+    }
+   ]
+  },
+  {
+   "id": "f52c156c1a3a62e1",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 44,
+    "end": 44
+   },
+   "passage": "- Waiting on the style migration for pattern 15 (#115) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#115"
+    }
+   ]
+  },
+  {
+   "id": "591bd183e8082f34",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 45,
+    "end": 45
+   },
+   "passage": "- Waiting on the style migration for pattern 16 (#116) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#116"
+    }
+   ]
+  },
+  {
+   "id": "37fde8cc31446171",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 46,
+    "end": 46
+   },
+   "passage": "- Waiting on the style migration for pattern 17 (#117) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#117"
+    }
+   ]
+  },
+  {
+   "id": "58ed52aad14d5009",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 47,
+    "end": 47
+   },
+   "passage": "- Waiting on the style migration for pattern 18 (#118) before new code uses its replacement.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    },
+    {
+     "name": "ref",
+     "value": "#118"
+    }
+   ]
+  },
+  {
+   "id": "415bf8e35218b9c6",
+   "check": "duplicate",
+   "summary": "the same passage twice",
+   "source": {
+    "rel": "shop/CLAUDE.md",
+    "start": 51,
+    "end": 51
+   },
+   "passage": "- Run the full verification suite before you push, because the hook and CI run exactly the same command.",
+   "evidence": [
+    {
+     "name": "copies",
+     "value": "lines 28, 53"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "7883e555ba5fba64",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "shop/docs/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- Waiting on the generator rewrite (#88): until it merges, edit the generated reference by hand.",
+   "certain": false,
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ]
+  },
+  {
+   "id": "faf797b09bfb9144",
+   "check": "retired-store",
+   "summary": "a pointer to a retired memory store",
+   "source": {
+    "rel": "tools/skills/release/SKILL.md",
+    "start": 8,
+    "end": 8
+   },
+   "passage": "Read `~/.notes/memory.md` before you start.",
+   "evidence": [
+    {
+     "name": "pattern",
+     "value": "~/.notes/memory.md"
+    },
+    {
+     "name": "certain",
+     "value": "the store is retired"
+    }
+   ],
+   "certain": true
+  },
+  {
+   "id": "a1c0de0000000001",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "tools/CLAUDE.md",
+    "start": 6,
+    "end": 6
+   },
+   "passage": "- Waiting on the runner upgrade (#57) before a script may use `local`.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "a1c0de0000000002",
+   "check": "duplicate",
+   "summary": "a rule the global file also has",
+   "source": {
+    "rel": "tools/CLAUDE.md",
+    "start": 5,
+    "end": 5
+   },
+   "passage": "- Keep the scripts POSIX sh: the release runner has no bash.",
+   "evidence": [
+    {
+     "name": "also in",
+     "value": "home/.agent/AGENTS.md"
+    }
+   ],
+   "certain": false
+  },
+  {
+   "id": "a1c0de0000000003",
+   "check": "stale-status",
+   "summary": "status that may be stale",
+   "source": {
+    "rel": "tools/cli/AGENTS.md",
+    "start": 3,
+    "end": 3
+   },
+   "passage": "- Waiting on the flag parser rewrite (#61) before new commands take long options.",
+   "evidence": [
+    {
+     "name": "matched",
+     "value": "Waiting on"
+    }
+   ],
+   "certain": false
+  }
+ ],
+ "recs": {
+  "shop/CLAUDE.md": {
+   "summary": "Drops the Style section's eighteen migration notes and the payments line, whose pull requests have merged, and the dead layout paths. It takes the slow-suite rule from the global file, and keeps the flaky-test note because the vendor's fix has not shipped.",
+   "content": "# shop\n\nInstructions for agents working in the shop service.\n\n## Git\n\n- Never push directly to main.\n- Don't force-push a shared branch.\n- Do not commit generated files.\n\n## Tests\n\n- Never mock the database in integration tests; the fixtures exist for that.\n- Don't leave a skipped test without an issue number.\n- Run `make test` before you push.\n- Run the slow suite before a release: it covers the payment provider's sandbox, the tax tables for every region and the database migrations, which the fast suite leaves out because together they take forty minutes; a release that skipped it shipped a broken tax table last spring, and the fix took a day.\n\n## Status\n\n- Waiting on the vendor's fix for the flaky checkout test; until it ships, rerun that test once before you report it.\n\n## Release\n\n- Run the full verification suite before you push, because the hook and CI run exactly the same command.\n",
+   "links": [
+    "home/.agent/AGENTS.md"
+   ],
+   "fixed": "the status is obsolete: removed",
+   "how": {
+    "c3141af60b8b7c71": "down to 1.4 KB, under the 6 KB budget",
+    "f2bd5dd90fa29c0e": "the Layout section is gone: both paths are dead",
+    "ff8d0c4ae38de2ec": "removed with the Layout section",
+    "0a3b4551207c7805": "the payments migration shipped: line removed",
+    "33d5391a08af8c44": "merged into Release, its one place",
+    "549aa2640703a341": "#101 merged: the Style section is gone",
+    "e241f69842a6d518": "#102 merged: the Style section is gone",
+    "b54e15165df5b0d4": "#103 merged: the Style section is gone",
+    "fc1d9f7e3e30977f": "#104 merged: the Style section is gone",
+    "62ce620f836cf945": "#105 merged: the Style section is gone",
+    "c6d7b6a73d1fe12c": "#106 merged: the Style section is gone",
+    "f5cdcdec1859c5d8": "#107 merged: the Style section is gone",
+    "cca5eaa9e2452efe": "#108 merged: the Style section is gone",
+    "63f90a1474683deb": "#109 merged: the Style section is gone",
+    "09b597d23b75555b": "#110 merged: the Style section is gone",
+    "d297e559478c44e6": "#111 merged: the Style section is gone",
+    "d211f2c3c6e63435": "#112 merged: the Style section is gone",
+    "c193e6911367997f": "#113 merged: the Style section is gone",
+    "0f6f1928af799321": "#114 merged: the Style section is gone",
+    "f52c156c1a3a62e1": "#115 merged: the Style section is gone",
+    "591bd183e8082f34": "#116 merged: the Style section is gone",
+    "37fde8cc31446171": "#117 merged: the Style section is gone",
+    "58ed52aad14d5009": "#118 merged: the Style section is gone",
+    "415bf8e35218b9c6": "kept in Release, the copy in Status removed"
+   },
+   "kept": {
+    "74e83fc84eb4cc09": "the vendor's fix has not shipped, so the rerun still applies"
+   }
+  },
+  "home/.agent/AGENTS.md": {
+   "summary": "Moves a shop-only rule to shop/CLAUDE.md, where only shop sessions load it.",
+   "content": "# Global\n\n- Prefer small commits.\n",
+   "links": [
+    "shop/CLAUDE.md"
+   ],
+   "fixed": "moved to shop/CLAUDE.md, under Tests"
+  },
+  "shop/docs/AGENTS.md": {
+   "summary": "Drops the wait on #88, which has merged, and points at the generator instead.",
+   "content": "# docs\n\n- Change the generated reference through its generator (`make docs`).\n- Write in the second person.\n",
+   "fixed": "#88 merged: says to use the generator"
+  },
+  "tools/skills/release/SKILL.md": {
+   "summary": "Drops the pointer to a memory store that has been retired.",
+   "content": "---\nname: release\ndescription: cut a release\n---\n\n# Release\n\n- Tag from main.\n",
+   "fixed": "the pointer to the retired store is removed"
+  },
+  "tools/CLAUDE.md": {
+   "summary": "Nothing to change: #57 is still open, and every rule here is the scripts'.",
+   "content": "# tools\n\nShared scripts for the release and the docs.\n\n- Keep the scripts POSIX sh: the release runner has no bash.\n- Waiting on the runner upgrade (#57) before a script may use `local`.\n",
+   "kept": {
+    "a1c0de0000000001": "#57 is still open",
+    "a1c0de0000000002": "the global rule is about shell in general; this one names the runner"
+   }
+  },
+  "tools/cli/AGENTS.md": {
+   "summary": "Nothing to change: the flag parser rewrite is still in review.",
+   "content": "# cli\n\n- Waiting on the flag parser rewrite (#61) before new commands take long options.\n- Every command prints its usage on -h.\n",
+   "kept": {
+    "a1c0de0000000003": "#61 is still in review"
+   }
+  }
+ }
+}

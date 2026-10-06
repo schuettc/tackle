@@ -86,7 +86,7 @@ func TestChecksHaveTheSpecNames(t *testing.T) {
 	for _, c := range All {
 		names = append(names, c.Name)
 	}
-	want := "size load-limit duplicate dead-path stale-status retired-store misplaced negative-rule secret"
+	want := "size load-limit duplicate dead-path stale-status retired-store misplaced secret"
 	if got := strings.Join(names, " "); got != want {
 		t.Fatalf("checks %q", got)
 	}
@@ -94,7 +94,7 @@ func TestChecksHaveTheSpecNames(t *testing.T) {
 
 // Run runs every check and orders the rows by file, line and check.
 func TestRunOrdersRows(t *testing.T) {
-	in := input(fixture(t, "negative-rule", "hit.md", discover.ClassRepo), fixture(t, "size", "hit.md", discover.ClassRepo))
+	in := input(fixture(t, "stale-status", "hit.md", discover.ClassRepo), fixture(t, "size", "hit.md", discover.ClassRepo))
 	in.Config.Budgets.Repo = 100
 	rows := Run(ctx, in)
 	if len(rows) < 5 {
@@ -113,23 +113,23 @@ func TestRunOrdersRows(t *testing.T) {
 // and a whitespace change does not move any of them.
 func TestRunGivesRepeatsTheirOwnIDs(t *testing.T) {
 	para := "Run the full verification suite before you push, because the hook and CI run exactly the same command."
-	f := &discover.File{Path: "/r/CLAUDE.md", Class: discover.ClassRepo, Content: "- Never force-push.\n- Never force-push.\n\n" + para + "\n\n" + para + "\n\n" + para + "\n"}
+	f := &discover.File{Path: "/r/CLAUDE.md", Class: discover.ClassRepo, Content: "- Waiting on the API change.\n- Waiting on the API change.\n\n" + para + "\n\n" + para + "\n\n" + para + "\n"}
 	rows := Run(ctx, input(f))
 	ids := map[string]bool{}
-	var neg []row.Row
+	var stale []row.Row
 	for _, r := range rows {
 		if ids[r.ID] {
 			t.Fatalf("id %s twice: %+v", r.ID, rows)
 		}
 		ids[r.ID] = true
-		if r.Check == "negative-rule" {
-			neg = append(neg, r)
+		if r.Check == "stale-status" {
+			stale = append(stale, r)
 		}
 	}
-	if len(neg) != 2 || neg[0].ID != row.ID(f.Path, "negative-rule", "- Never force-push.") || neg[1].ID != row.Nth(neg[0].ID, 1) {
-		t.Fatalf("negative rows %+v", neg)
+	if len(stale) != 2 || stale[0].ID != row.ID(f.Path, "stale-status", "- Waiting on the API change.") || stale[1].ID != row.Nth(stale[0].ID, 1) {
+		t.Fatalf("stale rows %+v", stale)
 	}
-	f.Content = strings.Replace(f.Content, "- Never force-push.\n- Never force-push.", "- Never  force-push.\n-   Never force-push. ", 1)
+	f.Content = strings.Replace(f.Content, "- Waiting on the API change.\n- Waiting on the API change.", "- Waiting on  the API change.\n-   Waiting on the API change. ", 1)
 	again := map[string]bool{}
 	for _, r := range Run(ctx, input(f)) {
 		again[r.ID] = true

@@ -5,14 +5,20 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
+	"github.com/schuettc/tackle/internal/sift/rec"
 	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/schuettc/tackle/internal/sift/shown"
 	tools "github.com/schuettc/tools-common"
 	"github.com/schuettc/tools-common/sqlitedb"
 )
@@ -53,9 +59,83 @@ CREATE TABLE mutes (
 );
 `
 
+// schemaV2 is the review loop: each round's revision (bumped by every change
+// the page must see), the agent session the round's review goes to, when a
+// decision was sent, one row per press of Send (kept until delivered), and
+// what apply did per repo.
+const schemaV2 = `
+ALTER TABLE rounds ADD COLUMN rev INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE rounds ADD COLUMN owner_session TEXT NOT NULL DEFAULT '';
+ALTER TABLE rounds ADD COLUMN owner_label TEXT NOT NULL DEFAULT '';
+ALTER TABLE decisions ADD COLUMN sent_at INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE sends (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  round_id     INTEGER NOT NULL,
+  created_at   INTEGER NOT NULL,
+  counts       TEXT NOT NULL,
+  notes        TEXT NOT NULL,
+  owner        TEXT NOT NULL DEFAULT '',
+  delivered_to TEXT,
+  delivered_at INTEGER
+);
+CREATE TABLE applies (
+  round_id INTEGER NOT NULL,
+  repo     TEXT NOT NULL,
+  base     TEXT NOT NULL DEFAULT '',
+  branch   TEXT NOT NULL DEFAULT '',
+  pr       TEXT NOT NULL DEFAULT '',
+  state    TEXT NOT NULL,
+  detail   TEXT NOT NULL DEFAULT '',
+  rows     TEXT NOT NULL DEFAULT '[]',
+  at       INTEGER NOT NULL,
+  PRIMARY KEY (round_id, repo)
+);
+`
+
+// schemaV3: the fields an edit cleared (an edit can empty the title or
+// text), and apply's latest attempt kept apart from a success, which is
+// never overwritten.
+const schemaV3 = `
+ALTER TABLE decisions ADD COLUMN cleared TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_state TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_detail TEXT NOT NULL DEFAULT '';
+ALTER TABLE applies ADD COLUMN last_at INTEGER NOT NULL DEFAULT 0;
+`
+
+// schemaV5: each decision's id (Seen), new each time a decision is created
+// or replaced. The decisions already stored get one each.
+const schemaV5 = `
+ALTER TABLE decisions ADD COLUMN decision_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE file_decisions ADD COLUMN decision_id TEXT NOT NULL DEFAULT '';
+UPDATE decisions SET decision_id = lower(hex(randomblob(8)));
+UPDATE file_decisions SET decision_id = lower(hex(randomblob(8)));
+`
+
 // Migrations is the append-only list of schema steps.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
+	sqlitedb.SQL(schemaV2),
+	sqlitedb.SQL(schemaV3),
+	sqlitedb.SQL(schemaV4),
+	sqlitedb.SQL(schemaV5),
+}
+
+// Seen is what the page showed of one file or row when the person decided:
+// the id of the decision in force ("" for none) and the item's fingerprint
+// (what the page shows of it: the proposal or recommendation, with the edit
+// in force over it, and, for a merge, its target's). Every approval check
+// binds to both: a decision replaced by an identical one has another id,
+// and a decision whose item changed under it has another print.
+type Seen struct {
+	Fingerprint string `json:"fingerprint"`
+	Decision    string `json:"decision_id"`
+}
+
+// newID is a new decision's id: random, so never reused.
+func newID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 // ErrStale is returned when a decision names a row that is not in the round
@@ -90,12 +170,23 @@ type Round struct {
 	Kind    string
 	At      time.Time
 	Summary map[string]int // rows per check
+	// Rev counts the changes to the round since it was recorded: proposals
+	// merged, decisions, applies.
+	Rev int64
+	// OwnerSession and OwnerLabel name the agent session the review goes to
+	// (the last one that opened it).
+	OwnerSession, OwnerLabel string
 }
 
 // RecordRound stores a round and its rows in one transaction, then prunes
 // to the latest keepRounds rounds. When the transaction rolls back the round
-// is not stored and its id is 0.
+// is not stored and its id is 0. An audit round's files go in with
+// RecordAudit.
 func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64, error) {
+	return s.record(ctx, r, rows, nil)
+}
+
+func (s *Store) record(ctx context.Context, r Round, rows []row.Row, files []rec.File) (int64, error) {
 	if r.At.IsZero() {
 		r.At = time.Now()
 	}
@@ -116,6 +207,10 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 			return err
 		}
 		for i, rw := range rows {
+			if rw.Source.FromDisk() {
+				rw.Source.Canon = row.Resolve(rw.Source.File)
+			}
+			rw.Decision, rw.Fingerprint = nil, ""
 			body, err := json.Marshal(rw)
 			if err != nil {
 				return err
@@ -125,9 +220,25 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 				return fmt.Errorf("row %s: %w", rw.ID, err)
 			}
 		}
-		old := `SELECT id FROM rounds ORDER BY id DESC LIMIT -1 OFFSET ?`
-		if _, err := tx.ExecContext(ctx, `DELETE FROM rows WHERE round_id IN (`+old+`)`, keepRounds); err != nil {
-			return err
+		for i, f := range files {
+			f.Content = "" // never stored: it is read back at its source
+			body, err := json.Marshal(f)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO files(round_id, seq, key, body) VALUES (?,?,?,?)`, id, i, f.Key, string(body)); err != nil {
+				return fmt.Errorf("file %s: %w", f.Source.File, err)
+			}
+		}
+		const old = `SELECT id FROM rounds ORDER BY id DESC LIMIT -1 OFFSET ?`
+		for _, q := range []string{
+			`DELETE FROM rows WHERE round_id IN (` + old + `)`,
+			`DELETE FROM files WHERE round_id IN (` + old + `)`,
+			`DELETE FROM recs WHERE round_id IN (` + old + `)`,
+		} {
+			if _, err := tx.ExecContext(ctx, q, keepRounds); err != nil {
+				return err
+			}
 		}
 		_, err = tx.ExecContext(ctx, `DELETE FROM rounds WHERE id IN (`+old+`)`, keepRounds)
 		return err
@@ -141,11 +252,28 @@ func (s *Store) RecordRound(ctx context.Context, r Round, rows []row.Row) (int64
 // LatestRound returns the newest round and its rows in the order they were
 // recorded, each with its decision; sql.ErrNoRows when there is none.
 func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
+	id, _, err := s.Latest(ctx)
+	if err != nil {
+		return Round{}, nil, err
+	}
+	return s.Round(ctx, id)
+}
+
+// Latest returns the newest round's id and revision; sql.ErrNoRows when
+// there is none.
+func (s *Store) Latest(ctx context.Context) (id, rev int64, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT id, rev FROM rounds ORDER BY id DESC LIMIT 1`).Scan(&id, &rev)
+	return id, rev, err
+}
+
+// Round returns a round and its rows in the order they were recorded, each
+// with its decision; sql.ErrNoRows when there is no such round.
+func (s *Store) Round(ctx context.Context, id int64) (Round, []row.Row, error) {
 	var r Round
 	var at int64
 	var sum string
-	err := s.db.QueryRowContext(ctx, `SELECT id, kind, at, summary FROM rounds ORDER BY id DESC LIMIT 1`).
-		Scan(&r.ID, &r.Kind, &at, &sum)
+	err := s.db.QueryRowContext(ctx, `SELECT id, kind, at, summary, rev, owner_session, owner_label FROM rounds WHERE id = ?`, id).
+		Scan(&r.ID, &r.Kind, &at, &sum, &r.Rev, &r.OwnerSession, &r.OwnerLabel)
 	if err != nil {
 		return r, nil, err
 	}
@@ -153,53 +281,300 @@ func (s *Store) LatestRound(ctx context.Context) (Round, []row.Row, error) {
 	if err := json.Unmarshal([]byte(sum), &r.Summary); err != nil {
 		return r, nil, err
 	}
-	q, err := s.db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.note FROM rows r
-		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
-		WHERE r.round_id = ? ORDER BY r.seq`, r.ID)
+	rows, err := rowsOf(ctx, s.db, r.ID)
 	if err != nil {
 		return r, nil, err
+	}
+	return r, rows, nil
+}
+
+// querier is a database or a transaction.
+type querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// rowsOf is a round's rows in the order they were recorded, each with its
+// decision and its fingerprint.
+func rowsOf(ctx context.Context, db querier, roundID int64) ([]row.Row, error) {
+	q, err := db.QueryContext(ctx, `SELECT r.body, d.action, d.verdict, d.title, d.text, d.cleared, d.note, d.sent_at, d.decision_id FROM rows r
+		LEFT JOIN decisions d ON d.round_id = r.round_id AND d.row_id = r.row_id
+		WHERE r.round_id = ? ORDER BY r.seq`, roundID)
+	if err != nil {
+		return nil, err
 	}
 	defer func() { _ = q.Close() }()
 	var rows []row.Row
 	for q.Next() {
 		var body string
-		var action, verdict, title, text, note sql.NullString
-		if err := q.Scan(&body, &action, &verdict, &title, &text, &note); err != nil {
-			return r, nil, err
+		var action, verdict, title, text, cleared, note, did sql.NullString
+		var sent sql.NullInt64
+		if err := q.Scan(&body, &action, &verdict, &title, &text, &cleared, &note, &sent, &did); err != nil {
+			return nil, err
 		}
 		var rw row.Row
 		if err := json.Unmarshal([]byte(body), &rw); err != nil {
-			return r, nil, err
+			return nil, err
 		}
+		rw.Decision = nil
 		if action.Valid {
-			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String, Note: note.String}
+			rw.Decision = &row.Decision{Action: action.String, Verdict: verdict.String, Title: title.String, Text: text.String,
+				Note: note.String, Sent: sent.Int64 != 0, ID: did.String}
+			if cleared.String != "" {
+				rw.Decision.Cleared = strings.Split(cleared.String, ",")
+			}
 		}
 		rows = append(rows, rw)
 	}
-	return r, rows, q.Err()
+	if err := q.Err(); err != nil {
+		return nil, err
+	}
+	byID := make(map[string]*row.Row, len(rows))
+	for i := range rows {
+		byID[rows[i].ID] = &rows[i]
+	}
+	in := func(id string) *row.Row { return byID[id] }
+	for i := range rows {
+		rows[i].Fingerprint = rows[i].Print(in)
+	}
+	return rows, nil
+}
+
+// ErrChanged is returned when a decision answers a fingerprint the row no
+// longer has: what the page shows of it (the proposal, or the edit in
+// force) changed since the page showed it.
+var ErrChanged = errors.New("store: the row changed since it was shown")
+
+// Answer is one decision on a row, given against the row as the page
+// showed it: its fingerprint (row.Print: the proposal with the edit in
+// force over it) and the id of the decision in force ("" for none). An
+// edit to merge:C also carries C's fingerprint as the page showed it
+// (TargetFingerprint).
+type Answer struct {
+	Row               string
+	Fingerprint       string
+	DecisionID        string
+	TargetFingerprint string
+	Decision          row.Decision
 }
 
 // Decide records the answer to one row of a round (accept, edit or reject
-// its proposal), replacing an earlier one.
+// its proposal), replacing an earlier one, whatever the row holds now. The
+// review page's decisions go through Answer, which checks the fingerprint.
+// Both refuse to approve a merge into a row the round lacks (ErrChanged).
 func (s *Store) Decide(ctx context.Context, roundID int64, rowID string, d row.Decision) error {
-	if err := d.Validate(); err != nil {
-		return err
+	_, err := s.answer(ctx, roundID, []Answer{{Row: rowID, Decision: d}}, false)
+	return err
+}
+
+// Answer records decisions on a round's rows, all or nothing, each only if
+// the row's fingerprint (row.Print: what the page shows, the edit in force
+// included, with its merge target's) and the id of its decision in force
+// are still the ones given, and, for an edit to merge:C, C's fingerprint
+// is still TargetFingerprint: ErrChanged when any is not, ErrStale when the row is not in the round, ErrNotReady while a
+// round decided per item still waits for the agent's verdicts. An accept
+// of an edited row keeps the edit, with the accept's note (shown.Kept), as
+// an accept of an edited file does; going back to the proposal is
+// Undecide. The check and the write are one transaction, which also reads
+// back the answered rows: the snapshot the page shows next, each with its
+// decision and fingerprint.
+func (s *Store) Answer(ctx context.Context, roundID int64, as []Answer) ([]row.Row, error) {
+	return s.answer(ctx, roundID, as, true)
+}
+
+func (s *Store) answer(ctx context.Context, roundID int64, as []Answer, check bool) ([]row.Row, error) {
+	for _, a := range as {
+		if err := a.Decision.Validate(); err != nil {
+			return nil, err
+		}
 	}
-	return s.db.Tx(ctx, func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&n); err != nil {
+	var after []row.Row
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		// The first statement is a write (the main connection begins deferred).
+		if err := bump(ctx, tx, roundID); err != nil {
 			return err
 		}
-		if n == 0 {
+		// A round decided per item waits for the agent's verdict on every
+		// item, as an audit round waits for every file's recommendation.
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM rounds WHERE id = ?`, roundID).Scan(&kind); errors.Is(err, sql.ErrNoRows) {
 			return ErrStale
+		} else if err != nil {
+			return err
 		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, note, decided_at)
-			VALUES (?,?,?,?,?,?,?,?)
-			ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
-			  title = excluded.title, text = excluded.text, note = excluded.note, decided_at = excluded.decided_at`,
-			roundID, rowID, d.Action, d.Verdict, d.Title, d.Text, d.Note, time.Now().UnixMilli())
+		if PerItem(kind) {
+			p, err := stateIn(ctx, tx, roundID)
+			if err != nil {
+				return err
+			}
+			if p.State == Recommending {
+				return ErrNotReady
+			}
+		}
+		// Every print is checked against the round as the page showed it,
+		// before this answer writes anything.
+		before, err := rowsOf(ctx, tx, roundID)
+		if err != nil {
+			return err
+		}
+		byID := make(map[string]row.Row, len(before))
+		for _, r := range before {
+			byID[r.ID] = r
+		}
+		for _, a := range as {
+			cur, ok := byID[a.Row]
+			if !ok {
+				return ErrStale
+			}
+			if check && (a.Fingerprint == "" || cur.Fingerprint != a.Fingerprint || idOf(cur.Decision) != a.DecisionID) {
+				return fmt.Errorf("%w: %s", ErrChanged, a.Row)
+			}
+			d := shown.Kept(a.Decision, a.Decision.Note, cur.Decision)
+			if id := row.MergeTarget(chosen(cur, d)); id != "" {
+				target, ok := byID[id]
+				if !ok {
+					return fmt.Errorf("%w: %s merges into %s, which is not in the round", ErrChanged, a.Row, id)
+				}
+				if check && a.Decision.Action == "edit" && a.Decision.Verdict != "" &&
+					(a.TargetFingerprint == "" || target.Fingerprint != a.TargetFingerprint) {
+					return fmt.Errorf("%w: %s (its merge target %s)", ErrChanged, a.Row, id)
+				}
+			}
+			// A new decision, with a new id, even when it equals the one it
+			// replaces.
+			if _, err := tx.ExecContext(ctx, `INSERT INTO decisions(round_id, row_id, action, verdict, title, text, cleared, note, decided_at, sent_at, decision_id)
+				VALUES (?,?,?,?,?,?,?,?,?,0,?)
+				ON CONFLICT(round_id, row_id) DO UPDATE SET action = excluded.action, verdict = excluded.verdict,
+				  title = excluded.title, text = excluded.text, cleared = excluded.cleared, note = excluded.note,
+				  decided_at = excluded.decided_at, sent_at = 0, decision_id = excluded.decision_id`,
+				roundID, a.Row, d.Action, d.Verdict, d.Title, d.Text, strings.Join(d.Cleared, ","), d.Note, time.Now().UnixMilli(), newID()); err != nil {
+				return err
+			}
+		}
+		ids := make([]string, len(as))
+		for i, a := range as {
+			ids[i] = a.Row
+		}
+		after, err = rowsNow(ctx, tx, roundID, ids)
 		return err
 	})
+	if err != nil {
+		return nil, err
+	}
+	return after, nil
+}
+
+// idOf is a row decision's id, "" for none.
+func idOf(d *row.Decision) string {
+	if d == nil {
+		return ""
+	}
+	return d.ID
+}
+
+// rowsNow is the round's rows named by ids as they are now, in the round's
+// order.
+func rowsNow(ctx context.Context, tx *sql.Tx, roundID int64, ids []string) ([]row.Row, error) {
+	rows, err := rowsOf(ctx, tx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	var out []row.Row
+	for _, r := range rows {
+		if slices.Contains(ids, r.ID) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// chosen is the verdict a decision on cur approves: the proposal's for an
+// accept, the edit's own when it names one, none for a reject.
+func chosen(cur row.Row, d row.Decision) string {
+	switch {
+	case d.Action == "reject":
+		return ""
+	case d.Action == "edit" && d.Verdict != "":
+		return d.Verdict
+	}
+	return cur.Verdict
+}
+
+// rowIn reads one row of a round as stored (no decision); sql.ErrNoRows
+// when the round has no such row.
+func rowIn(ctx context.Context, tx *sql.Tx, roundID int64, rowID string) (row.Row, error) {
+	var body string
+	if err := tx.QueryRowContext(ctx, `SELECT body FROM rows WHERE round_id = ? AND row_id = ?`, roundID, rowID).Scan(&body); err != nil {
+		return row.Row{}, err
+	}
+	var r row.Row
+	err := json.Unmarshal([]byte(body), &r)
+	return r, err
+}
+
+// Undecide removes the answer to one row (for a certain row: redoes it; for
+// an edited row: reverts it to the proposal, which the page then shows
+// again), if the row's fingerprint and the id of its decision are still
+// the ones the page showed: ErrChanged when they are not, ErrStale when the
+// row is not in the round. It returns the row as it is after, read in the
+// same transaction.
+func (s *Store) Undecide(ctx context.Context, roundID int64, rowID, fingerprint, decisionID string) (row.Row, error) {
+	var after row.Row
+	err := s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if err := bump(ctx, tx, roundID); err != nil {
+			return err
+		}
+		rows, err := rowsNow(ctx, tx, roundID, []string{rowID})
+		if err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return ErrStale
+		}
+		if fingerprint == "" || rows[0].Fingerprint != fingerprint || idOf(rows[0].Decision) != decisionID {
+			return fmt.Errorf("%w: %s", ErrChanged, rowID)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM decisions WHERE round_id = ? AND row_id = ?`, roundID, rowID); err != nil {
+			return err
+		}
+		rows, err = rowsNow(ctx, tx, roundID, []string{rowID})
+		if err != nil {
+			return err
+		}
+		after = rows[0]
+		return nil
+	})
+	return after, err
+}
+
+// Note sets the note on a row's answer, and nothing else: it approves
+// nothing, so it carries no fingerprint. The answer is unsent again.
+// ErrChanged when the row has no answer (cleared since the page showed it),
+// ErrStale when it is not in the round.
+func (s *Store) Note(ctx context.Context, roundID int64, rowID, note string) error {
+	return s.db.Tx(ctx, func(tx *sql.Tx) error {
+		if err := bump(ctx, tx, roundID); err != nil {
+			return err
+		}
+		if _, err := rowIn(ctx, tx, roundID, rowID); errors.Is(err, sql.ErrNoRows) {
+			return ErrStale
+		} else if err != nil {
+			return err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE decisions SET note = ?, sent_at = 0 WHERE round_id = ? AND row_id = ?`, note, roundID, rowID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return fmt.Errorf("%w: %s has no decision", ErrChanged, rowID)
+		}
+		return nil
+	})
+}
+
+// bump counts one change to the round, so a page watching it reloads.
+func bump(ctx context.Context, tx *sql.Tx, roundID int64) error {
+	_, err := tx.ExecContext(ctx, `UPDATE rounds SET rev = rev + 1 WHERE id = ?`, roundID)
+	return err
 }
 
 // Mute stops flagging a row id ("keep, stop flagging"). The id hashes the

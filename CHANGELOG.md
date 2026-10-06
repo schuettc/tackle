@@ -12,9 +12,67 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 - `sift check`: audits instruction files (global files, repo files and
   skills, read at each repo's fetched base) and records the round's findings
   as rows: size, load limit, duplicate, dead path, stale status, retired
-  store, misplaced content, negative rule and secret. `--json` prints them.
+  store, misplaced content and secret, and each audited file (where it is,
+  the commit it was read at, its content's hash; never the content). Forks
+  (a repo with an `upstream` remote) and vendor-managed skill directories
+  (Claude Code's `skills/synced`, `plugins/cache` and `plugins/marketplaces`)
+  are skipped and listed, unless the config's `[include]` turns them on.
+  `--json` prints them.
 - `sift doctor`: config, profiles found, roots readable, and whether `gh` is
-  there for PR and issue state.
+  there for PR and issue state; the page server and each enabled harness's
+  channel registration.
+- `sift next` and `sift propose`: the recommending loop. Every file with
+  findings gets one recommendation from the agent: the whole revised file,
+  the base it started from, each finding fixed (how) or kept (why), links to
+  the files it moves text to or from, and a summary. `propose` refuses a
+  stale base, a finding left out or unexplained, a certain finding kept, a
+  one-way link, and content unchanged while something is fixed; a new
+  recommendation drops the decisions on its file and the files linked to it.
+  `next` gives the guidance for the rewrite with each file.
+- Round states: recommending until every file has a recommendation, then
+  ready, sent and applied. The page and `sift_review` wait for ready.
+- `sift rows add`: merges the agent's rows (proposals and intake rows), as
+  JSON lines, into a backlog or intake round, decided per item. A changed
+  proposal drops its decision, and a changed merge target drops every merge
+  into it.
+- `sift serve`: the review page. An audit round has two sections. To
+  change lists one entry per file the recommendation changes (sizes before
+  and after, findings, the version picked), linked files together; a file
+  asks which version it should have, side by side: 1 current, 2
+  recommended, or your own (e writes it; it is then a third choice, 3),
+  then the findings with what the chosen version does, a note, and a
+  wrapping diff with the certain fixes marked. Linked files are picked
+  together. Nothing to change lists the files the agent keeps as they are,
+  with its reason for each finding: agree (one file, or a for all) mutes
+  their findings until the text changes; disagree takes a note, and Send
+  asks the agent to recommend the file again. A backlog round lists its
+  items, grouped as issues by repo, decisions and closes, each with accept,
+  edit or reject; an item shows your edit once you make one, and
+  accepting it keeps the edit; u reverts to the proposal. Each decision and clear
+  carries the fingerprints of what the page showed (an edit included), and
+  one the agent or another page has changed since is refused, and the page
+  reloads what changed. A decision shows once the server has it, and while
+  it saves, its linked files and Send wait; while Send is in flight,
+  nothing else runs. Send delivers the decisions the page showed, those
+  still in force, to the agent session that opened that review, and the
+  page marks only those sent.
+- `sift wait`: returns when you press Send and prints what to do, for
+  sessions without the channel.
+- `sift channel`: the MCP server for an agent session, with `sift_check`,
+  `sift_next`, `sift_propose`, `sift_review`, `sift_apply` and
+  `sift_status`, and Send as a channel event.
+- `sift apply`: each file accepted or edited and sent, written whole, as one
+  branch per repo cut from the fetched base in a worktree; a file whose base
+  changed since the audit is held, with the files linked to it; every path
+  stays inside the repo (no `..`, no `.git`, no symlinks), and every write
+  goes through an `os.Root` on the worktree; a failure after the commit
+  keeps the branch; a repo with uncommitted or unpushed work, or an
+  untracked instruction file, in its primary clone is held; with `gh` and a
+  GitHub remote, a pull request (`--body-file`). A file outside any repo is
+  left to you with its approved content saved; a backlog round's approved
+  rows are left to the agent.
+- `sift reconcile`: each file on an apply branch equals its approved
+  content; any other file the branch changes is extra.
 
 ## [casebook 0.2.1] - 2026-10-01
 

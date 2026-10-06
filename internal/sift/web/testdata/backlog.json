@@ -1,0 +1,13 @@
+{
+ "kind": "backlog",
+ "repos": [],
+ "files": {
+  "notes/SCRATCHPAD.md": "# Scratchpad\n\n- [ ] the release script skips the changelog\n- [ ] the probe is flaky under load\n- [x] rename the config key\n- [ ] decide on the new layout\n"
+ },
+ "rows": [
+  {"id": "b1", "check": "intake", "summary": "a to-do item", "passage": "- [ ] the release script skips the changelog", "verdict": "issue", "title": "release: the script skips the changelog", "destination": "acme/shop", "text": "The release script tags without updating the changelog.", "reason": "Checked: release.sh has no changelog step.", "certain": false, "source": {"rel": "notes/SCRATCHPAD.md", "start": 3, "end": 3}},
+  {"id": "b2", "check": "intake", "summary": "a to-do item", "passage": "- [ ] the probe is flaky under load", "verdict": "issue", "title": "probe: flaky under load", "destination": "acme/tools", "text": "The page probe times out on a busy runner.", "reason": "Three CI runs this week.", "certain": false, "source": {"rel": "notes/SCRATCHPAD.md", "start": 4, "end": 4}},
+  {"id": "b3", "check": "intake", "summary": "a to-do item", "passage": "- [x] rename the config key", "verdict": "close:done", "reason": "Done in the last release.", "certain": false, "source": {"rel": "notes/SCRATCHPAD.md", "start": 5, "end": 5}},
+  {"id": "b4", "check": "intake", "summary": "a to-do item", "passage": "- [ ] decide on the new layout", "verdict": "ask", "reason": "A choice only you can make.", "certain": false, "source": {"rel": "notes/SCRATCHPAD.md", "start": 6, "end": 6}}
+ ]
+}

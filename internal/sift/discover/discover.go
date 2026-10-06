@@ -84,6 +84,7 @@ type Load struct {
 type Repo struct {
 	Root   string
 	Ref    string // what it was read at: origin/<base>, an upstream, or HEAD
+	Commit string // the commit Ref named when it was read
 	Remote string // origin's URL, if any
 	// Tree holds every file and directory at Ref (repo-relative).
 	Tree map[string]bool
@@ -119,12 +120,23 @@ type Result struct {
 	Copies   []Copy
 	Chains   []Chain
 	Warnings []string
+	// Skipped is what was left out as another project's: each fork's root
+	// (Why "fork") and each vendor-managed skill file (Why "vendor").
+	Skipped []Skip
+}
+
+// Skip is one thing left out of the audit, and why.
+type Skip struct {
+	Path string `json:"path"`
+	Why  string `json:"why"` // fork or vendor
 }
 
 // Options says what to look at.
 type Options struct {
 	Profiles []profile.Profile
 	Roots    []config.Root
+	// Include audits forks and what is under vendor directories too.
+	Include config.Include
 }
 
 // skipDirs are never descended into, on disk or in a tree.
@@ -137,11 +149,26 @@ type finder struct {
 	res   Result
 	real  map[string]*File     // realpath → file, so a file reached twice is one
 	repos map[string]*repoTree // root → repo
+	// vendor is each profile's vendor directories, as given and real,
+	// unless the config includes them: nothing under one is audited, by
+	// any route.
+	vendor []string
 }
 
 // Run discovers the files.
 func Run(ctx context.Context, opt Options) (Result, error) {
 	f := &finder{opt: opt, real: map[string]*File{}, repos: map[string]*repoTree{}}
+	if !opt.Include.Vendor {
+		for _, p := range opt.Profiles {
+			for _, v := range p.Vendor {
+				d := filepath.Clean(p.Path(v))
+				f.vendor = append(f.vendor, d)
+				if r := realish(d); r != d {
+					f.vendor = append(f.vendor, r)
+				}
+			}
+		}
+	}
 	f.globals()
 	for _, root := range opt.Roots {
 		f.root(ctx, root)
@@ -159,6 +186,30 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		return a.Path < b.Path
 	})
 	return f.res, nil
+}
+
+// vendored reports whether p is a vendor directory or under one.
+func (f *finder) vendored(p string) bool {
+	for _, v := range f.vendor {
+		if p == v || strings.HasPrefix(p, v+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// realish is p with the symlinks in its longest existing prefix resolved.
+func realish(p string) string {
+	rest := ""
+	for d := p; ; d = filepath.Dir(d) {
+		if r, err := filepath.EvalSymlinks(d); err == nil {
+			return filepath.Join(r, rest)
+		}
+		if filepath.Dir(d) == d {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(d), rest)
+	}
 }
 
 func (f *finder) warn(format string, a ...any) {
@@ -248,8 +299,40 @@ func (f *finder) globals() {
 // keeps its bundled skills in .system) and are skipped.
 func (f *finder) skillDirs() {
 	for _, p := range f.opt.Profiles {
+		if !f.opt.Include.Vendor {
+			seen := map[string]bool{}
+			for _, v := range p.Vendor {
+				f.skipVendor(p.Path(v), seen)
+			}
+		}
+		seen := map[string]bool{}
 		for _, s := range p.Skills {
-			f.walkSkills(p.Path(s), p.Name, map[string]bool{})
+			f.walkSkills(p.Path(s), p.Name, seen)
+		}
+	}
+}
+
+// skipVendor lists every SKILL.md under a vendor-managed directory as
+// skipped. seen holds the real directories walked.
+func (f *finder) skipVendor(dir string, seen map[string]bool) {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil || seen[real] {
+		return
+	}
+	seen[real] = true
+	entries, err := os.ReadDir(real)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		fp := filepath.Join(dir, e.Name())
+		st, err := os.Stat(fp)
+		switch {
+		case err != nil:
+		case st.IsDir():
+			f.skipVendor(fp, seen)
+		case e.Name() == profile.SkillFile:
+			f.res.Skipped = append(f.res.Skipped, Skip{Path: fp, Why: "vendor"})
 		}
 	}
 }
@@ -259,7 +342,7 @@ func (f *finder) skillDirs() {
 // tree is not followed twice.
 func (f *finder) walkSkills(dir, prof string, seen map[string]bool) {
 	real, err := filepath.EvalSymlinks(dir)
-	if err != nil || seen[real] {
+	if err != nil || seen[real] || f.vendored(dir) || f.vendored(real) {
 		return
 	}
 	seen[real] = true
@@ -319,6 +402,7 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 		return false
 	}
 	loose := map[string][]string{} // dir → instruction file names present, outside repos
+	realStart := realish(start)
 	err := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if p == start {
@@ -328,6 +412,9 @@ func (f *finder) root(ctx context.Context, root config.Root) {
 		}
 		if d.IsDir() {
 			if p != start && skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			if rel, rerr := filepath.Rel(start, p); rerr == nil && (f.vendored(p) || f.vendored(filepath.Join(realStart, rel))) {
 				return filepath.SkipDir
 			}
 			if st, gerr := os.Lstat(filepath.Join(p, ".git")); gerr == nil {
@@ -439,6 +526,12 @@ func enclosing(ctx context.Context, start string) (top, prefix string) {
 // directories above it are read too, as chain context only: a harness loads
 // them, but they are not this root's to audit.
 func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix string) error {
+	if !f.opt.Include.Forks {
+		if u, err := git(ctx, dir, "config", "--get", "remote.upstream.url"); err == nil && strings.TrimSpace(string(u)) != "" {
+			f.res.Skipped = append(f.res.Skipped, Skip{Path: dir, Why: "fork"})
+			return nil
+		}
+	}
 	r, err := f.readRepo(ctx, dir, root.Base)
 	if err != nil {
 		return err
@@ -451,6 +544,14 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			}
 		}
 	}
+	realRoot, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		realRoot = dir
+	}
+	vendored := func(rel string) bool {
+		p := filepath.FromSlash(rel)
+		return f.vendored(filepath.Join(dir, p)) || f.vendored(filepath.Join(realRoot, p))
+	}
 	byDir := map[string][]string{}
 	for rel := range r.files {
 		name := path.Base(rel)
@@ -460,14 +561,10 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 		if name != profile.SkillFile && !f.isRepoFile(name) {
 			continue
 		}
-		if skipped(rel) || excluded(rel, root.Exclude) {
+		if skipped(rel) || excluded(rel, root.Exclude) || vendored(rel) {
 			continue
 		}
 		byDir[path.Dir(rel)] = append(byDir[path.Dir(rel)], name)
-	}
-	realRoot, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		realRoot = dir
 	}
 	dirs := make([]string, 0, len(byDir))
 	for d := range byDir {
@@ -512,7 +609,7 @@ func (f *finder) repoFile(ctx context.Context, r *repoTree, dir, realRoot, rel s
 	p := filepath.Join(dir, filepath.FromSlash(rel))
 	file := f.real[key]
 	if file == nil || file.Repo == nil {
-		body, err := git(ctx, dir, "show", r.Ref+":"+rel)
+		body, err := git(ctx, dir, "show", r.Commit+":"+rel)
 		if err != nil {
 			f.warn("%s: %v", p, err)
 			return nil
@@ -547,11 +644,16 @@ func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, err
 	if ref == "" {
 		return nil, errors.New("no commits")
 	}
-	out, err := git(ctx, dir, "ls-tree", "-r", "-z", "--name-only", ref)
+	commit, err := git(ctx, dir, "rev-parse", "--verify", "-q", ref+"^{commit}")
 	if err != nil {
 		return nil, err
 	}
-	r := &repoTree{Repo: &Repo{Root: dir, Ref: ref, Tree: map[string]bool{}}, files: map[string]bool{}}
+	r := &repoTree{Repo: &Repo{Root: dir, Ref: ref, Commit: strings.TrimSpace(string(commit)), Tree: map[string]bool{}}, files: map[string]bool{}}
+	// Read at the commit, so the tree and every file are the same snapshot.
+	out, err := git(ctx, dir, "ls-tree", "-r", "-z", "--name-only", r.Commit)
+	if err != nil {
+		return nil, err
+	}
 	if u, err := git(ctx, dir, "config", "--get", "remote.origin.url"); err == nil {
 		r.Remote = strings.TrimSpace(string(u))
 	}
@@ -566,7 +668,7 @@ func (f *finder) readRepo(ctx context.Context, dir, base string) (*repoTree, err
 		}
 	}
 	r.Gone = map[string]bool{}
-	if out, err := git(ctx, dir, "log", "--format=", "--name-only", "--no-renames", "--diff-filter=D", "-z", ref); err == nil {
+	if out, err := git(ctx, dir, "log", "--format=", "--name-only", "--no-renames", "--diff-filter=D", "-z", r.Commit); err == nil {
 		for _, rel := range strings.Split(string(out), "\x00") {
 			if rel = strings.TrimSpace(rel); rel != "" && !r.files[rel] {
 				r.Gone[rel] = true

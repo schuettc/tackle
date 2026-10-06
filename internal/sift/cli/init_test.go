@@ -51,8 +51,8 @@ func TestInitDetectsHarnessesAndWritesTheConfig(t *testing.T) {
 	if strings.Contains(string(body), "patterns") || strings.Contains(string(body), "phrases") {
 		t.Errorf("config pins the default patterns:\n%s", body)
 	}
-	if !reflect.DeepEqual(c.Negative, config.Default().Negative) || !reflect.DeepEqual(c.Stale, config.Default().Stale) {
-		t.Errorf("patterns not the defaults: %+v %+v", c.Negative, c.Stale)
+	if !reflect.DeepEqual(c.Stale, config.Default().Stale) {
+		t.Errorf("patterns not the defaults: %+v", c.Stale)
 	}
 	for _, w := range []string{`Claude Code:\s+found`, `Codex:\s+not found`, `pi:\s+found`, regexp.QuoteMeta(root), regexp.QuoteMeta(config.Path())} {
 		if !regexp.MustCompile(w).MatchString(out) {
