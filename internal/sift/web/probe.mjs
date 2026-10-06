@@ -266,16 +266,49 @@ async function main() {
     spill.length === 0,
     spill.join(' | '),
   );
+  // Each entry's meta sits on its own line under the title, so a title
+  // gets the row's width, not what the meta leaves of it.
+  const lines = await page.locator('.kit-row').evaluateAll((els) =>
+    els.map((e) => {
+      const t = e.querySelector('.kit-title').getBoundingClientRect();
+      const m = e.querySelector('.kit-meta').getBoundingClientRect();
+      const r = e.getBoundingClientRect();
+      return { t: t.width, r: r.width, under: m.top >= t.bottom - 0.5 };
+    }),
+  );
+  check(
+    'list titles have the row: the meta sits under the title, which is most of the row wide',
+    lines.every((l) => l.under && l.t >= 0.85 * (l.r - 20)),
+    JSON.stringify(lines),
+  );
+  const cut = await page.locator('.kit-row .kit-title').evaluateAll((els) =>
+    els
+      .filter((e) => e.scrollWidth > e.clientWidth + 1)
+      .map((e) => {
+        const cw = e.scrollWidth / e.textContent.length;
+        return `${Math.floor(e.clientWidth / cw)} of ${e.textContent.length}: ${e.textContent}`;
+      }),
+  );
+  check(
+    'a cut-off list title still shows 40 characters or more',
+    cut.every((c) => parseInt(c, 10) >= 40),
+    cut.join(' | '),
+  );
   const send = page.locator('.kit-primary');
   check('nothing to send yet: no Send button', !(await send.isVisible()));
   check(
-    'the bar shows progress 0/6',
-    norm(await page.locator('.kit-ctl').first().innerText()) === 'review 0/6',
+    'the bar counts the files to change: 0/4',
+    norm(await page.locator('.kit-ctl').first().innerText()) === 'review 0/4',
+    norm(await page.locator('.kit-ctl').first().innerText()),
   );
   check(
-    'the overview counts the files to decide',
+    'the overview counts the files to change, and those with nothing to change on their own',
     (await page.locator('.kit-doc h1').innerText()) ===
-      '6 of 6 files to decide',
+      '4 files to change · 2 with nothing to change' &&
+      (await page.locator('.kit-doc').innerText()).includes(
+        'Still to decide: 4 of 4 to change and 2 of 2 with nothing to change.',
+      ),
+    await page.locator('.kit-doc').innerText(),
   );
   await shoot(page, 'list');
 
@@ -326,6 +359,12 @@ async function main() {
     }),
   );
   const docBox0 = await box(page.locator('.kit-doc'));
+  const readBox0 = await box(page.locator('main.kit-read'));
+  check(
+    'at 1400 px the reading column takes the width beside the list (wider than the kit 640)',
+    docBox0.width >= readBox0.width - 20 && docBox0.width > 900,
+    JSON.stringify([docBox0, readBox0]),
+  );
   check(
     'two versions side by side: 1 current and 2 recommended, inside the column',
     cb.length === 2 &&
@@ -335,7 +374,7 @@ async function main() {
       cb[1].x >= cb[0].x + cb[0].w &&
       cb[0].x >= docBox0.x &&
       cb[1].x + cb[1].w <= docBox0.x + docBox0.width + 0.5 &&
-      cb.every((c) => c.w > 150 && c.h > 40),
+      cb.every((c) => c.w > 400 && c.h > 40),
     JSON.stringify(cb),
   );
   check(
@@ -612,6 +651,17 @@ async function main() {
     ),
   );
   await openFile(global);
+  // The choices and buttons where they are with a decision (clear shown).
+  const placed = () =>
+    page
+      .locator('.sift-pick .sift-choice, .sift-decide .kit-btn')
+      .evaluateAll((els) =>
+        els.map((e) => {
+          const r = e.getBoundingClientRect();
+          return [Math.round(r.x), Math.round(r.y), Math.round(r.width)];
+        }),
+      );
+  const withClear = await placed();
   await decideKey(page, 'u');
   check(
     'u clears both',
@@ -619,6 +669,20 @@ async function main() {
       async () =>
         !(await fileOf(global)).decision && !(await fileOf(shop)).decision,
     ),
+  );
+  await settled(page);
+  await until(
+    async () => (await page.locator('.sift-choice.chosen').count()) === 0,
+  );
+  const noClear = await placed();
+  check(
+    'clear goes without moving the choices or buttons: its place is kept',
+    withClear.length === 4 &&
+      JSON.stringify(withClear) === JSON.stringify(noClear) &&
+      !(await page
+        .locator('.sift-decide .kit-btn', { hasText: 'clear (u)' })
+        .isVisible()),
+    JSON.stringify([withClear, noClear]),
   );
   await decideKey(page, '2');
   await until(async () => (await fileOf(shop)).decision?.action === 'accept');
@@ -729,6 +793,55 @@ async function main() {
       'to change · 4 files',
   );
   await shoot(page, 'nothing-to-change');
+  // Agree moves to the next file with no decision, and the clear that
+  // appears moves nothing: each button keeps its place in its block.
+  const inBlock = (i) =>
+    blocks.nth(i).evaluate((b) => {
+      const o = b.getBoundingClientRect();
+      return [...b.querySelectorAll('.sift-nc-head .kit-btn')].map((e) => {
+        const r = e.getBoundingClientRect();
+        return [
+          Math.round(r.x - o.x),
+          Math.round(r.y - o.y),
+          Math.round(r.width),
+        ];
+      });
+    });
+  const before0 = await inBlock(0);
+  await blocks
+    .first()
+    .locator('.kit-btn', { hasText: /^agree$/ })
+    .click();
+  check(
+    'agree moves to the next file with nothing to change still undecided',
+    await until(
+      async () =>
+        (await fileOf(same)).decision?.action === 'accept' &&
+        (await page.evaluate(
+          () => document.activeElement?.closest('.sift-nc')?.dataset.key ?? '',
+        )) === cli.key &&
+        (await page.locator('.sift-nochange').count()) === 1,
+    ),
+    await page.evaluate(() => document.activeElement?.outerHTML ?? ''),
+  );
+  const after0 = await inBlock(0);
+  check(
+    'a decision moves nothing: agree and disagree stay put as clear appears',
+    before0.length === 3 &&
+      JSON.stringify(before0) === JSON.stringify(after0) &&
+      (await blocks
+        .first()
+        .locator('.kit-btn', { hasText: /^clear$/ })
+        .isVisible()),
+    JSON.stringify([before0, after0]),
+  );
+  await settled(page);
+  await blocks
+    .first()
+    .locator('.kit-btn', { hasText: /^clear$/ })
+    .click();
+  await until(async () => !(await fileOf(same)).decision);
+  await settled(page);
   await blocks.nth(1).locator('.kit-btn', { hasText: 'disagree…' }).click();
   const why = page.locator('.sift-disagree-note');
   await why.waitFor();
@@ -782,6 +895,21 @@ async function main() {
       const f = await fileOf(same);
       return f.decision?.action === 'accept' && f.muted;
     }),
+  );
+  check(
+    'after agree with all, with nothing left, the page moves on to the overview',
+    await until(
+      async () =>
+        (await page.evaluate(() => location.hash)) === '#/open' &&
+        (await page.locator('.kit-doc h1').innerText()) ===
+          '4 files to change · 2 with nothing to change',
+    ),
+    await page.evaluate(() => location.hash),
+  );
+  check(
+    'the bar counts the files to change, all decided: 4/4',
+    norm(await page.locator('.kit-ctl').first().innerText()) === 'review 4/4',
+    norm(await page.locator('.kit-ctl').first().innerText()),
   );
   check(
     'a keeps the disagreement',

@@ -18,6 +18,15 @@
   margin: 10px 0 14px;
 }
 
+/* the reading column: wider than the kit's, for two versions side by
+   side and a diff; the lead stays a readable measure */
+.kit-doc {
+  max-width: 1080px;
+}
+.kit-doc .sift-lead {
+  max-width: 46em;
+}
+
 /* a long unbroken title wraps instead of widening the reading column */
 .kit-doc h1 {
   overflow-wrap: anywhere;
@@ -59,9 +68,14 @@
   color: var(--kit-signal);
 }
 
-/* the list: a long path wraps in its row instead of running past it */
+/* the list: a long path wraps in its row instead of running past it; the
+   meta sits on its own line under the title, so neither is squeezed */
 .kit-list .kit-kicker {
   overflow-wrap: anywhere;
+}
+.kit-list .kit-row {
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 0;
 }
 
 /* the list: a group's rows sit under it while it is open */
@@ -360,6 +374,10 @@ textarea.sift-whole {
 }
 .sift-disagree {
   margin: 10px 0 4px;
+}
+/* a clear with nothing to clear keeps its place, unseen */
+.kit-btn.sift-held {
+  visibility: hidden;
 }
 .sift-agree-all {
   margin: 24px 0 8px;

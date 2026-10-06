@@ -659,9 +659,8 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
       run: () => ctx.startEdit(f),
     },
   ];
-  if (f.decision)
-    bs.push({ label: 'clear (u)', disabled: busy, run: () => ctx.clear(f) });
-  const decide = buttons(bs);
+  bs.push({ label: 'clear (u)', disabled: busy, run: () => ctx.clear(f) });
+  const decide = holdClear(buttons(bs), !f.decision);
   decide.classList.add('sift-decide');
   parts.push(decide);
   const said: string[] = [];
@@ -719,6 +718,19 @@ export function fileDoc(ctx: FileCtx, f: FileView): HTMLElement {
     parts.push(h('p', { class: 'kit-muted sift-loading' }, 'loading…'));
   else parts.push(diffView(base, showMine ? mine : rec, certainLines(rows)));
   return h('div', { class: 'kit-doc sift-file' }, ...parts);
+}
+
+/** The clear button, last in bs, keeps its place while there is nothing
+ * to clear, so a decision moves nothing when it appears. */
+function holdClear(bs: HTMLElement, none: boolean): HTMLElement {
+  const c = bs.lastElementChild as HTMLButtonElement | null;
+  if (c && none) {
+    c.classList.add('sift-held');
+    c.disabled = true;
+    c.tabIndex = -1;
+    c.setAttribute('aria-hidden', 'true');
+  }
+  return bs;
 }
 
 // ---- nothing to change ------------------------------------------------------
@@ -787,8 +799,7 @@ export function noChangeDoc(ctx: NoChangeCtx, files: FileView[]): HTMLElement {
         run: () => ctx.startDisagree(f),
       },
     ];
-    if (f.decision)
-      bs.push({ label: 'clear', disabled: busy, run: () => ctx.clear(f) });
+    bs.push({ label: 'clear', disabled: busy, run: () => ctx.clear(f) });
     const head = h(
       'div',
       { class: 'sift-nc-head' },
@@ -808,7 +819,7 @@ export function noChangeDoc(ctx: NoChangeCtx, files: FileView[]): HTMLElement {
             .join(' · '),
         ),
       ),
-      buttons(bs),
+      holdClear(buttons(bs), !f.decision),
     );
     const block = h(
       'section',

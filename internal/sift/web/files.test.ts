@@ -202,14 +202,15 @@ test("snippet: a choice's first changed lines, cut short", () => {
   assert.deepEqual(snippet(base, base, '+', 3), []);
 });
 
-test('filesProgress and unsentFiles', () => {
+test('filesProgress counts the files to change, not those with nothing to change; unsentFiles counts both', () => {
   const files = [
     mk('a', '/a', { decision: { action: 'accept', sent: true } }),
     mk('b', '/b', { decision: { action: 'reject' } }),
     mk('c', '/c'),
+    mk('s', '/s', { unchanged: true, decision: { action: 'accept' } }),
   ];
   assert.deepEqual(filesProgress(files), { decided: 2, total: 3 });
-  assert.equal(unsentFiles(files), 1);
+  assert.equal(unsentFiles(files), 2);
 });
 
 test('holdFiles: a snapshot replaces the files it holds, content and print together', () => {

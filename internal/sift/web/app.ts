@@ -135,6 +135,9 @@ export function boot(): void {
   let editGen = 0;
   // The file whose disagree form is open (nothing to change).
   let disagreeing: string | null = null;
+  // The nothing-to-change file an agree moved to: scrolled to and focused
+  // once drawn.
+  let ncNext: string | null = null;
   // Each file's own version, as last saved or shown: it stays a choice
   // (yours) after another version is picked.
   const mine = new Map<string, string>();
@@ -502,12 +505,20 @@ export function boot(): void {
     },
     agree(f) {
       if (disagreeing === f.key) disagreeing = null;
-      void decider.file(f.key, { action: 'accept' }).then(() => render());
+      void decider
+        .file(f.key, { action: 'accept' })
+        .then((ok) => (ok ? agreed(f.key) : render()));
     },
     agreeAll() {
-      for (const f of noChangeFiles(files(), home()))
-        if (!f.decision && !fctx.busy(f))
-          void decider.file(f.key, { action: 'accept' });
+      const todo = noChangeFiles(files(), home()).filter(
+        (f) => !f.decision && !fctx.busy(f),
+      );
+      if (!todo.length) return;
+      void Promise.all(
+        todo.map((f) => decider.file(f.key, { action: 'accept' })),
+      ).then((oks) =>
+        oks.every(Boolean) && openKey === NOCHANGE ? leaveNoChange() : render(),
+      );
     },
     startDisagree(f) {
       if (fctx.busy(f)) return;
@@ -653,6 +664,16 @@ export function boot(): void {
         why.replaceWith(oldWhy);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
+      if (ncNext && e.kind === 'nochange') {
+        const at = [...doc.querySelectorAll<HTMLElement>('.sift-nc')].find(
+          (s) => s.dataset.key === ncNext,
+        );
+        at?.scrollIntoView({ block: 'nearest' });
+        at?.querySelector<HTMLButtonElement>('.kit-btn')?.focus({
+          preventScroll: true,
+        });
+      }
+      ncNext = null;
     } else {
       read.replaceChildren(overview());
     }
@@ -676,7 +697,8 @@ export function boot(): void {
       );
     }
     const p = filesProgress(files());
-    if (!p.total)
+    const same = noChangeFiles(files(), home());
+    if (!p.total && !same.length)
       return message(
         'needs you',
         'Nothing here',
@@ -685,11 +707,22 @@ export function boot(): void {
           : 'This round found nothing to change.',
       );
     const linked = shown.filter((e) => e.kind === 'file' && e.linked).length;
-    const same = noChangeFiles(files(), home()).length;
+    const sameLeft = same.filter((f) => !f.decision).length;
+    const left = [
+      p.total ? `${p.total - p.decided} of ${p.total} to change` : '',
+      same.length ? `${sameLeft} of ${same.length} with nothing to change` : '',
+    ]
+      .filter(Boolean)
+      .join(' and ');
     return message(
       'needs you',
-      `${p.total - p.decided} of ${plural(p.total, 'file')} to decide`,
-      `Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? ' Linked files move text between them and are picked together.' : ''}${same ? ` The agent recommends no change to ${plural(same, 'file')}: agree, or disagree and say why.` : ''} Send returns your decisions to the agent.`,
+      [
+        p.total ? `${plural(p.total, 'file')} to change` : '',
+        same.length ? `${same.length} with nothing to change` : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      `Still to decide: ${left}. Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? ' Linked files move text between them and are picked together.' : ''}${same.length ? ` The agent recommends no change to ${plural(same.length, 'file')}: agree, or disagree and say why.` : ''} Send returns your decisions to the agent.`,
     );
   }
 
@@ -851,6 +884,26 @@ export function boot(): void {
     if (!file && at && openKey === at && at === `r:${key}`)
       go(frag(nextOpen(shown as Entry[], at)));
     else render();
+  }
+
+  /** After an agree in the nothing-to-change section: the next file in it
+   * with no decision, as a pick moves to the next file; after the last,
+   * leaves the section. */
+  function agreed(key: string): void {
+    const e = current();
+    if (openKey !== NOCHANGE || e?.kind !== 'nochange') return render();
+    const i = e.files.findIndex((f) => f.key === key);
+    const next = e.files.slice(i + 1).find((f) => !f.decision);
+    if (!next) return leaveNoChange();
+    ncNext = next.key;
+    render();
+  }
+
+  /** Leaves the nothing-to-change section for the first file to change
+   * still undecided, else the overview. */
+  function leaveNoChange(): void {
+    const left = shown.find((e) => e.kind === 'file' && !e.file.decision);
+    go(frag(left?.key ?? null));
   }
 
   /** The next file with no decision after key, else the next file. */

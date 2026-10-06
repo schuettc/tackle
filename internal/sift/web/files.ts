@@ -295,12 +295,13 @@ export function holdFiles(files: FileView[], snap: FileView[]): void {
   }
 }
 
-/** Decided of the files with a recommendation. */
+/** Decided of the files to change: those with a recommendation, less
+ * those with nothing to change, which are counted on their own. */
 export function filesProgress(files: FileView[]): {
   decided: number;
   total: number;
 } {
-  const open = files.filter((f) => f.rec);
+  const open = files.filter((f) => f.rec && !f.unchanged);
   return { decided: open.filter((f) => f.decision).length, total: open.length };
 }
 

@@ -468,7 +468,7 @@ function holdFiles(files, snap) {
   }
 }
 function filesProgress(files) {
-  const open = files.filter((f) => f.rec);
+  const open = files.filter((f) => f.rec && !f.unchanged);
   return { decided: open.filter((f) => f.decision).length, total: open.length };
 }
 function unsentFiles(files) {
@@ -1336,9 +1336,8 @@ function fileDoc(ctx, f) {
       run: () => ctx.startEdit(f)
     }
   ];
-  if (f.decision)
-    bs.push({ label: "clear (u)", disabled: busy, run: () => ctx.clear(f) });
-  const decide = buttons(bs);
+  bs.push({ label: "clear (u)", disabled: busy, run: () => ctx.clear(f) });
+  const decide = holdClear(buttons(bs), !f.decision);
   decide.classList.add("sift-decide");
   parts.push(decide);
   const said = [];
@@ -1389,6 +1388,16 @@ function fileDoc(ctx, f) {
   else parts.push(diffView(base, showMine ? mine : rec, certainLines(rows)));
   return h2("div", { class: "kit-doc sift-file" }, ...parts);
 }
+function holdClear(bs, none) {
+  const c = bs.lastElementChild;
+  if (c && none) {
+    c.classList.add("sift-held");
+    c.disabled = true;
+    c.tabIndex = -1;
+    c.setAttribute("aria-hidden", "true");
+  }
+  return bs;
+}
 function noChangeDoc(ctx, files) {
   const open = files.filter((f) => !f.decision);
   const parts = [
@@ -1428,8 +1437,7 @@ function noChangeDoc(ctx, files) {
         run: () => ctx.startDisagree(f)
       }
     ];
-    if (f.decision)
-      bs.push({ label: "clear", disabled: busy, run: () => ctx.clear(f) });
+    bs.push({ label: "clear", disabled: busy, run: () => ctx.clear(f) });
     const head = h2(
       "div",
       { class: "sift-nc-head" },
@@ -1447,7 +1455,7 @@ function noChangeDoc(ctx, files) {
           ].filter(Boolean).join(" · ")
         )
       ),
-      buttons(bs)
+      holdClear(buttons(bs), !f.decision)
     );
     const block = h2(
       "section",
@@ -1573,6 +1581,7 @@ function boot() {
   let fileSnap = null;
   let editGen = 0;
   let disagreeing = null;
+  let ncNext = null;
   const mine = /* @__PURE__ */ new Map();
   let filter = "";
   let search = "";
@@ -1702,7 +1711,7 @@ function boot() {
       if (e.kind === "nochange") {
         const n = e.files.length;
         const kept = e.files.reduce((t, f) => t + f.rows.length, 0);
-        const agreed = e.files.filter(
+        const agreed2 = e.files.filter(
           (f) => f.decision?.action === "accept"
         ).length;
         const disagreed = e.files.filter(
@@ -1712,8 +1721,8 @@ function boot() {
           id: e.key,
           key: `nothing to change · ${plural3(n, "file")}`,
           title: `${plural3(n, "file")}, ${plural3(kept, "finding")} kept`,
-          meta: agreed + disagreed ? [
-            agreed ? `${agreed} agreed` : "",
+          meta: agreed2 + disagreed ? [
+            agreed2 ? `${agreed2} agreed` : "",
             disagreed ? `${disagreed} disagreed` : ""
           ].filter(Boolean).join(" · ") : "reasons given · not reviewed"
         };
@@ -1875,12 +1884,18 @@ function boot() {
     },
     agree(f) {
       if (disagreeing === f.key) disagreeing = null;
-      void decider.file(f.key, { action: "accept" }).then(() => render());
+      void decider.file(f.key, { action: "accept" }).then((ok) => ok ? agreed(f.key) : render());
     },
     agreeAll() {
-      for (const f of noChangeFiles(files(), home()))
-        if (!f.decision && !fctx.busy(f))
-          void decider.file(f.key, { action: "accept" });
+      const todo = noChangeFiles(files(), home()).filter(
+        (f) => !f.decision && !fctx.busy(f)
+      );
+      if (!todo.length) return;
+      void Promise.all(
+        todo.map((f) => decider.file(f.key, { action: "accept" }))
+      ).then(
+        (oks) => oks.every(Boolean) && openKey === NOCHANGE ? leaveNoChange() : render()
+      );
     },
     startDisagree(f) {
       if (fctx.busy(f)) return;
@@ -1986,6 +2001,16 @@ function boot() {
         why.replaceWith(oldWhy);
       read.replaceChildren(doc);
       if (focus instanceof HTMLElement && read.contains(focus)) focus.focus();
+      if (ncNext && e.kind === "nochange") {
+        const at = [...doc.querySelectorAll(".sift-nc")].find(
+          (s) => s.dataset.key === ncNext
+        );
+        at?.scrollIntoView({ block: "nearest" });
+        at?.querySelector(".kit-btn")?.focus({
+          preventScroll: true
+        });
+      }
+      ncNext = null;
     } else {
       read.replaceChildren(overview());
     }
@@ -2008,18 +2033,26 @@ function boot() {
       );
     }
     const p = filesProgress(files());
-    if (!p.total)
+    const same = noChangeFiles(files(), home());
+    if (!p.total && !same.length)
       return message(
         "needs you",
         "Nothing here",
         search ? "Nothing matches the search." : "This round found nothing to change."
       );
     const linked = shown.filter((e) => e.kind === "file" && e.linked).length;
-    const same = noChangeFiles(files(), home()).length;
+    const sameLeft = same.filter((f) => !f.decision).length;
+    const left = [
+      p.total ? `${p.total - p.decided} of ${p.total} to change` : "",
+      same.length ? `${sameLeft} of ${same.length} with nothing to change` : ""
+    ].filter(Boolean).join(" and ");
     return message(
       "needs you",
-      `${p.total - p.decided} of ${plural3(p.total, "file")} to decide`,
-      `Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? " Linked files move text between them and are picked together." : ""}${same ? ` The agent recommends no change to ${plural3(same, "file")}: agree, or disagree and say why.` : ""} Send returns your decisions to the agent.`
+      [
+        p.total ? `${plural3(p.total, "file")} to change` : "",
+        same.length ? `${same.length} with nothing to change` : ""
+      ].filter(Boolean).join(" · "),
+      `Still to decide: ${left}. Each file to change has one recommendation covering all its findings. Open one (↵) and pick the version it should have: 1 current, 2 recommended, or e to write your own.${linked ? " Linked files move text between them and are picked together." : ""}${same.length ? ` The agent recommends no change to ${plural3(same.length, "file")}: agree, or disagree and say why.` : ""} Send returns your decisions to the agent.`
     );
   }
   function go(f) {
@@ -2157,6 +2190,19 @@ function boot() {
     if (!file && at && openKey === at && at === `r:${key}`)
       go(frag(nextOpen(shown, at)));
     else render();
+  }
+  function agreed(key) {
+    const e = current();
+    if (openKey !== NOCHANGE || e?.kind !== "nochange") return render();
+    const i = e.files.findIndex((f) => f.key === key);
+    const next = e.files.slice(i + 1).find((f) => !f.decision);
+    if (!next) return leaveNoChange();
+    ncNext = next.key;
+    render();
+  }
+  function leaveNoChange() {
+    const left = shown.find((e) => e.kind === "file" && !e.file.decision);
+    go(frag(left?.key ?? null));
   }
   function nextFile(key) {
     const i = shown.findIndex((e) => e.key === key);

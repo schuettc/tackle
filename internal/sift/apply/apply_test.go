@@ -527,3 +527,39 @@ func TestApplyHoldsForAnUntrackedInstructionFile(t *testing.T) {
 		}
 	}
 }
+
+// A file whose approved content is the file as it is has nothing to write:
+// agreeing with a file the agent recommends leaving alone only mutes its
+// findings, and an edit back to the original is no change. Neither plans a
+// branch.
+func TestApplyPlansNothingForAFileLeftAsItIs(t *testing.T) {
+	g := newRig(t)
+	c, o, l := g.in(g.repo, "CLAUDE.md"), g.in(g.repo, "docs/other.md"), g.in(g.lib, "AGENTS.md")
+	g.audit(c, o, l)
+	same := g.rec(c, c.Content)
+	same.Findings[0].Did, same.Summary = "kept", "Nothing to change."
+	g.propose(same, g.rec(o, "# Other\n\n## Notes\n\n- one, rewritten\n"), g.rec(l, "# Lib\n\n- Keep the API stable.\n"))
+	items, err := g.s.Files(ctx, g.round)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range items {
+		if it.Key == c.Key && !it.Unchanged {
+			t.Fatal("CLAUDE.md: its recommendation leaves it as it is")
+		}
+	}
+	g.decide(c, rec.Decision{Action: "accept"})
+	g.decide(o, rec.Decision{Action: "edit", Content: o.Content})
+	g.decide(l, rec.Decision{Action: "accept"})
+	res := g.run(Options{DryRun: true})
+	r := one(t, res)
+	if r.Path != g.lib || r.State != "planned" || len(r.Applied) != 1 || len(r.Skipped) != 0 {
+		t.Fatalf("only lib's AGENTS.md changes: %+v", res.Repos)
+	}
+	if res.Unsent != 0 || len(res.Left) != 0 {
+		t.Fatalf("%+v", res)
+	}
+	if sel := Select(items); len(sel.Files) != 0 {
+		t.Fatalf("before the decisions: %+v", sel)
+	}
+}

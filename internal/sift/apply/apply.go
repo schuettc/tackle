@@ -128,17 +128,19 @@ type Selection struct {
 
 // Select works out which files the decisions approve, in the round's
 // order. It is the one place that says what counts as approved: an accept
-// or edit the user sent (reconcile uses it too).
+// or edit the user sent (reconcile uses it too) that changes the file. A
+// file with nothing to change never is: agreeing with it only mutes its
+// findings, and disagreeing sends it back to the agent.
 func Select(items []store.FileItem) Selection {
 	var sel Selection
 	for _, it := range items {
 		d := it.Decision
 		switch {
-		case d == nil || it.Rec == nil:
+		case d == nil || it.Rec == nil || it.Unchanged:
 		case !d.Sent:
 			sel.Unsent++
 		default:
-			if body, ok := rec.Approved(*it.Rec, *d); ok {
+			if body, ok := rec.Approved(*it.Rec, *d); ok && rec.Hash(body) != it.Base {
 				sel.Files = append(sel.Files, Approved{FileItem: it, Content: body})
 			}
 		}
