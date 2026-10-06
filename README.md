@@ -12,6 +12,8 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
   Install: `kempt apply -manifest cmd/casebook/kempt.toml -packages casebook`, then `casebook init` (creates a private `<you>/casebook-data` if needed) and `casebook hooks install`.
 - **cull** — judges the tests an agent wrote, using TypeSafe's Jev, cuts the ones Jev is sure about, and puts the rest in front of you on a local page. (Preview.)
   Install: `kempt apply -manifest cmd/cull/kempt.toml -packages cull`, then `cull init` in each project.
+- **sift** — audits the instruction files coding agents read (global files, repo files, skills), has the agent recommend one revised version per file, and puts each in front of you on a local page; what you approve becomes one pull request per repo. (Preview.)
+  Install: `kempt apply -manifest cmd/sift/kempt.toml -packages sift`, then `sift skills install` and `sift init --root DIR`.
 
 ## Install
 
@@ -275,6 +277,65 @@ returns when you press Send.
 in `~/.config/cull`, the review database in `~/.local/state/cull`, and Jev's
 cached answers in `~/.cache/cull`. `cull serve --stop` stops the server, but
 while an agent's channel is running it starts again within seconds.
+
+## sift
+
+sift audits the instruction files coding agents read: each harness's global
+file and skills, and every instruction file in the repos under your roots. It
+finds what is too big, duplicated, stale, dead or misplaced. An agent writes
+one revised version of each file with findings, and you decide each file on a
+local page. What you approve becomes one pull request per repo.
+
+**Install:** `kempt apply -manifest cmd/sift/kempt.toml -packages sift`. This
+installs the binary and registers the `sift` channel for Claude Code and pi.
+Then run `sift skills install`, which installs the sift skill for each agent
+harness it finds, and again after each upgrade. Run `sift init --root DIR` once
+to name the directories to audit. `sift doctor` checks the setup.
+
+**Commands**
+
+- `sift init` detects your harnesses and writes the config. It lists the repos that have an `origin/dev`, so you can set their base (below).
+- `sift check` audits the files, read at each repo's fetched base, and records a round of findings.
+- `sift next` and `sift propose` are the agent's loop: one file at a time, one whole revised file each.
+- `sift serve` opens the review page (starting the local server if needed).
+- `sift wait` waits until you press Send, then prints what to do.
+- `sift apply` writes each approved file whole, one branch per repo, cut from the repo's base in a worktree, and opens a pull request with `gh`.
+- `sift reconcile` checks that each branch holds exactly the approved content.
+- `sift clean` removes the branches and worktrees apply made, once their pull requests are merged or closed. `--dry-run` shows the plan.
+- `sift skills install` installs the skill this binary was built with.
+- `sift doctor` checks the config, the roots, `gh`, the page server and the channel registrations.
+
+**The agent loop.** An agent has seven channel tools: `sift_check`,
+`sift_next`, `sift_propose`, `sift_review`, `sift_apply`, `sift_status` and
+`sift_clean`. The sift skill tells it how to run a round end to end. It audits,
+recommends every file, opens the page with `sift_review`, then waits for you.
+After Send it applies, reports the pull requests, and cleans up once you have
+merged them. Merging is always yours.
+
+**The page.** Each file to change shows the current and recommended versions
+side by side, with its findings and a diff. You pick one, or write your own,
+and add a note if you like. Files the agent would leave as they are get agree
+or disagree. Press Send to hand your decisions to the agent.
+
+**Bases.** sift reads each repo at its default branch and opens its pull
+request there. For a repo whose pull requests go to another branch, name it in
+the config, and both the audit and apply use it:
+
+    [[repo]]
+    path = "~/src/app"
+    base = "dev"
+
+A skill or global file that is a symlink into a git repo (a dotfiles repo, say)
+is written in that repo, on its own branch.
+
+**Hearing the channel.** Claude Code only listens to Send when launched with
+`claude --dangerously-load-development-channels server:sift`. pi gets it
+through `channels.tools`. For any other session, run `sift wait` in it: it
+returns when you press Send.
+
+**Where things live.** The config is `~/.config/sift/config.toml`, and the
+rounds, decisions and the record of what apply created are in
+`~/.local/state/sift`. `sift serve --stop` stops the server.
 
 ---
 
