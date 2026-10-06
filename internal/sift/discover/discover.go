@@ -135,6 +135,8 @@ type Skip struct {
 type Options struct {
 	Profiles []profile.Profile
 	Roots    []config.Root
+	// Repos are the repos with a base of their own, over their root's.
+	Repos []config.Repo
 	// Include audits forks and what is under vendor directories too.
 	Include config.Include
 }
@@ -532,7 +534,11 @@ func (f *finder) repo(ctx context.Context, dir string, root config.Root, prefix 
 			return nil
 		}
 	}
-	r, err := f.readRepo(ctx, dir, root.Base)
+	base := root.Base
+	if b := config.RepoBase(f.opt.Repos, dir); b != "" {
+		base = b
+	}
+	r, err := f.readRepo(ctx, dir, base)
 	if err != nil {
 		return err
 	}

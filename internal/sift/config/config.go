@@ -26,6 +26,8 @@ type Config struct {
 	Profiles []string          `toml:"profiles"`
 	Custom   []profile.Profile `toml:"profile,omitempty"`
 	Roots    []Root            `toml:"root,omitempty"`
+	// Repos sets one repo's own base, over its root's.
+	Repos []Repo `toml:"repo,omitempty"`
 	// Archive is where intake copies a memory store before it is retired.
 	Archive string    `toml:"archive,omitempty"`
 	Budgets Budgets   `toml:"budgets"`
@@ -57,6 +59,37 @@ type Root struct {
 	Private string `toml:"private,omitempty"`
 	// Exclude lists repo-relative globs (** allowed) never audited.
 	Exclude []string `toml:"exclude,omitempty"`
+}
+
+// Repo is one repo's base branch, when it is not the root's or the repo's
+// default: a repo whose pull requests go to dev, say. The audit reads the
+// repo at it (origin/<base>, else <base>), and apply cuts its branch from it
+// and opens its pull request against it. sift never guesses it.
+type Repo struct {
+	Path string `toml:"path"`
+	Base string `toml:"base"`
+}
+
+// RepoBase is the base repos set for the repo at dir ("" for none),
+// matching by path as given or with symlinks resolved.
+func RepoBase(repos []Repo, dir string) string {
+	if len(repos) == 0 {
+		return ""
+	}
+	same := func(a, b string) bool {
+		if filepath.Clean(a) == filepath.Clean(b) {
+			return true
+		}
+		ra, ea := filepath.EvalSymlinks(a)
+		rb, eb := filepath.EvalSymlinks(b)
+		return ea == nil && eb == nil && ra == rb
+	}
+	for _, r := range repos {
+		if same(r.Path, dir) {
+			return r.Base
+		}
+	}
+	return ""
 }
 
 // Budgets are the size budgets in bytes per file class.
@@ -174,6 +207,9 @@ func Load(path string) (Config, error) {
 		c.Roots[i].Path = profile.Expand(c.Roots[i].Path)
 		c.Roots[i].Private = profile.Expand(c.Roots[i].Private)
 	}
+	for i := range c.Repos {
+		c.Repos[i].Path = profile.Expand(c.Repos[i].Path)
+	}
 	c.Archive = profile.Expand(c.Archive)
 	if err := c.Validate(); err != nil {
 		return c, fmt.Errorf("%s: %w", path, err)
@@ -211,6 +247,14 @@ func (c Config) Validate() error {
 	for _, r := range c.Roots {
 		if !filepath.IsAbs(r.Path) {
 			return fmt.Errorf("root %q: path must be absolute (or start with ~)", r.Path)
+		}
+	}
+	for _, r := range c.Repos {
+		if !filepath.IsAbs(r.Path) {
+			return fmt.Errorf("repo %q: path must be absolute (or start with ~)", r.Path)
+		}
+		if r.Base == "" {
+			return fmt.Errorf("repo %q: needs a base", r.Path)
 		}
 	}
 	if c.Budgets.Global <= 0 || c.Budgets.Repo <= 0 || c.Budgets.Skill <= 0 {

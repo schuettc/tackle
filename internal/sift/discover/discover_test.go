@@ -116,6 +116,31 @@ func TestConfiguredBase(t *testing.T) {
 	}
 }
 
+// A [[repo]] base wins over its root's for that repo alone: muster is read
+// at origin/dev, its neighbour under the same root at its own default.
+func TestRepoBaseOverride(t *testing.T) {
+	st.Env(t)
+	st.Home(t)
+	ws := t.TempDir()
+	muster := st.Repo(t, filepath.Join(ws, "muster"), map[string]string{"CLAUDE.md": "main\n"})
+	st.Publish(t, muster)
+	st.Git(t, muster, "checkout", "-q", "-b", "dev")
+	st.Commit(t, muster, map[string]string{"CLAUDE.md": "dev\n"})
+	st.Git(t, muster, "push", "-q", "origin", "dev")
+	ops := st.Repo(t, filepath.Join(ws, "ops"), map[string]string{"CLAUDE.md": "main\n"})
+	st.Publish(t, ops)
+	st.Git(t, ops, "push", "-q", "origin", "main:dev")
+	res := run(t, Options{Profiles: profiles(t, "claude-code"), Roots: []config.Root{{Path: ws}},
+		Repos: []config.Repo{{Path: muster, Base: "dev"}}})
+	m := byRel(res)
+	if f := m["muster:CLAUDE.md"]; f == nil || f.Repo.Ref != "origin/dev" || f.Content != "dev\n" {
+		t.Fatalf("muster %+v", f)
+	}
+	if f := m["ops:CLAUDE.md"]; f == nil || f.Repo.Ref != "origin/main" {
+		t.Fatalf("ops (has an origin/dev, no override) %+v", f)
+	}
+}
+
 // Files at any depth; skills anywhere in a repo; fixtures, vendored code,
 // excluded globs, untracked files in a repo, nested repos and linked
 // worktrees handled; files outside any repo read from disk.

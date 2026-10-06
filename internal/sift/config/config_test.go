@@ -183,3 +183,28 @@ func TestInclude(t *testing.T) {
 		t.Fatalf("%+v %v", c.Include, err)
 	}
 }
+
+// A [[repo]] names one repo's own base, which wins over its root's: the
+// audit reads the repo there and apply cuts its branch and PR from it.
+func TestRepoBaseOverride(t *testing.T) {
+	t.Setenv("HOME", "/home/u")
+	c, err := Load(write(t, "profiles = [\"pi\"]\n\n[[root]]\npath = \"~/src\"\nbase = \"main\"\n\n[[repo]]\npath = \"~/src/muster\"\nbase = \"dev\"\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Repo{{Path: "/home/u/src/muster", Base: "dev"}}; !reflect.DeepEqual(c.Repos, want) {
+		t.Fatalf("repos %+v", c.Repos)
+	}
+	if got := RepoBase(c.Repos, "/home/u/src/muster/"); got != "dev" {
+		t.Errorf("muster's base %q", got)
+	}
+	if got := RepoBase(c.Repos, "/home/u/src/galley"); got != "" {
+		t.Errorf("galley's base %q", got)
+	}
+	if _, err := Load(write(t, "[[repo]]\npath = \"rel\"\nbase = \"dev\"\n")); err == nil {
+		t.Error("a relative repo path loaded")
+	}
+	if _, err := Load(write(t, "[[repo]]\npath = \"/x\"\n")); err == nil {
+		t.Error("a repo with no base loaded")
+	}
+}
