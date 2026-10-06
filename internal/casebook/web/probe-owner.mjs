@@ -400,6 +400,8 @@ export async function ownerScenarios(context, t) {
       stops.push(stopRest);
       const threadC = await agent.newThread(C, 'coordination');
       await agent.postMessage(threadC.id, 'an earlier note');
+      // A draft batch Court started for it.
+      await agent.postMessage(threadC.id, 'a drafted follow-up', {}, true);
       const pg = await lightPage(context);
       try {
         await pg.goto(`${s.url}&session=${encodeURIComponent(C)}`, {
@@ -481,6 +483,23 @@ export async function ownerScenarios(context, t) {
         check(
           'nothing was queued to any session',
           (await queuedAll()) === before,
+        );
+        // Its draft batch doesn't go out either: the tray's send is refused
+        // the same way, and the drafts stay.
+        await pg
+          .click('[data-testid="batch-tray"] .cb-batch-send', { timeout: 5000 })
+          .catch(() => {});
+        await pg.waitForTimeout(500);
+        check(
+          "the batch tray's send is refused too: the draft stays a draft, nothing queued",
+          (await queuedAll()) === before &&
+            (await pg.$$eval(
+              '[data-testid="batch-tray"] .cb-batch-draft',
+              (els) => els.length,
+            )) === 1 &&
+            (await pg.evaluate(
+              () => document.querySelector('.cb-comp-note')?.textContent,
+            )) === 'your session left',
         );
         check('the screenshot is light', await isLight(pg));
         await pg.screenshot({ path: '/tmp/owner-left.png' });

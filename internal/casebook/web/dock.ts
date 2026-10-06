@@ -594,23 +594,31 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // ---- Task 7: batch tray, progress line, waiting strip, composer ---------
 
+  // blocked is why nothing can be sent now ('' when it can): no session is
+  // attached, or the attached one left. The composer and the batch tray both
+  // ask; neither sends anywhere else in its place.
+  const blocked = (): string => {
+    switch (attachedState(currentSessionId, sessions)) {
+      case 'none':
+        return 'choose a session first';
+      case 'left':
+      case 'unknown':
+        return 'your session left';
+    }
+    return '';
+  };
+
   // The batch tray is the last card in the scrolling message area (mock).
-  const batchTray = makeBatchTray(ctx);
+  const batchTray = makeBatchTray(ctx, {
+    blocked,
+    say: (text) => composer.say(text),
+  });
   const progLine = makeProgressLine();
   const waitStrip = makeWaitingStrip();
   const composer = makeComposer(ctx, {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
-    blocked: () => {
-      switch (attachedState(currentSessionId, sessions)) {
-        case 'none':
-          return 'choose a session first';
-        case 'left':
-        case 'unknown':
-          return 'your session left';
-      }
-      return '';
-    },
+    blocked,
     threadCreated(t: Thread) {
       threads = [...threads, t];
       currentThreadId = t.id;

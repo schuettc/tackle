@@ -28,7 +28,15 @@ export interface BatchTrayHandle {
   reload(): Promise<void>;
 }
 
-export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
+/** What the tray asks of the dock before it sends a batch. */
+export interface BatchTrayDock {
+  /** Why nothing can be sent now ('' when it can): see ComposerDock.blocked. */
+  blocked(): string;
+  /** Say it where Court looks (the composer's note). */
+  say(text: string): void;
+}
+
+export function makeBatchTray(ctx: Ctx, dock?: BatchTrayDock): BatchTrayHandle {
   let thread = 0;
   let batch = 0;
   let drafts: Message[] = [];
@@ -205,6 +213,13 @@ export function makeBatchTray(ctx: Ctx): BatchTrayHandle {
 
   async function sendBatch(): Promise<void> {
     if (!batch || !drafts.length) return;
+    // A batch goes to the attached session while it is here, and nowhere
+    // else: the drafts stay until Court chooses.
+    const why = dock?.blocked() ?? '';
+    if (why) {
+      dock?.say(why);
+      return;
+    }
     const sent = batch;
     drafts = [];
     render();

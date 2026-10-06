@@ -3697,13 +3697,16 @@ function makeComposer(ctx, dock) {
     },
     addToBatch() {
       void send(true);
+    },
+    say(text) {
+      note.textContent = text;
     }
   };
 }
 
 // progress.ts
 import { h as h9, card as card3, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
-function makeBatchTray(ctx) {
+function makeBatchTray(ctx, dock) {
   let thread = 0;
   let batch = 0;
   let drafts = [];
@@ -3856,6 +3859,11 @@ function makeBatchTray(ctx) {
   }
   async function sendBatch() {
     if (!batch || !drafts.length) return;
+    const why = dock?.blocked() ?? "";
+    if (why) {
+      dock?.say(why);
+      return;
+    }
     const sent = batch;
     drafts = [];
     render();
@@ -4394,22 +4402,26 @@ function makeDock(ctx) {
     class: "cb-dock-messages",
     "data-testid": "dock-messages"
   });
-  const batchTray = makeBatchTray(ctx);
+  const blocked = () => {
+    switch (attachedState(currentSessionId, sessions)) {
+      case "none":
+        return "choose a session first";
+      case "left":
+      case "unknown":
+        return "your session left";
+    }
+    return "";
+  };
+  const batchTray = makeBatchTray(ctx, {
+    blocked,
+    say: (text) => composer.say(text)
+  });
   const progLine = makeProgressLine();
   const waitStrip = makeWaitingStrip();
   const composer = makeComposer(ctx, {
     currentThread: () => currentThreadId,
     currentSession: () => currentSessionId,
-    blocked: () => {
-      switch (attachedState(currentSessionId, sessions)) {
-        case "none":
-          return "choose a session first";
-        case "left":
-        case "unknown":
-          return "your session left";
-      }
-      return "";
-    },
+    blocked,
     threadCreated(t) {
       threads = [...threads, t];
       currentThreadId = t.id;

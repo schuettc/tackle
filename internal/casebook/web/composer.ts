@@ -57,6 +57,8 @@ export interface ComposerHandle {
   addToBatch(): void;
   /** The message field, so the `⌘↵` binding can scope itself to it. */
   input: HTMLTextAreaElement;
+  /** Show a note in the footer (why something wasn't sent). */
+  say(text: string): void;
 }
 
 // threadName names a new thread from its first request (spec §3.5 item 2).
@@ -271,6 +273,9 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     },
     addToBatch(): void {
       void send(true);
+    },
+    say(text: string): void {
+      note.textContent = text;
     },
   };
 }
