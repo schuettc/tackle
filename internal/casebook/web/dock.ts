@@ -657,6 +657,10 @@ export function makeDock(ctx: Ctx): DockHandle {
     const state = attachedState(currentSessionId, sessions);
     sessionHeader.setAttribute('data-attach', state);
     const sess = sessions.find((s) => s.id === currentSessionId);
+    // The session the composer sends to, while it is here (blocked() is '').
+    ctx.setDockTarget(
+      sess && !blocked() ? { id: sess.id, name: sessionTitle(sess) } : null,
+    );
     if (!sess) {
       // No session, or one serve no longer knows: the dot is muted and the
       // header says which.
@@ -1172,6 +1176,9 @@ export function makeDock(ctx: Ctx): DockHandle {
     },
     currentSession(): string {
       return currentSessionId;
+    },
+    sendText(body: string): Promise<string> {
+      return composer.sendText(body);
     },
   };
 }

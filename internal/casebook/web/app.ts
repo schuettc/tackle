@@ -61,6 +61,27 @@ export interface Ctx {
   dockSession(): string;
   setDockSession(id: string): void;
   onDockSession(cb: (id: string) => void): void;
+  /**
+   * The session the composer sends to now, while it is here (its id and
+   * the name the dock's header shows), else null: none attached, or the
+   * attached one left. The dock sets it; Attention's "ask … to recommend
+   * the rest" reads it and hears when it changes.
+   */
+  dockTarget(): DockTarget | null;
+  setDockTarget(t: DockTarget | null): void;
+  onDockTarget(cb: (t: DockTarget | null) => void): void;
+  /**
+   * askSession sends body to the dock's session through the composer's send
+   * path (queued until its turn ends), with nothing attached. Resolves ''
+   * when posted, else why not.
+   */
+  askSession(body: string): Promise<string>;
+}
+
+/** The session the dock's composer sends to. */
+export interface DockTarget {
+  id: string;
+  name: string;
 }
 
 export interface Router {
@@ -121,6 +142,8 @@ export interface DockHandle {
   focusComposer(): void;
   currentThread(): number;
   currentSession(): string;
+  /** sendText: the composer's sendText (see Ctx.askSession). */
+  sendText(body: string): Promise<string>;
 }
 
 // ---- section + dock registry ------------------------------------------------
@@ -341,6 +364,8 @@ export function boot(): void {
   const agentListeners: Array<(name: string) => void> = [];
   let dockSession = '';
   const dockSessionListeners: Array<(id: string) => void> = [];
+  let dockTarget: DockTarget | null = null;
+  const dockTargetListeners: Array<(t: DockTarget | null) => void> = [];
 
   // The keyboard layer: always the shown section's (its list, its keys),
   // plus the page-wide keys registered on ctx.keys (key-layer.ts).
@@ -386,6 +411,19 @@ export function boot(): void {
     },
     onDockSession(cb) {
       dockSessionListeners.push(cb);
+    },
+    dockTarget: () => dockTarget,
+    setDockTarget(t) {
+      if (t?.id === dockTarget?.id && t?.name === dockTarget?.name) return;
+      dockTarget = t ? { ...t } : null;
+      for (const cb of dockTargetListeners) cb(dockTarget);
+    },
+    onDockTarget(cb) {
+      dockTargetListeners.push(cb);
+    },
+    askSession(body) {
+      const d = dockHandles[0];
+      return d ? d.sendText(body) : Promise.resolve('no agent session');
     },
   };
 

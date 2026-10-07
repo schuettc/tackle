@@ -12,6 +12,10 @@ import {
   notNowUntil,
   choicesForKeys,
   fillLabel,
+  recommendLine,
+  agreeGroups,
+  agreeText,
+  recommendedLine,
 } from './decide-math.ts';
 import type { DecisionVocabView, NotNowForm } from './wire.d.ts';
 
@@ -194,5 +198,127 @@ describe('fillLabel', () => {
       fillLabel('Not now', ['issue:o/r#1', 'branch:o/r@x']),
       'Not now · 2 items',
     );
+  });
+});
+
+// A pending proposal on key from source.
+function pending(key: string, disposition: string, source = 'pi:s1', id = 0) {
+  return {
+    key,
+    proposal: { id, key, disposition, source, state: 'pending' },
+  };
+}
+
+describe('recommendLine', () => {
+  test("the row's line: the agent and serve's label for its kind", () => {
+    assert.equal(
+      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'close'),
+      'pi recommends Close it',
+    );
+    assert.equal(
+      recommendLine(VOCAB, 'branch:o/r@x', 'rule:stale', 'delete'),
+      'rule recommends Delete it',
+    );
+  });
+
+  test('watch reads as Not now', () => {
+    assert.equal(
+      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'watch'),
+      'pi recommends Not now',
+    );
+  });
+
+  test('before the vocabulary loads: the disposition', () => {
+    assert.equal(
+      recommendLine(null, 'issue:o/r#1', 'pi:abc', 'close'),
+      'pi recommends close',
+    );
+  });
+});
+
+describe('agreeGroups', () => {
+  test('two or more sharing an agent and a choice make a group, in list order', () => {
+    const items = [
+      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
+      pending('issue:o/r#2', 'close', 'pi:s1', 2),
+      pending('issue:o/r#3', 'keep', 'pi:s1', 3),
+      { key: 'issue:o/r#4' },
+      pending('issue:o/r#5', 'keep', 'pi:s2', 5),
+      pending('issue:o/r#6', 'close', 'rule:x', 6),
+    ];
+    const got = agreeGroups(VOCAB, items);
+    assert.equal(got.length, 1);
+    assert.deepEqual(got[0].ids, [1, 3, 5]);
+    assert.deepEqual(got[0].keys, [
+      'issue:o/r#1',
+      'issue:o/r#3',
+      'issue:o/r#5',
+    ]);
+    assert.equal(got[0].label, 'Leave it open');
+    assert.equal(got[0].agent, 'pi');
+    assert.equal(got[0].outward, false);
+  });
+
+  test('settled proposals and one-item choices make none', () => {
+    const items = [
+      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
+      {
+        key: 'issue:o/r#2',
+        proposal: {
+          id: 2,
+          key: 'issue:o/r#2',
+          disposition: 'keep',
+          source: 'pi:s1',
+          state: 'rejected',
+        },
+      },
+    ];
+    assert.deepEqual(agreeGroups(VOCAB, items), []);
+  });
+
+  test('an outward choice is marked, kinds worded differently are joined', () => {
+    const got = agreeGroups(VOCAB, [
+      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
+      pending('branch:o/r@x', 'keep', 'pi:s1', 2),
+      pending('issue:o/r#3', 'close', 'pi:s1', 3),
+      pending('issue:o/r#4', 'close', 'pi:s1', 4),
+    ]);
+    assert.deepEqual(
+      got.map((g) => [g.label, g.outward, g.ids.length]),
+      [
+        ['Leave it open / Keep it', false, 2],
+        ['Close it', true, 2],
+      ],
+    );
+  });
+});
+
+describe('agreeText', () => {
+  const g = (outward: boolean) => ({
+    agent: 'pi',
+    disposition: outward ? 'close' : 'keep',
+    label: outward ? 'Close it' : 'Leave it open',
+    outward,
+    ids: [1, 2, 3],
+    keys: ['a', 'b', 'c'],
+  });
+  test('a group to agree with', () => {
+    assert.deepEqual(agreeText(g(false)), {
+      says: 'pi recommends Leave it open for 3',
+      action: 'agree with all 3',
+    });
+  });
+  test('an outward group goes to To apply', () => {
+    assert.deepEqual(agreeText(g(true)), {
+      says: 'pi recommends Close it for 3',
+      action: 'send all 3 to To apply',
+    });
+  });
+});
+
+describe('recommendedLine', () => {
+  test('the counts', () => {
+    assert.equal(recommendedLine(18, 13), '18 recommended \u00b7 13 not yet');
+    assert.equal(recommendedLine(0, 0), '0 recommended \u00b7 0 not yet');
   });
 });

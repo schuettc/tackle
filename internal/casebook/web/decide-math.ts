@@ -208,3 +208,123 @@ export function fillLabel(label: string, keys: string[]): string {
     : pluralize(keys.length, 'item');
   return `${label} \u00b7 ${count}`;
 }
+
+// ---- recommendations in the list --------------------------------------------
+
+/**
+ * agentFromSource is the name a proposal's source shows as: "pi:session-id"
+ * → "pi", "rule:id" → "rule".
+ */
+export function agentFromSource(source: string): string {
+  const i = source.indexOf(':');
+  return i === -1 ? source : source.slice(0, i);
+}
+
+/**
+ * choiceLabel is serve's label for disposition on key's kind ("Close it");
+ * watch reads as Not now. The disposition itself before the vocabulary has
+ * loaded, or when serve has no card for it.
+ */
+export function choiceLabel(
+  vocab: DecisionVocabView | null,
+  key: string,
+  disposition: string,
+): string {
+  const d = disposition === 'watch' ? 'wait' : disposition;
+  if (!vocab) return disposition;
+  return (
+    choicesForKeys(vocab, [key]).find((c) => c.disposition === d)?.label ??
+    disposition
+  );
+}
+
+/** recommendLine is a list row's line for its pending proposal. */
+export function recommendLine(
+  vocab: DecisionVocabView | null,
+  key: string,
+  source: string,
+  disposition: string,
+): string {
+  return `${agentFromSource(source)} recommends ${choiceLabel(vocab, key, disposition)}`;
+}
+
+/** What agreeGroups reads from a list row. */
+export interface Recommendable {
+  key: string;
+  proposal?: {
+    id: number;
+    disposition: string;
+    source: string;
+    state: string;
+  } | null;
+}
+
+/** A group of rows whose pending proposals share an agent and a choice. */
+export interface AgreeGroup {
+  agent: string;
+  disposition: string;
+  /** serve's label, joined when the kinds word it differently. */
+  label: string;
+  /** The choice goes to To apply (close, merge, archive, delete). */
+  outward: boolean;
+  ids: number[];
+  keys: string[];
+}
+
+/**
+ * agreeGroups groups the rows shown whose pending proposals come from the
+ * same agent and recommend the same choice, two or more to a group, in the
+ * order each group first appears. "agree with all" accepts exactly a
+ * group's ids.
+ */
+export function agreeGroups(
+  vocab: DecisionVocabView,
+  items: Recommendable[],
+): AgreeGroup[] {
+  const groups = new Map<
+    string,
+    { agent: string; d: string; rows: Recommendable[] }
+  >();
+  for (const it of items) {
+    const p = it.proposal;
+    if (!p || p.state !== 'pending') continue;
+    const agent = agentFromSource(p.source);
+    const d = p.disposition === 'watch' ? 'wait' : p.disposition;
+    const id = `${agent}\u0000${d}`;
+    const g = groups.get(id) ?? { agent, d, rows: [] };
+    g.rows.push(it);
+    groups.set(id, g);
+  }
+  const out: AgreeGroup[] = [];
+  for (const g of groups.values()) {
+    if (g.rows.length < 2) continue;
+    const keys = g.rows.map((r) => r.key);
+    const c = choicesForKeys(vocab, keys).find((x) => x.disposition === g.d);
+    out.push({
+      agent: g.agent,
+      disposition: g.d,
+      label: c?.label ?? g.d,
+      outward: c?.outward ?? false,
+      ids: g.rows.map((r) => r.proposal!.id),
+      keys,
+    });
+  }
+  return out;
+}
+
+/**
+ * agreeText is a group's line in the list foot: what is recommended, and the
+ * action ("agree with all 3"; an outward choice "send all 2 to To apply").
+ */
+export function agreeText(g: AgreeGroup): { says: string; action: string } {
+  const n = g.ids.length;
+  return {
+    says: `${g.agent} recommends ${g.label} for ${n}`,
+    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`,
+  };
+}
+
+/** recommendedLine is the line at the top of Attention. */
+export function recommendedLine(recommended: number, notYet: number): string {
+  return `${recommended} recommended \u00b7 ${notYet} not yet`;
+}

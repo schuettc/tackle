@@ -15,6 +15,15 @@
 //   u undoes the last decision; a decision changed since is refused (409)
 //   a live decide elsewhere doesn't skip the item after it
 //   the multi-select sheet asks with the same cards: "Close it · 2 issues"
+//
+// And recommendations in the list (Task 4), on a serve and repo of their own:
+//
+//   recommended items first; each row reads "pi recommends ‹label›"
+//   "n recommended · m not yet" with serve's counts
+//   "ask ‹session› to recommend the rest": only with a session attached, and
+//     its message reaches that session's thread and no other's
+//   "agree with all 3" accepts exactly those three; the next item opens
+//   an outward group: "send all 2 to To apply"; To apply lists them; no job
 
 import { startServe } from './serve.mjs';
 import { createAgent } from './agent.mjs';
@@ -177,22 +186,24 @@ function opened(t, pg, key) {
 }
 
 export async function decideScenarios(shared, t) {
-  const context = await shared.browser().newContext({
-    viewport: { width: 1600, height: 900 },
-  });
-  const s = await startServe(seed());
-  serves.push(s);
-  try {
-    await decideScenario(context, t, s);
-  } catch (err) {
-    t.check(
-      `the decide step: the scenario ran to its end — ${err.message}`,
-      false,
-    );
-  } finally {
-    await context.close();
-    s.stop();
-    serves = serves.filter((x) => x !== s);
+  for (const [name, scenario, seeded] of [
+    ['the decide step', decideScenario, seed()],
+    ['recommendations in the list', recommendScenario, recSeed()],
+  ]) {
+    const context = await shared.browser().newContext({
+      viewport: { width: 1600, height: 900 },
+    });
+    const s = await startServe(seeded);
+    serves.push(s);
+    try {
+      await scenario(context, t, s);
+    } catch (err) {
+      t.check(`${name}: the scenario ran to its end — ${err.message}`, false);
+    } finally {
+      await context.close();
+      s.stop();
+      serves = serves.filter((x) => x !== s);
+    }
   }
 }
 
@@ -305,6 +316,17 @@ async function decideScenario(context, t, s) {
   }
   const sheetsBefore = await sheets();
 
+  // ---- the row's line names serve's label for the recommendation ----------
+  {
+    const sub = await row(pg, ISSUE(1))
+      .locator('.kit-sub')
+      .textContent({ timeout: 5000 });
+    check(
+      `issue #1's row reads "pi recommends Close it" ("${sub}")`,
+      sub === 'pi recommends Close it',
+    );
+  }
+
   // ---- issue #1: the question, the recommendation, the cards --------------
   await row(pg, ISSUE(1)).click();
   check('issue #1 opens', await opened(t, pg, ISSUE(1)));
@@ -403,6 +425,21 @@ async function decideScenario(context, t, s) {
   check(
     'after the accept, the next undecided item (issue #2) opens',
     await opened(t, pg, ISSUE(2)),
+  );
+  check(
+    "and the list's open row follows it to issue #2",
+    await until(
+      pg,
+      (kick) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row.open .kit-kicker',
+          ),
+        ].map((e) => e.textContent) +
+          '' ===
+        kick,
+      kicker(ISSUE(2)),
+    ),
   );
 
   // ---- one click on "Close it" decides, with no sheet ----------------------
@@ -553,17 +590,29 @@ async function decideScenario(context, t, s) {
     '"when a PR merges…" asks for one value (one field shows)',
     (await field.count()) === 1 && (await field.isVisible()),
   );
-  await field.fill('tackle#5');
+  // A well-formed key to a pull request that isn't there: serve refuses it.
+  const NO_PR = `pr:schuettc/${REPO}#999`;
+  const NO_PR_MSG = `${NO_PR} isn't an item casebook knows; sync first if it's new`;
+  await field.fill(NO_PR);
   await field.press('Enter');
-  check(
-    "a PR serve can't read shows serve's message",
-    await until(pg, () =>
-      (
+  const errShown = () =>
+    pg.evaluate(
+      () =>
         document.querySelector(
           '.kit-app > .kit-read:not([hidden]) .cb-choice-err:not([hidden])',
-        )?.textContent ?? ''
-      ).includes('invalid until'),
-    ),
+        )?.textContent ?? '',
+    );
+  await until(
+    pg,
+    () =>
+      !!document.querySelector(
+        '.kit-app > .kit-read:not([hidden]) .cb-choice-err:not([hidden])',
+      ),
+  );
+  const shownErr = await errShown();
+  check(
+    `a PR that doesn't exist shows serve's message ("${shownErr}")`,
+    shownErr === NO_PR_MSG,
   );
   col = await readCol(pg);
   check(
@@ -626,6 +675,395 @@ async function decideScenario(context, t, s) {
   check(
     'and no sheet opened for any single item',
     (await sheets()) === sheetsBefore,
+  );
+  await pg.close();
+}
+
+// ---- recommendations in the list ---------------------------------------------
+
+const REC = 'rd-rec';
+const RISSUE = (n) => `issue:schuettc/${REC}#${n}`;
+const RPR = (n) => `pr:schuettc/${REC}#${n}`;
+const RECOMMEND_THE_REST =
+  'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
+
+function recSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${REC}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${REC}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [
+          [9, 'Bump the uploader dependency', 'renovate'],
+          [10, 'Bump the parser dependency', 'renovate'],
+        ].map(item),
+        issues: [
+          [1, 'How do I set the region?', 'alice'],
+          [2, 'Works on my machine', 'carol'],
+          [3, 'A second region', 'dave'],
+          [4, 'Flag docs', 'erin'],
+          [5, 'Tags question', 'frank'],
+          [6, 'Thanks for the tool', 'grace'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function recommendScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: recommendations in the list');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const decisionOf = async (key) =>
+    (await api('GET', `/api/item?key=${encodeURIComponent(key)}`)).item
+      .decision ?? null;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${REC}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+
+  // Two sessions here, so the dock attaches to neither on its own.
+  const A = 'probe-rec-a';
+  const B = 'probe-rec-b';
+  await agent.presence(A, 'pi \u00b7 rec-a', '/home/court/rec-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 rec-b', '/home/court/rec-b', 'pi');
+  // B already has a thread of its own: the ask must not land there.
+  const bThread = await agent.newThread(B, 'b work');
+  // pi recommends leaving three issues open and closing both bot PRs.
+  await agent.propose(A, [RISSUE(2), RISSUE(4), RISSUE(6)], 'keep', 'active');
+  await agent.propose(A, [RPR(9), RPR(10)], 'close', 'superseded');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+
+  const kickers = () =>
+    pg.$$eval(
+      '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+      (els) => els.map((e) => e.textContent ?? ''),
+    );
+  const recommended = [RISSUE(2), RISSUE(4), RISSUE(6), RPR(10), RPR(9)];
+  const notYet = [RISSUE(1), RISSUE(3), RISSUE(5)];
+  await until(
+    pg,
+    (want) =>
+      [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+        ),
+      ].length === want,
+    recommended.length + notYet.length,
+  );
+  checkList(
+    'the recommended items come first, each group in key order',
+    await kickers(),
+    [...recommended, ...notYet].map(kicker),
+  );
+  {
+    const subs = {};
+    for (const k of [RISSUE(2), RPR(9), RISSUE(1)]) {
+      subs[k] =
+        (await row(pg, k).locator('.kit-sub').count()) > 0
+          ? await row(pg, k).locator('.kit-sub').textContent()
+          : '';
+    }
+    check(
+      `the rows name serve's label ("${subs[RISSUE(2)]}", "${subs[RPR(9)]}"), and an item with none has no line`,
+      subs[RISSUE(2)] === 'pi recommends Leave it open' &&
+        subs[RPR(9)] === 'pi recommends Close it without merging' &&
+        subs[RISSUE(1)] === '',
+    );
+  }
+
+  // ---- the line: serve's counts; no session attached, no offer -------------
+  const lineText = () =>
+    pg.evaluate(() => {
+      const l = document.querySelector(
+        '.kit-app > .kit-list:not([hidden]) .cb-rec-line',
+      );
+      return {
+        shown: !!l && !l.hidden,
+        counts: l?.querySelector('.cb-rec-counts')?.textContent ?? '',
+        ask: (() => {
+          const b = l?.querySelector('.cb-rec-ask');
+          return b && !b.hidden ? (b.textContent ?? '') : '';
+        })(),
+        note: l?.querySelector('.cb-rec-note')?.textContent ?? '',
+      };
+    });
+  const summaryLine = async () => {
+    const sv = await api('GET', '/api/summary');
+    return `${sv.recommended} recommended \u00b7 ${sv.not_recommended} not yet`;
+  };
+  {
+    const want = await summaryLine();
+    const ok = await until(
+      pg,
+      (w) =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .cb-rec-counts',
+        )?.textContent === w,
+      want,
+    );
+    const got = await lineText();
+    check(
+      `the line reads serve's counts ("${got.counts}", serve: "${want}")`,
+      ok && got.shown && want.startsWith('5 recommended'),
+    );
+    const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
+    check(
+      `with no session attached (dock: ${attach}) the offer is absent`,
+      attach === 'none' && got.ask === '',
+    );
+  }
+
+  // ---- the foot: agree with all ---------------------------------------------
+  const agreeLines = () =>
+    pg.$$eval(
+      '.kit-app > .kit-list:not([hidden]) .cb-agree:not([hidden]) .cb-agree-line',
+      (els) =>
+        els.map(
+          (e) =>
+            `${e.querySelector('.cb-agree-says')?.textContent} | ${e.querySelector('.cb-agree-btn')?.textContent}`,
+        ),
+    );
+  checkList(
+    'the foot offers agree with all per agreeing group',
+    await agreeLines(),
+    [
+      'pi recommends Leave it open for 3 | agree with all 3',
+      'pi recommends Close it without merging for 2 | send all 2 to To apply',
+    ],
+  );
+  {
+    const agentC = await cssColor(pg, 'var(--kit-agent)');
+    const dangerC = await cssColor(pg, 'var(--kit-danger)');
+    const got = await pg.evaluate(() => {
+      const ls = document.querySelectorAll(
+        '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
+      );
+      return [...ls].map((l) => ({
+        says: getComputedStyle(l.querySelector('.cb-agree-says')).color,
+        btn: getComputedStyle(l.querySelector('.cb-agree-btn')).color,
+      }));
+    });
+    check(
+      `what is recommended is the agent's colour, and no action is danger (${got.map((g) => `${g.says}/${g.btn}`).join(', ')})`,
+      got.length === 2 &&
+        got.every((g) => g.says === agentC && g.btn !== dangerC),
+    );
+  }
+
+  // ---- attach session A: the offer names it ---------------------------------
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  check(
+    `with ${aName} attached the line offers "ask ${aName} to recommend the rest"`,
+    !!aName &&
+      (await until(
+        pg,
+        (w) => {
+          const b = document.querySelector(
+            '.kit-app > .kit-list:not([hidden]) .cb-rec-ask',
+          );
+          return !!b && !b.hidden && b.textContent === w;
+        },
+        `ask ${aName} to recommend the rest`,
+      )),
+  );
+  await shoot(t, pg, 'list', ['light']);
+
+  // ---- ask: the message reaches A's thread only -----------------------------
+  const bodiesOf = async (session) => {
+    const tv = await api(
+      'GET',
+      `/api/threads?session=${encodeURIComponent(session)}`,
+    );
+    const out = [];
+    for (const th of tv.threads ?? []) {
+      const mv = await agent.messages(th.id);
+      for (const m of mv.messages ?? []) out.push(m.body);
+    }
+    return out;
+  };
+  await pg.click('.kit-app > .kit-list:not([hidden]) .cb-rec-ask');
+  check(
+    "asking puts the exact message in the attached session's thread, once",
+    await eventually(async () => {
+      const a = await bodiesOf(A);
+      return a.filter((b) => b === RECOMMEND_THE_REST).length === 1;
+    }),
+  );
+  {
+    const b = await bodiesOf(B);
+    const bt = (await agent.messages(bThread.id)).messages ?? [];
+    check(
+      `and nothing in any other session's thread (B has ${b.length} messages)`,
+      !b.includes(RECOMMEND_THE_REST) &&
+        bt.every((m) => m.body !== RECOMMEND_THE_REST),
+    );
+  }
+  {
+    const got = await lineText();
+    check(
+      `the offer gives way to "${got.note}"`,
+      got.ask === '' && got.note === `asked ${aName}`,
+    );
+  }
+
+  // ---- agree with all 3: exactly those three; the next item opens ----------
+  await row(pg, RISSUE(2)).click();
+  await opened(t, pg, RISSUE(2));
+  await pg.click(
+    '.kit-app > .kit-list:not([hidden]) .cb-agree-line[data-d="keep"] .cb-agree-btn',
+  );
+  check(
+    'agree with all 3 decides exactly issues #2, #4 and #6 keep, from the recommendation',
+    await eventually(async () => {
+      const ds = await Promise.all(
+        [RISSUE(2), RISSUE(4), RISSUE(6)].map(decisionOf),
+      );
+      return ds.every(
+        (d) => d?.disposition === 'keep' && (d.proposed_by ?? '').includes(A),
+      );
+    }),
+  );
+  {
+    const rest = await Promise.all(
+      [RISSUE(1), RISSUE(3), RISSUE(5), RPR(9), RPR(10)].map(decisionOf),
+    );
+    const proposed = await api('GET', '/api/items?view=proposed&limit=500');
+    checkList(
+      'and nothing else: the rest are undecided, the PRs still recommended',
+      [
+        ...rest.map((d) => (d ? d.disposition : 'undecided')),
+        ...(proposed.items ?? []).map((it) => it.key).sort(),
+      ],
+      [
+        'undecided',
+        'undecided',
+        'undecided',
+        'undecided',
+        'undecided',
+        RPR(10),
+        RPR(9),
+      ],
+    );
+  }
+  check(
+    'and the next undecided item (pull request #10) opens',
+    await opened(t, pg, RPR(10)),
+  );
+  check(
+    "and the list's open row follows it",
+    await until(
+      pg,
+      (kick) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row.open .kit-kicker',
+          ),
+        ].map((e) => e.textContent) +
+          '' ===
+        kick,
+      kicker(RPR(10)),
+    ),
+  );
+  checkList(
+    'the foot now offers only the outward group',
+    await (async () => {
+      await until(
+        pg,
+        () =>
+          document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
+          ).length === 1,
+      );
+      return agreeLines();
+    })(),
+    ['pi recommends Close it without merging for 2 | send all 2 to To apply'],
+  );
+
+  // ---- an outward group goes to To apply, and runs nothing -----------------
+  await pg.click(
+    '.kit-app > .kit-list:not([hidden]) .cb-agree-line[data-d="close"] .cb-agree-btn',
+  );
+  check(
+    'send all 2 to To apply decides both pull requests close',
+    await eventually(async () => {
+      const ds = await Promise.all([RPR(9), RPR(10)].map(decisionOf));
+      return ds.every((d) => d?.disposition === 'close');
+    }),
+  );
+  check(
+    'and issue #1, the next undecided item, opens',
+    await opened(t, pg, RISSUE(1)),
+  );
+  {
+    const jobs = await api('GET', '/api/jobs');
+    check(
+      `no job was started (${(jobs.jobs ?? []).length} jobs)`,
+      (jobs.jobs ?? []).length === 0,
+    );
+  }
+  {
+    const want = await summaryLine();
+    check(
+      `the line follows serve ("${want}")`,
+      want.startsWith('0 recommended') &&
+        (await until(
+          pg,
+          (w) =>
+            document.querySelector(
+              '.kit-app > .kit-list:not([hidden]) .cb-rec-counts',
+            )?.textContent === w,
+          want,
+        )),
+    );
+  }
+  await pg.goto(`${s.url}#/apply`, { waitUntil: 'domcontentloaded' });
+  await pg.click('.kit-chip[data-id="ready"]');
+  check(
+    "To apply's ready list holds both pull requests",
+    await until(
+      pg,
+      (want) => {
+        const ks = [
+          ...document.querySelectorAll('.cb-apply-list .kit-row'),
+        ].map((e) => e.dataset.key);
+        return want.every((k) => ks.includes(k));
+      },
+      [RPR(9), RPR(10)],
+      8000,
+    ),
+  );
+  check(
+    'and still no job',
+    ((await api('GET', '/api/jobs')).jobs ?? []).length === 0,
   );
   await pg.close();
 }

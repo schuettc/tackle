@@ -349,7 +349,7 @@ async function keyboardScenario(shared, t) {
         // x selects the cursor's row; ⇧x selects the range to it; d decides
         // the selection, and it is decided on serve.
         rows = await rowsOf(pg);
-        const hasProposal = (r) => r.sub.includes('proposes');
+        const hasProposal = (r) => r.sub.includes(' recommends ');
         let from = -1;
         for (let i = 0; i + 2 < rows.length; i++) {
           if (![0, 1, 2].some((d) => hasProposal(rows[i + d]))) {

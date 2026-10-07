@@ -285,6 +285,8 @@ function boot() {
   const agentListeners = [];
   let dockSession = "";
   const dockSessionListeners = [];
+  let dockTarget = null;
+  const dockTargetListeners = [];
   const layer = makeKeyLayer(
     (list4) => createKeys(list4 ? { list: list4 } : {}),
     (m) => console.error(m)
@@ -326,6 +328,19 @@ function boot() {
     },
     onDockSession(cb) {
       dockSessionListeners.push(cb);
+    },
+    dockTarget: () => dockTarget,
+    setDockTarget(t) {
+      if (t?.id === dockTarget?.id && t?.name === dockTarget?.name) return;
+      dockTarget = t ? { ...t } : null;
+      for (const cb of dockTargetListeners) cb(dockTarget);
+    },
+    onDockTarget(cb) {
+      dockTargetListeners.push(cb);
+    },
+    askSession(body) {
+      const d = dockHandles[0];
+      return d ? d.sendText(body) : Promise.resolve("no agent session");
     }
   };
   const sections = /* @__PURE__ */ new Map();
@@ -569,6 +584,56 @@ function fillLabel(label, keys) {
   const noun = kinds.length === 1 ? KIND_NOUN[kinds[0]] : void 0;
   const count = noun ? pluralize(keys.length, noun[0], noun[1]) : pluralize(keys.length, "item");
   return `${label} · ${count}`;
+}
+function agentFromSource(source) {
+  const i = source.indexOf(":");
+  return i === -1 ? source : source.slice(0, i);
+}
+function choiceLabel(vocab2, key, disposition) {
+  const d = disposition === "watch" ? "wait" : disposition;
+  if (!vocab2) return disposition;
+  return choicesForKeys(vocab2, [key]).find((c) => c.disposition === d)?.label ?? disposition;
+}
+function recommendLine(vocab2, key, source, disposition) {
+  return `${agentFromSource(source)} recommends ${choiceLabel(vocab2, key, disposition)}`;
+}
+function agreeGroups(vocab2, items) {
+  const groups = /* @__PURE__ */ new Map();
+  for (const it of items) {
+    const p = it.proposal;
+    if (!p || p.state !== "pending") continue;
+    const agent = agentFromSource(p.source);
+    const d = p.disposition === "watch" ? "wait" : p.disposition;
+    const id = `${agent}\0${d}`;
+    const g = groups.get(id) ?? { agent, d, rows: [] };
+    g.rows.push(it);
+    groups.set(id, g);
+  }
+  const out = [];
+  for (const g of groups.values()) {
+    if (g.rows.length < 2) continue;
+    const keys = g.rows.map((r) => r.key);
+    const c = choicesForKeys(vocab2, keys).find((x) => x.disposition === g.d);
+    out.push({
+      agent: g.agent,
+      disposition: g.d,
+      label: c?.label ?? g.d,
+      outward: c?.outward ?? false,
+      ids: g.rows.map((r) => r.proposal.id),
+      keys
+    });
+  }
+  return out;
+}
+function agreeText(g) {
+  const n = g.ids.length;
+  return {
+    says: `${g.agent} recommends ${g.label} for ${n}`,
+    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`
+  };
+}
+function recommendedLine(recommended, notYet) {
+  return `${recommended} recommended · ${notYet} not yet`;
 }
 
 // decide.ts
@@ -2450,10 +2515,6 @@ import { h as h6, facts as facts2, fold } from "/_kit/kit.js";
 
 // proposals.ts
 import { card as card2, sheet as sheet2, noteField as noteField2, h as h5 } from "/_kit/kit.js";
-function agentFromSource(source) {
-  const i = source.indexOf(":");
-  return i === -1 ? source : source.slice(0, i);
-}
 function openRejectSheet(ctx, ids, onDone) {
   let reason = "";
   let submitting = false;
@@ -2626,6 +2687,42 @@ function bulkProposalActions(ctx, onDone) {
       acceptBtn.hidden = false;
       rejectBtn.hidden = false;
     }
+  }
+  return { el, update };
+}
+function agreeWithAll(onAgree) {
+  const el = h5("div", { class: "cb-agree", hidden: true });
+  function update(groups) {
+    el.replaceChildren(
+      ...groups.map((g) => {
+        const t = agreeText(g);
+        const btn = h5(
+          "button",
+          {
+            class: "kit-btn cb-agree-btn",
+            type: "button",
+            onclick() {
+              btn.disabled = true;
+              void onAgree(g).finally(() => {
+                btn.disabled = false;
+              });
+            }
+          },
+          t.action
+        );
+        return h5(
+          "div",
+          {
+            class: "cb-agree-line",
+            "data-d": g.disposition,
+            "data-ids": g.ids.join(" ")
+          },
+          h5("span", { class: "cb-agree-says" }, t.says),
+          btn
+        );
+      })
+    );
+    el.hidden = groups.length === 0;
   }
   return { el, update };
 }
@@ -2984,6 +3081,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
 }
 
 // attention.ts
+var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.";
 var PAGE_SIZE2 = 200;
 var selection = createSelection();
 var VIEWS2 = [
@@ -3053,6 +3151,9 @@ function makeAttention(ctx) {
   let deciding = null;
   let lastUndo = null;
   let boardHandle = null;
+  let vocab2 = null;
+  let recCounts = null;
+  let syncingOpen = false;
   function renderReadEmpty() {
     const nameEl = h8(
       "p",
@@ -3187,7 +3288,12 @@ function makeAttention(ctx) {
       const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf2(it);
-      const proposal = it.proposal ? `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}` : void 0;
+      const proposal = it.proposal && it.proposal.state === "pending" ? recommendLine(
+        vocab2,
+        it.key,
+        it.proposal.source,
+        it.proposal.disposition
+      ) : void 0;
       return {
         id: it.key,
         key: kindKey,
@@ -3214,6 +3320,7 @@ function makeAttention(ctx) {
       }
     },
     onOpen(it) {
+      if (syncingOpen) return;
       ctx.route.go("item", it.key);
       void openDetail(it.key);
     },
@@ -3271,6 +3378,8 @@ function makeAttention(ctx) {
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       handle.setItems(loadedItems);
+      markOpenRow();
+      updateAgree();
       updateFoot();
       updateReadEmptyCount();
       updateProposalBulk(selection.ids());
@@ -3291,6 +3400,8 @@ function makeAttention(ctx) {
       totalItems = data.total;
       totalItemsForView = data.total;
       handle.setItems(loadedItems);
+      markOpenRow();
+      updateAgree();
       updateFoot();
       updateProposalBulk(selection.ids());
     } catch {
@@ -3318,8 +3429,113 @@ function makeAttention(ctx) {
     }
     footEl.hidden = false;
   }
+  function markOpenRow() {
+    if (!currentOpenKey || boardHandle) return;
+    const i = loadedItems.findIndex((it) => it.key === currentOpenKey);
+    if (i < 0) return;
+    const rowEl = handle.el.querySelectorAll(".kit-rows > .kit-row")[i];
+    if (rowEl?.classList.contains("open")) return;
+    syncingOpen = true;
+    try {
+      handle.open(i);
+    } finally {
+      syncingOpen = false;
+    }
+  }
+  const recCountsEl = h8("span", { class: "cb-rec-counts" });
+  const askBtn = h8("button", {
+    class: "kit-btn cb-rec-ask",
+    type: "button",
+    hidden: true,
+    onclick() {
+      void askTheRest();
+    }
+  });
+  const askNote = h8("span", { class: "cb-rec-note" });
+  const recLine = h8(
+    "div",
+    { class: "cb-rec-line", hidden: true },
+    recCountsEl,
+    askBtn,
+    askNote
+  );
+  handle.el.querySelector(".kit-lh")?.append(recLine);
+  let asked = "";
+  function renderRecLine() {
+    if (!recCounts) {
+      recLine.hidden = true;
+      return;
+    }
+    recLine.hidden = false;
+    recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
+    if (recCounts.notYet === 0) asked = "";
+    const t = ctx.dockTarget();
+    const offer = recCounts.notYet > 0 && !!t;
+    askBtn.hidden = !offer || asked === t?.id;
+    if (t) askBtn.textContent = `ask ${t.name} to recommend the rest`;
+    askNote.textContent = offer && asked === t?.id ? `asked ${t.name}` : "";
+  }
+  ctx.onDockTarget(() => renderRecLine());
+  async function askTheRest() {
+    const t = ctx.dockTarget();
+    if (!t || askBtn.disabled) return;
+    askBtn.disabled = true;
+    try {
+      const why = await ctx.askSession(RECOMMEND_THE_REST);
+      if (why) askNote.textContent = why;
+      else asked = t.id;
+    } finally {
+      askBtn.disabled = false;
+    }
+    if (asked) renderRecLine();
+  }
+  function refreshSummary() {
+    void ctx.api.get("/summary").then((sv) => {
+      applyCounts(sv.counts);
+      recCounts = {
+        rec: sv.recommended ?? 0,
+        notYet: sv.not_recommended ?? 0
+      };
+      renderRecLine();
+    }).catch(() => {
+    });
+  }
+  const agree = agreeWithAll(agreeAll);
+  handle.el.querySelector(".kit-foot")?.before(agree.el);
+  function updateAgree() {
+    agree.update(vocab2 && !boardHandle ? agreeGroups(vocab2, loadedItems) : []);
+  }
+  async function agreeAll(g) {
+    if (deciding) return;
+    const open = currentOpenKey;
+    deciding = open ?? "\0agree";
+    const order = [...lastOrder];
+    try {
+      const r = await ctx.api.post("/proposals/accept", {
+        ids: g.ids
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join("; ") || "nothing was accepted");
+        return;
+      }
+      selection.deselect(g.keys);
+      lastUndo = null;
+      if (!open || g.keys.includes(open)) {
+        await moveOn(open ?? "", order);
+      } else {
+        void reload();
+      }
+      const errs = r.errors ?? [];
+      if (errs.length) showReadError(errs.join("; "));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
   async function openDetail(key) {
     currentOpenKey = key;
+    markOpenRow();
     feedAttached();
     try {
       const detail = await ctx.api.get("/item", { key });
@@ -3383,11 +3599,11 @@ function makeAttention(ctx) {
       const data = await ctx.api.get("/items", buildQuery(0));
       undecided = new Set((data.items ?? []).map((it) => it.key));
     } catch {
-      void openDetail(key);
+      if (key) void openDetail(key);
       return;
     }
     undecided.delete(key);
-    if (currentOpenKey !== key) return;
+    if ((currentOpenKey ?? "") !== key) return;
     const next = nextUndecided(order, key, undecided);
     if (next) openKey(next);
     else {
@@ -3584,8 +3800,11 @@ function makeAttention(ctx) {
     }
   };
   const boardKeys = [decideKey, searchKey];
-  void ctx.api.get("/summary").then((s) => {
-    applyCounts(s.counts);
+  refreshSummary();
+  void getVocab(ctx).then((v) => {
+    vocab2 = v;
+    handle.setItems(loadedItems);
+    updateAgree();
   }).catch(() => {
   });
   function getBoardFilters() {
@@ -3606,6 +3825,7 @@ function makeAttention(ctx) {
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
+    agree.update([]);
     boardHandle = makeBoard(
       ctx,
       selection,
@@ -3633,6 +3853,7 @@ function makeAttention(ctx) {
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = false;
     if (kitFoot) kitFoot.hidden = false;
+    updateAgree();
   }
   function show(sub) {
     active = true;
@@ -3686,6 +3907,7 @@ function makeAttention(ctx) {
       if (type === "index") {
         const s = data;
         applyCounts(s?.counts ?? null);
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {
@@ -3700,8 +3922,7 @@ function makeAttention(ctx) {
         if (currentOpenKey && currentOpenKey !== deciding && decidedKeys.includes(currentOpenKey)) {
           void openDetail(currentOpenKey);
         }
-        void ctx.api.get("/summary").then((s) => applyCounts(s.counts)).catch(() => {
-        });
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {
@@ -3721,8 +3942,7 @@ function makeAttention(ctx) {
             void openDetail(currentOpenKey);
           }
         }
-        void ctx.api.get("/summary").then((s) => applyCounts(s.counts)).catch(() => {
-        });
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {
@@ -3997,6 +4217,34 @@ function makeComposer(ctx, dock) {
     },
     say(text) {
       note.textContent = text;
+    },
+    async sendText(body) {
+      const why = dock.blocked();
+      if (why) {
+        note.textContent = why;
+        return why;
+      }
+      try {
+        const thread = await threadFor(body);
+        if (!thread) {
+          note.textContent = "no agent session";
+          return note.textContent;
+        }
+        await ctx.api.post("/messages", {
+          thread,
+          body,
+          attached: {},
+          batch: false,
+          session: dock.currentSession()
+        });
+        return "";
+      } catch (err) {
+        const moved = movedNote(err);
+        note.textContent = moved || "not sent";
+        if (moved) dock.threadMoved();
+        console.error("[composer] sendText:", err);
+        return note.textContent;
+      }
     }
   };
 }
@@ -4755,6 +5003,9 @@ function makeDock(ctx) {
     const state = attachedState(currentSessionId, sessions);
     sessionHeader.setAttribute("data-attach", state);
     const sess = sessions.find((s) => s.id === currentSessionId);
+    ctx.setDockTarget(
+      sess && !blocked() ? { id: sess.id, name: sessionTitle(sess) } : null
+    );
     if (!sess) {
       sessionDot.style.background = "var(--kit-muted)";
       sessionLabelEl.textContent = state === "unknown" ? "session not here" : "no session";
@@ -5142,6 +5393,9 @@ function makeDock(ctx) {
     },
     currentSession() {
       return currentSessionId;
+    },
+    sendText(body) {
+      return composer.sendText(body);
     }
   };
 }

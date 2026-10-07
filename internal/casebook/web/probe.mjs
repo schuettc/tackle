@@ -3556,8 +3556,8 @@ async function rulesScenariosOn(context, serveHandle) {
           );
         })(),
         [
-          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule proposes delete',
-          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule proposes delete',
+          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule recommends Delete it',
+          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule recommends Delete it',
         ],
       );
 
@@ -5034,7 +5034,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 763;
+const MIN_CHECKS = 787;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -7173,7 +7173,7 @@ async function run() {
           check('proposal card is inside the .kit-doc reading document', false);
         }
 
-        // List row in proposed view must show "<agent> proposes <disposition>".
+        // List row in proposed view must show "<agent> recommends <label>".
         await propGeoPage.evaluate(() => {
           location.hash = '#/attention/proposed';
         });
@@ -7190,9 +7190,11 @@ async function run() {
             els.map((e) => e.textContent ?? ''),
           )
           .catch(() => []);
-        const hasProposesText = subTexts.some((t) => t.includes('proposes'));
+        const hasProposesText = subTexts.some((t) =>
+          / recommends [A-Z]/.test(t),
+        );
         check(
-          'list row in proposed view shows "<agent> proposes <disposition>"',
+          `list row in proposed view shows "<agent> recommends <label>" (${subTexts.join(', ')})`,
           hasProposesText,
         );
       } finally {

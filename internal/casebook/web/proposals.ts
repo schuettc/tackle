@@ -5,6 +5,7 @@
 //   proposalCard(ctx, detail, onDone)   — the recommendation card in the decide step
 //   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
 //   bulkProposalActions(ctx, onDone)    — accept N / reject N… foot; call .update()
+//   agreeWithAll(onAgree)               — the list foot's "agree with all N" lines
 
 import { card, sheet, noteField, h, type Button } from '/_kit/kit.js';
 import type {
@@ -15,20 +16,15 @@ import type {
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { openDecideSheet } from './decide.ts';
-import { pluralize } from './decide-math.ts';
+import {
+  agentFromSource,
+  agreeText,
+  pluralize,
+  type AgreeGroup,
+} from './decide-math.ts';
 
-// ---- agent name from source -------------------------------------------------
-
-/**
- * agentFromSource extracts the agent name from a proposal source string.
- * "pi:session-id" → "pi"
- * "claude:xyz"    → "claude"
- * "rule:id"       → "rule"
- */
-export function agentFromSource(source: string): string {
-  const i = source.indexOf(':');
-  return i === -1 ? source : source.slice(0, i);
-}
+// agentFromSource ("pi:session-id" → "pi") lives with the pure helpers.
+export { agentFromSource };
 
 // ---- reject sheet -----------------------------------------------------------
 
@@ -291,6 +287,63 @@ export function bulkProposalActions(
       acceptBtn.hidden = false;
       rejectBtn.hidden = false;
     }
+  }
+
+  return { el, update };
+}
+
+// ---- agree with all ----------------------------------------------------------
+
+/** Handle returned by agreeWithAll; call update() when the rows change. */
+export interface AgreeWithAll {
+  el: HTMLElement;
+  update(groups: AgreeGroup[]): void;
+}
+
+/**
+ * agreeWithAll is the list foot's band of groups: for each group of two or
+ * more rows whose recommendations agree, "‹agent› recommends ‹label› for
+ * ‹n›" and a button that accepts exactly that group's proposals ("agree
+ * with all n"; an outward choice reads "send all n to To apply", since
+ * accepting it only puts it in To apply). onAgree does the accepting; the
+ * button is disabled while it runs.
+ */
+export function agreeWithAll(
+  onAgree: (g: AgreeGroup) => Promise<void>,
+): AgreeWithAll {
+  const el = h('div', { class: 'cb-agree', hidden: true });
+
+  function update(groups: AgreeGroup[]): void {
+    el.replaceChildren(
+      ...groups.map((g) => {
+        const t = agreeText(g);
+        const btn = h(
+          'button',
+          {
+            class: 'kit-btn cb-agree-btn',
+            type: 'button',
+            onclick() {
+              btn.disabled = true;
+              void onAgree(g).finally(() => {
+                btn.disabled = false;
+              });
+            },
+          },
+          t.action,
+        ) as HTMLButtonElement;
+        return h(
+          'div',
+          {
+            class: 'cb-agree-line',
+            'data-d': g.disposition,
+            'data-ids': g.ids.join(' '),
+          },
+          h('span', { class: 'cb-agree-says' }, t.says),
+          btn,
+        );
+      }),
+    );
+    el.hidden = groups.length === 0;
   }
 
   return { el, update };
