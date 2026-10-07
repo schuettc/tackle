@@ -4,6 +4,21 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.5] - 2026-10-07
+
+### Fixed
+- A recommendation made for the item you have open now shows on it at
+  once: its recommendation card, with the reason, and the "recommended"
+  mark on the proposed choice. Before, the list row said "pi recommends
+  …" while the open item showed nothing until you reopened it. The same
+  goes for a recommendation accepted, changed or rejected elsewhere, and
+  for one a rule makes. If you are mid-answer on that item (a closing
+  comment typed, or the Not now picker open), it isn't redrawn under you:
+  a quiet line reads "pi recommends ‹label› · show", and "show" redraws it.
+- Every `proposals` live event now names the items its proposals are for
+  (`keys`), and a rule's new proposals (propose once, or an active rule
+  after a sync) publish one too, from `rule:<id>`.
+
 ## [casebook 0.4.4] - 2026-10-07
 
 ### Changed

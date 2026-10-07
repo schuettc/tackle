@@ -446,8 +446,12 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 	var errs []string
 	by := s.App.Cfg.User
 	made := map[string]Committed{}
+	var keys []string
 	for _, id := range in.IDs {
 		p, err := s.Props.Get(ctx, id)
+		if err == nil {
+			keys = append(keys, p.Key)
+		}
 		if err != nil || p.State != propose.Pending {
 			errs = append(errs, fmt.Sprintf("proposal %d is not pending", id))
 			continue
@@ -472,7 +476,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		total++
 	}
 	errs = s.finishDecides(ctx, total, errs)
-	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "keys": nonNil(keys), "state": propose.Accepted})
 	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Decisions: made}, nil)
 }
 
@@ -498,7 +502,7 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	n, done, errs, made := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
 	if n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
-		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
+		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "keys": []string{p.Key}, "state": propose.Changed})
 	}
 	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Decisions: made}, nil)
 }
@@ -514,12 +518,16 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	n := 0
+	var keys []string
 	for _, id := range in.IDs {
+		if p, err := s.Props.Get(ctx, id); err == nil {
+			keys = append(keys, p.Key)
+		}
 		if s.Props.Settle(ctx, id, propose.Rejected, in.Reason) == nil {
 			n++
 		}
 	}
-	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "keys": nonNil(keys), "state": propose.Rejected})
 	reply(w, RejectResult{Rejected: n}, nil)
 }
 

@@ -725,17 +725,81 @@ export function makeAttention(ctx: Ctx): Section {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
       // Another item opened meanwhile: this answer is no longer shown.
       if (currentOpenKey !== key) return;
-      shownDetail = detail;
-      const el = renderItem(ctx, detail, {
-        // Re-render after a reject or a change from the recommendation card.
-        onRefresh: () => void openDetail(key),
-        decide: (d, until, note) => void decideOpen(key, d, until, note),
-        accept: () => void acceptOpen(),
-      });
-      readEl.replaceChildren(el);
+      paintDetail(key, detail);
     } catch {
       // non-fatal; leave the reading column
     }
+  }
+
+  // paintDetail renders detail (key's) in the reading column.
+  function paintDetail(key: string, detail: ItemDetailView): void {
+    shownDetail = detail;
+    const el = renderItem(ctx, detail, {
+      // Re-render after a reject or a change from the recommendation card.
+      onRefresh: () => void openDetail(key),
+      decide: (d, until, note) => void decideOpen(key, d, until, note),
+      accept: () => void acceptOpen(),
+    });
+    readEl.replaceChildren(el);
+  }
+
+  // midInput: Court is in the middle of answering the open item: its
+  // closing-comment field is open with text typed, or its Not now picker
+  // is open. A re-render then would wipe what he is doing.
+  function midInput(): boolean {
+    const comment = readEl.querySelector<HTMLElement>('.cb-close-comment');
+    const typed =
+      comment?.querySelector<HTMLInputElement>('input')?.value ?? '';
+    if (comment && !comment.hidden && typed !== '') return true;
+    const notNow = readEl.querySelector<HTMLElement>('.cb-notnow');
+    return !!notNow && !notNow.hidden;
+  }
+
+  // proposalsChanged: a proposal for the open item came, or went (a live
+  // "proposals" event naming key). The item re-renders, so its
+  // recommendation card and the "recommended" mark appear or go; while
+  // Court is mid-input it doesn't, and a quiet line under the question
+  // says what changed, with "show" to re-render.
+  let freshSeq = 0;
+  async function proposalsChanged(key: string): Promise<void> {
+    const mine = ++freshSeq;
+    let detail: ItemDetailView;
+    try {
+      detail = await ctx.api.get<ItemDetailView>('/item', { key });
+    } catch {
+      return;
+    }
+    // Only the newest answer, and only for the item still open (and not
+    // one this tab is deciding: it moves on).
+    if (mine !== freshSeq || currentOpenKey !== key || deciding === key) return;
+    if (!midInput()) {
+      paintDetail(key, detail);
+      return;
+    }
+    const p = detail.item.proposal;
+    const says =
+      p && p.state === 'pending'
+        ? recommendLine(vocab, key, p.source, p.disposition)
+        : 'the recommendation changed';
+    const show = h(
+      'button',
+      {
+        type: 'button',
+        class: 'cb-link cb-rec-show',
+        onclick: () => void openDetail(key),
+      },
+      'show',
+    );
+    const line = h(
+      'p',
+      { class: 'cb-rec-fresh' },
+      h('span', { class: 'cb-rec-fresh-says' }, says),
+      ' \u00b7 ',
+      show,
+    );
+    const old = readEl.querySelector('.cb-rec-fresh');
+    if (old) old.replaceWith(line);
+    else readEl.querySelector('.cb-question')?.after(line);
   }
 
   // ---- the decide step: decide, move on, undo ------------------------------
@@ -1303,34 +1367,31 @@ export function makeAttention(ctx: Ctx): Section {
           void reload();
         }
       } else if (type === 'proposals') {
-        // proposals event is emitted by accept/reject/change or by the agent.
-        // Payload shape: {ids: number[], state: string, source?: string}.
+        // proposals event: an agent's or a rule's new pending proposals, or
+        // proposals accepted, rejected or changed. Payload shape:
+        // {ids: number[], keys: string[], state: string, source?: string};
+        // keys are the items the proposals are for.
         const propPayload = data as {
           ids?: number[];
+          keys?: string[];
           state?: string;
-          source?: string;
         };
-        const propIds = propPayload?.ids ?? [];
+        const propKeys = propPayload?.keys ?? [];
         const propState = propPayload?.state ?? '';
 
         // When proposals are settled (accepted, rejected, changed), deselect
-        // the affected item keys so the selection count stays correct.
+        // their items so the selection count stays correct.
+        if (propState !== 'pending' && propKeys.length > 0) {
+          selection.deselect(propKeys);
+        }
+        // The open item's recommendation came or went, in any state: by
+        // keys, as the open item may not be on the loaded page.
         if (
-          propState === 'accepted' ||
-          propState === 'rejected' ||
-          propState === 'changed'
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          propKeys.includes(currentOpenKey)
         ) {
-          const propIdSet = new Set(propIds);
-          const affectedKeys = loadedItems
-            .filter((it) => it.proposal && propIdSet.has(it.proposal.id))
-            .map((it) => it.key);
-          if (affectedKeys.length > 0) {
-            selection.deselect(affectedKeys);
-          }
-          // Re-render the open item if it was affected.
-          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
-            void openDetail(currentOpenKey);
-          }
+          void proposalsChanged(currentOpenKey);
         }
 
         // Re-fetch summary to update view-chip counts (particularly 'proposed').

@@ -59,6 +59,16 @@
 //     its message reaches that session's thread and no other's
 //   "agree with all 3" accepts exactly those three; the next item opens
 //   an outward group: "send all 2 to To apply"; To apply lists them; no job
+//
+// And a new recommendation on the open item (casebook 0.4.5), on a serve
+// and repo of their own:
+//
+//   the agent proposes for the open item: its recommendation card (with the
+//     reason) and the "recommended" mark show, with no reload
+//   a proposal for another item leaves the open item as it was
+//   with the closing comment typed, or the Not now picker open, the open
+//     item isn't re-rendered under Court: "pi recommends ‹label› · show"
+//     shows instead, and "show" re-renders it
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -235,6 +245,7 @@ export async function decideScenarios(shared, t) {
       closeSeed(),
     ],
     ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
+    ['a new recommendation on the open item', openRecScenario, openRecSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -2231,5 +2242,257 @@ async function leftOpenScenario(context, t, s) {
       'new activity since you left it open',
   );
   await shootLO(t, pg, 'back');
+  await pg.close();
+}
+
+// ---- a new recommendation on the open item (casebook 0.4.5) ---------------
+
+const OR = 'rd-openrec';
+const OISSUE = (n) => `issue:schuettc/${OR}#${n}`;
+const OPR = (n) => `pr:schuettc/${OR}#${n}`;
+
+function openRecSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${OR}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${OR}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [[4, 'Bump the uploader dependency', 'renovate']].map(item),
+        issues: [
+          [1, 'Region question', 'alice'],
+          [2, 'README typo', 'carol'],
+          [3, 'Tags question', 'dave'],
+          [5, 'Flag docs', 'erin'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function openRecScenario(context, t, s) {
+  const { check, until } = t;
+  console.log('\nscenario: a new recommendation on the open item');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const FIELD = `${READ} .cb-close-comment`;
+  const LINE = `${READ} .cb-rec-fresh`;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${OR}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  const A = 'probe-openrec';
+  await agent.presence(A, 'pi \u00b7 openrec', '/home/court/openrec', 'pi');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  // A reload would lose this.
+  await pg.evaluate(() => {
+    window.__openRecNoReload = true;
+  });
+  const noReload = () => pg.evaluate(() => window.__openRecNoReload === true);
+  // tagItem marks the open item's element; tagged says it is still shown
+  // (not re-rendered).
+  const tagItem = () =>
+    pg.evaluate((r) => {
+      document.querySelector(`${r} .cb-item`).dataset.probeTag = '1';
+    }, READ);
+  const tagged = () =>
+    pg.evaluate(
+      (r) => document.querySelector(`${r} .cb-item`)?.dataset.probeTag === '1',
+      READ,
+    );
+  const recCard = (c) => c.cards.filter((x) => x.rec).map((x) => x.d);
+
+  // ---- the agent proposes for the open item: it shows, no reload ---------
+  await row(pg, OPR(4)).click();
+  check('pr #4 opens, undecided', await opened(t, pg, OPR(4)));
+  {
+    const c = await readCol(pg);
+    check(
+      `before: no recommendation card, no card marked recommended (${recCard(c).join(',') || 'none'})`,
+      c.rec === '' && recCard(c).length === 0,
+    );
+  }
+  await agent.propose(A, [OPR(4)], 'close', 'superseded by the next bump');
+  {
+    const ok = await until(
+      pg,
+      (r) => !!document.querySelector(`${r} .cb-proposal-card`),
+      READ,
+      8000,
+    );
+    const c = await readCol(pg);
+    const closeCard = c.cards.find((x) => x.d === 'close');
+    check(
+      `the recommendation card appears on the open item with its reason ("${c.rec}")`,
+      ok &&
+        c.key === OPR(4) &&
+        c.rec.includes('Close it without merging') &&
+        c.rec.includes('superseded by the next bump'),
+    );
+    check(
+      `the proposed choice is marked recommended ("${closeCard?.kick}"), and only it`,
+      !!closeCard &&
+        closeCard.rec &&
+        closeCard.kick.includes('recommended') &&
+        recCard(c).join(',') === 'close',
+    );
+    check('with no reload', await noReload());
+  }
+
+  // ---- a proposal for another item leaves the open item as it was --------
+  await row(pg, OISSUE(1)).click();
+  check('issue #1 opens', await opened(t, pg, OISSUE(1)));
+  await until(
+    pg,
+    (r) => !!document.querySelector(`${r} .cb-question`)?.textContent,
+    READ,
+  );
+  await tagItem();
+  const before = await readCol(pg);
+  await agent.propose(A, [OISSUE(2)], 'keep', 'still being discussed');
+  {
+    // The list hears it: issue #2's row gets its line.
+    const heard = await until(
+      pg,
+      (k) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].some(
+          (r) =>
+            r.querySelector('.kit-kicker')?.textContent === k &&
+            (r.querySelector('.kit-sub')?.textContent ?? '').includes(
+              'recommends',
+            ),
+        ),
+      kicker(OISSUE(2)),
+      8000,
+    );
+    await pg.waitForTimeout(400);
+    const after = await readCol(pg);
+    check(
+      `a proposal for issue #2 (the list heard it: ${heard}) leaves the open issue #1 as it was: not re-rendered, no card, nothing recommended`,
+      heard &&
+        (await tagged()) &&
+        after.key === OISSUE(1) &&
+        after.rec === '' &&
+        recCard(after).length === 0 &&
+        JSON.stringify(after) === JSON.stringify(before),
+    );
+    check(
+      'and no "pi recommends · show" line on it',
+      (await pg.locator(LINE).count()) === 0,
+    );
+  }
+
+  // ---- mid-input: the closing comment typed --------------------------------
+  const TYPED = 'Closing: answered in the docs.';
+  await row(pg, OISSUE(3)).click();
+  check('issue #3 opens', await opened(t, pg, OISSUE(3)));
+  await pg.click(`${READ} .cb-choice[data-d="close"]`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.checkVisibility(),
+    FIELD,
+  );
+  await pg.locator(`${FIELD} input`).fill(TYPED);
+  await tagItem();
+  await agent.propose(A, [OISSUE(3)], 'keep', 'a fix is in review');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      LINE,
+      8000,
+    );
+    const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
+    check(
+      `with the closing comment typed, the line shows instead ("${line}")`,
+      ok && line === 'pi recommends Leave it open \u00b7 show',
+    );
+    const st = await pg.evaluate((sel) => {
+      const f = document.querySelector(sel);
+      return {
+        shown: !!f?.checkVisibility(),
+        value: f?.querySelector('input')?.value ?? '',
+      };
+    }, FIELD);
+    const c = await readCol(pg);
+    check(
+      `and the typed comment stays ("${st.value}", field ${st.shown ? 'open' : 'closed'}), not re-rendered: no card yet`,
+      st.shown && st.value === TYPED && (await tagged()) && c.rec === '',
+    );
+  }
+  await pg.click(`${LINE} button`);
+  {
+    const ok = await until(
+      pg,
+      (r) => !!document.querySelector(`${r} .cb-proposal-card`),
+      READ,
+      8000,
+    );
+    const c = await readCol(pg);
+    check(
+      `"show" re-renders it: the card ("${c.rec}") and "Leave it open" marked recommended`,
+      ok &&
+        c.key === OISSUE(3) &&
+        c.rec.includes('a fix is in review') &&
+        recCard(c).join(',') === 'keep' &&
+        (await pg.locator(LINE).count()) === 0,
+    );
+  }
+
+  // ---- mid-input: the Not now picker open ----------------------------------
+  await row(pg, OISSUE(5)).click();
+  check('issue #5 opens', await opened(t, pg, OISSUE(5)));
+  await pg.click(`${READ} .cb-choice[data-d="wait"]`);
+  await until(
+    pg,
+    (r) => !!document.querySelector(`${r} .cb-notnow`)?.checkVisibility(),
+    READ,
+  );
+  await tagItem();
+  await agent.propose(A, [OISSUE(5)], 'close', 'answered');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      LINE,
+      8000,
+    );
+    const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
+    const picker = await pg.evaluate(
+      (r) => !!document.querySelector(`${r} .cb-notnow`)?.checkVisibility(),
+      READ,
+    );
+    check(
+      `with the Not now picker open, it stays open (${picker}) and the line shows ("${line}")`,
+      ok &&
+        picker &&
+        (await tagged()) &&
+        line === 'pi recommends Close it \u00b7 show',
+    );
+  }
+  check('still no reload', await noReload());
   await pg.close();
 }

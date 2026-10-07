@@ -3899,16 +3899,62 @@ function makeAttention(ctx) {
     try {
       const detail = await ctx.api.get("/item", { key });
       if (currentOpenKey !== key) return;
-      shownDetail = detail;
-      const el = renderItem(ctx, detail, {
-        // Re-render after a reject or a change from the recommendation card.
-        onRefresh: () => void openDetail(key),
-        decide: (d, until, note) => void decideOpen(key, d, until, note),
-        accept: () => void acceptOpen()
-      });
-      readEl.replaceChildren(el);
+      paintDetail(key, detail);
     } catch {
     }
+  }
+  function paintDetail(key, detail) {
+    shownDetail = detail;
+    const el = renderItem(ctx, detail, {
+      // Re-render after a reject or a change from the recommendation card.
+      onRefresh: () => void openDetail(key),
+      decide: (d, until, note) => void decideOpen(key, d, until, note),
+      accept: () => void acceptOpen()
+    });
+    readEl.replaceChildren(el);
+  }
+  function midInput() {
+    const comment = readEl.querySelector(".cb-close-comment");
+    const typed = comment?.querySelector("input")?.value ?? "";
+    if (comment && !comment.hidden && typed !== "") return true;
+    const notNow = readEl.querySelector(".cb-notnow");
+    return !!notNow && !notNow.hidden;
+  }
+  let freshSeq = 0;
+  async function proposalsChanged(key) {
+    const mine = ++freshSeq;
+    let detail;
+    try {
+      detail = await ctx.api.get("/item", { key });
+    } catch {
+      return;
+    }
+    if (mine !== freshSeq || currentOpenKey !== key || deciding === key) return;
+    if (!midInput()) {
+      paintDetail(key, detail);
+      return;
+    }
+    const p = detail.item.proposal;
+    const says = p && p.state === "pending" ? recommendLine(vocab2, key, p.source, p.disposition) : "the recommendation changed";
+    const show2 = h8(
+      "button",
+      {
+        type: "button",
+        class: "cb-link cb-rec-show",
+        onclick: () => void openDetail(key)
+      },
+      "show"
+    );
+    const line = h8(
+      "p",
+      { class: "cb-rec-fresh" },
+      h8("span", { class: "cb-rec-fresh-says" }, says),
+      " · ",
+      show2
+    );
+    const old = readEl.querySelector(".cb-rec-fresh");
+    if (old) old.replaceWith(line);
+    else readEl.querySelector(".cb-question")?.after(line);
   }
   function viewLabel() {
     return VIEWS2.find((v) => v.id === filters.view)?.label ?? filters.view;
@@ -4315,17 +4361,13 @@ function makeAttention(ctx) {
         }
       } else if (type === "proposals") {
         const propPayload = data;
-        const propIds = propPayload?.ids ?? [];
+        const propKeys = propPayload?.keys ?? [];
         const propState = propPayload?.state ?? "";
-        if (propState === "accepted" || propState === "rejected" || propState === "changed") {
-          const propIdSet = new Set(propIds);
-          const affectedKeys = loadedItems.filter((it) => it.proposal && propIdSet.has(it.proposal.id)).map((it) => it.key);
-          if (affectedKeys.length > 0) {
-            selection.deselect(affectedKeys);
-          }
-          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
-            void openDetail(currentOpenKey);
-          }
+        if (propState !== "pending" && propKeys.length > 0) {
+          selection.deselect(propKeys);
+        }
+        if (currentOpenKey && currentOpenKey !== deciding && propKeys.includes(currentOpenKey)) {
+          void proposalsChanged(currentOpenKey);
         }
         refreshSummary();
         if (boardHandle) {

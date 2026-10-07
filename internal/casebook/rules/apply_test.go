@@ -79,7 +79,8 @@ func TestActiveRuleProposesMatchesOnRebuild(t *testing.T) {
 		repoItem("repo:schuettc/old"),
 	)
 
-	created, err := EvaluateActive(ctx, []Rule{r}, res, applyTestNow, s)
+	createdPs, err := EvaluateActive(ctx, []Rule{r}, res, applyTestNow, s)
+	created := len(createdPs)
 	if err != nil {
 		t.Fatalf("EvaluateActive: %v", err)
 	}
@@ -118,7 +119,8 @@ func TestActiveRuleReProposesNewMatchAfterSync(t *testing.T) {
 
 	// First rebuild: one item.
 	res1 := buildResult(repoItem("repo:schuettc/hail"))
-	created1, err := EvaluateActive(ctx, []Rule{r}, res1, applyTestNow, s)
+	created1Ps, err := EvaluateActive(ctx, []Rule{r}, res1, applyTestNow, s)
+	created1 := len(created1Ps)
 	if err != nil || created1 != 1 {
 		t.Fatalf("first EvaluateActive: created=%d err=%v", created1, err)
 	}
@@ -128,7 +130,8 @@ func TestActiveRuleReProposesNewMatchAfterSync(t *testing.T) {
 		repoItem("repo:schuettc/hail"),
 		repoItem("repo:schuettc/old"),
 	)
-	created2, err := EvaluateActive(ctx, []Rule{r}, res2, applyTestNow, s)
+	created2Ps, err := EvaluateActive(ctx, []Rule{r}, res2, applyTestNow, s)
+	created2 := len(created2Ps)
 	if err != nil {
 		t.Fatalf("second EvaluateActive: %v", err)
 	}
@@ -166,7 +169,8 @@ func TestDraftRuleProposesNothingUntilProposeOnce(t *testing.T) {
 
 	// EvaluateActive ignores draft rules (caller pre-filters; passing draft
 	// directly verifies the defensive skip inside EvaluateActive).
-	created, err := EvaluateActive(ctx, []Rule{draft}, res, applyTestNow, s)
+	createdPs, err := EvaluateActive(ctx, []Rule{draft}, res, applyTestNow, s)
+	created := len(createdPs)
 	if err != nil {
 		t.Fatalf("EvaluateActive: %v", err)
 	}
@@ -224,7 +228,8 @@ func TestRuleNeverReProposesAfterAccept(t *testing.T) {
 	res2 := buildResult(decided)
 
 	// Second rebuild: item is decided, so Proposable should skip it.
-	created, err := EvaluateActive(ctx, []Rule{r}, res2, applyTestNow, s)
+	createdPs, err := EvaluateActive(ctx, []Rule{r}, res2, applyTestNow, s)
+	created := len(createdPs)
 	if err != nil {
 		t.Fatalf("second EvaluateActive: %v", err)
 	}

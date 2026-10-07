@@ -278,6 +278,11 @@
   font: 600 20px/1.35 var(--kit-sans);
   margin: 0 0 12px;
 }
+.cb-rec-fresh {
+  margin: -4px 0 12px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-agent);
+}
 .cb-decide .cb-proposal-card {
   margin: 0 0 16px;
 }

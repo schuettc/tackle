@@ -285,6 +285,22 @@ func (s *Server) publish(ctx context.Context, kind string, payload any) {
 	}
 }
 
+// publishPending announces new pending proposals from source: their ids
+// and the items they are for (keys), so the page can show a recommendation
+// on the item it has open, whichever page of the list that item is on.
+func (s *Server) publishPending(ctx context.Context, ps []propose.Proposal, source string) {
+	if len(ps) == 0 {
+		return
+	}
+	ids := make([]int64, 0, len(ps))
+	keys := make([]string, 0, len(ps))
+	for _, p := range ps {
+		ids = append(ids, p.ID)
+		keys = append(keys, p.Key)
+	}
+	s.publish(ctx, "proposals", map[string]any{"ids": ids, "keys": keys, "state": propose.Pending, "source": source})
+}
+
 // settleJob calls Store.Settle for jobID and, when the state changes,
 // publishes a "job" event on the bus so watchers see the terminal state.
 // Errors are logged to stderr (non-fatal: the step state is already persisted).
@@ -471,7 +487,7 @@ func (s *Server) rebuild(ctx context.Context) error {
 	// Bug 1: EvaluateActive now returns rule-level Propose errors (joined).
 	// Surface them as index notices so the page can display them, and log
 	// to stderr for diagnostics.
-	var proposed int
+	var proposed []propose.Proposal
 	if len(active) > 0 {
 		var evalErr error
 		proposed, evalErr = rules.EvaluateActive(ctx, active, res, now, s.Props)
@@ -491,8 +507,20 @@ func (s *Server) rebuild(ctx context.Context) error {
 	// The index is set: announcing it can no longer fail the rebuild (a
 	// caller would report an error for a change that happened).
 	s.publish(ctx, "index", map[string]any{"counts": s.Index.Counts(pending), "head": s.Index.Head()})
-	if proposed > 0 {
-		s.publish(ctx, "rules", map[string]int{"proposed": proposed})
+	if len(proposed) > 0 {
+		s.publish(ctx, "rules", map[string]int{"proposed": len(proposed)})
+		// Each rule's proposals, as the page hears an agent's: by source.
+		bySource := map[string][]propose.Proposal{}
+		var sources []string
+		for _, p := range proposed {
+			if _, ok := bySource[p.Source]; !ok {
+				sources = append(sources, p.Source)
+			}
+			bySource[p.Source] = append(bySource[p.Source], p)
+		}
+		for _, src := range sources {
+			s.publishPending(ctx, bySource[src], src)
+		}
 	}
 	return nil
 }
