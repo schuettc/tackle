@@ -205,6 +205,11 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 		out = append(out, v)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	// In an Attention view the recommended items (a pending proposal) come
+	// first, each group in key order. To apply keeps key order.
+	if q.View != ViewToApply {
+		sort.SliceStable(out, func(i, j int) bool { return out[i].Proposal != nil && out[j].Proposal == nil })
+	}
 	total := len(out)
 	if q.Limit <= 0 || q.Limit > 500 {
 		q.Limit = 200

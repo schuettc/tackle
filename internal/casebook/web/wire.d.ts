@@ -29,6 +29,8 @@ export interface SummaryView {
   sessions: number;
   sync_interval_ms: number;
   syncing: boolean;
+  recommended: number;
+  not_recommended: number;
 }
 
 export interface ItemsView {

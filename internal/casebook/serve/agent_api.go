@@ -255,6 +255,10 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("a recommendation needs a one-line reason in note"))
 		return
 	}
+	if err := s.untilRefKnown(in.Until, in.Keys); err != nil {
+		reply(w, nil, err)
+		return
+	}
 
 	// Proposals are only valid for items that exist in the casebook index and
 	// are currently in attention (awaiting Court's decision). Agents receive
@@ -306,17 +310,17 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 // likely to need the user first.
 var nextViews = []string{ViewWaiting, ViewDue, ViewNew}
 
-// needsRecommendation lists the items that need a decision and have no
-// pending proposal, in nextViews order and, within a view, the index's
-// order. An item in two views is listed once, at the first.
-func (s *Server) needsRecommendation(pending map[string]propose.Proposal) []ItemView {
+// needsDecision lists the items that need a decision, in nextViews order
+// and, within a view, the index's order. An item in two views is listed
+// once, at the first.
+func (s *Server) needsDecision(pending map[string]propose.Proposal) []ItemView {
 	seen := map[string]bool{}
 	var out []ItemView
 	for _, view := range nextViews {
 		for offset := 0; ; {
 			page, total := s.Index.List(Query{View: view, Offset: offset, Limit: 500}, pending)
 			for _, it := range page {
-				if seen[it.ID] || it.Proposal != nil {
+				if seen[it.ID] {
 					continue
 				}
 				seen[it.ID] = true
@@ -329,6 +333,31 @@ func (s *Server) needsRecommendation(pending map[string]propose.Proposal) []Item
 		}
 	}
 	return out
+}
+
+// needsRecommendation lists the items that need a decision and have no
+// pending proposal, in needsDecision's order: what casebook_next hands out.
+func (s *Server) needsRecommendation(pending map[string]propose.Proposal) []ItemView {
+	var out []ItemView
+	for _, it := range s.needsDecision(pending) {
+		if it.Proposal == nil {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// recommendCounts counts the items that need a decision with a pending
+// proposal and without one (the summary's "n recommended · m not yet").
+func (s *Server) recommendCounts(pending map[string]propose.Proposal) (recommended, notYet int) {
+	for _, it := range s.needsDecision(pending) {
+		if it.Proposal != nil {
+			recommended++
+		} else {
+			notYet++
+		}
+	}
+	return recommended, notYet
 }
 
 // agentNext is casebook_next: the next item that needs a recommendation,

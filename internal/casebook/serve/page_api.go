@@ -33,6 +33,7 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		synced = fi.ModTime().UTC()
 	}
 	sessions, _ := s.Queue.Sessions(ctx)
+	recommended, notYet := s.recommendCounts(pending)
 	reply(w, SummaryView{
 		Machine:        s.App.Cfg.Machine,
 		User:           s.App.Cfg.User,
@@ -46,6 +47,8 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		Sessions:       len(sessions),
 		SyncIntervalMS: s.syncIntervalFor().Milliseconds(),
 		Syncing:        s.Syncing(),
+		Recommended:    recommended,
+		NotRecommended: notYet,
 	}, nil)
 }
 
@@ -286,6 +289,34 @@ func (s *Server) postClearDecision(w http.ResponseWriter, r *http.Request) {
 	reply(w, ClearResult{Cleared: true, PushedLater: true}, nil)
 }
 
+// untilRefKnown refuses an until whose merged(...), closed(...) or
+// released(...) names an item the index doesn't hold: a well-formed key to
+// something that isn't there would keep the item hidden for good. An until
+// one of keys is already decided with passes (an undo re-deciding it). A
+// malformed until passes here; the decide reports it.
+func (s *Server) untilRefKnown(until string, keys []string) error {
+	var ref string
+	if c, err := item.ParseUntil(until); err == nil && c.Ref.Kind != "" {
+		ref = c.Ref.String()
+	}
+	if ref == "" {
+		return nil
+	}
+	if _, ok := s.Index.Item(ref); ok {
+		return nil
+	}
+	for _, raw := range keys {
+		k, err := item.ParseKey(raw)
+		if err != nil {
+			continue
+		}
+		if it, ok := s.Index.Item(k.String()); ok && it.Decision != nil && it.Decision.Until == until {
+			return nil
+		}
+	}
+	return bad("%s isn't an item casebook knows; sync first if it's new", ref)
+}
+
 func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Keys        []string `json:"keys"`
@@ -300,6 +331,10 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.Keys) == 0 {
 		reply(w, nil, bad("no keys"))
+		return
+	}
+	if err := s.untilRefKnown(in.Until, in.Keys); err != nil {
+		reply(w, nil, err)
 		return
 	}
 	if in.DryRun {
@@ -388,6 +423,10 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Props.Get(ctx, in.ID)
 	if err != nil || p.State != propose.Pending {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: fmt.Sprintf("proposal %d is not pending", in.ID)})
+		return
+	}
+	if err := s.untilRefKnown(in.Until, []string{p.Key}); err != nil {
+		reply(w, nil, err)
 		return
 	}
 	o := proposalOpts(p)

@@ -40,6 +40,11 @@ type SummaryView struct {
 	SyncIntervalMS int64 `json:"sync_interval_ms"`
 	// Syncing: a sync POST /api/sync started is running.
 	Syncing bool `json:"syncing"`
+	// Recommended and NotRecommended count the items that need a decision
+	// (the waiting, due and new views, each item once): those with a
+	// pending proposal, and those casebook_next still has to hand out.
+	Recommended    int `json:"recommended"`
+	NotRecommended int `json:"not_recommended"`
 }
 
 // ItemsView is the response body of GET /api/items.
