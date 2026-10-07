@@ -118,11 +118,12 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 // recent history (the last 50 events) and decision log: GET /api/item and
 // casebook_next.
 func (s *Server) itemDetail(ctx context.Context, it engine.Item, k item.Key) ItemDetailView {
-	v := ItemView{Item: it}
+	var prop *propose.Proposal
 	pending, _ := s.Props.Pending(ctx)
 	if p, ok := pending[it.ID]; ok {
-		v.Proposal = &p
+		prop = &p
 	}
+	v := newItemView(it, prop)
 	proposals, _ := s.Props.ForKey(ctx, it.ID)
 	evidence, _ := s.Props.Evidence(ctx, it.ID)
 	events, _ := s.App.Events()

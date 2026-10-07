@@ -97,12 +97,6 @@ type Query struct {
 	Limit    int
 }
 
-// ItemView is an item as the page and the agent see it.
-type ItemView struct {
-	engine.Item
-	Proposal *propose.Proposal `json:"proposal,omitempty"`
-}
-
 func inView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
 	case ViewWaiting:
@@ -201,12 +195,11 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 		if !inView(q.View, it, pending) || !matches(q, it) {
 			continue
 		}
-		v := ItemView{Item: it}
+		var prop *propose.Proposal
 		if p, ok := pending[it.ID]; ok {
-			p := p
-			v.Proposal = &p
+			prop = &p
 		}
-		out = append(out, v)
+		out = append(out, newItemView(it, prop))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	// In an Attention view the recommended items (a pending proposal) come

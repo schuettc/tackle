@@ -2,10 +2,13 @@ package serve
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/apply"
 	"github.com/schuettc/tackle/internal/casebook/deliver"
+	"github.com/schuettc/tackle/internal/casebook/engine"
+	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/journal"
 	"github.com/schuettc/tackle/internal/casebook/propose"
 	"github.com/schuettc/tackle/internal/casebook/rules"
@@ -45,6 +48,35 @@ type SummaryView struct {
 	// pending proposal, and those casebook_next still has to hand out.
 	Recommended    int `json:"recommended"`
 	NotRecommended int `json:"not_recommended"`
+}
+
+// ItemView is an item as the page and the agent see it. Its url (engine.Item's
+// URL) is serve's, built from the key by githubURL: the item's page on GitHub,
+// "" for a branch or a worktree, which have none.
+type ItemView struct {
+	engine.Item
+	Proposal *propose.Proposal `json:"proposal,omitempty"`
+}
+
+// newItemView is it as the page and the agent see it, with its proposal
+// (nil for none) and the GitHub page its key names.
+func newItemView(it engine.Item, p *propose.Proposal) ItemView {
+	it.URL = githubURL(it.Key)
+	return ItemView{Item: it, Proposal: p}
+}
+
+// githubURL is the GitHub page k names: a pull request's, an issue's or a
+// repository's; "" for a branch or a worktree.
+func githubURL(k item.Key) string {
+	switch k.Kind {
+	case item.KindPR:
+		return fmt.Sprintf("https://github.com/%s/pull/%d", k.Repo(), k.Number)
+	case item.KindIssue:
+		return fmt.Sprintf("https://github.com/%s/issues/%d", k.Repo(), k.Number)
+	case item.KindRepo:
+		return "https://github.com/" + k.Repo()
+	}
+	return ""
 }
 
 // ItemsView is the response body of GET /api/items.
