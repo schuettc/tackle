@@ -1252,7 +1252,19 @@ export function makeAttention(ctx: Ctx): Section {
     listKeys: () => (boardHandle ? null : { nav: handle, selects: true }),
     keys: () => (boardHandle ? boardKeys : listKeys),
     onLive(type: string, data: unknown) {
-      if (type === 'index') {
+      if (type === 'gap') {
+        // Events this page never heard were pruned: reload all it shows
+        // (the counts, the list or board, and the open item).
+        refreshSummary();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
+        if (currentOpenKey && currentOpenKey !== deciding) {
+          void openDetail(currentOpenKey);
+        }
+      } else if (type === 'index') {
         // One reload per index event: apply counts from the event payload and
         // refresh the list (or the board when it is active).
         const s = data as { counts?: Record<string, number> };

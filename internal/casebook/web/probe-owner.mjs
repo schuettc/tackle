@@ -604,7 +604,8 @@ export async function ownerScenarios(context, t) {
         // Sending is refused: nothing goes to the session that left, nor
         // anywhere else.
         const queuedAll = async () =>
-          ((await agent.api('GET', '/api/sessions')).sessions ?? [])
+          // every session, the one that left too (?all=1)
+          ((await agent.api('GET', '/api/sessions?all=1')).sessions ?? [])
             .map((x) => `${x.id}:${x.queued}`)
             .sort()
             .join(',');

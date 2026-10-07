@@ -325,13 +325,15 @@ const sessionCols = `s.id, s.harness, s.label, s.cwd, s.pid, s.first_seen, s.las
 		EXISTS(SELECT 1 FROM deliveries d WHERE d.session_id = s.id AND d.state = 'inflight'),
 		(s.parent != '' AND s.pid > 1 AND EXISTS(SELECT 1 FROM sessions p WHERE p.id = s.parent AND p.pid = s.pid AND p.last_seen >= ?1 AND p.ended_at = 0))`
 
+// queuedCol counts a session's queued (unsent) messages.
+const queuedCol = `COALESCE((SELECT count(*) FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.session_id = s.id AND m.state = 'queued'), 0)`
+
 // Sessions lists every known session, most recently seen first.
 // Left is computed server-side: a session is left when its last_seen is older
 // than the configured LeftAfter threshold (default 60 s, spec §2.1).
 func (q *Queue) Sessions(ctx context.Context) ([]Session, error) {
 	now := q.Now()
-	rows, err := q.DB.QueryContext(ctx, `SELECT `+sessionCols+`,
-		COALESCE((SELECT count(*) FROM messages m JOIN threads t ON t.id = m.thread_id WHERE t.session_id = s.id AND m.state = 'queued'), 0)
+	rows, err := q.DB.QueryContext(ctx, `SELECT `+sessionCols+`, `+queuedCol+`
 		FROM sessions s ORDER BY s.last_seen DESC`, q.leftCutoff(now))
 	if err != nil {
 		return nil, err
@@ -630,6 +632,27 @@ func (q *Queue) SendBatch(ctx context.Context, batch int64) (int, error) {
 		return err
 	})
 	return int(n), err
+}
+
+// Stuck lists the deliveries in flight and stuck (untouched for
+// StuckAfter, as Delivery computes it), by id, with their sessions.
+func (q *Queue) Stuck(ctx context.Context) (map[int64]string, error) {
+	cutoff := ms(q.Now().Add(-q.stuckAfter()))
+	rows, err := q.DB.QueryContext(ctx, "SELECT id, session_id FROM deliveries WHERE state = 'inflight' AND touched_at < ?", cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[int64]string{}
+	for rows.Next() {
+		var id int64
+		var session string
+		if err := rows.Scan(&id, &session); err != nil {
+			return nil, err
+		}
+		out[id] = session
+	}
+	return out, rows.Err()
 }
 
 // Inflight returns the session's delivery in flight, or nil.
@@ -1046,14 +1069,14 @@ func (q *Queue) Thread(ctx context.Context, id int64) (Thread, error) {
 	return t, err
 }
 
-// Session reads one session.
+// Session reads one session (with its queued count, as Sessions).
 func (q *Queue) Session(ctx context.Context, id string) (Session, error) {
 	var s Session
 	var fs, ls, la int64
 	var ended bool
 	now := q.Now()
-	err := q.DB.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM sessions s WHERE s.id = ?2`, q.leftCutoff(now), id).
-		Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Name, &ended, &s.Busy, &s.Worker)
+	err := q.DB.QueryRowContext(ctx, `SELECT `+sessionCols+`, `+queuedCol+` FROM sessions s WHERE s.id = ?2`, q.leftCutoff(now), id).
+		Scan(&s.ID, &s.Harness, &s.Label, &s.CWD, &s.PID, &fs, &ls, &la, &s.Name, &ended, &s.Busy, &s.Worker, &s.Queued)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Session{}, ErrNotFound

@@ -405,7 +405,7 @@ func TestSessionInfoReachesServe(t *testing.T) {
 		var sv struct {
 			Sessions []map[string]any `json:"sessions"`
 		}
-		if _, err := channel.NewClient().Do(context.Background(), http.MethodGet, "/api/sessions", nil, &sv); err != nil {
+		if _, err := channel.NewClient().Do(context.Background(), http.MethodGet, "/api/sessions?all=1", nil, &sv); err != nil {
 			t.Fatal(err)
 		}
 		out := map[string]map[string]any{}

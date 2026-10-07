@@ -9,6 +9,7 @@ package bus
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -97,13 +98,27 @@ func (b *Bus) Head(ctx context.Context) (int64, error) {
 	return c, err
 }
 
-// Trim drops events older than age, and also trims progress_log rows for
-// sessions that have not been seen since before the same cutoff.
-func (b *Bus) Trim(ctx context.Context, age time.Duration) error {
+// Prune drops old events and returns how many went. An event goes only when
+// it is neither among the newest keep nor younger than age: whichever rule
+// keeps more wins. A client whose cursor is older than what is left hears
+// "gap" (see Read) and reloads its views.
+func (b *Bus) Prune(ctx context.Context, keep int, age time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-age).UnixMilli()
-	if _, err := b.db.ExecContext(ctx, "DELETE FROM events WHERE created_at < ?", cutoff); err != nil {
+	res, err := b.db.ExecContext(ctx, `DELETE FROM events
+		WHERE cursor <= (SELECT COALESCE(MAX(cursor), 0) FROM events) - ? AND created_at < ?`, keep, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// Trim prunes the event log (Prune) and trims progress_log rows for
+// sessions that have not been seen within age.
+func (b *Bus) Trim(ctx context.Context, keep int, age time.Duration) error {
+	if _, err := b.Prune(ctx, keep, age); err != nil {
 		return err
 	}
+	cutoff := time.Now().Add(-age).UnixMilli()
 	// Remove orphaned progress_log rows for sessions that have been absent
 	// longer than the trim window (serve prunes only empty sessions, so a
 	// kept one's log rows can accumulate if it died without settling its
@@ -111,6 +126,57 @@ func (b *Bus) Trim(ctx context.Context, age time.Duration) error {
 	_, err := b.db.ExecContext(ctx,
 		"DELETE FROM progress_log WHERE session_id IN (SELECT id FROM sessions WHERE last_seen < ?)", cutoff)
 	return err
+}
+
+// Gap is the type of the event a client hears first when events after its
+// cursor were pruned: it missed some, so it reloads what it shows rather
+// than going on as if it had heard them all. Its cursor is the one just
+// before the oldest kept event; Data is GapData.
+const Gap = "gap"
+
+// GapData is a gap event's payload: the client's cursor and the cursor the
+// log now resumes after.
+type GapData struct {
+	From int64 `json:"from"`
+	To   int64 `json:"to"`
+}
+
+// gap is the gap event for a client at cursor, if events after it were
+// pruned (the oldest kept event is not the next one).
+func (b *Bus) gap(ctx context.Context, cursor int64) (Event, bool, error) {
+	var oldest sql.NullInt64
+	if err := b.db.QueryRowContext(ctx, "SELECT MIN(cursor) FROM events").Scan(&oldest); err != nil {
+		return Event{}, false, err
+	}
+	if !oldest.Valid || cursor >= oldest.Int64-1 {
+		return Event{}, false, nil
+	}
+	to := oldest.Int64 - 1
+	data, _ := json.Marshal(GapData{From: cursor, To: to})
+	return Event{Cursor: to, Type: Gap, Data: data}, true, nil
+}
+
+// Read is Since for a client: when the client named a cursor (known) and
+// events after it were pruned, a gap event comes first and the events
+// follow from the oldest kept one. A client that named none starts at the
+// oldest kept event, with no gap.
+func (b *Bus) Read(ctx context.Context, cursor int64, known bool, limit int) ([]Event, int64, error) {
+	var out []Event
+	if known {
+		g, ok, err := b.gap(ctx, cursor)
+		if err != nil {
+			return nil, cursor, err
+		}
+		if ok {
+			out = append(out, g)
+			cursor = g.Cursor
+		}
+	}
+	evs, next, err := b.Since(ctx, cursor, limit)
+	if err != nil {
+		return nil, cursor, err
+	}
+	return append(out, evs...), next, nil
 }
 
 // Subscribe returns a channel that receives a (coalesced) signal after each
@@ -127,18 +193,25 @@ func (b *Bus) Subscribe() (<-chan struct{}, func()) {
 	}
 }
 
-func cursorParam(r *http.Request) int64 {
+// cursorParam is the client's cursor (Last-Event-ID, else ?since) and
+// whether it named one.
+func cursorParam(r *http.Request) (int64, bool) {
 	s := r.Header.Get("Last-Event-ID")
 	if s == "" {
 		s = r.URL.Query().Get("since")
 	}
-	c, _ := strconv.ParseInt(s, 10, 64)
-	return c
+	if s == "" {
+		return 0, false
+	}
+	c, err := strconv.ParseInt(s, 10, 64)
+	return c, err == nil
 }
 
-// ServePoll answers GET ?since=<cursor> with {cursor, events}.
+// ServePoll answers GET ?since=<cursor> with {cursor, events}; a gap first
+// when events after since were pruned (Read).
 func (b *Bus) ServePoll(w http.ResponseWriter, r *http.Request) {
-	evs, cur, err := b.Since(r.Context(), cursorParam(r), 500)
+	since, known := cursorParam(r)
+	evs, cur, err := b.Read(r.Context(), since, known, 500)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -153,7 +226,8 @@ func (b *Bus) ServePoll(w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeSSE streams events after Last-Event-ID (or ?since) until the client
-// goes away. Each event's id is its cursor and its data is {type, data}.
+// goes away. Each event's id is its cursor and its data is {type, data}. A
+// cursor older than the log's oldest kept event hears a gap first (Read).
 func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	fl, ok := w.(http.Flusher)
 	if !ok {
@@ -166,14 +240,17 @@ func (b *Bus) ServeSSE(w http.ResponseWriter, r *http.Request) {
 	fl.Flush()
 	sig, cancel := b.Subscribe()
 	defer cancel()
-	cur := cursorParam(r)
+	cur, known := cursorParam(r)
 	tick := time.NewTicker(b.Heartbeat)
 	defer tick.Stop()
 	for {
-		evs, next, err := b.Since(r.Context(), cur, 500)
+		evs, next, err := b.Read(r.Context(), cur, known, 500)
 		if err != nil {
 			return
 		}
+		// From here on the stream has a cursor: a prune that overtakes it
+		// (a client that fell that far behind) is a gap too.
+		known = true
 		for _, e := range evs {
 			line, _ := json.Marshal(e)
 			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", e.Cursor, line); err != nil {

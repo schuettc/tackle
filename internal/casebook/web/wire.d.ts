@@ -31,6 +31,7 @@ export interface SummaryView {
   syncing: boolean;
   recommended: number;
   not_recommended: number;
+  cursor: number;
 }
 
 export interface ItemsView {

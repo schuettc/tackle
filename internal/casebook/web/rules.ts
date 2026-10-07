@@ -1696,7 +1696,11 @@ export function makeRules(ctx: Ctx): Section {
       asking = false;
     },
     onLive(type: string, data: unknown) {
-      if (type === 'rules') {
+      if (type === 'rules' || type === 'gap') {
+        // gap: events this page never heard were pruned. It reloads all it
+        // shows, as a "rules" event naming no rule does (the list, the
+        // open rule), and the open rule's matches.
+        if (type === 'gap') doc?.refresh();
         void loadList();
         const ev = data as { id?: string; by?: string };
         if (doc && openId && (!ev?.id || ev.id === openId)) {
