@@ -146,6 +146,22 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   refused push keeps the commit, prints the report and says the next sync
   pushes it.
 
+## [cull 0.1.1] - 2026-10-06
+
+### Fixed
+- `cull check` on a whole project failed ("argument list too long") when the
+  project had a virtual environment that git ignores, such as `.venv/`: it
+  looked at every test file on disk, including the third-party packages'
+  own tests. In a git repository it now uses git's list of files (tracked
+  files, plus new files that aren't ignored).
+- `cull doctor` said cull was not registered in pi when it was: it now reads
+  pi's `channelServers`. It also read `~/.claude.json` correctly only when
+  that file held nothing but `mcpServers`.
+- `cull doctor` no longer fails a project whose TypeScript tests have no
+  `node_modules/typescript` at the project root; `cull check` skips those
+  tests and says so, and doctor now notes it. Its test command line shows
+  the command and how many test files it runs, not every file name.
+
 ## [cull 0.1.0] - 2026-10-01
 
 ### Added

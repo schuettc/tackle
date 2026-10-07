@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -44,12 +45,31 @@ func Root(p string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// Suite walks root/sub and returns the project-root-relative, '/'-separated
-// paths of every file matched by a registered extractor. It skips .git,
-// node_modules, vendor, testdata, .worktrees directories anywhere in the
-// tree, and any file whose relpath matches one of the exclude globs
-// (doublestar-style ** supported).
+// Suite returns the project-root-relative, '/'-separated paths of every
+// file under root/sub matched by a registered extractor. In a git
+// repository the candidates are git's own file list (tracked files that
+// still exist, plus untracked files that aren't ignored), so a git-ignored
+// virtualenv or build output never enters the suite; elsewhere it walks the
+// tree. Either way it skips .git, node_modules, vendor, testdata and
+// .worktrees directories anywhere in the path, and any file whose relpath
+// matches one of the exclude globs (doublestar-style ** supported).
 func Suite(root, sub string, exclude []string) ([]string, error) {
+	if files, ok, err := gitFiles(root); err != nil {
+		return nil, err
+	} else if ok {
+		var out []string
+		for _, rel := range files {
+			if inSkippedDir(rel) || !Keep(sub, exclude, rel) {
+				continue
+			}
+			if fi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err != nil || !fi.Mode().IsRegular() {
+				continue // tracked but deleted (or not a plain file)
+			}
+			out = append(out, rel)
+		}
+		sort.Strings(out)
+		return out, nil
+	}
 	start := filepath.Join(root, sub)
 	var out []string
 	err := filepath.WalkDir(start, func(p string, d fs.DirEntry, err error) error {
@@ -235,6 +255,48 @@ func Diff(root, base, sub string, exclude []string) (Changes, error) {
 
 // untrackedFiles lists untracked, non-ignored files in root, as
 // '/'-separated relpaths.
+// gitFiles is git's file list for root: tracked plus untracked-not-ignored.
+// ok is false when root is not the top of a git work tree.
+func gitFiles(root string) (files []string, ok bool, err error) {
+	top, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return nil, false, nil //nolint:nilerr // not a git repository: Suite walks instead
+	}
+	want, err1 := filepath.EvalSymlinks(root)
+	got, err2 := filepath.EvalSymlinks(strings.TrimSpace(string(top)))
+	if err1 != nil || err2 != nil || want != got {
+		return nil, false, nil //nolint:nilerr // root is not the top of this work tree: Suite walks instead
+	}
+	cmd := exec.Command("git", "-c", "core.quotePath=false", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	cmd.Dir = root
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, false, fmt.Errorf("git ls-files: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(stdout.String(), "\x00") {
+		if line == "" || seen[line] {
+			continue
+		}
+		seen[line] = true
+		files = append(files, filepath.ToSlash(line))
+	}
+	return files, true, nil
+}
+
+// inSkippedDir reports whether any directory in rel is one Suite never enters.
+func inSkippedDir(rel string) bool {
+	parts := strings.Split(rel, "/")
+	for _, d := range parts[:len(parts)-1] {
+		if skipDirs[d] {
+			return true
+		}
+	}
+	return false
+}
+
 func untrackedFiles(root string) ([]string, error) {
 	cmd := exec.Command("git", "-c", "core.quotePath=false", "ls-files", "-z", "--others", "--exclude-standard")
 	cmd.Dir = root

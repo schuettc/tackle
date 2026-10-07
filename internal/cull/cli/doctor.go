@@ -100,7 +100,8 @@ func runDoctor(args []string, out, errw io.Writer) error {
 			line("node", true, "", "")
 		}
 		if _, err := os.Stat(filepath.Join(root, "node_modules", "typescript")); err != nil {
-			line("typescript", true, "node_modules/typescript not found: install the project's dependencies", "")
+			// cull check skips these files and says so; not a reason to fail.
+			line("typescript", false, "TypeScript tests will be skipped: no node_modules/typescript at the project root", "")
 		} else {
 			line("typescript", true, "", "")
 		}
@@ -115,7 +116,22 @@ func runDoctor(args []string, out, errw io.Writer) error {
 	} else {
 		var parts []string
 		for _, c := range cmds {
-			parts = append(parts, strings.Join(c.Argv, " "))
+			// Name the command and count the test files it would run: a
+			// whole suite's file list is far too long for one line.
+			var argv []string
+			n := 0
+			for _, a := range c.Argv {
+				if _, isTest := langs[a]; isTest {
+					n++
+					continue
+				}
+				argv = append(argv, a)
+			}
+			part := strings.Join(argv, " ")
+			if n > 0 {
+				part += fmt.Sprintf(" (%d test files)", n)
+			}
+			parts = append(parts, part)
 		}
 		line("test command", true, "", " ("+strings.Join(parts, "; ")+")")
 	}
@@ -132,7 +148,7 @@ func runDoctor(args []string, out, errw io.Writer) error {
 	} else {
 		line("~/.claude.json", false, "cull is not in mcpServers: install cull with kempt", "")
 	}
-	if registered(filepath.Join(home, ".pi", "agent", "channels.json"), "") {
+	if registered(filepath.Join(home, ".pi", "agent", "channels.json"), "channelServers") {
 		line("channels.json", false, "", "")
 	} else {
 		line("channels.json", false, "cull is not in ~/.pi/agent/channels.json: install cull with kempt", "")
@@ -144,30 +160,18 @@ func runDoctor(args []string, out, errw io.Writer) error {
 	return nil
 }
 
-// registered reports whether the JSON file has a "cull" entry, under
-// section when given (else at the top level or under "channels").
+// registered reports whether the JSON file has a "cull" entry under section
+// (mcpServers in ~/.claude.json, channelServers in pi's channels.json).
 func registered(path, section string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
-	var m map[string]json.RawMessage
-	if json.Unmarshal(b, &m) != nil {
+	var top map[string]json.RawMessage // other top-level values aren't objects
+	var servers map[string]json.RawMessage
+	if json.Unmarshal(b, &top) != nil || json.Unmarshal(top[section], &servers) != nil {
 		return false
 	}
-	has := func(raw json.RawMessage) bool {
-		var inner map[string]json.RawMessage
-		if json.Unmarshal(raw, &inner) != nil {
-			return false
-		}
-		_, ok := inner["cull"]
-		return ok
-	}
-	if section != "" {
-		return has(m[section])
-	}
-	if _, ok := m["cull"]; ok {
-		return true
-	}
-	return has(m["channels"])
+	_, ok := servers["cull"]
+	return ok
 }
