@@ -113,38 +113,55 @@ type Rig struct {
 
 // New initializes a casebook, syncs it once (so the index has items:
 // repo:schuettc/hail, pr:schuettc/hail#3, issue:schuettc/hail#4 through #7,
-// and the branch/worktree items from the scanned clone), and opens it.
+// and the branch/worktree items from the scanned clone), and opens it. The
+// casebook is built once per test binary; each test gets its own copy of it
+// (HOME, remote and clone) from testgit.Fixture.
 func New(t testing.TB) *Rig {
 	t.Helper()
 	ctx := context.Background()
 	testgit.Env(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CASEBOOK_HOME", filepath.Join(home, "casebook-home"))
-	r := &Rig{Remote: testgit.NewBare(t), Now: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}
-	r.Root, _ = filepath.EvalSymlinks(t.TempDir())
-	clone := filepath.Join(r.Root, "hail")
-	if err := os.MkdirAll(clone, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	testgit.Git(t, clone, "init", "-q", "-b", "main")
-	c1 := testgit.Commit(t, clone, "a", "1")
-	testgit.Git(t, clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")
-	testgit.Git(t, clone, "update-ref", "refs/remotes/origin/main", c1)
-	testgit.Git(t, clone, "switch", "-q", "-c", "feat/client")
-	testgit.Commit(t, clone, "b", "2")
 	gh := FakeGh{}
-	if _, err := app.Init(ctx, app.InitOptions{Remote: r.Remote, Machine: "mbp", User: "schuettc", Roots: []string{r.Root}}, gh); err != nil {
-		t.Fatal(err)
+	r := &Rig{Now: time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)}
+	use := func(dir string) {
+		home := filepath.Join(dir, "home")
+		t.Setenv("HOME", home)
+		t.Setenv("CASEBOOK_HOME", filepath.Join(home, "casebook-home"))
+		r.Remote = filepath.Join(dir, "remote", "remote.git")
+		r.Root, _ = filepath.EvalSymlinks(filepath.Join(dir, "root"))
 	}
+	dir := testgit.Fixture(t, "apptest", func(dir string) {
+		for _, d := range []string{"home", "remote", filepath.Join("root", "hail")} {
+			if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		use(dir)
+		testgit.Git(t, filepath.Dir(r.Remote), "init", "-q", "--bare", "-b", "main", r.Remote)
+		clone := filepath.Join(r.Root, "hail")
+		testgit.Git(t, clone, "init", "-q", "-b", "main")
+		c1 := testgit.Commit(t, clone, "a", "1")
+		testgit.Git(t, clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")
+		testgit.Git(t, clone, "update-ref", "refs/remotes/origin/main", c1)
+		testgit.Git(t, clone, "switch", "-q", "-c", "feat/client")
+		testgit.Commit(t, clone, "b", "2")
+		if _, err := app.Init(ctx, app.InitOptions{Remote: r.Remote, Machine: "mbp", User: "schuettc", Roots: []string{r.Root}}, gh); err != nil {
+			t.Fatal(err)
+		}
+		a, err := app.Open(gh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Now = func() time.Time { return r.Now }
+		if _, err := a.Sync(ctx, app.SyncOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	use(dir)
 	a, err := app.Open(gh)
 	if err != nil {
 		t.Fatal(err)
 	}
 	a.Now = func() time.Time { return r.Now }
-	if _, err := a.Sync(ctx, app.SyncOptions{}); err != nil {
-		t.Fatal(err)
-	}
 	r.App = a
 	return r
 }

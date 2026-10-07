@@ -54,29 +54,41 @@ type rig struct {
 }
 
 // newRig initializes a casebook against a bare remote with one scanned clone
-// (schuettc/hail, branch feat/client with an unpushed commit).
+// (schuettc/hail, branch feat/client with an unpushed commit). The casebook
+// is built once per test binary; each test gets its own copy of it from
+// testgit.Fixture.
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	testgit.Env(t)
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("CASEBOOK_HOME", filepath.Join(home, "casebook-home"))
-	r := &rig{remote: testgit.NewBare(t), now: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)}
-	r.root, _ = filepath.EvalSymlinks(t.TempDir())
-	r.clone = filepath.Join(r.root, "hail")
-	if err := os.MkdirAll(r.clone, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	testgit.Git(t, r.clone, "init", "-q", "-b", "main")
-	c1 := testgit.Commit(t, r.clone, "a", "1")
-	testgit.Git(t, r.clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")
-	testgit.Git(t, r.clone, "update-ref", "refs/remotes/origin/main", c1)
-	testgit.Git(t, r.clone, "switch", "-q", "-c", "feat/client")
-	testgit.Commit(t, r.clone, "b", "2")
 	gh := &fakeGh{}
-	if _, err := Init(ctx, InitOptions{Remote: r.remote, Machine: "mbp", User: "schuettc", Roots: []string{r.root}}, gh); err != nil {
-		t.Fatal(err)
+	r := &rig{now: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)}
+	use := func(dir string) {
+		home := filepath.Join(dir, "home")
+		t.Setenv("HOME", home)
+		t.Setenv("CASEBOOK_HOME", filepath.Join(home, "casebook-home"))
+		r.remote = filepath.Join(dir, "remote", "remote.git")
+		r.root, _ = filepath.EvalSymlinks(filepath.Join(dir, "root"))
+		r.clone = filepath.Join(r.root, "hail")
 	}
+	dir := testgit.Fixture(t, "app", func(dir string) {
+		for _, d := range []string{"home", "remote", filepath.Join("root", "hail")} {
+			if err := os.MkdirAll(filepath.Join(dir, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		use(dir)
+		testgit.Git(t, filepath.Dir(r.remote), "init", "-q", "--bare", "-b", "main", r.remote)
+		testgit.Git(t, r.clone, "init", "-q", "-b", "main")
+		c1 := testgit.Commit(t, r.clone, "a", "1")
+		testgit.Git(t, r.clone, "remote", "add", "origin", "git@github.com:schuettc/hail.git")
+		testgit.Git(t, r.clone, "update-ref", "refs/remotes/origin/main", c1)
+		testgit.Git(t, r.clone, "switch", "-q", "-c", "feat/client")
+		testgit.Commit(t, r.clone, "b", "2")
+		if _, err := Init(ctx, InitOptions{Remote: r.remote, Machine: "mbp", User: "schuettc", Roots: []string{r.root}}, gh); err != nil {
+			t.Fatal(err)
+		}
+	})
+	use(dir)
 	a, err := Open(gh)
 	if err != nil {
 		t.Fatal(err)
