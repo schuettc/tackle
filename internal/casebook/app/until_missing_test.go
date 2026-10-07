@@ -150,7 +150,8 @@ func TestUntilKeyTransientFailureStaysWaiting(t *testing.T) {
 }
 
 // TestUntilKeyFoundBehavesAsBefore: a key GitHub finds is read as before:
-// open waits, merged is met (due, with no not-found reason).
+// open waits, merged is met (due, saying its condition was met, not that
+// GitHub can't find it).
 func TestUntilKeyFoundBehavesAsBefore(t *testing.T) {
 	r := newRig(t)
 	waitOnNamed(t, r)
@@ -163,7 +164,7 @@ func TestUntilKeyFoundBehavesAsBefore(t *testing.T) {
 		}
 		return openPR(n)
 	}})
-	if it.Status != item.StatusDue || it.DueReason != "" {
-		t.Fatalf("merged: status %s reason %q, want due with no reason", it.Status, it.DueReason)
+	if it.Status != item.StatusDue || it.DueReason != "its condition was met" {
+		t.Fatalf("merged: status %s reason %q, want due: its condition was met", it.Status, it.DueReason)
 	}
 }

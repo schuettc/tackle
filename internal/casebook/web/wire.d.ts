@@ -37,6 +37,8 @@ export interface SummaryView {
 export interface ItemsView {
   total: number;
   items: ItemView[] | null;
+  left_open: ItemView[] | null;
+  left_open_total: number;
 }
 
 export interface ItemDetailView {
@@ -274,6 +276,7 @@ export interface ItemView {
   relation?: string;
   status: string;
   due_reason?: string;
+  new_activity?: boolean;
   decision?: Decision;
   hits?: Hit[];
   observed: Observed;

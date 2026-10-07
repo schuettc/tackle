@@ -104,7 +104,10 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []ItemView{}
 	}
-	reply(w, ItemsView{Total: total, Items: items}, nil)
+	group := query
+	group.Offset = 0
+	left, leftTotal := s.Index.LeftOpen(group, pending)
+	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal}, nil)
 }
 
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {

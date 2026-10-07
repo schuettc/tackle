@@ -21,6 +21,10 @@ type Facts interface {
 	State(k Key) (state string, ok bool)         // pr/issue: OPEN, CLOSED or MERGED
 	LatestRelease(k Key) (at time.Time, ok bool) // repo
 	LastActivity(k Key) (at time.Time, ok bool)  // any item
+	// OthersActivity: a pr's or issue's latest activity by anyone but the
+	// configured user. ok=false: none known (and always for branches,
+	// worktrees and repos, which have no such activity).
+	OthersActivity(k Key) (at time.Time, ok bool)
 	// Missing: a sync looked k up and GitHub answered that it doesn't
 	// exist. Not looked up yet, or a lookup that failed otherwise, is false.
 	Missing(k Key) bool

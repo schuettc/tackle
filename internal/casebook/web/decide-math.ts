@@ -441,3 +441,25 @@ export function latestSearch<T>(
     },
   };
 }
+
+// ---- the left-open group -------------------------------------------------------
+
+/**
+ * leftOpenMeta is a left-open row's meta: "left open · Oct 6", the date it
+ * was left open (with its year when that isn't now's).
+ */
+export function leftOpenMeta(
+  decidedAt: string | undefined,
+  now: Date = new Date(),
+): string {
+  if (!decidedAt) return 'left open';
+  const d = new Date(decidedAt);
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return `left open \u00b7 ${d.toLocaleDateString('en-US', opts)}`;
+}
+
+/** leftOpenLabel is the left-open group's divider: "left open · 3". */
+export function leftOpenLabel(n: number): string {
+  return `left open \u00b7 ${n}`;
+}

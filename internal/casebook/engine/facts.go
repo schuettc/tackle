@@ -60,3 +60,12 @@ func (f facts) Missing(k item.Key) bool {
 	r, ok := f.refs[k.String()]
 	return ok && !r.Exists
 }
+
+// OthersActivity returns a pr's or issue's latest activity by anyone but
+// the configured user, when known.
+func (f facts) OthersActivity(k item.Key) (time.Time, bool) {
+	if it := f.items[k.String()]; it != nil && !it.othersAt.IsZero() {
+		return it.othersAt, true
+	}
+	return time.Time{}, false
+}

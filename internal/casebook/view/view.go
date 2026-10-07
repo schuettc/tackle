@@ -79,11 +79,13 @@ func readme(r engine.Result) []byte {
 		{"Drift", func(it engine.Item) bool { return it.Status == item.StatusDrift }},
 		{"Due", func(it engine.Item) bool { return it.Status == item.StatusDue }},
 		{"Flagged", func(it engine.Item) bool {
-			return len(it.Hits) > 0 && it.Status != item.StatusNew && it.Status != item.StatusConflict && it.Status != item.StatusDrift && it.Status != item.StatusDue
+			return len(it.Hits) > 0 && it.Status != item.StatusNew && it.Status != item.StatusConflict && it.Status != item.StatusDrift && it.Status != item.StatusDue && it.Status != item.StatusLeftOpen
 		}},
 		{"New", func(it engine.Item) bool { return it.Status == item.StatusNew }},
 		{"Waiting", func(it engine.Item) bool { return it.Status == item.StatusWaiting && len(it.Hits) == 0 }},
 		{"To apply", func(it engine.Item) bool { return it.Status == item.StatusToApply && len(it.Hits) == 0 }},
+		// Kept and still open: no decision needed, listed last.
+		{"Left open", func(it engine.Item) bool { return it.Status == item.StatusLeftOpen }},
 	}
 	var b strings.Builder
 	b.WriteString("# casebook\n\nWritten by `casebook sync`; decide with `casebook decide <key> <disposition>`.\n\n")
@@ -91,9 +93,9 @@ func readme(r engine.Result) []byte {
 	for _, it := range r.Items {
 		counts[it.Status]++
 	}
-	fmt.Fprintf(&b, "%d items: %d new, %d due, %d drift, %d conflict, %d waiting, %d to apply, %d done.\n\n",
+	fmt.Fprintf(&b, "%d items: %d new, %d due, %d drift, %d conflict, %d waiting, %d to apply, %d left open, %d done.\n\n",
 		len(r.Items), counts[item.StatusNew], counts[item.StatusDue], counts[item.StatusDrift], counts[item.StatusConflict],
-		counts[item.StatusWaiting], counts[item.StatusToApply], counts[item.StatusDone])
+		counts[item.StatusWaiting], counts[item.StatusToApply], counts[item.StatusLeftOpen], counts[item.StatusDone])
 	if len(r.Notices) > 0 {
 		b.WriteString("> [!WARNING]\n")
 		for _, n := range r.Notices {

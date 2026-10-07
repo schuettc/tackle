@@ -40,6 +40,8 @@ import {
   recommendLine,
   recommendedLine,
   agreeGroups,
+  leftOpenMeta,
+  leftOpenLabel,
   type AgreeGroup,
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
@@ -136,6 +138,11 @@ function ageOf(it: ItemView): string {
   return `${days}d`;
 }
 
+// isLeftOpen: a kept item still open, in a view's left-open group.
+function isLeftOpen(it: ItemView): boolean {
+  return it.status === 'left-open';
+}
+
 export function makeAttention(ctx: Ctx): Section {
   const readEl = h('div', { class: 'kit-read' });
   let offset = 0;
@@ -147,6 +154,13 @@ export function makeAttention(ctx: Ctx): Section {
   let propFoot: BulkProposalActions | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
   let totalItemsForView = 0; // updated after every load; used by select-all
+  // The view's left-open group (kept items still open: they need no
+  // decision, so the view's count and move-on leave them out). Its rows
+  // follow the items that need a decision, once every page of those is
+  // loaded; shown is what the list renders.
+  let leftOpen: ItemView[] = [];
+  let leftOpenTotal = 0;
+  let shown: ItemView[] = [];
   // currentOpenKey is the key of the item currently shown in the reading column;
   // used by the 'a' and 'r' key bindings.
   let currentOpenKey: string | null = null;
@@ -362,9 +376,10 @@ export function makeAttention(ctx: Ctx): Section {
       // Display the key without its kind prefix — the kind is already shown in the kicker.
       const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
-      const age = ageOf(it);
+      const left = isLeftOpen(it);
+      const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf(it);
       const proposal =
-        it.proposal && it.proposal.state === 'pending'
+        !left && it.proposal && it.proposal.state === 'pending'
           ? recommendLine(
               vocab,
               it.key,
@@ -379,7 +394,12 @@ export function makeAttention(ctx: Ctx): Section {
         // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client".
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
-        sub: proposal,
+        // An item new activity brought back says so ("new activity since
+        // you left it open"), before any recommendation.
+        sub:
+          [it.new_activity ? it.due_reason : undefined, proposal]
+            .filter(Boolean)
+            .join(' \u00b7 ') || undefined,
         selectable: true,
       };
     },
@@ -468,9 +488,11 @@ export function makeAttention(ctx: Ctx): Section {
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
+      leftOpen = data.left_open ?? [];
+      leftOpenTotal = data.left_open_total ?? 0;
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
-      handle.setItems(loadedItems);
+      setRows();
       markOpenRow();
       updateAgree();
       updateFoot();
@@ -490,11 +512,13 @@ export function makeAttention(ctx: Ctx): Section {
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(offset));
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
+      leftOpen = data.left_open ?? [];
+      leftOpenTotal = data.left_open_total ?? 0;
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
-      handle.setItems(loadedItems);
+      setRows();
       markOpenRow();
       updateAgree();
       updateFoot();
@@ -504,6 +528,33 @@ export function makeAttention(ctx: Ctx): Section {
     } finally {
       loading = false;
     }
+  }
+
+  // setRows renders the items that need a decision and, once every page of
+  // them is loaded, the left-open group after them: a quiet divider
+  // ("left open · N", the group's own count) and muted rows.
+  function setRows(): void {
+    const all = offset >= totalItems;
+    const group = all ? leftOpen : [];
+    shown = [...loadedItems, ...group];
+    handle.setItems(shown);
+    const rowEls = handle.el.querySelectorAll<HTMLElement>(
+      '.kit-rows > .kit-row',
+    );
+    loadedItems.forEach((it, i) => {
+      if (it.new_activity) rowEls[i]?.classList.add('cb-new-activity');
+    });
+    if (!group.length) return;
+    for (let i = loadedItems.length; i < shown.length; i++) {
+      rowEls[i]?.classList.add('cb-left-open');
+    }
+    rowEls[loadedItems.length]?.before(
+      h(
+        'div',
+        { class: 'cb-left-open-head', role: 'presentation' },
+        leftOpenLabel(leftOpenTotal),
+      ),
+    );
   }
 
   function updateFoot(): void {
@@ -541,7 +592,7 @@ export function makeAttention(ctx: Ctx): Section {
   // leaves the cursor where it was.
   function markOpenRow(): void {
     if (!currentOpenKey || boardHandle) return;
-    const i = loadedItems.findIndex((it) => it.key === currentOpenKey);
+    const i = shown.findIndex((it) => it.key === currentOpenKey);
     if (i < 0) return;
     const rowEl = handle.el.querySelectorAll('.kit-rows > .kit-row')[i];
     if (rowEl?.classList.contains('open')) return;
@@ -1058,7 +1109,7 @@ export function makeAttention(ctx: Ctx): Section {
   void getVocab(ctx)
     .then((v) => {
       vocab = v;
-      handle.setItems(loadedItems);
+      setRows();
       updateAgree();
     })
     .catch(() => {});

@@ -11,6 +11,12 @@ type fakeFacts struct {
 	rel   map[string]time.Time
 	act   map[string]time.Time
 	gone  map[string]bool
+	other map[string]time.Time
+}
+
+func (f fakeFacts) OthersActivity(k Key) (time.Time, bool) {
+	t, ok := f.other[k.String()]
+	return t, ok
 }
 
 func (f fakeFacts) Missing(k Key) bool { return f.gone[k.String()] }

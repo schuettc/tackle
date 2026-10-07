@@ -38,6 +38,19 @@
 //     note; To apply's step posts exactly that text
 //   "close without comment" records no note; the step has no comment
 //
+// And what Leave it open leaves behind (casebook 0.4.3), on a serve and repo
+// of their own:
+//
+//   deciding Leave it open moves the row into the left-open group at the
+//     bottom ("left open · N", rows muted, "left open · date"); the view's
+//     count drops; move-on opens the next undecided item, never a
+//     left-open row
+//   opening a left-open row shows its decision (the chosen card) and the
+//     cards as usual
+//   someone else's newer comment (the GitHub cache, then a restart) moves
+//     it back up to the top, flagged "new activity since you left it
+//     open", counted again; Court's own newer comment doesn't
+//
 // And recommendations in the list (Task 4), on a serve and repo of their own:
 //
 //   recommended items first; each row reads "pi recommends ‹label›"
@@ -47,6 +60,8 @@
 //   "agree with all 3" accepts exactly those three; the next item opens
 //   an outward group: "send all 2 to To apply"; To apply lists them; no job
 
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { startServe } from './serve.mjs';
 import { createAgent } from './agent.mjs';
 
@@ -219,6 +234,7 @@ export async function decideScenarios(shared, t) {
       closeCommentScenario,
       closeSeed(),
     ],
+    ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -248,13 +264,14 @@ async function decideScenario(context, t, s) {
   const vocab = await api('GET', '/api/decisions/vocabulary');
   const kindVocab = (k) => vocab.kinds.find((v) => v.kind === k);
 
-  // Only this repo's items wait on Court: the fixture's are decided first.
+  // Only this repo's items wait on Court: the fixture's stop being tracked
+  // first (kept, they would stay in the list's left-open group).
   const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
   const others = (waiting0.items ?? [])
     .map((it) => it.key)
     .filter((k) => !k.includes(`/${REPO}`));
   if (others.length)
-    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
   const waiting = (
     (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
   ).map((it) => it.key);
@@ -807,13 +824,15 @@ async function decideScenario(context, t, s) {
   }
 
   // ---- a live decide of the next item elsewhere doesn't skip the one after --
+  // (Kept, it moves to the list's left-open group: it leaves the rows that
+  // need a decision.)
   await api('POST', '/api/decide', { keys: [ISSUE(6)], disposition: 'keep' });
   await until(
     pg,
     (kick) =>
       ![
         ...document.querySelectorAll(
-          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+          '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open) .kit-kicker',
         ),
       ].some((e) => e.textContent === kick),
     kicker(ISSUE(6)),
@@ -1013,7 +1032,7 @@ async function recommendScenario(context, t, s) {
     .map((it) => it.key)
     .filter((k) => !k.includes(`/${REC}`));
   if (others.length)
-    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
 
   // Two sessions here, so the dock attaches to neither on its own.
   const A = 'probe-rec-a';
@@ -1432,7 +1451,7 @@ async function pagesScenario(context, t, s) {
     .map((it) => it.key)
     .filter((k) => !k.includes(`/${PAGES}`));
   if (others.length)
-    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
   const view = await api('GET', '/api/items?view=waiting&limit=500');
   const keys = (view.items ?? []).map((it) => it.key);
   check(
@@ -1558,7 +1577,7 @@ async function closeCommentScenario(context, t, s) {
     .map((it) => it.key)
     .filter((k) => !k.includes(`/${CC}`));
   if (others.length)
-    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
 
   const pg = await context.newPage();
   await pg.goto(`${s.url}#/attention/waiting`, {
@@ -1902,5 +1921,315 @@ async function closeCommentScenario(context, t, s) {
       }),
     );
   }
+  await pg.close();
+}
+
+// ---- Leave it open stays in the list (casebook 0.4.3) ----------------------
+
+const LO = 'lo-left';
+const LISSUE = (n) => `issue:schuettc/${LO}#${n}`;
+
+function leftOpenSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${LO}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${LO}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        issues: [
+          [1, 'Question about the region flag', 'alice'],
+          [2, 'Typo in the install guide', 'carol'],
+          [3, 'Support a second profile', 'dave'],
+          [4, 'Docs for the new option', 'erin'],
+          [5, 'Crash when the cache is empty', 'frank'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+// shootLO takes /tmp/lo-<name>-light.png, light, nothing focused.
+async function shootLO(t, pg, name) {
+  await setTheme(pg, 'light');
+  await pg.evaluate(() => document.activeElement?.blur());
+  const got = await pg.evaluate(() => ({
+    theme: document.documentElement.dataset.theme,
+    bg: getComputedStyle(document.body).backgroundColor,
+  }));
+  const path = `/tmp/lo-${name}-light.png`;
+  t.check(
+    `${path} is light (theme ${got.theme}, body ${got.bg})`,
+    got.theme === 'light' && got.bg === BG.light,
+  );
+  await pg.screenshot({ path });
+}
+
+// listState reads the shown list: each row's key (its kicker), whether it is
+// in the left-open group, its meta and sub; the group's divider (its text,
+// and how many rows come before it); and the waiting chip's count.
+function listState(pg) {
+  return pg.evaluate(() => {
+    const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
+    const body = list?.querySelector('.kit-rows');
+    const kids = [...(body?.children ?? [])];
+    const head = list?.querySelector('.cb-left-open-head');
+    const chip = list?.querySelector('.kit-chip[data-id="waiting"] .kit-n');
+    return {
+      rows: kids
+        .filter((el) => el.classList.contains('kit-row'))
+        .map((el) => ({
+          key: (el.querySelector('.kit-kicker')?.textContent ?? '').replace(
+            ' \u00b7 ',
+            ':',
+          ),
+          left: el.classList.contains('cb-left-open'),
+          back: el.classList.contains('cb-new-activity'),
+          meta: el.querySelector('.kit-meta')?.textContent ?? '',
+          sub: el.querySelector('.kit-sub')?.textContent ?? '',
+          color: getComputedStyle(el.querySelector('.kit-title')).color,
+        })),
+      head: head?.textContent ?? '',
+      headAt: head
+        ? kids.filter(
+            (el) =>
+              el.classList.contains('kit-row') &&
+              el.compareDocumentPosition(head) &
+                Node.DOCUMENT_POSITION_FOLLOWING,
+          ).length
+        : -1,
+      count: chip ? parseInt(chip.textContent ?? '0', 10) : 0,
+    };
+  });
+}
+
+async function leftOpenScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: Leave it open stays in the list');
+  let agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const decisionOf = async (key) =>
+    (await api('GET', `/api/item?key=${encodeURIComponent(key)}`)).item
+      .decision ?? null;
+  const READ = '.kit-app > .kit-read:not([hidden])';
+
+  // Only this repo's items wait on Court: the fixture's stop being tracked
+  // (kept, they would stay in the list, left open).
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${LO}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+
+  const pg = await context.newPage();
+  const load = async () => {
+    await pg.goto(`${s.url}#/attention/waiting`, {
+      waitUntil: 'domcontentloaded',
+    });
+    await pg.waitForSelector('.kit-row', { timeout: 8000 });
+    await setTheme(pg, 'light');
+  };
+  await load();
+  {
+    const st = await listState(pg);
+    checkList(
+      'waiting on you holds the five seeded issues, with no left-open group',
+      st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
+      [1, 2, 3, 4, 5].map(LISSUE),
+    );
+    check(
+      `the waiting chip counts 5 (${st.count}), and there is no divider ("${st.head}")`,
+      st.count === 5 && st.head === '',
+    );
+  }
+
+  // ---- Leave it open: the row moves down, the count drops, move-on -------
+  await row(pg, LISSUE(1)).click();
+  check('issue #1 opens', await opened(t, pg, LISSUE(1)));
+  await pg.click(`${READ} .cb-choice[data-d="keep"]`);
+  check(
+    'Leave it open decides issue #1 keep',
+    await eventually(
+      async () => (await decisionOf(LISSUE(1)))?.disposition === 'keep',
+    ),
+  );
+  check(
+    'move-on opens the next undecided item, issue #2',
+    await opened(t, pg, LISSUE(2)),
+  );
+  check(
+    'the list settles with the left-open divider',
+    await until(
+      pg,
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
+        )?.textContent === 'left open \u00b7 1',
+    ),
+  );
+  {
+    const st = await listState(pg);
+    const today = new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+    });
+    checkList(
+      'issue #1 moved to the bottom, in the left-open group',
+      st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
+      [2, 3, 4, 5].map(LISSUE).concat([`${LISSUE(1)} (left open)`]),
+    );
+    check(
+      `the divider "${st.head}" comes after the 4 items that need a decision (at ${st.headAt})`,
+      st.head === 'left open \u00b7 1' && st.headAt === 4,
+    );
+    const lo = st.rows.find((r) => r.key === LISSUE(1));
+    check(
+      `the left-open row reads "left open · ${today}" ("${lo?.meta}")`,
+      lo?.meta === `left open \u00b7 ${today}`,
+    );
+    const muted = await cssColor(pg, 'var(--kit-muted)');
+    const live = st.rows.find((r) => r.key === LISSUE(2));
+    check(
+      `the left-open row is muted (${lo?.color} = --kit-muted ${muted}; a live row ${live?.color})`,
+      lo?.color === muted && live?.color !== muted,
+    );
+    check(`the waiting chip's count drops to 4 (${st.count})`, st.count === 4);
+  }
+
+  // Move-on never opens a left-open row: deciding the view's last item
+  // wraps to its first undecided one (issue #2), not to issue #1.
+  await row(pg, LISSUE(5)).click();
+  check('issue #5 opens', await opened(t, pg, LISSUE(5)));
+  await pg.click(`${READ} .cb-choice[data-d="keep"]`);
+  check(
+    'Leave it open decides issue #5 keep',
+    await eventually(
+      async () => (await decisionOf(LISSUE(5)))?.disposition === 'keep',
+    ),
+  );
+  check(
+    'move-on after the last item opens the first undecided one (issue #2), not a left-open row',
+    await opened(t, pg, LISSUE(2)),
+  );
+  check(
+    'the group counts 2',
+    await until(
+      pg,
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
+        )?.textContent === 'left open \u00b7 2',
+    ),
+  );
+
+  // Opening a left-open row shows its decision and the cards as usual.
+  await row(pg, LISSUE(1)).click();
+  check('the left-open issue #1 opens', await opened(t, pg, LISSUE(1)));
+  {
+    const col = await readCol(pg);
+    const iv = (await api('GET', '/api/decisions/vocabulary')).kinds.find(
+      (k) => k.kind === 'issue',
+    );
+    checkList(
+      "its cards are serve's choices for an issue",
+      col.cards.map((c) => c.label),
+      iv.choices.map((c) => c.label),
+    );
+    check(
+      `its decision shows: Leave it open is the chosen card (${col.cards.filter((c) => c.on).map((c) => c.label)})`,
+      col.cards
+        .filter((c) => c.on)
+        .map((c) => c.d)
+        .join() === 'keep',
+    );
+    check(
+      `the card says what Leave it open does now ("${col.cards[0]?.says}")`,
+      col.cards[0]?.says ===
+        'It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes.',
+    );
+  }
+  await shootLO(t, pg, 'list');
+
+  // ---- new activity brings it back ----------------------------------------
+  // A sync records alice's comment on issue #1 after the decision, and
+  // Court's own on issue #5: the GitHub cache, then serve restarts and
+  // builds from it.
+  const d1 = await decisionOf(LISSUE(1));
+  const d5 = await decisionOf(LISSUE(5));
+  const later = (d) =>
+    new Date(new Date(d.decided_at).getTime() + 60000).toISOString();
+  {
+    const cachePath = join(s.home, 'state', 'github.json');
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8'));
+    const repo = cache.owners.schuettc.repos.find(
+      (r) => r.repo === `schuettc/${LO}`,
+    );
+    for (const [n, who, d] of [
+      [1, 'alice', d1],
+      [5, 'schuettc', d5],
+    ]) {
+      const is = repo.issues.find((i) => i.number === n);
+      is.last_comment_author = who;
+      is.last_comment_at = later(d);
+      is.updated_at = later(d);
+    }
+    writeFileSync(cachePath, JSON.stringify(cache, null, 2));
+  }
+  await pg.goto('about:blank');
+  await s.restart();
+  agent = createAgent(s.base, s.token);
+  await load();
+  check(
+    'after the restart, the list settles with issue #1 at the top',
+    await until(
+      pg,
+      (k) =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+        )?.textContent === k,
+      kicker(LISSUE(1)),
+      8000,
+    ),
+  );
+  {
+    const st = await listState(pg);
+    checkList(
+      "alice's newer comment moves issue #1 back to the top, needing a decision",
+      st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
+      [1, 2, 3, 4].map(LISSUE),
+    );
+    const back = st.rows[0];
+    check(
+      `the brought-back row is flagged "${back?.sub}"`,
+      back?.back && back.sub === 'new activity since you left it open',
+    );
+    check(`the waiting chip counts it again: 4 (${st.count})`, st.count === 4);
+    // Court's own newer comment on issue #5 doesn't bring it back: it is
+    // still left open (in new; with Court's reply it no longer waits on him).
+    const nv = await api('GET', '/api/items?view=new&limit=500');
+    check(
+      "Court's own newer comment leaves issue #5 left open",
+      (nv.left_open ?? []).some((it) => it.key === LISSUE(5)) &&
+        !(nv.items ?? []).some((it) => it.key === LISSUE(5)) &&
+        !st.rows.some((r) => r.key === LISSUE(5)),
+    );
+  }
+  await row(pg, LISSUE(1)).click();
+  check('the brought-back issue #1 opens', await opened(t, pg, LISSUE(1)));
+  check(
+    'its reading column says why it is back',
+    (await pg.locator(`${READ} .cb-due-reason`).textContent()) ===
+      'new activity since you left it open',
+  );
+  await shootLO(t, pg, 'back');
   await pg.close();
 }

@@ -87,6 +87,12 @@ func githubURL(k item.Key) string {
 type ItemsView struct {
 	Total int        `json:"total"`
 	Items []ItemView `json:"items"`
+	// LeftOpen is an Attention view's left-open group: the kept items still
+	// open that the view would list, in key order, the first page of them
+	// (up to the request's limit). They need no decision: Total and the
+	// view's count leave them out; LeftOpenTotal counts them.
+	LeftOpen      []ItemView `json:"left_open"`
+	LeftOpenTotal int        `json:"left_open_total"`
 }
 
 // ItemDetailView is the response body of GET /api/item.

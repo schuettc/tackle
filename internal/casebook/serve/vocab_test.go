@@ -42,9 +42,9 @@ func (r *rig) vocab(t *testing.T) vocabView {
 }
 
 const (
-	saysLeaveOpen = "It stays as it is on GitHub and stops asking for your attention."
-	saysKeep      = "It stays as it is and stops asking for your attention."
-	saysNotNow    = "Hidden until a date or an event you pick, then it asks again."
+	saysLeaveOpen = "It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes."
+	saysKeep      = "It stays as it is and stays in your list, at the bottom."
+	saysNotNow    = "Hidden until a date or an event you pick, or until someone replies or it changes. Then it asks again."
 	saysIgnore    = "casebook never asks about it again. Nothing is done on GitHub."
 	saysClose     = "Goes to To apply with your closing comment. Nothing changes until you approve the plan, and you see the comment again before it's posted."
 )

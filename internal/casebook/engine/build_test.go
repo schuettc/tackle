@@ -466,3 +466,151 @@ func TestFinishLandedCombinations(t *testing.T) {
 		})
 	}
 }
+
+// leftOpenIDs lists the result's left-open items' keys.
+func leftOpenIDs(r Result) []string {
+	var ids []string
+	for _, it := range r.LeftOpen() {
+		ids = append(ids, it.ID)
+	}
+	return ids
+}
+
+func attentionIDs(r Result) []string {
+	var ids []string
+	for _, it := range r.Attention() {
+		ids = append(ids, it.ID)
+	}
+	return ids
+}
+
+// TestKeepLeavesItOpen: a kept item still open is left open: out of the
+// attention set (it needs no decision), in the left-open set, and with the
+// flags an undecided item would have (so it stays in its views).
+func TestKeepLeavesItOpen(t *testing.T) {
+	in := fixture()
+	decide(in, "pr:schuettc/hail#3", item.Keep, "")
+	decide(in, "branch:schuettc/hail@feat/client", item.Keep, "")
+	decide(in, "repo:schuettc/old", item.Keep, "")
+	r := Build(in)
+	for _, id := range []string{"pr:schuettc/hail#3", "branch:schuettc/hail@feat/client", "repo:schuettc/old"} {
+		it := mustFind(t, r, id)
+		if it.Status != item.StatusLeftOpen || it.DueReason != "" {
+			t.Errorf("%s: status %s reason %q, want left-open", id, it.Status, it.DueReason)
+		}
+		if slices.Contains(attentionIDs(r), id) {
+			t.Errorf("%s: left open but in attention", id)
+		}
+		if !slices.Contains(leftOpenIDs(r), id) {
+			t.Errorf("%s: not in the left-open set %v", id, leftOpenIDs(r))
+		}
+	}
+	if h := hitRules(mustFind(t, r, "pr:schuettc/hail#3")); !slices.Equal(h, []string{"incoming-no-reply"}) {
+		t.Errorf("left-open incoming PR's flags %v, want incoming-no-reply (its view)", h)
+	}
+	if h := hitRules(mustFind(t, r, "repo:schuettc/old")); !slices.Equal(h, []string{"dormant"}) {
+		t.Errorf("left-open repo's flags %v, want dormant", h)
+	}
+}
+
+// TestKeepBroughtBackByOthersActivity: someone else's comment newer than the
+// decision brings a kept PR back, needing a decision; Court's own doesn't.
+func TestKeepBroughtBackByOthersActivity(t *testing.T) {
+	in := fixture()
+	decide(in, "pr:schuettc/hail#3", item.Keep, "")
+	p := &in.GitHub.Owners["schuettc"].Repos[0].PRs[0]
+	p.LastCommentAt, p.LastCommentAuthor = now.Add(-time.Hour), "bob"
+	r := Build(in)
+	it := mustFind(t, r, "pr:schuettc/hail#3")
+	if it.Status != item.StatusDue || it.DueReason != "new activity since you left it open" {
+		t.Fatalf("status %s reason %q, want due: new activity since you left it open", it.Status, it.DueReason)
+	}
+	if !slices.Contains(attentionIDs(r), it.ID) || slices.Contains(leftOpenIDs(r), it.ID) {
+		t.Errorf("brought back: attention %v left open %v", attentionIDs(r), leftOpenIDs(r))
+	}
+	if !it.NewActivity {
+		t.Error("brought back, not marked new activity")
+	}
+
+	// Court's own newer comment does not bring it back.
+	p.LastCommentAuthor = "SchuettC"
+	r = Build(in)
+	if it := mustFind(t, r, "pr:schuettc/hail#3"); it.Status != item.StatusLeftOpen {
+		t.Errorf("Court's own comment: status %s, want left-open", it.Status)
+	}
+	// Nor does someone else's comment older than the decision.
+	p.LastCommentAt, p.LastCommentAuthor = days(3), "bob"
+	if it := mustFind(t, Build(in), "pr:schuettc/hail#3"); it.Status != item.StatusLeftOpen {
+		t.Errorf("older comment: status %s, want left-open", it.Status)
+	}
+	// An own PR with no comments: its creation is Court's, never another's.
+	in.Decisions["issue:schuettc/hail#4"] = item.Decision{Disposition: item.Keep, DecidedBy: "court", DecidedAt: days(5)}
+	if it := mustFind(t, Build(in), "issue:schuettc/hail#4"); it.Status != item.StatusLeftOpen {
+		t.Errorf("own issue created after the decision: status %s, want left-open", it.Status)
+	}
+}
+
+// TestKeepClosedSinceDropsOut: a kept PR closed or merged on GitHub since is
+// done: in neither the attention nor the left-open set.
+func TestKeepClosedSinceDropsOut(t *testing.T) {
+	in := fixture()
+	decide(in, "pr:schuettc/gone#1", item.Keep, "")
+	in.GitHub.Refs["pr:schuettc/gone#1"] = observe.Ref{Exists: true, State: "CLOSED"}
+	decide(in, "pr:schuettc/hail#3", item.Keep, "")
+	p := &in.GitHub.Owners["schuettc"].Repos[0].PRs[0]
+	p.State, p.LastCommentAt, p.LastCommentAuthor = "MERGED", now.Add(-time.Hour), "bob"
+	r := Build(in)
+	for _, id := range []string{"pr:schuettc/gone#1", "pr:schuettc/hail#3"} {
+		if it := mustFind(t, r, id); it.Status != item.StatusDone {
+			t.Errorf("%s: status %s, want done", id, it.Status)
+		}
+		if slices.Contains(attentionIDs(r), id) || slices.Contains(leftOpenIDs(r), id) {
+			t.Errorf("%s still listed", id)
+		}
+	}
+}
+
+// TestNotNowBroughtBackByOthersActivity: a Not now is due when someone
+// else's activity is newer than the decision, before its condition is met,
+// and says which brought it back.
+func TestNotNowBroughtBackByOthersActivity(t *testing.T) {
+	in := fixture()
+	decide(in, "pr:schuettc/hail#3", item.Wait, "date(2026-12-01)")
+	decide(in, "repo:schuettc/pi-usage", item.Watch, "merged(pr:up/stream#5)")
+	r := Build(in)
+	if it := mustFind(t, r, "pr:schuettc/hail#3"); it.Status != item.StatusWaiting {
+		t.Fatalf("quiet wait: %s", it.Status)
+	}
+	if it := mustFind(t, r, "repo:schuettc/pi-usage"); it.DueReason != "its condition was met" {
+		t.Errorf("condition met: reason %q", it.DueReason)
+	}
+	p := &in.GitHub.Owners["schuettc"].Repos[0].PRs[0]
+	p.LastCommentAt, p.LastCommentAuthor = now.Add(-time.Hour), "bob"
+	r = Build(in)
+	it := mustFind(t, r, "pr:schuettc/hail#3")
+	if it.Status != item.StatusDue || it.DueReason != "new activity since Not now" {
+		t.Fatalf("status %s reason %q, want due: new activity since Not now", it.Status, it.DueReason)
+	}
+	if !slices.Contains(attentionIDs(r), it.ID) || !it.NewActivity {
+		t.Errorf("brought-back Not now: in attention %v, new activity %v", attentionIDs(r), it.NewActivity)
+	}
+	p.LastCommentAuthor = "schuettc"
+	if it := mustFind(t, Build(in), "pr:schuettc/hail#3"); it.Status != item.StatusWaiting {
+		t.Errorf("Court's own comment: status %s, want waiting", it.Status)
+	}
+}
+
+// TestIgnoreNeverListed: Stop tracking is gone, whatever happens after.
+func TestIgnoreNeverListed(t *testing.T) {
+	in := fixture()
+	decide(in, "pr:schuettc/hail#3", item.Ignore, "")
+	p := &in.GitHub.Owners["schuettc"].Repos[0].PRs[0]
+	p.LastCommentAt, p.LastCommentAuthor = now.Add(-time.Hour), "bob"
+	r := Build(in)
+	if it := mustFind(t, r, "pr:schuettc/hail#3"); it.Status != item.StatusDone || len(it.Hits) != 0 {
+		t.Errorf("ignored: %s %v", it.Status, it.Hits)
+	}
+	if slices.Contains(attentionIDs(r), "pr:schuettc/hail#3") || slices.Contains(leftOpenIDs(r), "pr:schuettc/hail#3") {
+		t.Error("ignored item listed")
+	}
+}

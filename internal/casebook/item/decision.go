@@ -59,9 +59,9 @@ var questions = map[Kind]string{
 }
 
 var (
-	leaveOpen = Choice{Disposition: Keep, Label: "Leave it open", Says: "It stays as it is on GitHub and stops asking for your attention."}
-	keepIt    = Choice{Disposition: Keep, Label: "Keep it", Says: "It stays as it is and stops asking for your attention."}
-	notNow    = Choice{Disposition: Wait, Label: "Not now", Says: "Hidden until a date or an event you pick, then it asks again.", NeedsUntil: true}
+	leaveOpen = Choice{Disposition: Keep, Label: "Leave it open", Says: "It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes."}
+	keepIt    = Choice{Disposition: Keep, Label: "Keep it", Says: "It stays as it is and stays in your list, at the bottom."}
+	notNow    = Choice{Disposition: Wait, Label: "Not now", Says: "Hidden until a date or an event you pick, or until someone replies or it changes. Then it asks again.", NeedsUntil: true}
 	stopTrack = Choice{Disposition: Ignore, Label: "Stop tracking it", Says: "casebook never asks about it again. Nothing is done on GitHub."}
 	closeSays = "Goes to To apply with your closing comment. Nothing changes until you approve the plan, and you see the comment again before it's posted."
 )

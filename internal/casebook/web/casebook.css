@@ -2002,3 +2002,28 @@ textarea.cb-needs-edit:focus {
 .cb-dock-messages[hidden] {
   display: none;
 }
+
+/* ---- the left-open group (Leave it open stays in the list) ---------------- */
+/* A quiet divider after the items that need a decision ("left open · N"),
+   then the kept items still open, muted. */
+.cb-left-open-head {
+  margin: 14px 0 4px;
+  padding: 6px 12px 4px;
+  border-top: 1px solid var(--kit-line);
+  color: var(--kit-muted);
+  font-family: var(--kit-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.kit-row.cb-left-open .kit-title,
+.kit-row.cb-left-open .kit-kicker,
+.kit-row.cb-left-open .kit-meta {
+  color: var(--kit-muted);
+}
+.kit-row.cb-left-open .kit-title {
+  font-weight: 400;
+}
+/* An item new activity brought back: its reason, in the signal colour. */
+.kit-row.cb-new-activity .kit-sub {
+  color: var(--kit-signal);
+}
