@@ -380,3 +380,39 @@ func TestKeep(t *testing.T) {
 		}
 	}
 }
+
+// In a git repository the suite is git's own file list: tracked files plus
+// untracked files that aren't ignored. A git-ignored virtualenv full of
+// third-party tests never enters it (found on a real Python project).
+func TestSuiteInGitRepoUsesGitFileList(t *testing.T) {
+	root, gc := newGitRepo(t)
+	writeFile(t, root, ".gitignore", "venv/\n.venv/\n")
+	writeFile(t, root, "tests/test_a.py", "def test_a(): pass\n")
+	writeFile(t, root, "testdata/fixture_test.go", "package pkg\n")
+	writeFile(t, root, "tests/test_gone.py", "def test_gone(): pass\n")
+	runGit(t, root, gc, "add", "-A")
+	runGit(t, root, gc, "commit", "-qm", "init")
+	if err := os.Remove(filepath.Join(root, "tests/test_gone.py")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, root, "tests/test_new.py", "def test_new(): pass\n")
+	writeFile(t, root, "venv/lib/pkg/test_x.py", "def test_x(): pass\n")
+	writeFile(t, root, ".venv/lib/python3.12/site-packages/pkg/tests/test_y.py", "def test_y(): pass\n")
+
+	got, err := Suite(root, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"tests/test_a.py", "tests/test_new.py"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Suite() = %v, want %v", got, want)
+	}
+
+	got, err = Suite(root, "tests", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Suite(sub=tests) = %v, want %v", got, want)
+	}
+}
