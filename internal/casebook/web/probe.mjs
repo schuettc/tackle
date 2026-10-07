@@ -103,10 +103,25 @@ process.on('exit', () => {
 // chipCountsMatchLists checks that every attention view chip count shown in
 // the DOM matches the API total for that view. Runs with the page settled.
 async function chipCountsMatchLists(pg, base, token, label) {
-  // Let the page settle after the last action.
-  await pg.waitForTimeout(500);
   const views = ['waiting', 'new', 'due', 'proposed'];
   let allMatch = true;
+  // Read until the page has settled after the last action (the counts
+  // agree), or the wait runs out and the last mismatches are reported.
+  let mismatches = [];
+  await eventually(async () => {
+    mismatches = await chipMismatches(pg, base, token, views);
+    return mismatches.length === 0;
+  });
+  for (const m of mismatches) {
+    console.error(`  [chip invariant] ${m}`);
+    allMatch = false;
+  }
+  check(`${label}: view chip counts match list totals`, allMatch);
+}
+
+// chipMismatches lists each view whose chip count differs from serve's total.
+async function chipMismatches(pg, base, token, views) {
+  const out = [];
   for (const view of views) {
     // Read the count from the chip label. The kit renders chip counts in a
     // .kit-n span inside [data-id="<view>"].
@@ -126,14 +141,10 @@ async function chipCountsMatchLists(pg, base, token, label) {
     if (!resp) continue;
     const data = await resp.json().catch(() => ({}));
     const apiTotal = data.total ?? 0;
-    if (chipCount !== apiTotal) {
-      console.error(
-        `  [chip invariant] "${view}": chip=${chipCount} api=${apiTotal}`,
-      );
-      allMatch = false;
-    }
+    if (chipCount !== apiTotal)
+      out.push(`"${view}": chip=${chipCount} api=${apiTotal}`);
   }
-  check(`${label}: view chip counts match list totals`, allMatch);
+  return out;
 }
 
 // ---- Task 7: the composer, the batch tray, the progress line, the waiting strip
@@ -157,6 +168,114 @@ async function eventually(fn, timeout = 5000) {
     if (Date.now() > end) return false;
     await new Promise((r) => setTimeout(r, 100));
   }
+}
+
+// settled says when a wait for the page to match serve ran out (the checks
+// after it say what is wrong; this says where the time went).
+function settled(ok, what) {
+  if (!ok) console.log(`  (waited for ${what} to match serve's; it never did)`);
+  return ok;
+}
+
+// listShows waits until the page's shown list holds exactly the items serve
+// lists for view (q narrows it as the search does): the page has loaded it.
+async function listShows(pg, view, q = '', timeout = 6000) {
+  const { base, token } = _serveHandle;
+  const qs = q ? `&q=${encodeURIComponent(q)}` : '';
+  return eventually(async () => {
+    const r = await fetch(`${base}/api/items?view=${view}&limit=200${qs}`, {
+      headers: { 'X-Local-Token': token },
+    }).catch(() => null);
+    if (!r?.ok) return false;
+    // A row names its item in its kicker: "<kind> · <key without kind>".
+    // The items left open list after the rest.
+    const v = await r.json();
+    const want = [...(v.items ?? []), ...(v.left_open ?? [])]
+      .map((i) =>
+        i.kind
+          ? `${i.kind} \u00b7 ${i.key.slice(i.key.indexOf(':') + 1)}`
+          : i.key,
+      )
+      .sort();
+    const got = (
+      await pg
+        .$$eval(
+          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+          (els) => els.map((e) => e.textContent ?? ''),
+        )
+        .catch(() => [])
+    ).sort();
+    return want.length === got.length && want.every((k, i) => k === got[i]);
+  }, timeout).then((ok) => settled(ok, `the ${view} list`));
+}
+
+// boardShows waits until the board's four lanes hold serve's items for them,
+// each item in the first lane that lists it (as board.ts deals them).
+async function boardShows(pg, q = '', timeout = 6000) {
+  const { base, token } = _serveHandle;
+  const lanes = ['waiting', 'proposed', 'due', 'new'];
+  return eventually(async () => {
+    const seen = new Set();
+    const want = [];
+    for (const lane of lanes) {
+      const qs = q ? `&q=${encodeURIComponent(q)}` : '';
+      const r = await fetch(`${base}/api/items?view=${lane}&limit=200${qs}`, {
+        headers: { 'X-Local-Token': token },
+      }).catch(() => null);
+      if (!r?.ok) return false;
+      for (const { key } of (await r.json()).items ?? []) {
+        if (seen.has(key)) continue;
+        seen.add(key);
+        want.push(`${lane} ${key}`);
+      }
+    }
+    const got = await pg
+      .$$eval('.cb-lane .kit-card', (els) =>
+        els.map((e) => `${e.closest('.cb-lane').dataset.lane} ${e.dataset.id}`),
+      )
+      .catch(() => []);
+    want.sort();
+    got.sort();
+    return want.length === got.length && want.every((k, i) => k === got[i]);
+  }, timeout).then((ok) => settled(ok, 'the board'));
+}
+
+// chipShows waits until view's chip counts what serve counts for it.
+async function chipShows(pg, view, timeout = 6000) {
+  const { base, token } = _serveHandle;
+  return eventually(async () => {
+    const r = await fetch(`${base}/api/items?view=${view}&limit=1`, {
+      headers: { 'X-Local-Token': token },
+    }).catch(() => null);
+    if (!r?.ok) return false;
+    const want = (await r.json()).total ?? 0;
+    const got = await pg
+      .evaluate((v) => {
+        const chip = document.querySelector(`.kit-chip[data-id="${v}"]`);
+        if (!chip) return null;
+        return parseInt(chip.querySelector('.kit-n')?.textContent ?? '0', 10);
+      }, view)
+      .catch(() => null);
+    return got === want;
+  }, timeout).then((ok) => settled(ok, `the ${view} chip`));
+}
+
+// selShows waits until the shown list's foot counts n selected (hidden at 0).
+function selShows(pg, n, timeout = 6000) {
+  return until(
+    pg,
+    (n) => {
+      const el = document.querySelector(
+        '.kit-app > .kit-list:not([hidden]) .cb-sel-count',
+      );
+      if (!el) return false;
+      return n === 0
+        ? el.hidden
+        : !el.hidden && el.textContent === `${n} selected`;
+    },
+    n,
+    timeout,
+  );
 }
 
 // clickLifecycle clicks a rule's primary (Activate or Deactivate) and
@@ -529,6 +648,8 @@ async function composerScenariosOn(context, serveHandle) {
         (d4?.delivery?.messages ?? []).map((m) => m.body),
         ['y'],
       );
+      // Kept: the check is that the send's end does not touch the field; a
+      // short window after the delivery for a late write to show.
       await pg.waitForTimeout(100);
       const afterY = await field();
       check(
@@ -1544,6 +1665,8 @@ async function composerScenariosOn(context, serveHandle) {
         (await value()).text === want2 && (await value()).edited,
       );
       await boxes.nth(pick[4]).click();
+      // Kept: the check is that the edit does not change with the
+      // selection; a window for a redraw that would undo it.
       await pg.waitForTimeout(200);
       check(
         'the edit holds while the selection changes',
@@ -1695,9 +1818,7 @@ async function composerScenariosOn(context, serveHandle) {
   }
 
   // ---- scenario: the rail at 1600x900, light and dark ----------------------
-  console.log(
-    '\nscenario: the rail at 1600×900 — /tmp/t7-light.png, /tmp/t7-dark.png',
-  );
+  console.log('\nscenario: the rail at 1600×900, light and dark');
   {
     const fx = await dockFixture(serveHandle, 'tools-workspace');
     const stopPresent = fx.present();
@@ -1780,12 +1901,10 @@ async function composerScenariosOn(context, serveHandle) {
           (e) => getComputedStyle(e).backgroundColor,
         );
         check(
-          `the ${theme} screenshot is ${theme} (body ${bg})`,
+          `the rail in ${theme} is ${theme} (body ${bg})`,
           bg === bgs[theme],
         );
-        await pg.screenshot({ path: `/tmp/t7-${theme}.png` });
       }
-      console.log('  screenshots: /tmp/t7-light.png  /tmp/t7-dark.png');
     } finally {
       stopPresent();
       await pg.close();
@@ -1794,7 +1913,7 @@ async function composerScenariosOn(context, serveHandle) {
 
   // ---- scenario: only the active section sets the attached context --------
   // Last: it decides one of its seeded items, which leaves a decision queued
-  // for sync (the bar's status), and the screenshots come before it.
+  // for sync (the bar's status), and the rail scenario comes before it.
   console.log(
     '\nscenario: a hidden Attention does not change the attached line',
   );
@@ -2004,6 +2123,8 @@ async function keyScopeScenariosOn(context, serveHandle) {
     // r and d first: they only open a sheet, while a failing a settles the
     // proposal r would act on.
     await pressWithFocus(pg, 'r');
+    // Kept (this one and d's, a's): each check is that the key does nothing
+    // on #/rules; a window long enough for a sheet or a POST to land.
     await pg.waitForTimeout(500);
     const rSheet = await sheetOpen(pg);
     check(
@@ -2012,7 +2133,7 @@ async function keyScopeScenariosOn(context, serveHandle) {
     );
     if (rSheet) {
       await pg.keyboard.press('Escape');
-      await pg.waitForTimeout(300);
+      await pg.waitForTimeout(300); // only after a failed check
     }
 
     await pressWithFocus(pg, 'd');
@@ -2024,11 +2145,11 @@ async function keyScopeScenariosOn(context, serveHandle) {
     );
     if (dSheet) {
       await pg.keyboard.press('Escape');
-      await pg.waitForTimeout(300);
+      await pg.waitForTimeout(300); // only after a failed check
     }
 
     await pressWithFocus(pg, 'a');
-    await pg.waitForTimeout(1500);
+    await pg.waitForTimeout(500);
     check(
       'on #/rules, "a" does not accept Attention\'s hidden open proposal',
       (await proposalState()) === 'pending',
@@ -2283,7 +2404,7 @@ async function r8Light(pg) {
   );
 }
 
-async function r8Shoot(pg, name) {
+async function r8Themes(pg, name) {
   const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
   for (const theme of ['light', 'dark']) {
     for (let i = 0; i < 3; i++) {
@@ -2296,10 +2417,9 @@ async function r8Shoot(pg, name) {
       bg: getComputedStyle(document.body).backgroundColor,
     }));
     check(
-      `/tmp/t8-${name}-${theme}.png is ${theme} (theme ${got.theme}, body ${got.bg})`,
+      `the ${name} view is ${theme} (theme ${got.theme}, body ${got.bg})`,
       got.theme === theme && got.bg === bgs[theme],
     );
-    await pg.screenshot({ path: `/tmp/t8-${name}-${theme}.png` });
   }
   // Back to light for whatever follows.
   for (let i = 0; i < 3; i++) {
@@ -2557,7 +2677,7 @@ async function rulesScenariosOn(context, serveHandle) {
           afterIn.matches.total === 6,
       );
 
-      // Exclude it again for the screenshots: one excluded match.
+      // Exclude it again for what follows: one excluded match.
       await untick(a1, 'keep for reference');
       await until(
         pg,
@@ -2741,7 +2861,7 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.$eval('.cb-rules-read', (e) => {
         e.scrollTop = 0;
       });
-      await r8Shoot(pg, 'rules');
+      await r8Themes(pg, 'rules');
 
       // The + condition menu offers the vocabulary: every field with its
       // operators, as serve lists them.
@@ -2771,7 +2891,7 @@ async function rulesScenariosOn(context, serveHandle) {
           (e) => !e.hidden && e.offsetHeight > 100,
         ),
       );
-      await r8Shoot(pg, 'condition-menu');
+      await r8Themes(pg, 'condition-menu');
       await pg.keyboard.press('Escape');
       check(
         'Esc closes the menu',
@@ -2785,6 +2905,8 @@ async function rulesScenariosOn(context, serveHandle) {
       const how = '.cb-cond[data-index="3"] input.cb-cond-v';
       await pg.click(how, { clickCount: 3 });
       await pg.keyboard.type('merged-pr');
+      // Kept (here and below): with the clock paused nothing may preview;
+      // a real-time window for a stray request to show.
       await sleep(400);
       check(
         `no preview while the clock stands still after typing (${previews})`,
@@ -2815,7 +2937,7 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.clock.runFor(200);
       await pg.keyboard.press('Backspace');
       await pg.clock.runFor(200);
-      await sleep(300);
+      await sleep(300); // kept: no preview may come in this window
       check(
         `an edit 200 ms into the wait restarts it (${previews} after 400 ms)`,
         previews === 0,
@@ -2891,7 +3013,7 @@ async function rulesScenariosOn(context, serveHandle) {
           ) {
             held3 = false;
           }
-          await sleep(50);
+          await sleep(50); // kept: watches that the heading holds over 0.5 s
         }
         check(
           'the older one, answering after it, is dropped (still "3 · 3 in main")',
@@ -3151,7 +3273,7 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.waitForLoadState('domcontentloaded');
       await eventually(async () => {
         const n = firsts.length;
-        await sleep(300);
+        await sleep(300); // kept: "settled" is no new request in 300 ms
         return firsts.length === n;
       });
       firsts.length = 0;
@@ -3161,7 +3283,7 @@ async function rulesScenariosOn(context, serveHandle) {
         disposition: 'keep',
       });
       await listed; // the index event reached the page (it reloads the list)
-      await sleep(300);
+      await sleep(300); // kept: no preview may come before the debounce
       check(
         `the live events wait for the debounce (${firsts.length} previews)`,
         firsts.length === 0,
@@ -3240,7 +3362,7 @@ async function rulesScenariosOn(context, serveHandle) {
       pg.on('request', onPreview);
       await eventually(async () => {
         const n = previews.length;
-        await sleep(600);
+        await sleep(600); // kept: "settled" is no new request in 600 ms
         return previews.length === n;
       });
       // The order 49f7f70 left open, forced: a live re-preview's page one
@@ -3293,6 +3415,8 @@ async function rulesScenariosOn(context, serveHandle) {
         );
       releaseMore();
       const answered = await moreAnswered;
+      // Kept: the late answer must not add its rows a second time; a window
+      // for it to be (wrongly) drawn.
       await sleep(300);
       const keys = await r8Read.ticked(pg);
       check(
@@ -3922,6 +4046,7 @@ async function rulesScenariosOn(context, serveHandle) {
           document.querySelector('.cb-rule-note')?.textContent ===
           'not activated: fix what\u2019s marked above',
       );
+      // Kept: the check is that no activate POST goes out; a window for one.
       await pg.waitForTimeout(300);
       pg.off('request', countActivate);
       check(
@@ -3943,16 +4068,12 @@ async function rulesScenariosOn(context, serveHandle) {
         'serve still has a draft',
         (await ruleOf('old-forks-archive')).rule.status === 'draft',
       );
-      // The screenshot: the proposal with the until hint, the picker open.
+      // The proposal with the until hint, the picker open.
       await chips();
       await pg.$eval('[data-testid="propose"]', (e) =>
         e.scrollIntoView({ block: 'center' }),
       );
-      check(
-        '/tmp/t8-proposal-light.png is light (theme and body)',
-        await r8Light(pg),
-      );
-      await pg.screenshot({ path: '/tmp/t8-proposal-light.png' });
+      check('the proposal is light (theme and body)', await r8Light(pg));
       await closeMenu();
       // Fixed: archive, no until.
       await pg.fill('[data-testid="propose"] input[aria-label="until"]', '');
@@ -4212,11 +4333,7 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.$eval('.cb-rules-read', (e) => {
         e.scrollTop = 0;
       });
-      check(
-        '/tmp/t8-conflict-light.png is light (theme and body)',
-        await r8Light(pg),
-      );
-      await pg.screenshot({ path: '/tmp/t8-conflict-light.png' });
+      check('the conflict is light (theme and body)', await r8Light(pg));
       await pg.click('.kit-primary');
       check(
         'Activate refuses while it stands, and says why',
@@ -4834,11 +4951,7 @@ async function invalidRulesScenariosOn(context, serveHandle) {
     await pg.$eval('.cb-rules-read', (e) => {
       e.scrollTop = 0;
     });
-    check(
-      '/tmp/t8-invalid-light.png is light (theme and body)',
-      await r8Light(pg),
-    );
-    await pg.screenshot({ path: '/tmp/t8-invalid-light.png' });
+    check('the invalid rule is light (theme and body)', await r8Light(pg));
 
     // Fix it on the page: bot is true, then save (it becomes a draft).
     await pg.selectOption(
@@ -5346,7 +5459,7 @@ async function run() {
       if (newChip) {
         await newChip.click();
         // Wait for the list to update.
-        await page.waitForTimeout(600);
+        await listShows(page, 'new');
       }
       const afterCount = await page.$$eval('.kit-row', (rows) => rows.length);
       // The 'new' view may have 0 rows in the fixture (all are 'waiting'),
@@ -5362,7 +5475,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: search the Attention list (kit v0.11.0) -----------------
@@ -5374,7 +5487,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
 
       const fullCount = await page.$$eval('.kit-row', (rows) => rows.length);
 
@@ -5385,7 +5498,7 @@ async function run() {
           await searchField.click();
           await searchField.fill('nudge');
           // Wait for 200ms debounce + network round-trip.
-          await page.waitForTimeout(500);
+          await listShows(page, 'waiting', 'nudge');
           const narrowCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5413,7 +5526,7 @@ async function run() {
         if (searchField) {
           await searchField.press('Escape');
           // Wait for 200ms debounce + reload.
-          await page.waitForTimeout(500);
+          await listShows(page, 'waiting');
           const afterEscCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5438,14 +5551,22 @@ async function run() {
             document.activeElement.blur();
         });
         await page.keyboard.press('/');
-        await page.waitForTimeout(150);
+        await until(
+          page,
+          () =>
+            document.activeElement === document.querySelector('.kit-search'),
+        );
         const focused = await page
           .$eval('.kit-search', (el) => document.activeElement === el)
           .catch(() => false);
         check('/ focuses the search field', focused);
         // Press Esc to leave the field cleanly.
         await page.keyboard.press('Escape');
-        await page.waitForTimeout(200);
+        await until(
+          page,
+          () =>
+            document.activeElement !== document.querySelector('.kit-search'),
+        );
       }
 
       // 4. Reload with search in URL restores the narrowed list and field text.
@@ -5559,9 +5680,8 @@ async function run() {
         location.hash = '#/attention/new';
       });
       await page.waitForFunction(() => location.hash === '#/attention/new');
-      await page.waitForTimeout(600);
+      await listShows(page, 'new');
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(300);
 
       // cb-foot must not be hidden (the hidden attribute sets display:none).
       const footNotHidden = await page
@@ -5606,16 +5726,15 @@ async function run() {
       const boxes = page.locator('.kit-row .kit-box');
       for (let i = 0, n = await boxes.count(); i < n; i++) {
         await boxes.nth(i).click();
-        await page.waitForTimeout(40);
       }
-      await page.waitForTimeout(300);
+      await selShows(page, await boxes.count());
 
       // Open the decide sheet.
       await page.click('.kit-primary').catch(() => {});
       await page
         .waitForSelector('.kit-sheet', { timeout: 4000 })
         .catch(() => {});
-      await page.waitForTimeout(200);
+      await page.waitForSelector('.kit-sheet .cb-choice', { timeout: 4000 });
 
       const dispTexts = await page.$$eval('.kit-sheet .cb-choice', (btns) =>
         btns.map((b) => b.getAttribute('data-d') ?? ''),
@@ -5635,16 +5754,14 @@ async function run() {
           { timeout: 3000 },
         )
         .catch(() => {});
-      await page.waitForTimeout(200);
       const selBoxes = page.locator('.kit-row .kit-box');
       for (let i = 0, n = await selBoxes.count(); i < n; i++) {
         await selBoxes
           .nth(i)
           .click()
           .catch(() => {});
-        await page.waitForTimeout(30);
       }
-      await page.waitForTimeout(200);
+      await selShows(page, 0);
     }
 
     // ---- scenario: partial decide deselects succeeded, keeps failed selected -
@@ -5671,7 +5788,7 @@ async function run() {
         await partialPage.waitForFunction(
           () => location.hash === '#/attention/new',
         );
-        await partialPage.waitForTimeout(600);
+        await listShows(partialPage, 'new');
         await partialPage
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
@@ -5679,9 +5796,8 @@ async function run() {
         const newBoxes = partialPage.locator('.kit-row .kit-box');
         if ((await newBoxes.count()) >= 2) {
           await newBoxes.nth(0).click();
-          await partialPage.waitForTimeout(50);
           await newBoxes.nth(1).click();
-          await partialPage.waitForTimeout(300);
+          await selShows(partialPage, 2);
 
           // Intercept /api/decide to simulate a partial success:
           // first key decided, second key errors.
@@ -5708,18 +5824,23 @@ async function run() {
           await partialPage
             .waitForSelector('.kit-sheet', { timeout: 4000 })
             .catch(() => {});
-          await partialPage.waitForTimeout(200);
 
           // Pick the first available disposition.
           const firstDisp = await partialPage.$('.kit-sheet .cb-choice');
           if (firstDisp) {
             await firstDisp.click();
-            await partialPage.waitForTimeout(100);
           }
 
           // Click the sheet's fill ("<choice> · N items").
           await partialPage.click('.kit-sheet .kit-btn.fill');
-          await partialPage.waitForTimeout(800);
+          await until(partialPage, () => {
+            const el = document.querySelector('.kit-sheet .cb-choice-err');
+            return (
+              !!el &&
+              el.offsetParent !== null &&
+              (el.textContent || '').length > 0
+            );
+          });
 
           // The error for the failed key must be visible inside the sheet.
           const errVisible = await partialPage
@@ -5767,7 +5888,7 @@ async function run() {
         location.hash = '#/attention/new';
       });
       await page.waitForFunction(() => location.hash === '#/attention/new');
-      await page.waitForTimeout(600);
+      await listShows(page, 'new');
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
       const boxes = page.locator('.kit-row .kit-box');
@@ -5776,11 +5897,10 @@ async function run() {
 
       for (let i = 0; i < selectCount; i++) {
         await boxes.nth(i).click();
-        await page.waitForTimeout(50);
       }
 
       if (selectCount > 0) {
-        await page.waitForTimeout(300);
+        await selShows(page, selectCount);
 
         // 1. Primary reads 'Decide N'.
         const primaryText = await page
@@ -5796,7 +5916,6 @@ async function run() {
         await page
           .waitForSelector('.kit-sheet', { timeout: 4000 })
           .catch(() => {});
-        await page.waitForTimeout(200);
 
         const sheetEl = await page.$('.kit-sheet');
         if (sheetEl) {
@@ -5810,7 +5929,6 @@ async function run() {
               )
             : '';
           if (keepCard) await keepCard.click();
-          await page.waitForTimeout(150);
 
           // 2. The fill names the choice and the count:
           //    "<label> · N <kind>s" (items when the kinds differ).
@@ -5831,7 +5949,8 @@ async function run() {
           }
 
           // Wait for the API call and list refresh.
-          await page.waitForTimeout(2500);
+          await selShows(page, 0);
+          await listShows(page, 'new');
 
           // 3. Decided items gone; primary hidden.
           const rowsAfter = await page.$$eval(
@@ -5867,13 +5986,13 @@ async function run() {
         location.hash = '#/attention/new';
       });
       await page.waitForFunction(() => location.hash === '#/attention/new');
-      await page.waitForTimeout(600);
+      await listShows(page, 'new');
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
       const newBoxes = page.locator('.kit-row .kit-box');
       if ((await newBoxes.count()) > 0) {
         await newBoxes.first().click();
-        await page.waitForTimeout(300);
+        await selShows(page, 1);
         const primaryText = await page
           .$eval('.kit-primary', (el) => el.textContent ?? '')
           .catch(() => '');
@@ -5884,7 +6003,7 @@ async function run() {
         );
         // Clean up: deselect.
         await newBoxes.first().click();
-        await page.waitForTimeout(100);
+        await selShows(page, 0);
       } else {
         // If no 'new' items remain (all are decided), primary must be hidden.
         const primaryHidden = await page
@@ -5913,7 +6032,7 @@ async function run() {
         await detailPage.waitForFunction(
           () => location.hash === '#/attention/new',
         );
-        await detailPage.waitForTimeout(600);
+        await listShows(detailPage, 'new');
         await detailPage
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
@@ -5975,7 +6094,7 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
       await page.waitForSelector('.cb-lane', { timeout: 6000 }).catch(() => {});
-      await page.waitForTimeout(800);
+      await boardShows(page);
 
       const laneCount = await page.$$eval('.cb-lane', (lanes) => lanes.length);
       check('board shows four lanes', laneCount === 4);
@@ -6002,7 +6121,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: selection made on the board shows on the list ------------
@@ -6017,7 +6136,7 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
       await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(600);
+      await boardShows(page);
 
       // Click the card's checkbox (.kit-box) for selection; clicking the
       // title navigates to the item instead (brief fix-round item 2).
@@ -6027,7 +6146,10 @@ async function run() {
       const firstCard = await page.$('[data-lane="waiting"] .kit-card');
       if (firstCardBox && firstCard) {
         await firstCardBox.click();
-        await page.waitForTimeout(300);
+        await until(
+          page,
+          () => !!document.querySelector('[data-lane="waiting"] .kit-card.on'),
+        );
 
         const isSelected = await firstCard
           .evaluate((el) => el.classList.contains('on'))
@@ -6041,7 +6163,12 @@ async function run() {
         await page.waitForFunction(
           () => location.hash === '#/attention/waiting',
         );
-        await page.waitForTimeout(600);
+        await listShows(page, 'waiting');
+        await until(page, () =>
+          (document.querySelector('.kit-primary')?.textContent ?? '')
+            .trim()
+            .startsWith('Decide '),
+        );
 
         const primaryText = await page
           .$eval('.kit-primary', (el) => el.textContent ?? '')
@@ -6059,13 +6186,16 @@ async function run() {
         await page
           .waitForSelector('.cb-lane', { timeout: 5000 })
           .catch(() => {});
-        await page.waitForTimeout(600);
+        await boardShows(page);
         const selCardBox = await page.$(
           '[data-lane="waiting"] .kit-card.on .kit-box',
         );
         if (selCardBox) {
           await selCardBox.click();
-          await page.waitForTimeout(200);
+          await until(
+            page,
+            () => !document.querySelector('.cb-lane .kit-card.on'),
+          );
         }
       } else {
         check('clicking a board card selects it', false);
@@ -6080,7 +6210,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: list selection shows on the board (reverse direction) ---
@@ -6093,13 +6223,13 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(400);
+      await listShows(page, 'waiting');
 
       const firstRowBox = await page.$('.kit-row .kit-box');
       if (firstRowBox) {
         // Select the first row by clicking its checkbox.
         await firstRowBox.click();
-        await page.waitForTimeout(200);
+        await selShows(page, 1);
 
         // Verify selection took effect (primary shows "Decide 1" or similar).
         const primaryAfterSelect = await page
@@ -6115,7 +6245,7 @@ async function run() {
         await page
           .waitForSelector('.cb-lane', { timeout: 5000 })
           .catch(() => {});
-        await page.waitForTimeout(600);
+        await boardShows(page);
 
         // At least one card in any lane must have .on class (the selected item).
         // We don't use data-id from the list row (kit doesn't expose it as DOM
@@ -6133,7 +6263,6 @@ async function run() {
         const selBoxes = await page.$$('.cb-lane .kit-card.on .kit-box');
         for (const b of selBoxes) {
           await b.click();
-          await page.waitForTimeout(50);
         }
       } else {
         check(
@@ -6147,7 +6276,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(400);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: shift-click ranges within a lane -----------------------
@@ -6161,7 +6290,7 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
       await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(600);
+      await boardShows(page);
 
       // Use .kit-box (the checkbox) for clicks so the card's title (which
       // navigates to the item, brief fix-round item 2) is not triggered.
@@ -6171,9 +6300,13 @@ async function run() {
       if (waitingBoxes.length >= 3) {
         // Click first card, shift-click third card — middle card must be selected.
         await waitingBoxes[0].click();
-        await page.waitForTimeout(150);
         await waitingBoxes[2].click({ modifiers: ['Shift'] });
-        await page.waitForTimeout(150);
+        await until(
+          page,
+          () =>
+            document.querySelectorAll('[data-lane="waiting"] .kit-card.on')
+              .length >= 3,
+        );
 
         const waitingCardsAll = await page.$$(
           '[data-lane="waiting"] .kit-card',
@@ -6202,14 +6335,11 @@ async function run() {
         );
         for (const b of selBoxes) {
           await b.click();
-          await page.waitForTimeout(50);
         }
       } else if (waitingBoxes.length >= 2) {
         // Fallback: fixture has only 2 waiting cards.
         await waitingBoxes[0].click();
-        await page.waitForTimeout(150);
         await waitingBoxes[1].click({ modifiers: ['Shift'] });
-        await page.waitForTimeout(150);
         check('shift-click selects a range within the lane (≥3 cards)', false);
         check('shift-click selects the middle card in the range', false);
         const selBoxes = await page.$$(
@@ -6217,7 +6347,6 @@ async function run() {
         );
         for (const b of selBoxes) {
           await b.click();
-          await page.waitForTimeout(50);
         }
       } else {
         check('shift-click selects a range within the lane (≥3 cards)', false);
@@ -6229,7 +6358,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: deciding from the board removes the card -----------------
@@ -6256,7 +6385,7 @@ async function run() {
         await boardDecidePage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await boardDecidePage.waitForTimeout(800);
+        await boardShows(boardDecidePage);
 
         const firstCard = await boardDecidePage.$(
           '[data-lane="waiting"] .kit-card',
@@ -6271,25 +6400,36 @@ async function run() {
             .evaluate((el) => el.dataset.id ?? '')
             .catch(() => '');
           await firstCardBox.click();
-          await boardDecidePage.waitForTimeout(300);
+          await until(
+            boardDecidePage,
+            () =>
+              document.querySelector('.kit-primary')?.textContent ===
+              'Decide 1',
+          );
 
           // Click Decide N.
           await boardDecidePage.click('.kit-primary');
           await boardDecidePage
             .waitForSelector('.kit-sheet', { timeout: 4000 })
             .catch(() => {});
-          await boardDecidePage.waitForTimeout(200);
 
           // Pick the first disposition.
           const firstDisp = await boardDecidePage.$('.kit-sheet .cb-choice');
           if (firstDisp) {
             await firstDisp.click();
-            await boardDecidePage.waitForTimeout(100);
           }
 
           // Click the sheet's fill ("<choice> · N items").
           await boardDecidePage.click('.kit-sheet .kit-btn.fill');
-          await boardDecidePage.waitForTimeout(2500);
+          await until(
+            boardDecidePage,
+            (id) =>
+              !document.querySelector(
+                `[data-lane="waiting"] .kit-card[data-id="${CSS.escape(id)}"]`,
+              ) ||
+              (document.querySelector('.kit-primary')?.hidden ?? true),
+            cardId,
+          );
 
           // The decided card must be gone or selection cleared.
           const cardStillThere = cardId
@@ -6331,7 +6471,7 @@ async function run() {
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
       await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(800);
+      await boardShows(page);
 
       const unfilteredTotal = await page.$$eval(
         '.cb-lane .kit-card',
@@ -6350,7 +6490,7 @@ async function run() {
         await filterPage
           .waitForSelector('.cb-lane', { timeout: 8000 })
           .catch(() => {});
-        await filterPage.waitForTimeout(800);
+        await boardShows(filterPage, 'nudge');
 
         const filteredTotal = await filterPage.$$eval(
           '.cb-lane .kit-card',
@@ -6371,7 +6511,7 @@ async function run() {
         location.hash = '#/attention/waiting';
       });
       await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForTimeout(600);
+      await listShows(page, 'waiting');
     }
 
     // ---- scenario: board layout at 1600×900 ---------------------------------
@@ -6400,10 +6540,7 @@ async function run() {
         await widePage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await widePage.waitForTimeout(800);
-
-        // Screenshot after fix (required by the controller ruling).
-        await widePage.screenshot({ path: '/tmp/board-after.png' });
+        await boardShows(widePage);
 
         // The \'board\' chip must be the active view chip.
         const boardChipActive = await widePage
@@ -6468,7 +6605,7 @@ async function run() {
         await narrowPage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await narrowPage.waitForTimeout(800);
+        await boardShows(narrowPage);
 
         // The document (html element) must not scroll horizontally.
         const noDocScroll = await narrowPage.evaluate(
@@ -6524,7 +6661,7 @@ async function run() {
         await cardPage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await cardPage.waitForTimeout(800);
+        await boardShows(cardPage);
 
         // Click the title element of the first waiting card.
         const titleEl = await cardPage.$(
@@ -6537,7 +6674,14 @@ async function run() {
         if (titleEl && cardTitle) {
           await titleEl.click();
           // Wait for the item detail to load in the reading column.
-          await cardPage.waitForTimeout(1200);
+          await until(
+            cardPage,
+            (t) =>
+              (document.querySelector('.kit-read')?.textContent ?? '').includes(
+                t,
+              ),
+            cardTitle,
+          );
 
           const readText = await cardPage
             .$eval('.kit-read', (el) => el.textContent ?? '')
@@ -6556,7 +6700,7 @@ async function run() {
 
           // Pressing Back must return to #/attention/board.
           await cardPage.goBack();
-          await cardPage.waitForTimeout(600);
+          await until(cardPage, () => location.hash === '#/attention/board');
           const backHash = await cardPage.evaluate(() => location.hash);
           check(
             'Back from the item view returns to #/attention/board',
@@ -6598,7 +6742,12 @@ async function run() {
         await encPage
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
-        await encPage.waitForTimeout(600);
+        await until(
+          encPage,
+          () =>
+            (document.querySelector('.kit-read .cb-title')?.textContent ?? '')
+              .length > 0,
+        );
 
         const itemTitle = await encPage
           .$eval('.kit-read .cb-title', (el) => el.textContent ?? '')
@@ -6636,7 +6785,17 @@ async function run() {
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
         // Give the board time to fetch all four lanes.
-        await selAllPage.waitForTimeout(1200);
+        await boardShows(selAllPage);
+        await until(selAllPage, () => {
+          const m = (
+            document.querySelector('.cb-sel-all')?.textContent ?? ''
+          ).match(/select all (\d+) in view/);
+          return (
+            !!m &&
+            Number(m[1]) ===
+              document.querySelectorAll('.cb-lane .kit-card').length
+          );
+        });
 
         // Count total cards across all lanes (scoped to .cb-lane so other
         // kit-cards — e.g. in the decide sheet — are not counted).
@@ -6658,7 +6817,12 @@ async function run() {
 
         // Click select-all and verify the selection count equals totalCards.
         await selAllPage.click('.cb-sel-all');
-        await selAllPage.waitForTimeout(300);
+        await until(
+          selAllPage,
+          (n) =>
+            document.querySelectorAll('.cb-lane .kit-card.on').length === n,
+          totalCards,
+        );
         const selectedCards = await selAllPage.$$eval(
           '.cb-lane .kit-card.on',
           (cards) => cards.length,
@@ -6695,7 +6859,7 @@ async function run() {
         await showMorePage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await showMorePage.waitForTimeout(1200);
+        await boardShows(showMorePage);
 
         // For each lane: if the "show more" button is visible, it must show a
         // positive number > 0.  More importantly, if a lane's total unique items
@@ -6757,7 +6921,14 @@ async function run() {
         await emptyReadPage
           .waitForSelector('.kit-row', { timeout: 8000 })
           .catch(() => {});
-        await emptyReadPage.waitForTimeout(600);
+        await until(
+          emptyReadPage,
+          () =>
+            (
+              document.querySelector('.kit-read .cb-read-empty-prompt')
+                ?.textContent ?? ''
+            ).length > 0,
+        );
 
         // The reading column must have the empty-state element (not be blank).
         const hasEmptyState = await emptyReadPage
@@ -6815,7 +6986,7 @@ async function run() {
         await titleFallbackPage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await titleFallbackPage.waitForTimeout(800);
+        await boardShows(titleFallbackPage);
 
         // Check all board card titles: none should start with a kind prefix
         // followed by a colon, e.g. "branch:schuettc/hail@feat/client".
@@ -6861,7 +7032,7 @@ async function run() {
         await liveDeselPage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await liveDeselPage.waitForTimeout(800);
+        await boardShows(liveDeselPage);
 
         // Select the first waiting card via checkbox.
         const firstBox = await liveDeselPage.$(
@@ -6878,7 +7049,14 @@ async function run() {
 
         if (firstBox && cardId) {
           await firstBox.click();
-          await liveDeselPage.waitForTimeout(200);
+          await until(
+            liveDeselPage,
+            (k) =>
+              !!document.querySelector(
+                `.cb-lane .kit-card.on[data-id="${CSS.escape(k)}"]`,
+              ),
+            cardId,
+          );
 
           const isSelected = await firstCard
             .evaluate((el) => el.classList.contains('on'))
@@ -6905,7 +7083,7 @@ async function run() {
 
             if (resp === 200) {
               // Wait for the live decided event to arrive and be processed.
-              await liveDeselPage.waitForTimeout(2500);
+              await boardShows(liveDeselPage);
 
               // The card must now be deselected (not in the selection store).
               // Check: primary button must not show "Decide 1" or count the decided item.
@@ -6915,7 +7093,14 @@ async function run() {
               await liveDeselPage.waitForFunction(
                 () => location.hash === '#/attention/waiting',
               );
-              await liveDeselPage.waitForTimeout(600);
+              await listShows(liveDeselPage, 'waiting');
+              await until(
+                liveDeselPage,
+                () =>
+                  !(document.querySelector('.kit-primary')?.textContent ?? '')
+                    .trim()
+                    .startsWith('Decide '),
+              );
 
               const primaryText = await liveDeselPage
                 .$eval('.kit-primary', (el) => el.textContent ?? '')
@@ -6962,7 +7147,7 @@ async function run() {
             timeout: 6000,
           })
           .catch(() => {});
-        await propCountPage.waitForTimeout(500);
+        await chipShows(propCountPage, 'proposed');
 
         // Read the "proposed" chip count before posting the proposal.
         const beforeText = await propCountPage
@@ -7012,7 +7197,7 @@ async function run() {
 
         // Wait for the live proposals event to be received and the summary
         // re-fetch to complete.
-        await propCountPage.waitForTimeout(5000);
+        await chipShows(propCountPage, 'proposed');
 
         // The "proposed" chip count must have increased.
         const afterText = await propCountPage
@@ -7101,7 +7286,10 @@ async function run() {
         await propGeoPage
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
-        await propGeoPage.waitForTimeout(1000);
+        await until(
+          propGeoPage,
+          () => !!document.querySelector('.kit-read .cb-proposal-card'),
+        );
 
         // The proposal card must be present.
         const hasCard = await propGeoPage
@@ -7192,7 +7380,7 @@ async function run() {
         await propGeoPage
           .waitForSelector('.kit-row', { timeout: 6000 })
           .catch(() => {});
-        await propGeoPage.waitForTimeout(600);
+        await listShows(propGeoPage, 'proposed');
 
         const subTexts = await propGeoPage
           .$$eval('.kit-row .kit-sub', (els) =>
@@ -7240,7 +7428,10 @@ async function run() {
             .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
             .catch(() => {});
           // Wait for the proposal card to appear (might need a re-render).
-          await acceptPage.waitForTimeout(1000);
+          await until(
+            acceptPage,
+            () => !!document.querySelector('.kit-read .cb-proposal-card'),
+          );
 
           const cardBeforeAccept = await acceptPage
             .$('.cb-proposal-card')
@@ -7282,7 +7473,7 @@ async function run() {
             await acceptPage.waitForFunction(
               () => location.hash === '#/attention/proposed',
             );
-            await acceptPage.waitForTimeout(1000);
+            await listShows(acceptPage, 'proposed');
 
             const proposedRows = await acceptPage
               .$$eval('.kit-row', (rows) => rows.map((r) => r.dataset.id ?? ''))
@@ -7338,7 +7529,10 @@ async function run() {
           await rejectPage
             .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
             .catch(() => {});
-          await rejectPage.waitForTimeout(1000);
+          await until(
+            rejectPage,
+            () => !!document.querySelector('.kit-read .cb-proposal-card'),
+          );
 
           const cardBeforeReject = await rejectPage
             .$('.cb-proposal-card')
@@ -7355,7 +7549,6 @@ async function run() {
               await rejectPage
                 .waitForSelector('.kit-sheet', { timeout: 4000 })
                 .catch(() => {});
-              await rejectPage.waitForTimeout(300);
 
               const sheetVisible = await rejectPage
                 .$('.kit-sheet')
@@ -7369,7 +7562,6 @@ async function run() {
                   '.kit-sheet input.kit-note',
                   'not needed right now',
                 );
-                await rejectPage.waitForTimeout(200);
 
                 // Click the 'Reject N' fill button.
                 await rejectPage.click('.kit-sheet .kit-btn.fill');
@@ -7379,7 +7571,10 @@ async function run() {
                     { timeout: 5000 },
                   )
                   .catch(() => {});
-                await rejectPage.waitForTimeout(500);
+                await until(
+                  rejectPage,
+                  () => !document.querySelector('.cb-proposal-card'),
+                );
 
                 // Proposal card must be gone.
                 const cardAfterReject = await rejectPage
@@ -7468,7 +7663,10 @@ async function run() {
         await changePage
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
-        await changePage.waitForTimeout(1000);
+        await until(
+          changePage,
+          () => !!document.querySelector('.kit-read .cb-proposal-card'),
+        );
 
         const cardForChange = await changePage
           .$('.cb-proposal-card')
@@ -7493,7 +7691,6 @@ async function run() {
             await changePage
               .waitForSelector('.kit-sheet', { timeout: 4000 })
               .catch(() => {});
-            await changePage.waitForTimeout(400);
 
             const sheetOpen = await changePage
               .$('.kit-sheet')
@@ -7520,7 +7717,6 @@ async function run() {
               );
               if (closeBtn) {
                 await closeBtn.click();
-                await changePage.waitForTimeout(200);
 
                 // Submit the decision.
                 await changePage.click('.kit-sheet .kit-btn.fill');
@@ -7530,7 +7726,10 @@ async function run() {
                     { timeout: 6000 },
                   )
                   .catch(() => {});
-                await changePage.waitForTimeout(500);
+                await until(
+                  changePage,
+                  () => !document.querySelector('.cb-proposal-card'),
+                );
 
                 // Proposal card should be gone after change.
                 const cardAfterChange = await changePage
@@ -7618,7 +7817,17 @@ async function run() {
           await keyPage
             .waitForSelector('.kit-row', { timeout: 6000 })
             .catch(() => {});
-          await keyPage.waitForTimeout(600);
+          // The first row recommends something: it is the row opened next.
+          // (Not listShows: a view change while the page is reloading the
+          // list is dropped (attention.ts reload), and the list can stay the
+          // waiting view's, whose first row here has the proposal too.)
+          await until(keyPage, () =>
+            (
+              document
+                .querySelector('.kit-app > .kit-list:not([hidden]) .kit-row')
+                ?.querySelector('.kit-sub')?.textContent ?? ''
+            ).includes(' recommends '),
+          );
 
           // Click the first row to open the item.
           const firstRow = await keyPage.$('.kit-row');
@@ -7627,7 +7836,6 @@ async function run() {
             await keyPage
               .waitForSelector('.cb-proposal-card', { timeout: 5000 })
               .catch(() => {});
-            await keyPage.waitForTimeout(600);
 
             const hasCardForKey = await keyPage
               .$('.cb-proposal-card')
@@ -7641,7 +7849,6 @@ async function run() {
                 window.dispatchEvent(new Event('focus'));
                 document.body.dispatchEvent(new FocusEvent('focus'));
               });
-              await keyPage.waitForTimeout(100);
 
               // Press 'a' to accept the proposal: serve decides the item,
               // and the reading column moves on off it (the next undecided
@@ -7716,7 +7923,17 @@ async function run() {
           await keyPage
             .waitForSelector('.kit-row', { timeout: 6000 })
             .catch(() => {});
-          await keyPage.waitForTimeout(600);
+          // The first row recommends something: it is the row opened next.
+          // (Not listShows: a view change while the page is reloading the
+          // list is dropped (attention.ts reload), and the list can stay the
+          // waiting view's, whose first row here has the proposal too.)
+          await until(keyPage, () =>
+            (
+              document
+                .querySelector('.kit-app > .kit-list:not([hidden]) .kit-row')
+                ?.querySelector('.kit-sub')?.textContent ?? ''
+            ).includes(' recommends '),
+          );
 
           // Open the first row.
           const rowForR = await keyPage.$('.kit-row');
@@ -7725,7 +7942,6 @@ async function run() {
             await keyPage
               .waitForSelector('.cb-proposal-card', { timeout: 5000 })
               .catch(() => {});
-            await keyPage.waitForTimeout(600);
 
             const hasCardForR = await keyPage
               .$('.cb-proposal-card')
@@ -7737,14 +7953,12 @@ async function run() {
                 window.dispatchEvent(new Event('focus'));
                 document.body.dispatchEvent(new FocusEvent('focus'));
               });
-              await keyPage.waitForTimeout(100);
 
               // Press 'r' to reject (opens the reason sheet).
               await keyPage.keyboard.press('r');
               await keyPage
                 .waitForSelector('.kit-sheet', { timeout: 4000 })
                 .catch(() => {});
-              await keyPage.waitForTimeout(300);
 
               const sheetFromKey = await keyPage
                 .$('.kit-sheet')
@@ -7757,7 +7971,6 @@ async function run() {
 
               // Close the sheet.
               await keyPage.keyboard.press('Escape');
-              await keyPage.waitForTimeout(300);
             } else {
               check(
                 '"r" key opens the reject reason sheet for the open item',
@@ -7802,7 +8015,7 @@ async function run() {
         await bulkPage
           .waitForSelector('.kit-chip[data-id="proposed"]', { timeout: 5000 })
           .catch(() => {});
-        await bulkPage.waitForTimeout(600);
+        await listShows(bulkPage, 'proposed');
 
         // Count how many proposed rows are available.
         const rows = await bulkPage.$$('.kit-row');
@@ -7812,10 +8025,9 @@ async function run() {
             const box = await row.$('.kit-box');
             if (box) {
               await box.click();
-              await bulkPage.waitForTimeout(50);
             }
           }
-          await bulkPage.waitForTimeout(400);
+          await selShows(bulkPage, rows.length);
 
           // The bulk accept button must be visible in the foot.
           const acceptBtnVisible = await bulkPage
@@ -7882,16 +8094,14 @@ async function run() {
           await footPage
             .waitForSelector('.kit-row', { timeout: 5000 })
             .catch(() => {});
-          await footPage.waitForTimeout(400);
+          await listShows(footPage, view);
 
           // Select all visible rows to trigger the bulk/sel-count display.
           const boxes = footPage.locator('.kit-row .kit-box');
           const nBoxes = await boxes.count();
           for (let i = 0; i < nBoxes; i++) {
             await boxes.nth(i).click();
-            await footPage.waitForTimeout(30);
           }
-          await footPage.waitForTimeout(300);
 
           // After selecting all rows, the "Select all" button must be hidden.
           // Only assert for views where this behaviour is expected (opt-in via
@@ -7998,64 +8208,6 @@ async function run() {
         // Test with a selection in the new view (no bulk buttons).
         // The sel-all button doesn't have the same hide logic here.
         await checkFootLayout('new', 'new view with selection');
-
-        // Take fix-round-2 screenshots.
-        await footPage.setViewportSize({ width: 1600, height: 900 });
-
-        // proposed: 1 selected
-        await footPage.evaluate(() => {
-          location.hash = '#/attention/proposed';
-        });
-        await footPage.waitForFunction(
-          () => location.hash === '#/attention/proposed',
-        );
-        await footPage
-          .waitForSelector('.kit-row', { timeout: 5000 })
-          .catch(() => {});
-        await footPage.waitForTimeout(400);
-        const propRows1 = await footPage.$$('.kit-row .kit-box');
-        if (propRows1.length > 0) await propRows1[0].click();
-        await footPage.waitForTimeout(300);
-        await footPage.screenshot({ path: '/tmp/t5fix2-proposed-1sel.png' });
-
-        // proposed: all selected
-        for (let i = 1; i < propRows1.length; i++) {
-          await propRows1[i].click();
-          await footPage.waitForTimeout(30);
-        }
-        await footPage.waitForTimeout(300);
-        await footPage.screenshot({ path: '/tmp/t5fix2-proposed-allsel.png' });
-
-        // new: 2 selected
-        await footPage.evaluate(() => {
-          location.hash = '#/attention/new';
-        });
-        await footPage.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
-        await footPage
-          .waitForSelector('.kit-row', { timeout: 5000 })
-          .catch(() => {});
-        await footPage.waitForTimeout(400);
-        const newRows = await footPage.$$('.kit-row .kit-box');
-        if (newRows.length > 0) await newRows[0].click();
-        if (newRows.length > 1) await newRows[1].click();
-        // Wait until the selection counter reflects 2 selected items before
-        // capturing the screenshot (the old code just timed out, which meant the
-        // count might not have updated yet).
-        await footPage
-          .waitForFunction(
-            () => {
-              const el = document.querySelector('.cb-sel-count');
-              return el && /\b2\b/.test(el.textContent ?? '');
-            },
-            { timeout: 3000 },
-          )
-          .catch(() => {});
-        await footPage.screenshot({ path: '/tmp/t5fix2-new-2sel.png' });
-        console.log(
-          '  t5fix2 screenshots: /tmp/t5fix2-proposed-1sel.png  /tmp/t5fix2-proposed-allsel.png  /tmp/t5fix2-new-2sel.png',
-        );
       } finally {
         await footPage.close();
       }
@@ -8078,7 +8230,7 @@ async function run() {
         await claudePage.waitForFunction(
           () => location.hash === '#/attention/proposed',
         );
-        await claudePage.waitForTimeout(600);
+        await listShows(claudePage, 'proposed');
 
         // Create a proposal from a 'claude' session so we can verify the
         // agent name is taken from the source, not hardcoded.
@@ -8096,7 +8248,11 @@ async function run() {
 
         if (proposedClaude > 0) {
           // Wait for the proposals live event and list reload.
-          await claudePage.waitForTimeout(3000);
+          await until(claudePage, () =>
+            [...document.querySelectorAll('.kit-row .kit-sub')].some((e) =>
+              (e.textContent ?? '').toLowerCase().includes('claude'),
+            ),
+          );
 
           // The row sub-text must contain 'claude' (not 'pi').
           const subTexts = await claudePage
@@ -8124,7 +8280,7 @@ async function run() {
       }
     }
 
-    // ---- Task 5 screenshots ------------------------------------------------
+    // ---- Task 5: the theme forces light and dark ---------------------------
     {
       const t5Page = await context.newPage();
       try {
@@ -8154,7 +8310,6 @@ async function run() {
             const cur = await detectThemeT5(pg);
             if (cur === target) return;
             await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
-            await pg.waitForTimeout(300);
           }
           const actual = await detectThemeT5(pg);
           check(
@@ -8163,9 +8318,9 @@ async function run() {
           );
         }
 
-        // Use repo:schuettc/hail for the proposal card screenshot.
-        // At this point repo has a pending proposal from the claude-name test (G).
-        // We create one more from probe-t5-sess to ensure the card is visible.
+        // One more pending proposal on repo:schuettc/hail (after the
+        // claude-name test's), from probe-t5-sess: the scenarios after this
+        // one run on that state.
         await agentPropose(
           t5Page,
           'probe-t5-sess',
@@ -8175,75 +8330,17 @@ async function run() {
           't5 screenshot note',
         );
 
-        // Light: item detail with proposal card.
         await forceThemeT5(t5Page, 'light');
-        await t5Page.evaluate(() => {
-          location.hash = '#/item/repo:schuettc%2Fhail';
-        });
-        await t5Page
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await t5Page.waitForTimeout(1000);
-        await t5Page.screenshot({ path: '/tmp/t5fix-light-item.png' });
-
-        // Light: proposed view with a selection (so bulk buttons are visible).
-        await t5Page.evaluate(() => {
-          location.hash = '#/attention/proposed';
-        });
-        await t5Page.waitForFunction(
-          () => location.hash === '#/attention/proposed',
-        );
-        await t5Page
-          .waitForSelector('.kit-chip[data-id="proposed"]', { timeout: 5000 })
-          .catch(() => {});
-        await t5Page.waitForTimeout(600);
-        // Select all rows so the bulk accept/reject buttons appear in the foot.
-        const t5PropBoxes = await t5Page.$$('.kit-row .kit-box');
-        for (const box of t5PropBoxes) {
-          await box.click();
-          await t5Page.waitForTimeout(50);
-        }
-        await t5Page.waitForTimeout(400);
-        await t5Page.screenshot({ path: '/tmp/t5fix-light-proposed.png' });
-
-        // Dark: same pages.
         await forceThemeT5(t5Page, 'dark');
         const darkTheme = await detectThemeT5(t5Page);
         check('t5 dark theme is dark', darkTheme === 'dark');
-
-        // Re-select rows for dark proposed screenshot.
-        const t5DarkBoxes = await t5Page.$$('.kit-row .kit-box');
-        for (const box of t5DarkBoxes) {
-          await box.click();
-          await t5Page.waitForTimeout(50);
-        }
-        await t5Page.waitForTimeout(400);
-        await t5Page.screenshot({ path: '/tmp/t5fix-dark-proposed.png' });
-
-        await t5Page.evaluate(() => {
-          location.hash = '#/item/repo:schuettc%2Fhail';
-        });
-        await t5Page
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await t5Page.waitForTimeout(1000);
-        await t5Page.screenshot({ path: '/tmp/t5fix-dark-item.png' });
-
-        console.log(
-          '  t5fix screenshots: /tmp/t5fix-light-item.png  /tmp/t5fix-light-proposed.png',
-        );
-        console.log(
-          '                     /tmp/t5fix-dark-item.png   /tmp/t5fix-dark-proposed.png',
-        );
       } finally {
         await t5Page.close();
       }
     }
 
-    // ---- scenario: board screenshot at 1600x900 ----------------------------
-    console.log(
-      '\nscenario: board screenshot at 1600×900 — /tmp/fix3-board.png',
-    );
+    // ---- scenario: board at 1600x900 ----------------------------
+    console.log('\nscenario: board at 1600×900');
 
     {
       const boardShotCtx = await browser.newContext({
@@ -8265,18 +8362,12 @@ async function run() {
         await boardShotPage
           .waitForSelector('.cb-lane', { timeout: 6000 })
           .catch(() => {});
-        await boardShotPage.waitForTimeout(800);
-        await boardShotPage.screenshot({
-          path: '/tmp/fix3-board.png',
-          fullPage: false,
-        });
-        console.log('  board screenshot: /tmp/fix3-board.png');
         // Basic sanity: all 4 lanes are visible.
         const laneCount = await boardShotPage.$$eval(
           '.cb-lane',
           (lanes) => lanes.length,
         );
-        check('fix3-board screenshot: four lanes visible', laneCount === 4);
+        check('board at 1600×900: four lanes visible', laneCount === 4);
       } finally {
         await boardShotPage.close();
         await boardShotCtx.close();
@@ -8328,7 +8419,14 @@ async function run() {
           .waitForSelector('.kit-rail', { timeout: 5000 })
           .catch(() => {});
         // Give the dock time to load sessions from the API.
-        await dockPage.waitForTimeout(1500);
+        await until(
+          dockPage,
+          () =>
+            [...document.querySelectorAll('.cb-dock-threads .kit-chip')].some(
+              (c) => (c.textContent ?? '').includes('triage'),
+            ) &&
+            !!document.querySelector('[data-testid="dock-messages"] .kit-card'),
+        );
 
         // 1. Rail is at the right of the viewport.
         {
@@ -8377,7 +8475,6 @@ async function run() {
         // 4. Court's message card is visible in the dock.
         {
           // The dock loads the first thread. Wait for the message card.
-          await dockPage.waitForTimeout(500);
           const msgCards = await dockPage
             .$$eval('[data-testid="dock-messages"] .kit-card', (cards) =>
               cards.map((c) => c.textContent ?? ''),
@@ -8469,7 +8566,13 @@ async function run() {
         {
           // The message m1 should now be in 'answered' state (we replied above).
           // Reload messages in the dock by waiting for the live event.
-          await dockPage.waitForTimeout(600);
+          await until(
+            dockPage,
+            () =>
+              !!document.querySelector(
+                '[data-testid="dock-messages"] .cb-dock-state',
+              ),
+          );
           const stateFooters = await dockPage
             .$$eval('[data-testid="dock-messages"] .cb-dock-state', (els) =>
               els.map((e) => ({
@@ -8509,7 +8612,9 @@ async function run() {
             await dockPage.click(
               '[data-testid="dock-messages"] .cb-dock-card--agent .cb-dock-link',
             );
-            await dockPage.waitForTimeout(300);
+            await until(dockPage, () =>
+              /#\/(item|rules|apply)\//.test(location.hash),
+            );
             const hash = await dockPage.evaluate(() => location.hash);
             check(
               'an agent card link opens the route',
@@ -8536,7 +8641,14 @@ async function run() {
             'Merge the 4 bettor-help bumps if CI is green.',
           );
           // Wait for the live SSE event to arrive and re-render.
-          await dockPage.waitForTimeout(1200);
+          await until(
+            dockPage,
+            (n) =>
+              document.querySelectorAll(
+                '[data-testid="dock-messages"] .kit-card',
+              ).length > n,
+            beforeCount,
+          );
           const afterCount = await dockPage
             .$$eval(
               '[data-testid="dock-messages"] .kit-card',
@@ -8604,7 +8716,16 @@ async function run() {
           },
         );
         await statePage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await statePage.waitForTimeout(2000);
+        await until(statePage, () => {
+          const states = new Set(
+            [
+              ...document.querySelectorAll(
+                '[data-testid="dock-messages"] .cb-dock-state',
+              ),
+            ].map((e) => e.dataset.state),
+          );
+          return ['answered', 'declined', 'queued'].every((s) => states.has(s));
+        });
 
         // Check that state labels appear on Court's cards.
         const stateLabels = await statePage
@@ -8670,11 +8791,10 @@ async function run() {
           },
         );
         await stuckPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        // Wait for the dock to load the session (initial loadSessions → loadDelivery).
-        await stuckPage.waitForTimeout(2000);
-
         // Wait for the delivery to become stuck (CASEBOOK_STUCK_AFTER=2s).
-        await stuckPage.waitForTimeout(2500);
+        const isStuck = async () =>
+          (await agent.getDelivery(sessId))?.delivery?.stuck === true;
+        await eventually(isStuck, 8000);
 
         // Trigger dock refresh: a sessions event causes loadSessions → loadDelivery.
         // Send presence for sessId2 (not sessId, so sessId's last_seen stays old).
@@ -8822,19 +8942,6 @@ async function run() {
           check('stuck action buttons border is not the danger colour', false);
         }
 
-        // Take screenshots showing the dock with a stuck delivery.
-        await stuckPage.screenshot({
-          path: '/tmp/t6fix2-stuck.png',
-          fullPage: false,
-        });
-        await stuckPage.screenshot({
-          path: '/tmp/t6fix3-stuck.png',
-          fullPage: false,
-        });
-        console.log(
-          '  screenshots: /tmp/t6fix2-stuck.png  /tmp/t6fix3-stuck.png',
-        );
-
         // ---- Click the release button on the page -------------------------
         if (stuckVisible) {
           await stuckPage.click('[data-action="release"]');
@@ -8867,7 +8974,7 @@ async function run() {
         );
 
         // Wait for this delivery to become stuck.
-        await stuckPage.waitForTimeout(2500);
+        await eventually(isStuck, 8000);
         // Trigger dock refresh.
         await agent.presence(sessId2, 'pi · other', '/home/court/other');
         const stuckVisible2 = await stuckPage
@@ -8880,7 +8987,13 @@ async function run() {
         if (stuckVisible2) {
           await stuckPage.click('[data-action="move"]');
           // The move sheet appears — click the target session.
-          await stuckPage.waitForTimeout(400);
+          await until(
+            stuckPage,
+            () =>
+              !!document.querySelector(
+                '.cb-dock-pick-sheet .cb-dock-pick-item',
+              ),
+          );
           const sheetItems = await stuckPage.$$(
             '.cb-dock-pick-sheet .cb-dock-pick-item',
           );
@@ -8889,7 +9002,10 @@ async function run() {
           if (sheetItems.length > 0) {
             // Click the first item in the sheet (sessId2).
             await sheetItems[0].click();
-            await stuckPage.waitForTimeout(800);
+            await until(
+              stuckPage,
+              () => !document.querySelector('.cb-dock-stuck'),
+            );
             // After moving, the delivery is no longer on sessId.
             // The dock should no longer show stuck buttons for sessId.
             const movedAwayOk = await stuckPage
@@ -8976,10 +9092,16 @@ async function run() {
           },
         );
         await leftPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await leftPage.waitForTimeout(1500);
 
-        // Wait 3.5s for sessId to go left (CASEBOOK_LEFT_AFTER=3s).
-        await leftPage.waitForTimeout(3500);
+        // Wait for sessId to go left on serve (CASEBOOK_LEFT_AFTER=3s).
+        await eventually(async () => {
+          const r = await fetch(
+            `${serveHandle.base}/api/sessions?session=${encodeURIComponent(sessId)}`,
+            { headers: { 'X-Local-Token': serveHandle.token } },
+          );
+          const d = await r.json();
+          return (d.sessions ?? []).find((s) => s.id === sessId)?.left === true;
+        }, 8000);
 
         // Trigger dock refresh: send presence for sessId2 (NOT sessId, so
         // sessId's last_seen stays old => remains left). sessId2 keeps
@@ -9095,26 +9217,15 @@ async function run() {
             .catch(() => false);
           check('gap between “·” separator and move link is > 0 px', gapOk);
 
-          // Take screenshots showing the left session header.
-          await leftPage.screenshot({
-            path: '/tmp/t6fix-left.png',
-            fullPage: false,
-          });
-          await leftPage.screenshot({
-            path: '/tmp/t6fix2-left.png',
-            fullPage: false,
-          });
-          await leftPage.screenshot({
-            path: '/tmp/t6fix3-left.png',
-            fullPage: false,
-          });
-          console.log(
-            '  screenshots: /tmp/t6fix-left.png  /tmp/t6fix2-left.png  /tmp/t6fix3-left.png',
-          );
-
           // ---- Click "move to..." on the page ---------------------------------
           await leftPage.click('[data-testid="dock-move-link"]');
-          await leftPage.waitForTimeout(400);
+          await until(
+            leftPage,
+            () =>
+              !!document.querySelector(
+                '.cb-dock-pick-sheet .cb-dock-pick-item',
+              ),
+          );
           // The session move sheet appears with target sessions.
           const sheetItems = await leftPage.$$(
             '.cb-dock-pick-sheet .cb-dock-pick-item',
@@ -9129,9 +9240,22 @@ async function run() {
             await leftPage.click(
               `.cb-dock-pick-sheet .cb-dock-pick-item[data-session="${sessId2}"]`,
             );
-            await leftPage.waitForTimeout(1000);
             // Verify via API: sessId has 0 queued, sessId2 has 2. sessId
             // has left: it is listed when named (as the page names its own).
+            const queuedOf = async () => {
+              const r = await fetch(
+                `${serveHandle.base}/api/sessions?session=${encodeURIComponent(sessId)}`,
+                { headers: { 'X-Local-Token': serveHandle.token } },
+              );
+              const d = await r.json();
+              const q = (id) =>
+                (d.sessions ?? []).find((s) => s.id === id)?.queued ?? 0;
+              return [q(sessId), q(sessId2)];
+            };
+            await eventually(async () => {
+              const [q1, q2] = await queuedOf();
+              return q1 === 0 && q2 === 2;
+            });
             const afterResp = await fetch(
               `${serveHandle.base}/api/sessions?session=${encodeURIComponent(sessId)}`,
               {
@@ -9210,8 +9334,12 @@ async function run() {
           },
         );
         await silentPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        // Let the dock finish initial loading.
-        await silentPage.waitForTimeout(1500);
+        // The dock has loaded the session while it is still here, so only
+        // serve's push can tell it the session left.
+        await until(
+          silentPage,
+          () => !!document.querySelector('.cb-dock-header:not([data-left])'),
+        );
 
         // Wait for CASEBOOK_LEFT_AFTER=3s to elapse (use 4s to be safe).
         // The server's watch loop (WatchEvery=5s in production, shorter in tests)
@@ -9249,7 +9377,7 @@ async function run() {
         await chipInvPage.waitForFunction(() =>
           location.hash.includes('#/attention'),
         );
-        await chipInvPage.waitForTimeout(1000);
+        await listShows(chipInvPage, 'waiting');
         await chipCountsMatchLists(
           chipInvPage,
           serveHandle.base,
@@ -9293,7 +9421,11 @@ async function run() {
           timeout: 15000,
         });
         await pickPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await pickPage.waitForTimeout(1500);
+        await until(pickPage, () =>
+          (
+            document.querySelector('.cb-dock-agent-btn')?.textContent ?? ''
+          ).includes('AGENT'),
+        );
 
         // The AGENT ▾ button opens the picker.
         {
@@ -9305,7 +9437,14 @@ async function run() {
 
         // Click the picker and select session B.
         await pickPage.click('.cb-dock-agent-btn').catch(() => {});
-        await pickPage.waitForTimeout(300);
+        await until(
+          pickPage,
+          (id) =>
+            !!document.querySelector(
+              `.cb-dock-picker .cb-dock-pick-item[data-session="${id}"]`,
+            ),
+          sessB,
+        );
 
         // The picker shows sessions; select the one for sessB.
         const pickerItems = await pickPage
@@ -9318,7 +9457,12 @@ async function run() {
         );
         if (bItem) {
           await bItem.click();
-          await pickPage.waitForTimeout(600);
+          await until(
+            pickPage,
+            () =>
+              document.querySelector('[data-testid="dock-session-name"]')
+                ?.textContent === 'b',
+          );
           // After switching, the header names session B (by its folder: it
           // has no pi name).
           const headerName = await pickPage
@@ -9332,7 +9476,12 @@ async function run() {
           await pickPage
             .click('[data-testid="dock-add-thread"]')
             .catch(() => {});
-          await pickPage.waitForTimeout(600);
+          await until(
+            pickPage,
+            () =>
+              document.querySelectorAll('.cb-dock-threads .kit-chip').length >
+              1,
+          );
           // Verify the new thread appears in the chips.
           const chips = await pickPage
             .$$eval('.cb-dock-threads .kit-chip', (els) =>
@@ -9355,8 +9504,8 @@ async function run() {
       }
     }
 
-    // ---- scenario: task-6 screenshots at 1600x900 --------------------------
-    console.log('\nscenario: task-6 dock screenshots at 1600\ u00d7900');
+    // ---- scenario: task-6 dock themes at 1600x900 -------------------------
+    console.log('\nscenario: task-6 dock themes at 1600\u00d7900');
 
     {
       const t6Page = await context.newPage();
@@ -9408,15 +9557,6 @@ async function run() {
         );
         await t6Page.waitForSelector('.kit-bar', { timeout: 8000 });
 
-        // Navigate to an item so the reading column is populated.
-        await t6Page.evaluate(() => {
-          location.hash = '#/item/issue:schuettc%2Fhail%234';
-        });
-        await t6Page
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await t6Page.waitForTimeout(1200);
-
         // Helper: detect theme.
         async function detectThemeDock(pg) {
           const bg = await pg
@@ -9437,25 +9577,17 @@ async function run() {
             const cur = await detectThemeDock(pg);
             if (cur === target) return;
             await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
-            await pg.waitForTimeout(300);
           }
           const actual = await detectThemeDock(pg);
           check(`t6 theme forced to ${target}`, actual === target);
         }
 
-        // Light screenshot.
         await forceThemeDock(t6Page, 'light');
         const lightTheme = await detectThemeDock(t6Page);
         check('t6 light theme detected', lightTheme === 'light');
-        await t6Page.screenshot({ path: '/tmp/t6-light.png', fullPage: false });
-
-        // Dark screenshot.
         await forceThemeDock(t6Page, 'dark');
         const darkTheme = await detectThemeDock(t6Page);
         check('t6 dark theme detected', darkTheme === 'dark');
-        await t6Page.screenshot({ path: '/tmp/t6-dark.png', fullPage: false });
-
-        console.log('  t6 screenshots: /tmp/t6-light.png  /tmp/t6-dark.png');
       } finally {
         await t6Page.close();
       }
@@ -9506,7 +9638,13 @@ async function run() {
         await fidPage
           .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
           .catch(() => {});
-        await fidPage.waitForTimeout(600);
+        await until(
+          fidPage,
+          () =>
+            !!document.querySelector('.kit-doc') &&
+            !!document.querySelector('.kit-read .cb-kicker') &&
+            !!document.querySelector('.kit-read .kit-label'),
+        );
 
         // 1. Reading document geometry: left edge ≥ 40 px from list right edge;
         //    document width ≤ 700 px.
@@ -9587,7 +9725,7 @@ async function run() {
           check('brand mark is visible', markSize.visible);
         }
 
-        // ---- screenshots: detect actual theme, force correct theme, name correctly --
+        // ---- the theme forces light and dark --------------------------------
         // Helper: detect actual theme from computed background luminance.
         // Reads body (not html) because the kit sets background on body.
         // Parses both rgb(...) and rgba(...) forms.
@@ -9612,7 +9750,6 @@ async function run() {
             const cur = await detectTheme(pg);
             if (cur === target) return;
             await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
-            await pg.waitForTimeout(300);
           }
           // Assert that we actually reached the target theme.
           const actual = await detectTheme(pg);
@@ -9622,67 +9759,15 @@ async function run() {
           );
         }
 
-        // --- light screenshots ---
         await forceTheme(fidPage, 'light');
-
-        // Item detail (still on #/item/issue:schuettc%2Fhail%234 from above).
-        await fidPage.screenshot({
-          path: '/tmp/fid-light-item.png',
-          fullPage: false,
-        });
-
-        // Navigate to #/attention/new.
-        await fidPage.evaluate(() => {
-          location.hash = '#/attention/new';
-        });
-        await fidPage.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
-        await fidPage.waitForTimeout(600);
-        await fidPage
-          .waitForSelector('.kit-row', { timeout: 5000 })
-          .catch(() => {});
-        await fidPage.waitForTimeout(300);
-        await fidPage.screenshot({
-          path: '/tmp/fid-light-new.png',
-          fullPage: false,
-        });
-
-        // --- dark screenshots ---
         await forceTheme(fidPage, 'dark');
-
-        // List view in dark.
-        await fidPage.screenshot({
-          path: '/tmp/fid-dark-new.png',
-          fullPage: false,
-        });
-
-        // Item detail in dark.
-        await fidPage.evaluate(() => {
-          location.hash = '#/item/issue:schuettc%2Fhail%234';
-        });
-        await fidPage
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await fidPage.waitForTimeout(600);
-        await fidPage.screenshot({
-          path: '/tmp/fid-dark-item.png',
-          fullPage: false,
-        });
-
-        console.log(
-          '  fid screenshots: /tmp/fid-light-item.png  /tmp/fid-light-new.png',
-        );
-        console.log(
-          '                   /tmp/fid-dark-item.png   /tmp/fid-dark-new.png',
-        );
       } finally {
         await fidPage.close();
       }
     }
 
-    // ---- scenario: round-2 fidelity screenshots ----------------------------
-    console.log('\nscenario: round-2 fidelity screenshots at 1600\xd7900');
+    // ---- scenario: round-2 fidelity, the theme forces light and dark --------
+    console.log('\nscenario: round-2 fidelity themes at 1600\xd7900');
 
     {
       const fid2Page = await context.newPage();
@@ -9717,9 +9802,8 @@ async function run() {
             const cur = await detectTheme2(pg);
             if (cur === target) return;
             await pg.click('button.kit-ctl:has-text("theme")').catch(() => {});
-            await pg.waitForTimeout(300);
           }
-          // Assert the target was reached before capturing.
+          // Assert the target was reached.
           const actual = await detectTheme2(pg);
           check(
             `fid2 theme forced to ${target} (actual: ${actual})`,
@@ -9727,64 +9811,8 @@ async function run() {
           );
         }
 
-        // --- light screenshots (fid2) ---
         await forceTheme2(fid2Page, 'light');
-
-        await fid2Page.evaluate(() => {
-          location.hash = '#/item/issue:schuettc%2Fhail%234';
-        });
-        await fid2Page
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await fid2Page.waitForTimeout(600);
-        await fid2Page.screenshot({
-          path: '/tmp/fid2-light-item.png',
-          fullPage: false,
-        });
-
-        await fid2Page.evaluate(() => {
-          location.hash = '#/attention/new';
-        });
-        await fid2Page.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
-        await fid2Page.waitForTimeout(600);
-        await fid2Page
-          .waitForSelector('.kit-row', { timeout: 5000 })
-          .catch(() => {});
-        await fid2Page.waitForTimeout(300);
-        await fid2Page.screenshot({
-          path: '/tmp/fid2-light-new.png',
-          fullPage: false,
-        });
-
-        // --- dark screenshots (fid2) ---
         await forceTheme2(fid2Page, 'dark');
-        await fid2Page.waitForTimeout(200);
-
-        await fid2Page.screenshot({
-          path: '/tmp/fid2-dark-new.png',
-          fullPage: false,
-        });
-
-        await fid2Page.evaluate(() => {
-          location.hash = '#/item/issue:schuettc%2Fhail%234';
-        });
-        await fid2Page
-          .waitForSelector('.kit-read .cb-item', { timeout: 8000 })
-          .catch(() => {});
-        await fid2Page.waitForTimeout(600);
-        await fid2Page.screenshot({
-          path: '/tmp/fid2-dark-item.png',
-          fullPage: false,
-        });
-
-        console.log(
-          '  fid2 screenshots: /tmp/fid2-light-item.png  /tmp/fid2-light-new.png',
-        );
-        console.log(
-          '                    /tmp/fid2-dark-item.png   /tmp/fid2-dark-new.png',
-        );
       } finally {
         await fid2Page.close();
       }
@@ -9810,7 +9838,7 @@ async function run() {
         await invPage.waitForFunction(() =>
           location.hash.includes('#/attention'),
         );
-        await invPage.waitForTimeout(1000);
+        await listShows(invPage, 'waiting');
         await chipCountsMatchLists(
           invPage,
           serveHandle.base,

@@ -121,9 +121,9 @@ async function setTheme(pg, theme) {
   }
 }
 
-// shoot takes /tmp/rd-<name>-<theme>.png, asserting the theme took (the
+// inThemes shows the page in each theme, asserting the theme took (the
 // body's ground) and nothing is focused.
-async function shoot(t, pg, name, themes) {
+async function inThemes(t, pg, name, themes) {
   for (const theme of themes) {
     await setTheme(pg, theme);
     await pg.evaluate(() => document.activeElement?.blur());
@@ -132,12 +132,10 @@ async function shoot(t, pg, name, themes) {
       bg: getComputedStyle(document.body).backgroundColor,
       blurred: document.activeElement === document.body,
     }));
-    const path = `/tmp/rd-${name}-${theme}.png`;
     t.check(
-      `${path} is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
+      `the ${name} view is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
       got.theme === theme && got.bg === BG[theme] && got.blurred,
     );
-    await pg.screenshot({ path });
   }
 }
 
@@ -457,7 +455,7 @@ async function decideScenario(context, t, s) {
       got.label !== danger,
     );
   }
-  await shoot(t, pg, 'decide', ['light', 'dark']);
+  await inThemes(t, pg, 'decide', ['light', 'dark']);
   await setTheme(pg, 'light');
 
   // ---- a on a close recommendation asks for the closing comment ----------
@@ -485,7 +483,7 @@ async function decideScenario(context, t, s) {
       }),
       FIELD,
     );
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: "a" must accept nothing yet; a window for it
     check(
       `a on a close recommendation opens the closing-comment field, empty ("${f.value}"), focused, on "Close it"`,
       shown && f.value === '' && f.focused && f.closeOn,
@@ -680,7 +678,7 @@ async function decideScenario(context, t, s) {
         '.kit-app > .kit-read:not([hidden]) .cb-notnow:not([hidden]) .kit-chip',
       ),
   );
-  await shoot(t, pg, 'notnow', ['light']);
+  await inThemes(t, pg, 'notnow', ['light']);
   {
     const READ = '.kit-app > .kit-read:not([hidden])';
     const FIELD = `${READ} .cb-notnow-field input`;
@@ -734,7 +732,7 @@ async function decideScenario(context, t, s) {
     const junk = await searchFor('zzqx nothing like it');
     check(`junk offers nothing (${junk.length} options)`, junk.length === 0);
     await field.press('Enter');
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: Enter must decide nothing; a window for it
     col = await readCol(pg);
     check(
       `and Enter decides nothing: issue #5 stays undecided and open (${col.key})`,
@@ -763,7 +761,7 @@ async function decideScenario(context, t, s) {
         `typing more disables the ${old.length} option(s) shown for "retry" at once (${stale.disabled} of ${stale.shown} disabled)`,
         old.length === 1 && stale.shown === 1 && stale.disabled === 1,
       );
-      await pg.waitForTimeout(400);
+      await pg.waitForTimeout(400); // kept: the click must decide nothing; a window for it
       check(
         'and clicking one decides nothing: issue #5 stays undecided and open',
         (await decisionOf(ISSUE(5))) === null &&
@@ -778,7 +776,7 @@ async function decideScenario(context, t, s) {
       byTitle.map((o) => `${o.key} | ${o.says}`),
       [`${PR(7)} | ${PR(7)} \u00b7 Add a retry to the uploader`],
     );
-    await shoot(t, pg, 'pick', ['light']);
+    await inThemes(t, pg, 'pick', ['light']);
     await pg.click(`${READ} .cb-pick-opt[data-key="${PR(7)}"]`);
     check(
       `choosing it decides issue #5 wait until merged(${PR(7)})`,
@@ -1192,7 +1190,7 @@ async function recommendScenario(context, t, s) {
         `ask ${aName} to recommend the rest`,
       )),
   );
-  await shoot(t, pg, 'list', ['light']);
+  await inThemes(t, pg, 'list', ['light']);
 
   // ---- ask: the message reaches A's thread only -----------------------------
   const bodiesOf = async (session) => {
@@ -1543,21 +1541,19 @@ function closeSeed() {
   };
 }
 
-// shootLC takes /tmp/lc-<name>-light.png (light, nothing focused unless
-// keepFocus: the field open under the Close card shows its caret).
-async function shootLC(t, pg, name, keepFocus = false) {
+// lightLC shows the page light (nothing focused unless keepFocus: the
+// field open under the Close card keeps its caret), asserting it took.
+async function lightLC(t, pg, name, keepFocus = false) {
   await setTheme(pg, 'light');
   if (!keepFocus) await pg.evaluate(() => document.activeElement?.blur());
   const got = await pg.evaluate(() => ({
     theme: document.documentElement.dataset.theme,
     bg: getComputedStyle(document.body).backgroundColor,
   }));
-  const path = `/tmp/lc-${name}-light.png`;
   t.check(
-    `${path} is light (theme ${got.theme}, body ${got.bg})`,
+    `the ${name} view is light (theme ${got.theme}, body ${got.bg})`,
     got.theme === 'light' && got.bg === BG.light,
   );
-  await pg.screenshot({ path });
 }
 
 async function closeCommentScenario(context, t, s) {
@@ -1653,7 +1649,7 @@ async function closeCommentScenario(context, t, s) {
       st.aColor === signal && st.aColor !== muted,
     );
   }
-  await shootLC(t, pg, 'kicker');
+  await lightLC(t, pg, 'kicker');
 
   // A pull request's and a repository's pages; a branch has none.
   {
@@ -1740,7 +1736,7 @@ async function closeCommentScenario(context, t, s) {
       f.buttons.join('|') ===
         'close with this comment (fill)|close without comment',
     );
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: nothing may be decided yet; a window for it
     check(
       `and decides nothing yet (issue #1 undecided, still open: ${(await readCol(pg)).key})`,
       (await decisionOf(CISSUE(1))) === null &&
@@ -1748,7 +1744,7 @@ async function closeCommentScenario(context, t, s) {
     );
   }
   await pg.locator(`${FIELD} input`).fill(SAID);
-  await shootLC(t, pg, 'comment', true);
+  await lightLC(t, pg, 'comment', true);
 
   // ---- Esc cancels ---------------------------------------------------------
   await pg.keyboard.press('Escape');
@@ -1759,7 +1755,7 @@ async function closeCommentScenario(context, t, s) {
       FIELD,
     );
     const f = await fieldState();
-    await pg.waitForTimeout(300);
+    await pg.waitForTimeout(300); // kept: Esc must decide nothing; a window for it
     check(
       `Esc cancels: the field closes, "Close it" is no longer chosen, issue #1 stays undecided and open`,
       ok &&
@@ -1900,7 +1896,7 @@ async function closeCommentScenario(context, t, s) {
       FIELD,
     );
     const f = await fieldState();
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: nothing may be accepted yet; a window for it
     check(
       `the card's accept opens the closing-comment field, empty ("${f.value}"), not the reason, and accepts nothing yet`,
       f.shown && f.value === '' && (await decisionOf(CPR(4))) === null,
@@ -1957,20 +1953,18 @@ function leftOpenSeed() {
   };
 }
 
-// shootLO takes /tmp/lo-<name>-light.png, light, nothing focused.
-async function shootLO(t, pg, name) {
+// lightLO shows the page light, nothing focused, asserting it took.
+async function lightLO(t, pg, name) {
   await setTheme(pg, 'light');
   await pg.evaluate(() => document.activeElement?.blur());
   const got = await pg.evaluate(() => ({
     theme: document.documentElement.dataset.theme,
     bg: getComputedStyle(document.body).backgroundColor,
   }));
-  const path = `/tmp/lo-${name}-light.png`;
   t.check(
-    `${path} is light (theme ${got.theme}, body ${got.bg})`,
+    `the ${name} view is light (theme ${got.theme}, body ${got.bg})`,
     got.theme === 'light' && got.bg === BG.light,
   );
-  await pg.screenshot({ path });
 }
 
 // listState reads the shown list: each row's key (its kicker), whether it is
@@ -2157,7 +2151,7 @@ async function leftOpenScenario(context, t, s) {
         'It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes.',
     );
   }
-  await shootLO(t, pg, 'list');
+  await lightLO(t, pg, 'list');
 
   // ---- new activity brings it back ----------------------------------------
   // A sync records alice's comment on issue #1 after the decision, and
@@ -2200,6 +2194,14 @@ async function leftOpenScenario(context, t, s) {
       8000,
     ),
   );
+  // The waiting chip's count comes from its own fetch, after the list's.
+  await until(
+    pg,
+    () =>
+      document.querySelector(
+        '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="waiting"] .kit-n',
+      )?.textContent === '4',
+  );
   {
     const st = await listState(pg);
     checkList(
@@ -2230,6 +2232,6 @@ async function leftOpenScenario(context, t, s) {
     (await pg.locator(`${READ} .cb-due-reason`).textContent()) ===
       'new activity since you left it open',
   );
-  await shootLO(t, pg, 'back');
+  await lightLO(t, pg, 'back');
   await pg.close();
 }
