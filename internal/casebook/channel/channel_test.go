@@ -273,42 +273,6 @@ func TestToolCallStartsServeTheLoopDoesnt(t *testing.T) {
 	}
 }
 
-func TestServeRestartIsAnnounced(t *testing.T) {
-	r := apptest.New(t)
-	first := startServe(t, r)
-	ch := New(Identity{Session: "s1", Harness: "pi"}, NewClient(), "test")
-	ch.Retry, ch.Poll = 50*time.Millisecond, time.Second
-	m := start(t, ch)
-	time.Sleep(300 * time.Millisecond) // the loop reaches the first serve
-	// Guard: in the window before the first serve is stopped, no "restarted"
-	// event should arrive — the !seen.IsZero() guard in loop prevents it.
-	// Because notifications land in m.notifs (separate from responses), any
-	// spurious restarted event emitted during the MCP handshake is still here.
-	if v := m.nextTimeout(200 * time.Millisecond); v != nil {
-		if v["method"] == "notifications/claude/channel" {
-			if v["params"].(map[string]any)["meta"].(map[string]any)["event"] == "restarted" {
-				t.Fatal("spurious restarted event before first restart")
-			}
-		}
-	}
-	first.stop()
-	time.Sleep(10 * time.Millisecond) // StartedAt must differ
-	startServe(t, r)
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		ev := m.next(10 * time.Second)
-		if ev["method"] != "notifications/claude/channel" {
-			continue
-		}
-		params := ev["params"].(map[string]any)
-		if params["meta"].(map[string]any)["event"] != "restarted" || !strings.Contains(params["content"].(string), "casebook serve restarted") {
-			t.Fatalf("event %v", params)
-		}
-		return
-	}
-	t.Fatal("no restart event")
-}
-
 // TestToolCallCancelledWhenRunEnds proves that an in-flight tool call is
 // cancelled when the Run context ends. The client points at an httptest server
 // whose /api/agent/status handler blocks until its request context is done;

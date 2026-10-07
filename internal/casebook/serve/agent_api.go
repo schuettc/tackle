@@ -358,6 +358,25 @@ func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
 	reply(w, StatusView{Counts: s.Index.Counts(pending), Since: s.summary(ctx, sess), PageOpen: s.PageOpen()}, nil)
 }
 
+// agentInterrupted is the channel asking, after it saw serve restart,
+// whether this serve's start interrupted a delivery of ITS session: a
+// restart is that session's business only then. Session-scoped like the
+// other agent calls: an unknown session is 404 unknown_session, and only
+// the session's own deliveries are ever listed.
+func (s *Server) agentInterrupted(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.session(r.Context(), r.URL.Query().Get("session"))
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	v := InterruptedView{StartedAt: s.StartedAt(), Deliveries: []int64{}, Messages: []int64{}}
+	for _, in := range s.interrupted[sess.ID] {
+		v.Deliveries = append(v.Deliveries, in.Delivery)
+		v.Messages = append(v.Messages, in.Messages...)
+	}
+	reply(w, v, nil)
+}
+
 // agentOpen is casebook_open: open the page in Court's browser.
 // openViews are the routes casebook_open can land on besides an item: the
 // Attention views and the board (spec §3.2).

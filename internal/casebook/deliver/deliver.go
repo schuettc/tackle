@@ -942,31 +942,65 @@ func (q *Queue) MoveDelivery(ctx context.Context, id int64, session string) erro
 	})
 }
 
+// Interruption is one delivery Interrupt ended: whose it was, and the
+// messages in it that were still unsettled (now interrupted).
+type Interruption struct {
+	Delivery int64
+	Session  string
+	Messages []int64
+}
+
 // Interrupt runs at serve start: deliveries left in flight by a previous serve
-// are marked interrupted, and so are their unsettled messages.
-func (q *Queue) Interrupt(ctx context.Context) (int, error) {
-	var ids []int64
-	rows, err := q.DB.QueryContext(ctx, "SELECT id FROM deliveries WHERE state = 'inflight'")
+// are marked interrupted, and so are their unsettled messages. It returns
+// what it interrupted, so serve can tell each session about its own
+// deliveries and no others.
+func (q *Queue) Interrupt(ctx context.Context) ([]Interruption, error) {
+	var out []Interruption
+	rows, err := q.DB.QueryContext(ctx, "SELECT id, session_id FROM deliveries WHERE state = 'inflight' ORDER BY id")
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
+		var in Interruption
+		if err := rows.Scan(&in.Delivery, &in.Session); err != nil {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+	for i := range out {
+		if err := q.end(ctx, out[i].Delivery, Stopped, Interrupted); err != nil {
+			return nil, err
+		}
+		ids, err := q.interruptedMessages(ctx, out[i].Delivery)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Messages = ids
+	}
+	return out, nil
+}
+
+// interruptedMessages lists a delivery's interrupted messages, by id.
+func (q *Queue) interruptedMessages(ctx context.Context, delivery int64) ([]int64, error) {
+	rows, err := q.DB.QueryContext(ctx, "SELECT id FROM messages WHERE delivery_id = ? AND author = 'court' AND state = ? ORDER BY id", delivery, Interrupted)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int64
+	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return 0, err
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	for _, id := range ids {
-		if err := q.end(ctx, id, Stopped, Interrupted); err != nil {
-			return 0, err
-		}
-	}
-	return len(ids), nil
+	return ids, rows.Err()
 }
 
 // Resend queues unanswered or interrupted messages again.

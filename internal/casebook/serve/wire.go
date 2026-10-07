@@ -182,6 +182,16 @@ type StatusView struct {
 	PageOpen bool           `json:"page_open"`
 }
 
+// InterruptedView is the response body of GET /api/agent/interrupted: what
+// this serve's start interrupted of one session's deliveries (empty lists:
+// nothing). StartedAt is this serve's (the advert's), so a channel can tell
+// the answer is about the restart it noticed.
+type InterruptedView struct {
+	StartedAt  time.Time `json:"started_at"`
+	Deliveries []int64   `json:"deliveries"`
+	Messages   []int64   `json:"messages"`
+}
+
 // OpenResult is the response body of POST /api/agent/open.
 type OpenResult struct {
 	Opened string `json:"opened"`

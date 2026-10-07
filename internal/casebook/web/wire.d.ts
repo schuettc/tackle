@@ -107,6 +107,12 @@ export interface StatusView {
   page_open: boolean;
 }
 
+export interface InterruptedView {
+  started_at: string;
+  deliveries: number[] | null;
+  messages: number[] | null;
+}
+
 export interface OpenResult {
   opened: string;
   session?: string;

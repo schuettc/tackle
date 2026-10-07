@@ -55,6 +55,7 @@ var wireRoots = []any{
 	ReplyResult{},
 	ProposeResult{},
 	StatusView{},
+	InterruptedView{},
 	OpenResult{},
 	SettledResult{},
 	RulesView{},
