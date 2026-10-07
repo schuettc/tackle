@@ -424,7 +424,7 @@ async function keyboardScenario(shared, t) {
             pg,
             () =>
               document.querySelectorAll(
-                '.kit-app > .kit-list:not([hidden]) .kit-row',
+                '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
               ).length === 3 &&
               !!document.querySelector('.kit-primary')?.hidden,
           ),
@@ -915,7 +915,7 @@ async function pollFallbackScenario(shared, t) {
               pg,
               () =>
                 document.querySelectorAll(
-                  '.kit-app > .kit-list:not([hidden]) .kit-row',
+                  '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
                 ).length === 1,
               undefined,
               8000,
@@ -962,7 +962,7 @@ async function pollFallbackScenario(shared, t) {
               pg,
               () =>
                 document.querySelectorAll(
-                  '.kit-app > .kit-list:not([hidden]) .kit-row',
+                  '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
                 ).length === 0,
             ),
           );

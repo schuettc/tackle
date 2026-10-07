@@ -100,12 +100,9 @@ type Query struct {
 func inView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
 	case ViewWaiting:
-		for _, h := range it.Hits {
-			if h.Rule == "incoming-no-reply" {
-				return true
-			}
-		}
-		return false
+		// Someone else's activity newer than a Leave it open or a Not now
+		// waits on the user too.
+		return it.NewActivity || waitingHit(it)
 	case ViewNew:
 		return it.Status == item.StatusNew
 	case ViewDue:
@@ -117,6 +114,33 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 		return it.Status == item.StatusToApply && it.Decision != nil
 	}
 	return true
+}
+
+func waitingHit(it engine.Item) bool {
+	for _, h := range it.Hits {
+		if h.Rule == "incoming-no-reply" {
+			return true
+		}
+	}
+	return false
+}
+
+// leftOpenInView reports whether an item left open belongs to an Attention
+// view's left-open group: the views it would be in undecided (new, and
+// waiting when the policy flags it), proposed when it has a proposal, and
+// all. Due is for decisions that came back; To apply and tracked have no
+// left-open group.
+func leftOpenInView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
+	switch view {
+	case ViewWaiting:
+		return waitingHit(it)
+	case ViewNew, ViewAll:
+		return true
+	case ViewProposed:
+		_, ok := pending[it.ID]
+		return ok
+	}
+	return false
 }
 
 func matches(q Query, it engine.Item) bool {
@@ -202,11 +226,43 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 		out = append(out, newItemView(it, prop))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	// In an Attention view the recommended items (a pending proposal) come
-	// first, each group in key order. To apply and tracked keep key order.
+	// In an Attention view the items new activity brought back come first,
+	// then the recommended items (a pending proposal), each group in key
+	// order. To apply and tracked keep key order.
 	if q.View != ViewToApply && q.View != ViewTracked {
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Proposal != nil && out[j].Proposal == nil })
+		sort.SliceStable(out, func(i, j int) bool { return out[i].NewActivity && !out[j].NewActivity })
 	}
+	return pageOf(out, q)
+}
+
+// LeftOpen returns the page of an Attention view's left-open group (q's
+// filters apply; its Offset and Limit page the group) and the group's
+// total: the kept items still open that the view would list, in key order.
+// They need no decision, so List and Counts leave them out.
+func (x *Index) LeftOpen(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
+	if q.View == ViewToApply || q.View == ViewTracked {
+		return nil, 0
+	}
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	var out []ItemView
+	for _, it := range x.res.LeftOpen() {
+		if !leftOpenInView(q.View, it, pending) || !matches(q, it) {
+			continue
+		}
+		var prop *propose.Proposal
+		if p, ok := pending[it.ID]; ok {
+			prop = &p
+		}
+		out = append(out, newItemView(it, prop))
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return pageOf(out, q)
+}
+
+// pageOf cuts out q's page of out and returns it with out's length.
+func pageOf(out []ItemView, q Query) ([]ItemView, int) {
 	total := len(out)
 	if q.Limit <= 0 || q.Limit > 500 {
 		q.Limit = 200

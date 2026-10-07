@@ -15,6 +15,8 @@ import {
   allowedForKeys,
   keyWithoutKind,
   pluralize,
+  leftOpenMeta,
+  leftOpenLabel,
 } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 
@@ -344,5 +346,27 @@ describe('pluralize', () => {
     // This is the "N selected" pattern; the noun is omitted by design.
     assert.equal(pluralize(1, 'selected'), '1 selected');
     assert.equal(pluralize(4, 'selected'), '4 selecteds'); // base, not used in UI
+  });
+});
+
+// ---- the left-open group (Leave it open stays in the list) ------------------
+
+describe('left open', () => {
+  test('a row says "left open · date", the decision\'s date', () => {
+    const now = new Date('2026-10-07T12:00:00Z');
+    assert.equal(
+      leftOpenMeta('2026-10-06T09:00:00Z', now),
+      'left open \u00b7 Oct 6',
+    );
+    // Another year shows its year.
+    assert.equal(
+      leftOpenMeta('2025-12-30T09:00:00Z', now),
+      'left open \u00b7 Dec 30, 2025',
+    );
+    assert.equal(leftOpenMeta(undefined, now), 'left open');
+  });
+  test('the group is labelled with its own count', () => {
+    assert.equal(leftOpenLabel(3), 'left open \u00b7 3');
+    assert.equal(leftOpenLabel(1), 'left open \u00b7 1');
   });
 });

@@ -707,6 +707,16 @@ function latestSearch(find, publish, delay, stale) {
     }
   };
 }
+function leftOpenMeta(decidedAt, now = /* @__PURE__ */ new Date()) {
+  if (!decidedAt) return "left open";
+  const d = new Date(decidedAt);
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
+  return `left open · ${d.toLocaleDateString("en-US", opts)}`;
+}
+function leftOpenLabel(n) {
+  return `left open · ${n}`;
+}
 
 // decide.ts
 import {
@@ -3386,6 +3396,9 @@ function ageOf2(it) {
   if (days === 1) return "1d";
   return `${days}d`;
 }
+function isLeftOpen(it) {
+  return it.status === "left-open";
+}
 function makeAttention(ctx) {
   const readEl = h8("div", { class: "kit-read" });
   let offset = 0;
@@ -3397,6 +3410,9 @@ function makeAttention(ctx) {
   let propFoot = null;
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
+  let leftOpen = [];
+  let leftOpenTotal = 0;
+  let shown = [];
   let currentOpenKey = null;
   let shownDetail = null;
   const viewCounts2 = {};
@@ -3540,8 +3556,9 @@ function makeAttention(ctx) {
     row(it) {
       const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
-      const age = ageOf2(it);
-      const proposal = it.proposal && it.proposal.state === "pending" ? recommendLine(
+      const left = isLeftOpen(it);
+      const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf2(it);
+      const proposal = !left && it.proposal && it.proposal.state === "pending" ? recommendLine(
         vocab2,
         it.key,
         it.proposal.source,
@@ -3554,7 +3571,9 @@ function makeAttention(ctx) {
         // like branch:schuettc/hail@feat/client show "schuettc/hail@feat/client".
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
-        sub: proposal,
+        // An item new activity brought back says so ("new activity since
+        // you left it open"), before any recommendation.
+        sub: [it.new_activity ? it.due_reason : void 0, proposal].filter(Boolean).join(" · ") || void 0,
         selectable: true
       };
     },
@@ -3628,9 +3647,11 @@ function makeAttention(ctx) {
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
+      leftOpen = data.left_open ?? [];
+      leftOpenTotal = data.left_open_total ?? 0;
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
-      handle.setItems(loadedItems);
+      setRows();
       markOpenRow();
       updateAgree();
       updateFoot();
@@ -3648,11 +3669,13 @@ function makeAttention(ctx) {
       const data = await ctx.api.get("/items", buildQuery(offset));
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
+      leftOpen = data.left_open ?? [];
+      leftOpenTotal = data.left_open_total ?? 0;
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
-      handle.setItems(loadedItems);
+      setRows();
       markOpenRow();
       updateAgree();
       updateFoot();
@@ -3661,6 +3684,29 @@ function makeAttention(ctx) {
     } finally {
       loading = false;
     }
+  }
+  function setRows() {
+    const all = offset >= totalItems;
+    const group = all ? leftOpen : [];
+    shown = [...loadedItems, ...group];
+    handle.setItems(shown);
+    const rowEls = handle.el.querySelectorAll(
+      ".kit-rows > .kit-row"
+    );
+    loadedItems.forEach((it, i) => {
+      if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
+    });
+    if (!group.length) return;
+    for (let i = loadedItems.length; i < shown.length; i++) {
+      rowEls[i]?.classList.add("cb-left-open");
+    }
+    rowEls[loadedItems.length]?.before(
+      h8(
+        "div",
+        { class: "cb-left-open-head", role: "presentation" },
+        leftOpenLabel(leftOpenTotal)
+      )
+    );
   }
   function updateFoot() {
     if (!footEl) return;
@@ -3684,7 +3730,7 @@ function makeAttention(ctx) {
   }
   function markOpenRow() {
     if (!currentOpenKey || boardHandle) return;
-    const i = loadedItems.findIndex((it) => it.key === currentOpenKey);
+    const i = shown.findIndex((it) => it.key === currentOpenKey);
     if (i < 0) return;
     const rowEl = handle.el.querySelectorAll(".kit-rows > .kit-row")[i];
     if (rowEl?.classList.contains("open")) return;
@@ -4072,7 +4118,7 @@ function makeAttention(ctx) {
   refreshSummary();
   void getVocab(ctx).then((v) => {
     vocab2 = v;
-    handle.setItems(loadedItems);
+    setRows();
     updateAgree();
   }).catch(() => {
   });

@@ -139,7 +139,7 @@ func TestEndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(e.ok("attention", "--json")), &att); err != nil || len(att.Items) != 1 || att.Items[0].Key != "branch:schuettc/hail@feat/client" {
 		t.Fatalf("attention %+v %v", att, err)
 	}
-	if out := e.ok("show", "repo:Schuettc/Hail"); !strings.Contains(out, "keep") || !strings.Contains(out, "active") || !strings.Contains(out, "done") {
+	if out := e.ok("show", "repo:Schuettc/Hail"); !strings.Contains(out, "keep") || !strings.Contains(out, "active") || !strings.Contains(out, "status: left-open") {
 		t.Errorf("show:\n%s", out)
 	}
 	if out := e.ok("brief", "--cwd", e.clone); !strings.Contains(out, "branch:schuettc/hail@feat/client") {

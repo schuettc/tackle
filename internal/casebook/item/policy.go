@@ -60,20 +60,25 @@ type Hit struct {
 
 // Signals are the per-item facts policies read.
 type Signals struct {
-	Kind           Kind
-	Direction      string // pr/issue: outgoing, incoming or own
-	Open           bool
-	UpdatedAt      time.Time // pr/issue: last update; repo: pushed at
-	CreatedAt      time.Time
-	LastReplyByMe  time.Time // latest comment (or creation) by the user
-	LastActivity   time.Time // latest comment (or creation) by anyone
-	Archived       bool
-	Undecided      bool
+	Kind          Kind
+	Direction     string // pr/issue: outgoing, incoming or own
+	Open          bool
+	UpdatedAt     time.Time // pr/issue: last update; repo: pushed at
+	CreatedAt     time.Time
+	LastReplyByMe time.Time // latest comment (or creation) by the user
+	LastActivity  time.Time // latest comment (or creation) by anyone
+	Archived      bool
+	Undecided     bool
+	// LeftOpen: kept and still open. Its flags are read as an undecided
+	// item's, so it stays in the views it was in (in their left-open group).
+	LeftOpen       bool
 	OldestUnpushed time.Time // branch/worktree: oldest local-only commit
 	UnpushedWhere  string    // "machine:path", for the detail
 }
 
 // Evaluate returns p's hits for an item. Ignored items get none.
+// incoming-no-reply and dormant are for items that need a decision or are
+// left open; a Not now that still waits gets neither.
 func (p Policy) Evaluate(s Signals, ignored bool, now time.Time) []Hit {
 	if ignored {
 		return nil
@@ -88,11 +93,11 @@ func (p Policy) Evaluate(s Signals, ignored bool, now time.Time) []Hit {
 		if s.Kind == KindPR && s.Direction == "outgoing" && days(s.UpdatedAt) > p.OutgoingPRStaleDays {
 			hits = append(hits, Hit{Rule: "outgoing-stale", Detail: fmt.Sprintf("no activity for %dd (> %dd)", days(s.UpdatedAt), p.OutgoingPRStaleDays)})
 		}
-		if s.Direction == "incoming" && s.Undecided && s.LastReplyByMe.Before(s.LastActivity) && days(s.LastActivity) > p.IncomingNoReplyDays {
+		if s.Direction == "incoming" && (s.Undecided || s.LeftOpen) && s.LastReplyByMe.Before(s.LastActivity) && days(s.LastActivity) > p.IncomingNoReplyDays {
 			hits = append(hits, Hit{Rule: "incoming-no-reply", Detail: fmt.Sprintf("waiting on you for %dd (> %dd)", days(s.LastActivity), p.IncomingNoReplyDays)})
 		}
 	case KindRepo:
-		if !s.Archived && s.Undecided && !s.UpdatedAt.IsZero() && days(s.UpdatedAt) > p.RepoDormantDays {
+		if !s.Archived && (s.Undecided || s.LeftOpen) && !s.UpdatedAt.IsZero() && days(s.UpdatedAt) > p.RepoDormantDays {
 			hits = append(hits, Hit{Rule: "dormant", Detail: fmt.Sprintf("not pushed for %dd (> %dd)", days(s.UpdatedAt), p.RepoDormantDays)})
 		}
 	case KindBranch, KindWorktree:

@@ -60,3 +60,22 @@ func TestRender(t *testing.T) {
 		}
 	}
 }
+
+// TestReadmeLeftOpen: a kept item still open is in a Left open lane at the
+// end, counted on its own, never Flagged, whatever its flags.
+func TestReadmeLeftOpen(t *testing.T) {
+	r := result()
+	r.Items = append(r.Items, engine.Item{ID: "pr:schuettc/hail#3", Kind: item.KindPR, Status: item.StatusLeftOpen,
+		Hits:     []item.Hit{{Rule: "incoming-no-reply", Detail: "waiting on you for 9d (> 7d)"}},
+		Decision: &item.Decision{Disposition: item.Keep, DecidedBy: "court", DecidedAt: now}})
+	readme := string(Render(r, nil)["README.md"])
+	if !strings.Contains(readme, "1 left open") || !strings.Contains(readme, "## Left open (1)") {
+		t.Fatalf("README lacks the left-open lane or count:\n%s", readme)
+	}
+	if strings.Contains(readme, "## Flagged") {
+		t.Errorf("a left-open item is flagged:\n%s", readme)
+	}
+	if strings.Index(readme, "## Left open") < strings.Index(readme, "## Waiting") {
+		t.Error("left open must come last")
+	}
+}

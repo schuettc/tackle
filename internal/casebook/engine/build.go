@@ -24,15 +24,18 @@ type Input struct {
 
 // Item is one tracked thing with its computed status.
 type Item struct {
-	Key         item.Key          `json:"-"`
-	ID          string            `json:"key"`
-	Kind        item.Kind         `json:"kind"`
-	Repo        string            `json:"repo,omitempty"`
-	Title       string            `json:"title,omitempty"`
-	URL         string            `json:"url,omitempty"`
-	Relation    string            `json:"relation,omitempty"`
-	Status      item.Status       `json:"status"`
-	DueReason   string            `json:"due_reason,omitempty"` // why a Not now came back other than its condition being met
+	Key       item.Key    `json:"-"`
+	ID        string      `json:"key"`
+	Kind      item.Kind   `json:"kind"`
+	Repo      string      `json:"repo,omitempty"`
+	Title     string      `json:"title,omitempty"`
+	URL       string      `json:"url,omitempty"`
+	Relation  string      `json:"relation,omitempty"`
+	Status    item.Status `json:"status"`
+	DueReason string      `json:"due_reason,omitempty"` // why a Not now or a Leave it open came back
+	// NewActivity: due because someone else's activity on the PR or issue is
+	// newer than its keep, wait or watch decision. It waits on the user.
+	NewActivity bool              `json:"new_activity,omitempty"`
 	Decision    *item.Decision    `json:"decision,omitempty"`
 	Hits        []item.Hit        `json:"hits,omitempty"`
 	Observed    item.Observed     `json:"observed"`
@@ -50,7 +53,8 @@ type Item struct {
 	LandedVia   []string          `json:"landed_via,omitempty"`  // machine codes: "default-branch", "merged-pr" (multi-valued)
 	LandedTips  map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
-	fresh         bool // observed from a fresh owner listing
+	fresh         bool      // observed from a fresh owner listing
+	othersAt      time.Time // pr/issue: latest activity by anyone but the user (zero: none known)
 	signals       item.Signals
 	goneUpstream  bool   // branch: remote upstream was deleted
 	worktreeState string // branch: "dirty", "clean", or "" (none)
@@ -74,11 +78,14 @@ func (r Result) Find(id string) (Item, bool) {
 	return Item{}, false
 }
 
-// Attention returns items that are new, due, drifted, conflicted, or have policy hits.
+// Attention returns items that are new, due, drifted, conflicted, or have
+// policy hits: the items that need a decision. An item left open is not one,
+// whatever its flags (LeftOpen lists those).
 func (r Result) Attention() []Item {
 	var out []Item
 	for _, it := range r.Items {
 		switch {
+		case it.Status == item.StatusLeftOpen:
 		case it.Status == item.StatusNew, it.Status == item.StatusDue, it.Status == item.StatusDrift, it.Status == item.StatusConflict, len(it.Hits) > 0:
 			out = append(out, it)
 		}
@@ -245,6 +252,18 @@ func (b *builder) pr(k item.Key, p observe.PRObs, dir string, fresh bool) {
 	s.Direction, s.Open, s.UpdatedAt, s.CreatedAt, s.LastActivity = dir, p.State == "OPEN", p.UpdatedAt, p.CreatedAt, last
 	if strings.EqualFold(p.LastCommentAuthor, b.user) {
 		s.LastReplyByMe = p.LastCommentAt
+	}
+	// Someone else's latest activity: the cache holds each PR's and issue's
+	// last comment (author and time) and its creation, nothing about
+	// commits or reviews, and its updated_at names no actor. So this is
+	// LastActivity when it isn't the user's: the last comment when someone
+	// else wrote it, or, with no comments, the creation when someone else
+	// opened it.
+	switch {
+	case !p.LastCommentAt.IsZero() && !strings.EqualFold(p.LastCommentAuthor, b.user):
+		it.othersAt = p.LastCommentAt
+	case p.LastCommentAt.IsZero() && !strings.EqualFold(p.Author, b.user):
+		it.othersAt = p.CreatedAt
 	}
 	it.Evidence = append(it.Evidence, fmt.Sprintf("%s by %s, updated %s", strings.ToLower(p.State), p.Author, p.UpdatedAt.Format("2006-01-02")))
 	b.f.prs[k.String()] = p
@@ -444,17 +463,18 @@ func (b *builder) unobserved() {
 func (b *builder) finish(it *Item) {
 	seen := it.Decision != nil && b.in.Seen[it.ID].Equal(it.Decision.DecidedAt) && !it.Decision.DecidedAt.IsZero()
 	it.Status = item.Compute(it.Key, it.Decision, it.Observed, b.f, b.in.Now, seen)
-	if ref, gone := item.MissingRef(it.Decision, b.f); gone && it.Status == item.StatusDue {
-		it.DueReason = "its condition names " + ref.String() + ", which GitHub can't find"
-	}
+	it.DueReason = item.DueReason(it.Key, it.Decision, it.Observed, b.f, b.in.Now)
 	// Undecided is true when the item has no decision at all, OR when a
-	// wait/watch decision has lapsed (its until condition is now met) — meaning
-	// the item has returned to attention and Court needs to decide again.
-	// A non-lapsed wait (StatusWaiting) is NOT undecided: Court has decided to
-	// wait, and that decision is still active.
+	// keep, wait or watch decision has come back (its until condition is met,
+	// or someone else's activity is newer than it): the item has returned to
+	// attention and Court needs to decide again. A wait that still waits
+	// (StatusWaiting) is NOT undecided, and an item left open is LeftOpen.
 	it.signals.Undecided = it.Decision == nil ||
 		((it.Decision.Disposition == item.Wait || it.Decision.Disposition == item.Watch) &&
-			it.Status != item.StatusWaiting)
+			it.Status != item.StatusWaiting) ||
+		(it.Decision.Disposition == item.Keep && it.Status == item.StatusDue)
+	it.signals.LeftOpen = it.Status == item.StatusLeftOpen
+	it.NewActivity = it.Status == item.StatusDue && item.NewActivity(it.Key, it.Decision, b.f)
 	ignored := it.Decision != nil && it.Decision.Disposition == item.Ignore
 	if it.Observed.Known && it.Observed.Exists {
 		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)
@@ -515,4 +535,17 @@ func LookupKeys(decisions map[string]item.Decision) []item.Key {
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
 	return keys
+}
+
+// LeftOpen returns the items left open: kept, still open, with nobody
+// else's activity since. They need no decision; the page lists them in a
+// left-open group under the items that do.
+func (r Result) LeftOpen() []Item {
+	var out []Item
+	for _, it := range r.Items {
+		if it.Status == item.StatusLeftOpen {
+			out = append(out, it)
+		}
+	}
+	return out
 }

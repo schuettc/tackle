@@ -31,6 +31,8 @@ func TestPolicyEvaluate(t *testing.T) {
 		{"incoming answered", Signals{Kind: KindIssue, Direction: "incoming", Open: true, LastActivity: ago(10), LastReplyByMe: ago(10), Undecided: true}, false, nil},
 		{"incoming recent", Signals{Kind: KindPR, Direction: "incoming", Open: true, LastActivity: ago(2), Undecided: true}, false, nil},
 		{"dormant undecided", Signals{Kind: KindRepo, UpdatedAt: ago(400), Undecided: true}, false, []string{"dormant"}},
+		{"incoming unanswered left open", Signals{Kind: KindIssue, Direction: "incoming", Open: true, LastActivity: ago(10), LeftOpen: true}, false, []string{"incoming-no-reply"}},
+		{"dormant left open", Signals{Kind: KindRepo, UpdatedAt: ago(400), LeftOpen: true}, false, []string{"dormant"}},
 		{"dormant decided", Signals{Kind: KindRepo, UpdatedAt: ago(400)}, false, nil},
 		{"dormant archived", Signals{Kind: KindRepo, UpdatedAt: ago(400), Undecided: true, Archived: true}, false, nil},
 		{"unpushed old", Signals{Kind: KindBranch, OldestUnpushed: ago(5), UnpushedWhere: "mbp:/x"}, false, []string{"unpushed"}},

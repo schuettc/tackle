@@ -4,6 +4,44 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.3] - 2026-10-07
+
+### Changed
+- "Leave it open" (and "Keep it" for a branch, worktree or repository)
+  keeps the item in your list. It moves to a "left open" group at the
+  bottom of each Attention view it would be in (new; waiting on you when
+  it is flagged; proposed; all), after the items that need a decision. A
+  quiet divider reads "left open · N" with the group's own count, and each
+  muted row reads "left open · <date>". The view's count leaves left-open
+  items out. Opening one shows its decision and the cards as usual.
+  Move-on after a decision skips them. A kept pull request or issue that
+  has since closed or merged on GitHub drops out.
+- Someone else's activity on a kept pull request or issue that is newer
+  than the decision brings it back to the top, needing a decision, with
+  "new activity since you left it open". It counts again, and
+  `casebook_next` hands it out. `casebook_next` never hands out a quiet
+  left-open item.
+- "Not now" also comes back on someone else's newer activity, not only
+  when its condition is met. The item says which: "its condition was met"
+  or "new activity since Not now".
+- The cards say so. Leave it open: "It stays open and stays in your list,
+  at the bottom. It moves back up when someone replies or it changes."
+  Keep it: "It stays as it is and stays in your list, at the bottom."
+  Not now: "Hidden until a date or an event you pick, or until someone
+  replies or it changes. Then it asks again."
+- Someone else's activity is what the GitHub cache records: a pull
+  request's or issue's last comment, when someone other than you wrote it
+  (or, with no comments, its creation by someone else). The cache keeps no
+  commits or reviews, so a push or a review alone doesn't bring an item
+  back yet.
+- An item's computed status can be `left-open`. `GET /api/items` adds
+  `left_open` and `left_open_total` (the view's left-open group), and
+  items carry `new_activity`. The board leaves left-open items off. The
+  README board lists them in a "Left open" lane, and its summary counts
+  them. Stop tracking it is unchanged. casebook-data's format is
+  unchanged: this is how status is computed from the decisions you
+  already have.
+
 ## [casebook 0.4.1] - 2026-10-07
 
 ### Added
