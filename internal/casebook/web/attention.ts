@@ -35,7 +35,8 @@ import { wireSelection, getVocab } from './decide.ts';
 import {
   keyWithoutKind,
   pluralize,
-  nextUndecided,
+  nextInView,
+  MORE,
   recommendLine,
   recommendedLine,
   agreeGroups,
@@ -640,7 +641,7 @@ export function makeAttention(ctx: Ctx): Section {
     if (deciding) return;
     const open = currentOpenKey;
     deciding = open ?? '\u0000agree';
-    const order = [...lastOrder];
+    const order = await orderFor(open);
     try {
       const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
         ids: g.ids,
@@ -744,23 +745,56 @@ export function makeAttention(ctx: Ctx): Section {
     lastUndo = expect ? { key, prev, expect } : null;
   }
 
+  // orderFor is the view's order to move on from key in: the list's rows,
+  // or, when key is on a page the list no longer holds (opening an item
+  // reloads the first page), the view fetched a page at a time up to key.
+  async function orderFor(key: string | null): Promise<string[]> {
+    if (!key || lastOrder.includes(key)) return [...lastOrder];
+    const keys: string[] = [];
+    try {
+      for (let total = Infinity; keys.length < total;) {
+        const data = await ctx.api.get<ItemsView>(
+          '/items',
+          buildQuery(keys.length),
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        keys.push(...got);
+        total = Math.min(total, data.total);
+        if (!got.length || got.includes(key)) break;
+      }
+    } catch {
+      return [...lastOrder];
+    }
+    return keys.includes(key) ? keys : [...lastOrder];
+  }
+
   // moveOn opens the next undecided item in the view's order (order: the
   // view's keys when key was decided), or the view's summary when none is
-  // left. The undecided ones are the view as serve lists it now, so an item
-  // decided elsewhere meanwhile is passed over and none is skipped.
+  // left. The undecided ones are the view as serve lists it now, fetched a
+  // page at a time until the next one is known (at most the view's total),
+  // so an item decided elsewhere meanwhile is passed over, none is skipped,
+  // and an item on a later page is found before wrapping to the first.
   async function moveOn(key: string, order: string[]): Promise<void> {
-    let undecided: Set<string>;
+    const fresh: string[] = [];
+    let next: string | null | typeof MORE = MORE;
     try {
-      const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
-      undecided = new Set((data.items ?? []).map((it) => it.key));
+      for (let total = Infinity; next === MORE;) {
+        const data = await ctx.api.get<ItemsView>(
+          '/items',
+          buildQuery(fresh.length),
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        fresh.push(...got);
+        total = Math.min(total, data.total);
+        const complete = got.length === 0 || fresh.length >= total;
+        next = nextInView(order, key, fresh, complete);
+      }
     } catch {
       if (key) void openDetail(key);
       return;
     }
-    undecided.delete(key);
     // Court opened something else meanwhile: leave it open.
     if ((currentOpenKey ?? '') !== key) return;
-    const next = nextUndecided(order, key, undecided);
     if (next) openKey(next);
     else {
       showDone();
@@ -776,7 +810,7 @@ export function makeAttention(ctx: Ctx): Section {
   ): Promise<void> {
     if (deciding) return;
     deciding = key;
-    const order = [...lastOrder];
+    const order = await orderFor(key);
     const prev =
       shownDetail?.item.key === key
         ? (shownDetail.item.decision ?? null)
@@ -806,7 +840,7 @@ export function makeAttention(ctx: Ctx): Section {
     const key = currentOpenKey;
     if (!p || !key || deciding) return;
     deciding = key;
-    const order = [...lastOrder];
+    const order = await orderFor(key);
     const prev = shownDetail?.item.decision ?? null;
     try {
       const r = await ctx.api.post<AcceptResult>('/proposals/accept', {

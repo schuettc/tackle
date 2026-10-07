@@ -101,29 +101,47 @@ export function stripOwnKey(subject: string, key: string): string {
 // ---- the decide step ---------------------------------------------------------
 
 /**
- * nextUndecided is the item to open after the current one is decided: the
- * first key after current in order (the view's order when it was decided)
- * that is still undecided, then the first before it, then any undecided key
- * the order doesn't hold (a reload added it). undecided is the view as serve
- * lists it after the decision, so an item decided elsewhere meanwhile (a live
- * event) is not in it and is passed over, never counted as a step. When
- * current is no longer in order, the search starts at the beginning. null
- * when nothing is left.
+ * nextInView is the item to open after current is decided: the first key
+ * after current in order (the view's rows as the page had them, every page
+ * it loaded) that is still in the view, then the view's rows past the last
+ * of those, then (wrapping) the view's first row. fresh is the view as serve
+ * lists it after the decision, in its order, as far as it has been fetched;
+ * complete says it holds the whole view. An item decided elsewhere meanwhile
+ * is not in fresh and is passed over, never counted as a step. MORE when
+ * the answer may be in a page of fresh not fetched yet; null when nothing is
+ * left. When current is no longer in order, the search starts at order's
+ * beginning.
  */
-export function nextUndecided(
+/** MORE is nextInView's answer when a page not fetched yet may hold it. */
+export const MORE: unique symbol = Symbol('more');
+
+export function nextInView(
   order: string[],
   current: string,
-  undecided: Set<string>,
-): string | null {
+  fresh: string[],
+  complete: boolean,
+): string | null | typeof MORE {
+  const live = fresh.filter((k) => k !== current);
+  const inView = new Set(live);
+  const pos = new Map(order.map((k, i) => [k, i]));
+  // The furthest row of order fresh has reached: a row before it that isn't
+  // in fresh has left the view; a row after it may be on a later page.
+  let reached = -1;
+  for (const k of live) reached = Math.max(reached, pos.get(k) ?? -1);
   const i = order.indexOf(current);
-  const ring = i >= 0 ? [...order.slice(i + 1), ...order.slice(0, i)] : order;
-  for (const k of ring) {
-    if (k !== current && undecided.has(k)) return k;
+  for (const k of i >= 0 ? order.slice(i + 1) : order) {
+    if (inView.has(k)) return k;
+    if (!complete && (pos.get(k) ?? 0) > reached) return MORE;
   }
-  for (const k of undecided) {
-    if (k !== current && !order.includes(k)) return k;
-  }
-  return null;
+  // Past order's rows: the first row of fresh after the last one order holds.
+  let last = -1;
+  live.forEach((k, j) => {
+    if (pos.has(k)) last = j;
+  });
+  const past = live.slice(last + 1).find((k) => !pos.has(k));
+  if (past) return past;
+  if (!complete) return MORE;
+  return live[0] ?? null;
 }
 
 /** localDate is d's calendar date where the page runs, YYYY-MM-DD. */

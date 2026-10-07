@@ -8,7 +8,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  nextUndecided,
+  nextInView,
+  MORE,
   notNowUntil,
   choicesForKeys,
   fillLabel,
@@ -54,32 +55,55 @@ const form = (id: string) => FORMS.find((f) => f.id === id)!;
 // A fixed clock: midday on 2026-10-06, local time.
 const NOW = new Date(2026, 9, 6, 12, 0, 0);
 
-describe('nextUndecided', () => {
+describe('nextInView', () => {
   const order = ['a', 'b', 'c', 'd'];
 
   test('in the middle: the next undecided after the current one', () => {
-    assert.equal(nextUndecided(order, 'b', new Set(['a', 'c', 'd'])), 'c');
+    assert.equal(nextInView(order, 'b', ['a', 'c', 'd'], true), 'c');
   });
 
   test('skips decided ones after the current one', () => {
-    assert.equal(nextUndecided(order, 'a', new Set(['d'])), 'd');
+    assert.equal(nextInView(order, 'a', ['d'], true), 'd');
   });
 
   test('the last one: wraps to an undecided one before it', () => {
-    assert.equal(nextUndecided(order, 'd', new Set(['b'])), 'b');
+    assert.equal(nextInView(order, 'd', ['b'], true), 'b');
   });
 
   test('the current one already gone from the order: the first undecided', () => {
-    assert.equal(nextUndecided(['a', 'c', 'd'], 'b', new Set(['c', 'd'])), 'c');
+    assert.equal(nextInView(['a', 'c', 'd'], 'b', ['c', 'd'], true), 'c');
   });
 
   test('none left: null', () => {
-    assert.equal(nextUndecided(order, 'c', new Set()), null);
-    assert.equal(nextUndecided(order, 'c', new Set(['c'])), null);
+    assert.equal(nextInView(order, 'c', [], true), null);
+    assert.equal(nextInView(order, 'c', ['c'], true), null);
   });
 
   test('an undecided key outside the order still counts (a reload added it)', () => {
-    assert.equal(nextUndecided(['a', 'b'], 'b', new Set(['z'])), 'z');
+    assert.equal(nextInView(['a', 'b'], 'b', ['z'], true), 'z');
+  });
+
+  test('the next one not fetched yet: more, not a wrap', () => {
+    // Page two holds b..d; serve's first page (a, then what slid up) is in.
+    assert.equal(nextInView(order, 'b', ['a'], false), MORE);
+  });
+
+  test('the next one in a later page once fetched', () => {
+    assert.equal(nextInView(order, 'b', ['a', 'c', 'd'], true), 'c');
+  });
+
+  test('the last loaded row: the row past it, before any wrap', () => {
+    assert.equal(nextInView(['a', 'b'], 'b', ['a'], false), MORE);
+    assert.equal(nextInView(['a', 'b'], 'b', ['a', 'x', 'y'], true), 'x');
+  });
+
+  test('a later row gone while an even later one is in: passed over', () => {
+    assert.equal(nextInView(order, 'a', ['b', 'd'], false), 'b');
+    assert.equal(nextInView(order, 'b', ['d'], false), 'd');
+  });
+
+  test('nothing after it, not complete: more before wrapping', () => {
+    assert.equal(nextInView(order, 'd', ['a'], false), MORE);
   });
 });
 

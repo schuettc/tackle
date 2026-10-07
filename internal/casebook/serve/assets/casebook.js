@@ -524,16 +524,26 @@ function stripOwnKey(subject, key) {
   }
   return subject;
 }
-function nextUndecided(order, current, undecided) {
+var MORE = /* @__PURE__ */ Symbol("more");
+function nextInView(order, current, fresh, complete) {
+  const live2 = fresh.filter((k) => k !== current);
+  const inView = new Set(live2);
+  const pos = new Map(order.map((k, i2) => [k, i2]));
+  let reached = -1;
+  for (const k of live2) reached = Math.max(reached, pos.get(k) ?? -1);
   const i = order.indexOf(current);
-  const ring = i >= 0 ? [...order.slice(i + 1), ...order.slice(0, i)] : order;
-  for (const k of ring) {
-    if (k !== current && undecided.has(k)) return k;
+  for (const k of i >= 0 ? order.slice(i + 1) : order) {
+    if (inView.has(k)) return k;
+    if (!complete && (pos.get(k) ?? 0) > reached) return MORE;
   }
-  for (const k of undecided) {
-    if (k !== current && !order.includes(k)) return k;
-  }
-  return null;
+  let last = -1;
+  live2.forEach((k, j) => {
+    if (pos.has(k)) last = j;
+  });
+  const past = live2.slice(last + 1).find((k) => !pos.has(k));
+  if (past) return past;
+  if (!complete) return MORE;
+  return live2[0] ?? null;
 }
 function localDate(d) {
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -3634,7 +3644,7 @@ function makeAttention(ctx) {
     if (deciding) return;
     const open = currentOpenKey;
     deciding = open ?? "\0agree";
-    const order = [...lastOrder];
+    const order = await orderFor(open);
     try {
       const r = await ctx.api.post("/proposals/accept", {
         ids: g.ids
@@ -3713,18 +3723,45 @@ function makeAttention(ctx) {
     const expect = made?.[key];
     lastUndo = expect ? { key, prev, expect } : null;
   }
-  async function moveOn(key, order) {
-    let undecided;
+  async function orderFor(key) {
+    if (!key || lastOrder.includes(key)) return [...lastOrder];
+    const keys = [];
     try {
-      const data = await ctx.api.get("/items", buildQuery(0));
-      undecided = new Set((data.items ?? []).map((it) => it.key));
+      for (let total = Infinity; keys.length < total; ) {
+        const data = await ctx.api.get(
+          "/items",
+          buildQuery(keys.length)
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        keys.push(...got);
+        total = Math.min(total, data.total);
+        if (!got.length || got.includes(key)) break;
+      }
+    } catch {
+      return [...lastOrder];
+    }
+    return keys.includes(key) ? keys : [...lastOrder];
+  }
+  async function moveOn(key, order) {
+    const fresh = [];
+    let next = MORE;
+    try {
+      for (let total = Infinity; next === MORE; ) {
+        const data = await ctx.api.get(
+          "/items",
+          buildQuery(fresh.length)
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        fresh.push(...got);
+        total = Math.min(total, data.total);
+        const complete = got.length === 0 || fresh.length >= total;
+        next = nextInView(order, key, fresh, complete);
+      }
     } catch {
       if (key) void openDetail(key);
       return;
     }
-    undecided.delete(key);
     if ((currentOpenKey ?? "") !== key) return;
-    const next = nextUndecided(order, key, undecided);
     if (next) openKey(next);
     else {
       showDone();
@@ -3734,7 +3771,7 @@ function makeAttention(ctx) {
   async function decideOpen(key, disposition, until) {
     if (deciding) return;
     deciding = key;
-    const order = [...lastOrder];
+    const order = await orderFor(key);
     const prev = shownDetail?.item.key === key ? shownDetail.item.decision ?? null : null;
     try {
       const payload = { keys: [key], disposition };
@@ -3758,7 +3795,7 @@ function makeAttention(ctx) {
     const key = currentOpenKey;
     if (!p || !key || deciding) return;
     deciding = key;
-    const order = [...lastOrder];
+    const order = await orderFor(key);
     const prev = shownDetail?.item.decision ?? null;
     try {
       const r = await ctx.api.post("/proposals/accept", {

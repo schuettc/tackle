@@ -21,6 +21,10 @@
 //   a live decide elsewhere doesn't skip the item after it
 //   the multi-select sheet asks with the same cards: "Close it · 2 issues"
 //
+// And move-on past the first page, on a serve and repo of their own: with
+// more than a page of items, deciding one on page two opens the next one on
+// page two.
+//
 // And recommendations in the list (Task 4), on a serve and repo of their own:
 //
 //   recommended items first; each row reads "pi recommends ‹label›"
@@ -196,6 +200,7 @@ export async function decideScenarios(shared, t) {
   for (const [name, scenario, seeded] of [
     ['the decide step', decideScenario, seed()],
     ['recommendations in the list', recommendScenario, recSeed()],
+    ['move-on past the first page', pagesScenario, pagesSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -1234,6 +1239,108 @@ async function recommendScenario(context, t, s) {
   check(
     'and still no job',
     ((await api('GET', '/api/jobs')).jobs ?? []).length === 0,
+  );
+  await pg.close();
+}
+
+// ---- move-on past the first page ---------------------------------------------
+
+const PAGES = 'rd-pages';
+const PAGES_N = 230;
+
+function pagesSeed() {
+  const issues = [];
+  for (let n = 1; n <= PAGES_N; n++) {
+    const at = `2026-09-01T0${Math.floor(n / 60) % 10}:${String(n % 60).padStart(2, '0')}:00Z`;
+    issues.push({
+      repo: `schuettc/${PAGES}`,
+      number: n,
+      title: `Question number ${n}`,
+      author: 'alice',
+      state: 'OPEN',
+      created_at: at,
+      updated_at: at,
+    });
+  }
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${PAGES}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues,
+      },
+    ],
+  };
+}
+
+async function pagesScenario(context, t, s) {
+  const { check, until, eventually } = t;
+  console.log('\nscenario: move-on past the first page');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const decisionOf = async (key) =>
+    (await api('GET', `/api/item?key=${encodeURIComponent(key)}`)).item
+      .decision ?? null;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${PAGES}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'keep' });
+  const view = await api('GET', '/api/items?view=waiting&limit=500');
+  const keys = (view.items ?? []).map((it) => it.key);
+  check(
+    `waiting on you holds all ${PAGES_N} issues, more than a page (${view.total})`,
+    view.total === PAGES_N && keys.length === PAGES_N,
+  );
+  // Page two starts at 200: decide its sixth row; its seventh opens.
+  const target = keys[205];
+  const expected = keys[206];
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await pg.click('.cb-foot-more');
+  check(
+    'show more brings in page two',
+    await until(
+      pg,
+      (n) =>
+        document.querySelectorAll('.kit-app > .kit-list:not([hidden]) .kit-row')
+          .length === n,
+      PAGES_N,
+      8000,
+    ),
+  );
+  await row(pg, target).click();
+  check(`${target} (page two) opens`, await opened(t, pg, target));
+  await pg.click(
+    '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]',
+  );
+  check(
+    `deciding ${target} keep`,
+    await eventually(
+      async () => (await decisionOf(target))?.disposition === 'keep',
+    ),
+  );
+  check(
+    `the next item on page two, ${expected}, opens (not page one's first, ${keys[0]})`,
+    await opened(t, pg, expected),
+  );
+  // Opening it reloaded the list's first page; the next decide still goes
+  // on in page two.
+  await press(pg, '1');
+  check(
+    `deciding ${expected} with 1 opens ${keys[207]}, still on page two`,
+    (await eventually(
+      async () => (await decisionOf(expected))?.disposition === 'keep',
+    )) && (await opened(t, pg, keys[207])),
   );
   await pg.close();
 }
