@@ -18,17 +18,17 @@ import (
 // The note is rendered per item, so each proposal carries fields specific to
 // that item (e.g. {repo}, {how}, {tip}).
 //
-// Returns the number of new proposals created and a joined error collecting
+// Returns the new proposals created and a joined error collecting
 // every Propose failure (e.g. closed DB, invalid disposition). Callers must
 // not ignore the error: a non-nil return means some proposals were silently
 // dropped.
-func EvaluateActive(ctx context.Context, active []Rule, res engine.Result, now time.Time, props *propose.Store) (int, error) {
+func EvaluateActive(ctx context.Context, active []Rule, res engine.Result, now time.Time, props *propose.Store) ([]propose.Proposal, error) {
 	pending, err := props.Pending(ctx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
-	created := 0
+	var created []propose.Proposal
 	var allErrs []error
 	for _, r := range active {
 		// Defensive: skip non-active rules (caller should pre-filter, but we
@@ -54,7 +54,7 @@ func EvaluateActive(ctx context.Context, active []Rule, res engine.Result, now t
 			for _, pe := range propErrs {
 				allErrs = append(allErrs, fmt.Errorf("rule %s: %w", r.ID, pe))
 			}
-			created += len(ps)
+			created = append(created, ps...)
 			// Keep the pending map current so later rules in this same pass
 			// see newly created proposals and do not double-propose the same item.
 			for _, p := range ps {

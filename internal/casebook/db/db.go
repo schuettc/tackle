@@ -21,7 +21,7 @@ import (
 type DB = sqlitedb.DB
 
 // SchemaVersion is the schema version this binary targets.
-const SchemaVersion = 3
+const SchemaVersion = 4
 
 // schemaV1 is P1a's migration-1 SQL verbatim.
 const schemaV1 = `
@@ -188,12 +188,20 @@ ALTER TABLE sessions ADD COLUMN parent TEXT NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0;
 `
 
+// schemaV4 gives a message the purpose the page posted it with: ” for a
+// message Court wrote, "look-into" for "ask ‹session› to look into it"
+// (serve shows the item as being looked into from it, never from words).
+const schemaV4 = `
+ALTER TABLE messages ADD COLUMN purpose TEXT NOT NULL DEFAULT '';
+`
+
 // Migrations is the ordered list of schema steps for this binary.
 // Migrations[i] moves the database from user_version i to i+1.
 var Migrations = []sqlitedb.Step{
 	sqlitedb.SQL(schemaV1),
 	sqlitedb.SQL(schemaV2),
 	sqlitedb.SQL(schemaV3),
+	sqlitedb.SQL(schemaV4),
 }
 
 // Open opens (creating if needed) the database at path and migrates it to

@@ -150,9 +150,9 @@ export function makeBoard(
     }
 
     if (it.proposal) {
-      // Show "<agent> proposes <disposition>" in agent colour.
+      // Show "<agent> recommends <disposition>" in agent colour.
       const propEl = h('div', { class: 'cb-card-prop' });
-      propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
+      propEl.textContent = `${agentFromSource(it.proposal.source)} recommends ${it.proposal.disposition}`;
       card.append(propEl);
     }
 

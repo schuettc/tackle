@@ -16,6 +16,7 @@ import { renderChoices, asNotNow } from './choices.ts';
 import { keyWithoutKind, stripOwnKey } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 import { proposalCard } from './proposals.ts';
+import { lookingLine } from './sessions.ts';
 
 // Body is capped at 600 chars per the spec; anything longer is folded.
 const BODY_CAP = 600;
@@ -151,6 +152,10 @@ function renderDecideSection(
   const it = detail.item;
   const section = h('section', { class: 'cb-decide' });
   const question = h('h2', { class: 'cb-question' });
+  // "‹session› is looking into it": Court asked the session to (attention
+  // keeps it current, and offers the ask, under the cards).
+  const looking = lookingLine(it.looking);
+  const lookingEl = h('p', { class: 'cb-looking', hidden: !looking }, looking);
   const recSlot = h('div', { class: 'cb-rec-slot' });
   const pending =
     it.proposal && it.proposal.state === 'pending' ? it.proposal : null;
@@ -162,7 +167,7 @@ function renderDecideSection(
       hooks.decide?.(d, until, note);
     },
   });
-  section.append(question, recSlot, cards);
+  section.append(question, lookingEl, recSlot, cards);
 
   // The vocabulary is fetched once and cached: this resolves at once after
   // the first item.

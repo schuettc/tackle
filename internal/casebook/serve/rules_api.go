@@ -407,6 +407,7 @@ func (s *Server) postRulesProposeOnce(w http.ResponseWriter, r *http.Request) {
 	}
 	if n > 0 {
 		s.publish(ctx, "rules", map[string]any{"id": ru.ID, "proposed": n})
+		s.publishPending(ctx, proposals, "rule:"+ru.ID)
 	}
 	if proposals == nil {
 		proposals = []propose.Proposal{}

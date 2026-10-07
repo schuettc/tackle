@@ -197,6 +197,7 @@ export interface DecisionVocabView {
   kinds: KindVocab[] | null;
   until_forms: UntilForm[] | null;
   not_now: NotNowForm[] | null;
+  look_into: LookIntoVocab;
 }
 
 export interface ClearResult {
@@ -294,6 +295,7 @@ export interface ItemView {
   landed_via?: string[];
   landed_tips?: Record<string, string>;
   proposal?: Proposal;
+  looking?: Looking;
 }
 
 export interface Proposal {
@@ -395,6 +397,7 @@ export interface MessageView {
   batch_pos?: number;
   delivery_id?: number;
   reply_to?: number;
+  purpose?: string;
   state: string;
   created_at: string;
   queued_at?: string;
@@ -412,6 +415,7 @@ export interface Message {
   batch_pos?: number;
   delivery_id?: number;
   reply_to?: number;
+  purpose?: string;
   state: string;
   created_at: string;
   queued_at?: string;
@@ -484,6 +488,11 @@ export interface UntilForm {
   example: string;
 }
 
+export interface LookIntoVocab {
+  label: string;
+  message: string;
+}
+
 export interface NeedsYou {
   id: number;
   job_id: number;
@@ -552,6 +561,11 @@ export interface Observed {
   exists: boolean;
   archived?: boolean;
   state?: string;
+}
+
+export interface Looking {
+  message: number;
+  session: Session;
 }
 
 export interface Action {

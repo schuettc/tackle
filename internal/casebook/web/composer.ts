@@ -75,13 +75,19 @@ export interface ComposerHandle {
   /** Show a note in the footer (why something wasn't sent). */
   say(text: string): void;
   /**
-   * sendText sends body to the attached session as ↵ would, with nothing
-   * attached and without touching the field: a message the page writes
-   * ("ask … to recommend the rest"). It goes into the delivery queue, so it
-   * waits for the session's turn to end. Resolves '' when it was posted,
-   * else why not (the footer says so too).
+   * sendText sends body to the attached session as ↵ would, with attached
+   * (nothing by default) and without touching the field: a message the
+   * page writes ("ask … to recommend the rest", "ask … to look into it").
+   * It goes into the delivery queue, so it waits for the session's turn to
+   * end. purpose is what the page posts it for (serve's message purpose:
+   * "look-into" for "ask … to look into it"; none for the rest). Resolves
+   * '' when it was posted, else why not (the footer says so too).
    */
-  sendText(body: string): Promise<string>;
+  sendText(
+    body: string,
+    attached?: Attached,
+    purpose?: string,
+  ): Promise<string>;
 }
 
 // threadName names a new thread from its first request (spec §3.5 item 2).
@@ -306,7 +312,11 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     say(text: string): void {
       note.textContent = text;
     },
-    async sendText(body: string): Promise<string> {
+    async sendText(
+      body: string,
+      attached: Attached = {},
+      purpose = '',
+    ): Promise<string> {
       const why = dock.blocked();
       if (why) {
         note.textContent = why;
@@ -321,9 +331,10 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
         await ctx.api.post('/messages', {
           thread,
           body,
-          attached: {},
+          attached,
           batch: false,
           session: dock.currentSession(),
+          ...(purpose ? { purpose } : {}),
         });
         return '';
       } catch (err) {

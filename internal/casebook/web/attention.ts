@@ -28,6 +28,7 @@ import type {
   Committed,
   DecisionUndoResult,
   DecisionVocabView,
+  Message,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
@@ -46,6 +47,7 @@ import {
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { makeBoard } from './board.ts';
+import { lookingLine } from './sessions.ts';
 import {
   agreeWithAll,
   bulkProposalActions,
@@ -544,6 +546,17 @@ export function makeAttention(ctx: Ctx): Section {
     loadedItems.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add('cb-new-activity');
     });
+    // "‹session› is looking into it" (muted, agent colour) on the rows a
+    // session is looking into.
+    // It goes where the row's sub line goes: in the text column, under the
+    // title (and any recommendation line), one line.
+    shown.forEach((it, i) => {
+      const col = rowEls[i]?.querySelector('.kit-title')?.parentElement;
+      if (!col) return;
+      col.querySelector('.cb-row-looking')?.remove();
+      const says = lookingLine(it.looking);
+      if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
+    });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
       rowEls[i]?.classList.add('cb-left-open');
@@ -725,17 +738,168 @@ export function makeAttention(ctx: Ctx): Section {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
       // Another item opened meanwhile: this answer is no longer shown.
       if (currentOpenKey !== key) return;
-      shownDetail = detail;
-      const el = renderItem(ctx, detail, {
-        // Re-render after a reject or a change from the recommendation card.
-        onRefresh: () => void openDetail(key),
-        decide: (d, until, note) => void decideOpen(key, d, until, note),
-        accept: () => void acceptOpen(),
-      });
-      readEl.replaceChildren(el);
+      paintDetail(key, detail);
     } catch {
       // non-fatal; leave the reading column
     }
+  }
+
+  // paintDetail renders detail (key's) in the reading column.
+  function paintDetail(key: string, detail: ItemDetailView): void {
+    shownDetail = detail;
+    const el = renderItem(ctx, detail, {
+      // Re-render after a reject or a change from the recommendation card.
+      onRefresh: () => void openDetail(key),
+      decide: (d, until, note) => void decideOpen(key, d, until, note),
+      accept: () => void acceptOpen(),
+    });
+    readEl.replaceChildren(el);
+    renderAsk();
+  }
+
+  // ---- ask the session to look into it ------------------------------------
+
+  // renderAsk puts "ask ‹session› to look into it" under the open item's
+  // cards: only with a session attached, and not while one is looking
+  // into it already (the item says so under its question). Its words are
+  // serve's (the vocabulary's look_into: {session} and {key} filled in).
+  function renderAsk(): void {
+    readEl.querySelector('.cb-look')?.remove();
+    const key = currentOpenKey;
+    const t = ctx.dockTarget();
+    const cards = readEl.querySelector('.cb-decide .cb-choices-wrap');
+    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
+    if (shownDetail.item.looking) return;
+    const words = vocab?.look_into;
+    if (!words) return; // the vocabulary's load renders it
+    const note = h('span', { class: 'cb-look-note' });
+    const btn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'kit-btn cb-look-ask',
+        async onclick() {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const why = await ctx.askSession(
+            words.message.replaceAll('{key}', key),
+            { keys: [key] },
+            'look-into',
+          );
+          btn.disabled = false;
+          if (why) note.textContent = why;
+          else void refreshLooking(key);
+        },
+      },
+      words.label.replaceAll('{session}', t.name),
+    ) as HTMLButtonElement;
+    cards.after(h('div', { class: 'cb-look' }, btn, note));
+  }
+  ctx.onDockTarget(() => renderAsk());
+
+  // refreshLooking reads whether a session is looking into key (the open
+  // item) and shows it in place, under the question, without re-rendering
+  // the item (Court may be mid-input on it).
+  let lookingSeq = 0;
+  async function refreshLooking(key: string): Promise<void> {
+    const mine = ++lookingSeq;
+    let detail: ItemDetailView;
+    try {
+      detail = await ctx.api.get<ItemDetailView>('/item', { key });
+    } catch {
+      return;
+    }
+    if (mine !== lookingSeq || currentOpenKey !== key) return;
+    if (shownDetail?.item.key !== key) return;
+    shownDetail = {
+      ...shownDetail,
+      item: { ...shownDetail.item, looking: detail.item.looking },
+    };
+    const says = lookingLine(detail.item.looking);
+    const el = readEl.querySelector<HTMLElement>('.cb-looking');
+    if (el) {
+      el.textContent = says;
+      el.hidden = !says;
+    }
+    renderAsk();
+  }
+
+  // lookingShown: the open item or a shown row says a session is looking
+  // into it (a message settling may take that away).
+  function lookingShown(): boolean {
+    return !!shownDetail?.item.looking || shown.some((it) => !!it.looking);
+  }
+
+  // lookingMayHaveChanged: a message moved (posted, answered, declined,
+  // failed; a turn ended): the open item's marker and the rows' follow.
+  function lookingMayHaveChanged(): void {
+    if (currentOpenKey) void refreshLooking(currentOpenKey);
+    if (boardHandle) return;
+    void reload();
+  }
+
+  // midInput: Court is in the middle of answering the open item: its
+  // closing-comment field is open with text typed, or its Not now picker
+  // is open. A re-render then would wipe what he is doing.
+  function midInput(): boolean {
+    const comment = readEl.querySelector<HTMLElement>('.cb-close-comment');
+    const typed =
+      comment?.querySelector<HTMLInputElement>('input')?.value ?? '';
+    if (comment && !comment.hidden && typed !== '') return true;
+    const notNow = readEl.querySelector<HTMLElement>('.cb-notnow');
+    return !!notNow && !notNow.hidden;
+  }
+
+  // proposalsChanged: a proposal for the open item came, or went (a live
+  // "proposals" event naming key), or evidence for it came (why). The item re-renders, so its
+  // recommendation card and the "recommended" mark appear or go; while
+  // Court is mid-input it doesn't, and a quiet line under the question
+  // says what changed, with "show" to re-render.
+  let freshSeq = 0;
+  async function proposalsChanged(
+    key: string,
+    why: 'proposals' | 'evidence' = 'proposals',
+  ): Promise<void> {
+    const mine = ++freshSeq;
+    let detail: ItemDetailView;
+    try {
+      detail = await ctx.api.get<ItemDetailView>('/item', { key });
+    } catch {
+      return;
+    }
+    // Only the newest answer, and only for the item still open (and not
+    // one this tab is deciding: it moves on).
+    if (mine !== freshSeq || currentOpenKey !== key || deciding === key) return;
+    if (!midInput()) {
+      paintDetail(key, detail);
+      return;
+    }
+    const p = detail.item.proposal;
+    const says =
+      why === 'evidence'
+        ? 'new evidence'
+        : p && p.state === 'pending'
+          ? recommendLine(vocab, key, p.source, p.disposition)
+          : 'the recommendation changed';
+    const show = h(
+      'button',
+      {
+        type: 'button',
+        class: 'cb-link cb-rec-show',
+        onclick: () => void openDetail(key),
+      },
+      'show',
+    );
+    const line = h(
+      'p',
+      { class: 'cb-rec-fresh' },
+      h('span', { class: 'cb-rec-fresh-says' }, says),
+      ' \u00b7 ',
+      show,
+    );
+    const old = readEl.querySelector('.cb-rec-fresh');
+    if (old) old.replaceWith(line);
+    else readEl.querySelector('.cb-question')?.after(line);
   }
 
   // ---- the decide step: decide, move on, undo ------------------------------
@@ -1111,6 +1275,7 @@ export function makeAttention(ctx: Ctx): Section {
       vocab = v;
       setRows();
       updateAgree();
+      renderAsk();
     })
     .catch(() => {});
 
@@ -1303,34 +1468,31 @@ export function makeAttention(ctx: Ctx): Section {
           void reload();
         }
       } else if (type === 'proposals') {
-        // proposals event is emitted by accept/reject/change or by the agent.
-        // Payload shape: {ids: number[], state: string, source?: string}.
+        // proposals event: an agent's or a rule's new pending proposals, or
+        // proposals accepted, rejected or changed. Payload shape:
+        // {ids: number[], keys: string[], state: string, source?: string};
+        // keys are the items the proposals are for.
         const propPayload = data as {
           ids?: number[];
+          keys?: string[];
           state?: string;
-          source?: string;
         };
-        const propIds = propPayload?.ids ?? [];
+        const propKeys = propPayload?.keys ?? [];
         const propState = propPayload?.state ?? '';
 
         // When proposals are settled (accepted, rejected, changed), deselect
-        // the affected item keys so the selection count stays correct.
+        // their items so the selection count stays correct.
+        if (propState !== 'pending' && propKeys.length > 0) {
+          selection.deselect(propKeys);
+        }
+        // The open item's recommendation came or went, in any state: by
+        // keys, as the open item may not be on the loaded page.
         if (
-          propState === 'accepted' ||
-          propState === 'rejected' ||
-          propState === 'changed'
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          propKeys.includes(currentOpenKey)
         ) {
-          const propIdSet = new Set(propIds);
-          const affectedKeys = loadedItems
-            .filter((it) => it.proposal && propIdSet.has(it.proposal.id))
-            .map((it) => it.key);
-          if (affectedKeys.length > 0) {
-            selection.deselect(affectedKeys);
-          }
-          // Re-render the open item if it was affected.
-          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
-            void openDetail(currentOpenKey);
-          }
+          void proposalsChanged(currentOpenKey);
         }
 
         // Re-fetch summary to update view-chip counts (particularly 'proposed').
@@ -1340,6 +1502,33 @@ export function makeAttention(ctx: Ctx): Section {
         } else {
           void reload();
         }
+      } else if (type === 'evidence') {
+        // New evidence for the open item: shown as a recommendation is.
+        const key = (data as { key?: string })?.key ?? '';
+        if (
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          key === currentOpenKey
+        )
+          void proposalsChanged(currentOpenKey, 'evidence');
+      } else if (type === 'message') {
+        // Court's message posted (this tab or another): an ask to look into
+        // an item marks it.
+        const keys = (data as Message | null)?.attached?.keys ?? [];
+        if (
+          keys.some(
+            (k) => k === currentOpenKey || shown.some((it) => it.key === k),
+          )
+        )
+          lookingMayHaveChanged();
+      } else if (
+        type === 'messages' ||
+        type === 'settled' ||
+        type === 'delivery' ||
+        type === 'interrupted'
+      ) {
+        // A message settled (or a turn ended): a marker may go.
+        if (lookingShown()) lookingMayHaveChanged();
       }
     },
     primary() {

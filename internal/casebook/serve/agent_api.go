@@ -334,11 +334,7 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if len(ps) > 0 {
-		var ids []int64
-		for _, p := range ps {
-			ids = append(ids, p.ID)
-		}
-		s.publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
+		s.publishPending(ctx, ps, source(sess))
 	}
 	reply(w, ProposeResult{Proposed: len(ps), Proposals: nonNil(ps), Errors: nonNil(msgs)}, nil)
 }

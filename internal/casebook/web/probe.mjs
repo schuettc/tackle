@@ -5151,7 +5151,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 883;
+const MIN_CHECKS = 920;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -7304,7 +7304,7 @@ async function run() {
         );
 
         if (hasCard) {
-          // Card head: "<agent> proposes · <disposition>" not "pending proposal".
+          // Card head: "<agent> recommends · <choice>" not "pending proposal".
           const cardHead = await propGeoPage
             .$eval(
               '.cb-proposal-card .kit-card-head',
@@ -7312,8 +7312,9 @@ async function run() {
             )
             .catch(() => '');
           check(
-            'proposal card head contains "proposes ·"',
-            cardHead.includes('proposes \u00b7'),
+            `proposal card head contains "recommends ·" ("${cardHead}")`,
+            cardHead.includes('recommends \u00b7') &&
+              !cardHead.includes('proposes'),
           );
           check(
             'proposal card head uses real agent name (pi), not hardcoded string',
@@ -7360,7 +7361,7 @@ async function run() {
             cardInDoc,
           );
         } else {
-          check('proposal card head contains "proposes ·"', false);
+          check('proposal card head contains "recommends ·"', false);
           check(
             'proposal card head uses real agent name (pi), not hardcoded string',
             false,

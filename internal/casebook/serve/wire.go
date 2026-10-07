@@ -60,6 +60,9 @@ type SummaryView struct {
 type ItemView struct {
 	engine.Item
 	Proposal *propose.Proposal `json:"proposal,omitempty"`
+	// Looking: a session is looking into the item ("ask ‹session› to look
+	// into it", not yet settled); nil when none is.
+	Looking *Looking `json:"looking,omitempty"`
 }
 
 // newItemView is it as the page and the agent see it, with its proposal
@@ -363,6 +366,8 @@ type DecisionVocabView struct {
 	UntilForms []UntilForm `json:"until_forms"`
 	// NotNow is Not now's conditions, in the order the page offers them.
 	NotNow []NotNowForm `json:"not_now"`
+	// LookInto is "ask ‹session› to look into it": its label and message.
+	LookInto LookIntoVocab `json:"look_into"`
 }
 
 // KindVocab describes the valid decisions for one item kind. Allowed and

@@ -341,9 +341,9 @@ function start(first) {
     onDockTarget(cb) {
       dockTargetListeners.push(cb);
     },
-    askSession(body) {
+    askSession(body, attached, purpose) {
       const d = dockHandles[0];
-      return d ? d.sendText(body) : Promise.resolve("no agent session");
+      return d ? d.sendText(body, attached, purpose) : Promise.resolve("no agent session");
     }
   };
   const sections = /* @__PURE__ */ new Map();
@@ -1490,6 +1490,9 @@ function urlWithSession(href, session) {
   if (session) u.searchParams.set("session", session);
   else u.searchParams.delete("session");
   return u.toString();
+}
+function lookingLine(l) {
+  return l ? `${sessionTitle(l.session)} is looking into it` : "";
 }
 
 // coalesce.ts
@@ -2888,7 +2891,7 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   if (!proposal || proposal.state !== "pending") return null;
   const p = proposal;
   const agent = agentFromSource(p.source);
-  const head = `${agent} proposes · ${opts.label ?? p.disposition}`;
+  const head = `${agent} recommends · ${opts.label ?? p.disposition}`;
   const lines = [];
   if (p.note) {
     const noteEl = h5("p", { class: "cb-proposal-note" });
@@ -3122,6 +3125,8 @@ function renderDecideSection(ctx, detail, hooks) {
   const it = detail.item;
   const section = h6("section", { class: "cb-decide" });
   const question = h6("h2", { class: "cb-question" });
+  const looking = lookingLine(it.looking);
+  const lookingEl = h6("p", { class: "cb-looking", hidden: !looking }, looking);
   const recSlot = h6("div", { class: "cb-rec-slot" });
   const pending = it.proposal && it.proposal.state === "pending" ? it.proposal : null;
   const cards = renderChoices(ctx, it.kind, {
@@ -3132,7 +3137,7 @@ function renderDecideSection(ctx, detail, hooks) {
       hooks.decide?.(d, until, note);
     }
   });
-  section.append(question, recSlot, cards);
+  section.append(question, lookingEl, recSlot, cards);
   void getVocab(ctx).then((vocab2) => {
     const kv = (vocab2.kinds ?? []).find((k) => k.kind === it.kind);
     question.textContent = kv?.question ?? "";
@@ -3262,7 +3267,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     }
     if (it.proposal) {
       const propEl = h7("div", { class: "cb-card-prop" });
-      propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
+      propEl.textContent = `${agentFromSource(it.proposal.source)} recommends ${it.proposal.disposition}`;
       card6.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {
@@ -3756,6 +3761,13 @@ function makeAttention(ctx) {
     loadedItems.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
     });
+    shown.forEach((it, i) => {
+      const col = rowEls[i]?.querySelector(".kit-title")?.parentElement;
+      if (!col) return;
+      col.querySelector(".cb-row-looking")?.remove();
+      const says = lookingLine(it.looking);
+      if (says) col.append(h8("div", { class: "cb-row-looking" }, says));
+    });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
       rowEls[i]?.classList.add("cb-left-open");
@@ -3899,16 +3911,127 @@ function makeAttention(ctx) {
     try {
       const detail = await ctx.api.get("/item", { key });
       if (currentOpenKey !== key) return;
-      shownDetail = detail;
-      const el = renderItem(ctx, detail, {
-        // Re-render after a reject or a change from the recommendation card.
-        onRefresh: () => void openDetail(key),
-        decide: (d, until, note) => void decideOpen(key, d, until, note),
-        accept: () => void acceptOpen()
-      });
-      readEl.replaceChildren(el);
+      paintDetail(key, detail);
     } catch {
     }
+  }
+  function paintDetail(key, detail) {
+    shownDetail = detail;
+    const el = renderItem(ctx, detail, {
+      // Re-render after a reject or a change from the recommendation card.
+      onRefresh: () => void openDetail(key),
+      decide: (d, until, note) => void decideOpen(key, d, until, note),
+      accept: () => void acceptOpen()
+    });
+    readEl.replaceChildren(el);
+    renderAsk();
+  }
+  function renderAsk() {
+    readEl.querySelector(".cb-look")?.remove();
+    const key = currentOpenKey;
+    const t = ctx.dockTarget();
+    const cards = readEl.querySelector(".cb-decide .cb-choices-wrap");
+    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
+    if (shownDetail.item.looking) return;
+    const words = vocab2?.look_into;
+    if (!words) return;
+    const note = h8("span", { class: "cb-look-note" });
+    const btn = h8(
+      "button",
+      {
+        type: "button",
+        class: "kit-btn cb-look-ask",
+        async onclick() {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const why = await ctx.askSession(
+            words.message.replaceAll("{key}", key),
+            { keys: [key] },
+            "look-into"
+          );
+          btn.disabled = false;
+          if (why) note.textContent = why;
+          else void refreshLooking(key);
+        }
+      },
+      words.label.replaceAll("{session}", t.name)
+    );
+    cards.after(h8("div", { class: "cb-look" }, btn, note));
+  }
+  ctx.onDockTarget(() => renderAsk());
+  let lookingSeq = 0;
+  async function refreshLooking(key) {
+    const mine = ++lookingSeq;
+    let detail;
+    try {
+      detail = await ctx.api.get("/item", { key });
+    } catch {
+      return;
+    }
+    if (mine !== lookingSeq || currentOpenKey !== key) return;
+    if (shownDetail?.item.key !== key) return;
+    shownDetail = {
+      ...shownDetail,
+      item: { ...shownDetail.item, looking: detail.item.looking }
+    };
+    const says = lookingLine(detail.item.looking);
+    const el = readEl.querySelector(".cb-looking");
+    if (el) {
+      el.textContent = says;
+      el.hidden = !says;
+    }
+    renderAsk();
+  }
+  function lookingShown() {
+    return !!shownDetail?.item.looking || shown.some((it) => !!it.looking);
+  }
+  function lookingMayHaveChanged() {
+    if (currentOpenKey) void refreshLooking(currentOpenKey);
+    if (boardHandle) return;
+    void reload();
+  }
+  function midInput() {
+    const comment = readEl.querySelector(".cb-close-comment");
+    const typed = comment?.querySelector("input")?.value ?? "";
+    if (comment && !comment.hidden && typed !== "") return true;
+    const notNow = readEl.querySelector(".cb-notnow");
+    return !!notNow && !notNow.hidden;
+  }
+  let freshSeq = 0;
+  async function proposalsChanged(key, why = "proposals") {
+    const mine = ++freshSeq;
+    let detail;
+    try {
+      detail = await ctx.api.get("/item", { key });
+    } catch {
+      return;
+    }
+    if (mine !== freshSeq || currentOpenKey !== key || deciding === key) return;
+    if (!midInput()) {
+      paintDetail(key, detail);
+      return;
+    }
+    const p = detail.item.proposal;
+    const says = why === "evidence" ? "new evidence" : p && p.state === "pending" ? recommendLine(vocab2, key, p.source, p.disposition) : "the recommendation changed";
+    const show2 = h8(
+      "button",
+      {
+        type: "button",
+        class: "cb-link cb-rec-show",
+        onclick: () => void openDetail(key)
+      },
+      "show"
+    );
+    const line = h8(
+      "p",
+      { class: "cb-rec-fresh" },
+      h8("span", { class: "cb-rec-fresh-says" }, says),
+      " · ",
+      show2
+    );
+    const old = readEl.querySelector(".cb-rec-fresh");
+    if (old) old.replaceWith(line);
+    else readEl.querySelector(".cb-question")?.after(line);
   }
   function viewLabel() {
     return VIEWS2.find((v) => v.id === filters.view)?.label ?? filters.view;
@@ -4180,6 +4303,7 @@ function makeAttention(ctx) {
     vocab2 = v;
     setRows();
     updateAgree();
+    renderAsk();
   }).catch(() => {
   });
   function getBoardFilters() {
@@ -4315,17 +4439,13 @@ function makeAttention(ctx) {
         }
       } else if (type === "proposals") {
         const propPayload = data;
-        const propIds = propPayload?.ids ?? [];
+        const propKeys = propPayload?.keys ?? [];
         const propState = propPayload?.state ?? "";
-        if (propState === "accepted" || propState === "rejected" || propState === "changed") {
-          const propIdSet = new Set(propIds);
-          const affectedKeys = loadedItems.filter((it) => it.proposal && propIdSet.has(it.proposal.id)).map((it) => it.key);
-          if (affectedKeys.length > 0) {
-            selection.deselect(affectedKeys);
-          }
-          if (currentOpenKey && affectedKeys.includes(currentOpenKey)) {
-            void openDetail(currentOpenKey);
-          }
+        if (propState !== "pending" && propKeys.length > 0) {
+          selection.deselect(propKeys);
+        }
+        if (currentOpenKey && currentOpenKey !== deciding && propKeys.includes(currentOpenKey)) {
+          void proposalsChanged(currentOpenKey);
         }
         refreshSummary();
         if (boardHandle) {
@@ -4333,6 +4453,18 @@ function makeAttention(ctx) {
         } else {
           void reload();
         }
+      } else if (type === "evidence") {
+        const key = data?.key ?? "";
+        if (currentOpenKey && currentOpenKey !== deciding && key === currentOpenKey)
+          void proposalsChanged(currentOpenKey, "evidence");
+      } else if (type === "message") {
+        const keys = data?.attached?.keys ?? [];
+        if (keys.some(
+          (k) => k === currentOpenKey || shown.some((it) => it.key === k)
+        ))
+          lookingMayHaveChanged();
+      } else if (type === "messages" || type === "settled" || type === "delivery" || type === "interrupted") {
+        if (lookingShown()) lookingMayHaveChanged();
       }
     },
     primary() {
@@ -4603,7 +4735,7 @@ function makeComposer(ctx, dock) {
     say(text) {
       note.textContent = text;
     },
-    async sendText(body) {
+    async sendText(body, attached = {}, purpose = "") {
       const why = dock.blocked();
       if (why) {
         note.textContent = why;
@@ -4618,9 +4750,10 @@ function makeComposer(ctx, dock) {
         await ctx.api.post("/messages", {
           thread,
           body,
-          attached: {},
+          attached,
           batch: false,
-          session: dock.currentSession()
+          session: dock.currentSession(),
+          ...purpose ? { purpose } : {}
         });
         return "";
       } catch (err) {
@@ -5789,8 +5922,8 @@ function makeDock(ctx) {
     currentSession() {
       return currentSessionId;
     },
-    sendText(body) {
-      return composer.sendText(body);
+    sendText(body, attached, purpose) {
+      return composer.sendText(body, attached, purpose);
     }
   };
 }

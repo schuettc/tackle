@@ -4,6 +4,51 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.5] - 2026-10-07
+
+### Fixed
+- A recommendation made for the item you have open now shows on it at
+  once: its recommendation card, with the reason, and the "recommended"
+  mark on the proposed choice. Before, the list row said "pi recommends
+  …" while the open item showed nothing until you reopened it. The same
+  goes for a recommendation accepted, changed or rejected elsewhere, and
+  for one a rule makes. If you are mid-answer on that item (a closing
+  comment typed, or the Not now picker open), it isn't redrawn under you:
+  a quiet line reads "pi recommends ‹label› · show", and "show" redraws it.
+- Every `proposals` live event now names the items its proposals are for
+  (`keys`), and a rule's new proposals (propose once, or an active rule
+  after a sync) publish one too, from `rule:<id>`.
+
+### Added
+- "ask ‹session› to look into it" under the cards of the item you have
+  open, when a session is attached to the page. It decides nothing: it
+  sends that session a normal message, with the item attached, asking it
+  to check the item's CI, recent activity and anything blocking it, add
+  what it finds as evidence and recommend what to do. Like any message, it
+  waits for the end of the agent's turn.
+- While that message is queued or being worked on, the item says
+  "‹session› is looking into it" under its question, and its list row says
+  so on one line, as the row's "pi recommends …" does. It goes when the
+  agent answers, declines or fails the message; the evidence and
+  recommendation it added show on the open item as they come. serve marks
+  the item (`looking` on the item's view) from the message's purpose: the
+  button posts it with `purpose: "look-into"`, stored on the message (a
+  new `messages.purpose` column, schema version 4). A message you type
+  with the same words is just a message.
+- The decision vocabulary carries the button's words: `look_into` with
+  its `label` ("ask {session} to look into it") and `message` ({key}
+  filled in by the page).
+- The recommending guide asks the agent, when asked to look into an item,
+  to read its CI and recent activity with gh and record what it finds with
+  casebook_evidence before recommending.
+
+### Changed
+- The recommendation card's head and the board's cards say "recommends",
+  as the list's rows do: "pi recommends · Leave it open".
+- New evidence for the item you have open shows on it at once (with the
+  same "· show" line instead while you are mid-answer: "new evidence ·
+  show").
+
 ## [casebook 0.4.4] - 2026-10-07
 
 ### Changed

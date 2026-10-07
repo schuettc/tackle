@@ -107,6 +107,9 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	group := query
 	group.Offset = 0
 	left, leftTotal := s.Index.LeftOpen(group, pending)
+	looking := s.lookingInto(ctx)
+	withLooking(items, looking)
+	withLooking(left, looking)
 	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal}, nil)
 }
 
@@ -135,6 +138,7 @@ func (s *Server) itemDetail(ctx context.Context, it engine.Item, k item.Key) Ite
 		prop = &p
 	}
 	v := newItemView(it, prop)
+	v.Looking = s.lookingInto(ctx)[it.ID]
 	proposals, _ := s.Props.ForKey(ctx, it.ID)
 	evidence, _ := s.Props.Evidence(ctx, it.ID)
 	events, _ := s.App.Events()
@@ -238,6 +242,7 @@ func decisionVocab() DecisionVocabView {
 	vocab := DecisionVocabView{
 		Kinds:      make([]KindVocab, len(kinds)),
 		UntilForms: nil,
+		LookInto:   LookIntoVocab{Label: lookIntoLabel, Message: lookIntoMessage},
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)
@@ -446,8 +451,12 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 	var errs []string
 	by := s.App.Cfg.User
 	made := map[string]Committed{}
+	var keys []string
 	for _, id := range in.IDs {
 		p, err := s.Props.Get(ctx, id)
+		if err == nil {
+			keys = append(keys, p.Key)
+		}
 		if err != nil || p.State != propose.Pending {
 			errs = append(errs, fmt.Sprintf("proposal %d is not pending", id))
 			continue
@@ -472,7 +481,7 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 		total++
 	}
 	errs = s.finishDecides(ctx, total, errs)
-	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Accepted})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "keys": nonNil(keys), "state": propose.Accepted})
 	reply(w, AcceptResult{Accepted: total, Errors: nonNil(errs), Decisions: made}, nil)
 }
 
@@ -498,7 +507,7 @@ func (s *Server) postChange(w http.ResponseWriter, r *http.Request) {
 	n, done, errs, made := s.decideAll(ctx, []string{p.Key}, in.Disposition, o, p.ID)
 	if n == 1 {
 		_ = s.Props.Settle(ctx, p.ID, propose.Changed, changedTo(in.Disposition, in.Until, in.Note))
-		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "state": propose.Changed})
+		s.publish(ctx, "proposals", map[string]any{"ids": []int64{p.ID}, "keys": []string{p.Key}, "state": propose.Changed})
 	}
 	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Decisions: made}, nil)
 }
@@ -514,12 +523,16 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	n := 0
+	var keys []string
 	for _, id := range in.IDs {
+		if p, err := s.Props.Get(ctx, id); err == nil {
+			keys = append(keys, p.Key)
+		}
 		if s.Props.Settle(ctx, id, propose.Rejected, in.Reason) == nil {
 			n++
 		}
 	}
-	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "state": propose.Rejected})
+	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "keys": nonNil(keys), "state": propose.Rejected})
 	reply(w, RejectResult{Rejected: n}, nil)
 }
 
@@ -707,9 +720,24 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		// thread that belongs to another one now (moved behind the page's
 		// back) is refused: see ownedBy.
 		Session string `json:"session"`
+		// Purpose: what the page posts the message for. "" is a message
+		// Court wrote; PurposeLookInto is "ask ‹session› to look into it"
+		// (an item attached), which marks the item while it is underway.
+		Purpose string `json:"purpose"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
+		return
+	}
+	switch in.Purpose {
+	case "":
+	case PurposeLookInto:
+		if len(in.Attached.Keys) == 0 {
+			reply(w, nil, bad("a %s message needs an item attached", PurposeLookInto))
+			return
+		}
+	default:
+		reply(w, nil, bad("unknown message purpose %q", in.Purpose))
 		return
 	}
 	ctx := r.Context()
@@ -722,7 +750,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	m, err := s.Queue.Post(ctx, in.Thread, in.Body, in.Attached, in.Batch)
+	m, err := s.Queue.PostFor(ctx, in.Thread, in.Body, in.Attached, in.Batch, in.Purpose)
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return

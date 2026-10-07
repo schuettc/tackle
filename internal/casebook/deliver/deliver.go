@@ -137,19 +137,22 @@ type WorkedView struct {
 
 // Message is one message in a thread.
 type Message struct {
-	ID         int64     `json:"id"`
-	ThreadID   int64     `json:"thread_id"`
-	Author     string    `json:"author"` // "court" or the session id
-	Body       string    `json:"body"`
-	Attached   Attached  `json:"attached"`
-	BatchID    int64     `json:"batch_id,omitempty"`
-	BatchPos   int       `json:"batch_pos,omitempty"`
-	DeliveryID int64     `json:"delivery_id,omitempty"`
-	ReplyTo    int64     `json:"reply_to,omitempty"`
-	State      string    `json:"state"`
-	CreatedAt  time.Time `json:"created_at"`
-	QueuedAt   time.Time `json:"queued_at,omitzero"`
-	SettledAt  time.Time `json:"settled_at,omitzero"`
+	ID         int64    `json:"id"`
+	ThreadID   int64    `json:"thread_id"`
+	Author     string   `json:"author"` // "court" or the session id
+	Body       string   `json:"body"`
+	Attached   Attached `json:"attached"`
+	BatchID    int64    `json:"batch_id,omitempty"`
+	BatchPos   int      `json:"batch_pos,omitempty"`
+	DeliveryID int64    `json:"delivery_id,omitempty"`
+	ReplyTo    int64    `json:"reply_to,omitempty"`
+	// Purpose is what the page posted the message for: '' for a message
+	// Court wrote, "look-into" for "ask ‹session› to look into it".
+	Purpose   string    `json:"purpose,omitempty"`
+	State     string    `json:"state"`
+	CreatedAt time.Time `json:"created_at"`
+	QueuedAt  time.Time `json:"queued_at,omitzero"`
+	SettledAt time.Time `json:"settled_at,omitzero"`
 	// WorkedJSON holds the JSON-encoded WorkedView for messages with state
 	// "worked". It is not sent over the wire (json:"-"); serve decodes it
 	// into the MessageView wrapper returned by GET /api/messages.
@@ -445,13 +448,13 @@ func (q *Queue) MoveThread(ctx context.Context, thread int64, session string) er
 	return nil
 }
 
-const msgCols = "id, thread_id, author, body, attached, COALESCE(batch_id, 0), batch_pos, COALESCE(delivery_id, 0), COALESCE(reply_to, 0), state, created_at, queued_at, settled_at, worked_json"
+const msgCols = "id, thread_id, author, body, attached, COALESCE(batch_id, 0), batch_pos, COALESCE(delivery_id, 0), COALESCE(reply_to, 0), purpose, state, created_at, queued_at, settled_at, worked_json"
 
 func scanMessage(sc interface{ Scan(...any) error }) (Message, error) {
 	var m Message
 	var att string
 	var c, qd, st int64
-	if err := sc.Scan(&m.ID, &m.ThreadID, &m.Author, &m.Body, &att, &m.BatchID, &m.BatchPos, &m.DeliveryID, &m.ReplyTo, &m.State, &c, &qd, &st, &m.WorkedJSON); err != nil {
+	if err := sc.Scan(&m.ID, &m.ThreadID, &m.Author, &m.Body, &att, &m.BatchID, &m.BatchPos, &m.DeliveryID, &m.ReplyTo, &m.Purpose, &m.State, &c, &qd, &st, &m.WorkedJSON); err != nil {
 		return m, err
 	}
 	if att != "" {
@@ -478,6 +481,41 @@ func (q *Queue) messages(ctx context.Context, where string, args ...any) ([]Mess
 	return out, rows.Err()
 }
 
+// Underway lists Court's messages posted for purpose and not yet settled
+// (queued, delivered, received or being worked on: no draft, nothing
+// final), each with the session its thread belongs to, oldest first.
+func (q *Queue) Underway(ctx context.Context, purpose string) ([]UnderwayMessage, error) {
+	rows, err := q.DB.QueryContext(ctx, `SELECT m.id, m.body, m.attached, t.session_id
+		FROM messages m JOIN threads t ON t.id = m.thread_id
+		WHERE m.author = 'court' AND m.purpose = ? AND m.state IN (?, ?, ?, ?) ORDER BY m.id`,
+		purpose, Queued, Delivered, Received, Working)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []UnderwayMessage
+	for rows.Next() {
+		var u UnderwayMessage
+		var att string
+		if err := rows.Scan(&u.ID, &u.Body, &att, &u.Session); err != nil {
+			return nil, err
+		}
+		if att != "" {
+			_ = json.Unmarshal([]byte(att), &u.Attached)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UnderwayMessage is one of Underway's messages.
+type UnderwayMessage struct {
+	ID       int64
+	Body     string
+	Attached Attached
+	Session  string
+}
+
 // Messages lists a thread's messages in order.
 func (q *Queue) Messages(ctx context.Context, thread int64) ([]Message, error) {
 	return q.messages(ctx, "thread_id = ? ORDER BY id", thread)
@@ -495,6 +533,11 @@ func (q *Queue) Message(ctx context.Context, id int64) (Message, error) {
 // Post adds Court's message to a thread: queued for delivery, or, with
 // toBatch, appended to the thread's draft batch (created if needed).
 func (q *Queue) Post(ctx context.Context, thread int64, body string, att Attached, toBatch bool) (Message, error) {
+	return q.PostFor(ctx, thread, body, att, toBatch, "")
+}
+
+// PostFor is Post for a message the page posted for purpose (Message.Purpose).
+func (q *Queue) PostFor(ctx context.Context, thread int64, body string, att Attached, toBatch bool, purpose string) (Message, error) {
 	if strings.TrimSpace(body) == "" {
 		return Message{}, fmt.Errorf("empty message")
 	}
@@ -526,8 +569,8 @@ func (q *Queue) Post(ctx context.Context, thread int64, body string, att Attache
 			}
 			state, queued = Draft, 0
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, attached, batch_id, batch_pos, state, created_at, queued_at)
-			VALUES (?, 'court', ?, ?, ?, ?, ?, ?, ?)`, thread, body, attJSON, batch, pos, state, now, queued)
+		res, err := tx.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, attached, batch_id, batch_pos, purpose, state, created_at, queued_at)
+			VALUES (?, 'court', ?, ?, ?, ?, ?, ?, ?, ?)`, thread, body, attJSON, batch, pos, purpose, state, now, queued)
 		if err != nil {
 			return err
 		}

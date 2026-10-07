@@ -59,6 +59,30 @@
 //     its message reaches that session's thread and no other's
 //   "agree with all 3" accepts exactly those three; the next item opens
 //   an outward group: "send all 2 to To apply"; To apply lists them; no job
+//
+// And a new recommendation on the open item (casebook 0.4.5), on a serve
+// and repo of their own:
+//
+//   the agent proposes for the open item: its recommendation card (with the
+//     reason) and the "recommended" mark show, with no reload
+//   a proposal for another item leaves the open item as it was
+//   with the closing comment typed, or the Not now picker open, the open
+//     item isn't re-rendered under Court: "pi recommends ‹label› · show"
+//     shows instead, and "show" re-renders it
+//   the card's head and the board's cards say "recommends", as the list's
+//     rows do: "pi recommends · Close it without merging"
+//
+// And "ask ‹session› to look into it" (casebook 0.4.5), on a serve and repo
+// of their own:
+//
+//   with no session attached there is no button under the cards
+//   with one, the button sends exactly the ask, the item attached, to that
+//     session's thread only
+//   while the message is queued (and worked on), the item says "‹session›
+//     is looking into it" under its question, and its row says so (muted,
+//     agent colour)
+//   the agent's evidence and recommendation show on the open item with no
+//     reload; its reply clears the marker
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -233,6 +257,8 @@ export async function decideScenarios(shared, t) {
       closeSeed(),
     ],
     ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
+    ['a new recommendation on the open item', openRecScenario, openRecSeed()],
+    ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -2233,5 +2259,682 @@ async function leftOpenScenario(context, t, s) {
       'new activity since you left it open',
   );
   await lightLO(t, pg, 'back');
+  await pg.close();
+}
+
+// ---- a new recommendation on the open item (casebook 0.4.5) ---------------
+
+const OR = 'rd-openrec';
+const OISSUE = (n) => `issue:schuettc/${OR}#${n}`;
+const OPR = (n) => `pr:schuettc/${OR}#${n}`;
+
+function openRecSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${OR}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${OR}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [[4, 'Bump the uploader dependency', 'renovate']].map(item),
+        issues: [
+          [1, 'Region question', 'alice'],
+          [2, 'README typo', 'carol'],
+          [3, 'Tags question', 'dave'],
+          [5, 'Flag docs', 'erin'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function openRecScenario(context, t, s) {
+  const { check, until } = t;
+  console.log('\nscenario: a new recommendation on the open item');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const FIELD = `${READ} .cb-close-comment`;
+  const LINE = `${READ} .cb-rec-fresh`;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${OR}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  const A = 'probe-openrec';
+  await agent.presence(A, 'pi \u00b7 openrec', '/home/court/openrec', 'pi');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  // A reload would lose this.
+  await pg.evaluate(() => {
+    window.__openRecNoReload = true;
+  });
+  const noReload = () => pg.evaluate(() => window.__openRecNoReload === true);
+  // tagItem marks the open item's element; tagged says it is still shown
+  // (not re-rendered).
+  const tagItem = () =>
+    pg.evaluate((r) => {
+      document.querySelector(`${r} .cb-item`).dataset.probeTag = '1';
+    }, READ);
+  const tagged = () =>
+    pg.evaluate(
+      (r) => document.querySelector(`${r} .cb-item`)?.dataset.probeTag === '1',
+      READ,
+    );
+  const recCard = (c) => c.cards.filter((x) => x.rec).map((x) => x.d);
+
+  // ---- the agent proposes for the open item: it shows, no reload ---------
+  await row(pg, OPR(4)).click();
+  check('pr #4 opens, undecided', await opened(t, pg, OPR(4)));
+  {
+    const c = await readCol(pg);
+    check(
+      `before: no recommendation card, no card marked recommended (${recCard(c).join(',') || 'none'})`,
+      c.rec === '' && recCard(c).length === 0,
+    );
+  }
+  await agent.propose(A, [OPR(4)], 'close', 'superseded by the next bump');
+  {
+    const ok = await until(
+      pg,
+      (r) => !!document.querySelector(`${r} .cb-proposal-card`),
+      READ,
+      8000,
+    );
+    const c = await readCol(pg);
+    const closeCard = c.cards.find((x) => x.d === 'close');
+    check(
+      `the recommendation card appears on the open item with its reason ("${c.rec}")`,
+      ok &&
+        c.key === OPR(4) &&
+        c.rec.includes('Close it without merging') &&
+        c.rec.includes('superseded by the next bump'),
+    );
+    check(
+      `the proposed choice is marked recommended ("${closeCard?.kick}"), and only it`,
+      !!closeCard &&
+        closeCard.rec &&
+        closeCard.kick.includes('recommended') &&
+        recCard(c).join(',') === 'close',
+    );
+    check('with no reload', await noReload());
+  }
+
+  // ---- a proposal for another item leaves the open item as it was --------
+  await row(pg, OISSUE(1)).click();
+  check('issue #1 opens', await opened(t, pg, OISSUE(1)));
+  await until(
+    pg,
+    (r) => !!document.querySelector(`${r} .cb-question`)?.textContent,
+    READ,
+  );
+  await tagItem();
+  const before = await readCol(pg);
+  await agent.propose(A, [OISSUE(2)], 'keep', 'still being discussed');
+  {
+    // The list hears it: issue #2's row gets its line.
+    const heard = await until(
+      pg,
+      (k) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].some(
+          (r) =>
+            r.querySelector('.kit-kicker')?.textContent === k &&
+            (r.querySelector('.kit-sub')?.textContent ?? '').includes(
+              'recommends',
+            ),
+        ),
+      kicker(OISSUE(2)),
+      8000,
+    );
+    await pg.waitForTimeout(400); // kept: the open item must not re-render; a window for it
+    const after = await readCol(pg);
+    check(
+      `a proposal for issue #2 (the list heard it: ${heard}) leaves the open issue #1 as it was: not re-rendered, no card, nothing recommended`,
+      heard &&
+        (await tagged()) &&
+        after.key === OISSUE(1) &&
+        after.rec === '' &&
+        recCard(after).length === 0 &&
+        JSON.stringify(after) === JSON.stringify(before),
+    );
+    check(
+      'and no "pi recommends · show" line on it',
+      (await pg.locator(LINE).count()) === 0,
+    );
+  }
+
+  // ---- mid-input: the closing comment typed --------------------------------
+  const TYPED = 'Closing: answered in the docs.';
+  await row(pg, OISSUE(3)).click();
+  check('issue #3 opens', await opened(t, pg, OISSUE(3)));
+  await pg.click(`${READ} .cb-choice[data-d="close"]`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.checkVisibility(),
+    FIELD,
+  );
+  await pg.locator(`${FIELD} input`).fill(TYPED);
+  await tagItem();
+  await agent.propose(A, [OISSUE(3)], 'keep', 'a fix is in review');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      LINE,
+      8000,
+    );
+    const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
+    check(
+      `with the closing comment typed, the line shows instead ("${line}")`,
+      ok && line === 'pi recommends Leave it open \u00b7 show',
+    );
+    const st = await pg.evaluate((sel) => {
+      const f = document.querySelector(sel);
+      return {
+        shown: !!f?.checkVisibility(),
+        value: f?.querySelector('input')?.value ?? '',
+      };
+    }, FIELD);
+    const c = await readCol(pg);
+    check(
+      `and the typed comment stays ("${st.value}", field ${st.shown ? 'open' : 'closed'}), not re-rendered: no card yet`,
+      st.shown && st.value === TYPED && (await tagged()) && c.rec === '',
+    );
+  }
+  await pg.click(`${LINE} button`);
+  {
+    const ok = await until(
+      pg,
+      (r) => !!document.querySelector(`${r} .cb-proposal-card`),
+      READ,
+      8000,
+    );
+    const c = await readCol(pg);
+    check(
+      `"show" re-renders it: the card ("${c.rec}") and "Leave it open" marked recommended`,
+      ok &&
+        c.key === OISSUE(3) &&
+        c.rec.includes('a fix is in review') &&
+        recCard(c).join(',') === 'keep' &&
+        (await pg.locator(LINE).count()) === 0,
+    );
+  }
+
+  // ---- mid-input: the Not now picker open ----------------------------------
+  await row(pg, OISSUE(5)).click();
+  check('issue #5 opens', await opened(t, pg, OISSUE(5)));
+  await pg.click(`${READ} .cb-choice[data-d="wait"]`);
+  await until(
+    pg,
+    (r) => !!document.querySelector(`${r} .cb-notnow`)?.checkVisibility(),
+    READ,
+  );
+  await tagItem();
+  await agent.propose(A, [OISSUE(5)], 'close', 'answered');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      LINE,
+      8000,
+    );
+    const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
+    const picker = await pg.evaluate(
+      (r) => !!document.querySelector(`${r} .cb-notnow`)?.checkVisibility(),
+      READ,
+    );
+    check(
+      `with the Not now picker open, it stays open (${picker}) and the line shows ("${line}")`,
+      ok &&
+        picker &&
+        (await tagged()) &&
+        line === 'pi recommends Close it \u00b7 show',
+    );
+  }
+  check('still no reload', await noReload());
+
+  // ---- "recommends", as the list's rows say -------------------------------
+  {
+    await row(pg, OPR(4)).click();
+    await opened(t, pg, OPR(4));
+    const head = await pg
+      .locator(`${READ} .cb-proposal-card .kit-card-head`)
+      .textContent({ timeout: 8000 })
+      .catch(() => '');
+    check(
+      `the recommendation card's head reads "pi recommends · Close it without merging" ("${head}")`,
+      head === 'pi recommends \u00b7 Close it without merging',
+    );
+    await pg.evaluate(() => {
+      location.hash = '#/attention/board';
+    });
+    const sel = `.cb-board .kit-card[data-id="${OPR(4)}"] .cb-card-prop`;
+    const ok = await until(pg, (q) => !!document.querySelector(q), sel, 8000);
+    const prop = ok ? ((await pg.textContent(sel)) ?? '') : '';
+    check(
+      `the board's card says "recommends" too ("${prop}")`,
+      prop === 'pi recommends close',
+    );
+  }
+  await pg.close();
+}
+
+// ---- ask the session to look into it (casebook 0.4.5) ---------------------
+
+const LK = 'rd-look';
+const KISSUE = (n) => `issue:schuettc/${LK}#${n}`;
+const LOOK_INTO = (key) =>
+  `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+
+function lookIntoSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${LK}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${LK}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues: [
+          [1, 'Uploads fail on the second region', 'alice'],
+          [2, 'README typo', 'carol'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function lookIntoScenario(context, t, s) {
+  const { check, until, eventually } = t;
+  console.log('\nscenario: ask the session to look into it');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const ASK = `${READ} .cb-look-ask`;
+  const MARK = `${READ} .cb-looking`;
+  const KEY = KISSUE(1);
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${LK}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  // Two sessions, so the dock attaches to neither on its own; B has a
+  // thread of its own the ask must not reach.
+  const A = 'probe-look-a';
+  const B = 'probe-look-b';
+  await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 look-b', '/home/court/look-b', 'pi');
+  const bThread = await agent.newThread(B, 'b work');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await pg.evaluate(() => {
+    window.__lookNoReload = true;
+  });
+  await row(pg, KEY).click();
+  check('issue #1 opens', await opened(t, pg, KEY));
+
+  // ---- no session attached: no button --------------------------------------
+  {
+    await pg.waitForTimeout(500); // kept: no button may appear; a window for it
+    const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
+    check(
+      `with no session attached (dock: ${attach}) there is no "look into it" button`,
+      attach === 'none' && (await pg.locator(ASK).count()) === 0,
+    );
+  }
+
+  // ---- attach A: the button names it, under the cards ----------------------
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      ASK,
+    );
+    const got = await pg.evaluate((sel) => {
+      const b = document.querySelector(sel);
+      const cards = b?.closest('.cb-decide')?.querySelector('.cb-choices-wrap');
+      return {
+        text: b?.textContent ?? '',
+        below:
+          !!b &&
+          !!cards &&
+          b.getBoundingClientRect().top >= cards.getBoundingClientRect().bottom,
+      };
+    }, ASK);
+    check(
+      `with ${aName} attached, "${got.text}" shows under the cards`,
+      ok && got.text === `ask ${aName} to look into it` && got.below,
+    );
+  }
+
+  // ---- the ask: exactly the text, the item attached, A's thread only -------
+  const msgsOf = async (session) => {
+    const tv = await api(
+      'GET',
+      `/api/threads?session=${encodeURIComponent(session)}`,
+    );
+    const out = [];
+    for (const th of tv.threads ?? []) {
+      const mv = await agent.messages(th.id);
+      for (const m of mv.messages ?? []) out.push(m);
+    }
+    return out;
+  };
+  await pg.click(ASK);
+  let asked = null;
+  check(
+    "the button puts exactly the ask (serve's words), with the item attached and the look-into purpose, in the attached session's thread, once",
+    await eventually(async () => {
+      const mine = (await msgsOf(A)).filter((m) => m.body === LOOK_INTO(KEY));
+      asked = mine[0] ?? null;
+      return (
+        mine.length === 1 &&
+        JSON.stringify(asked.attached?.keys ?? []) === JSON.stringify([KEY]) &&
+        asked.purpose === 'look-into'
+      );
+    }),
+  );
+  {
+    const b = await msgsOf(B);
+    const bt = (await agent.messages(bThread.id)).messages ?? [];
+    check(
+      `and nothing in any other session's thread (B has ${b.length} messages)`,
+      b.every((m) => !m.body.startsWith('Look into')) &&
+        bt.every((m) => !m.body.startsWith('Look into')),
+    );
+    check(
+      `it decides nothing (issue #1 undecided: ${JSON.stringify((await api('GET', `/api/item?key=${encodeURIComponent(KEY)}`)).item.decision ?? null)})`,
+      !(await api('GET', `/api/item?key=${encodeURIComponent(KEY)}`)).item
+        .decision,
+    );
+  }
+
+  // ---- the marker, while the message is queued -----------------------------
+  const marks = () =>
+    pg.evaluate(
+      ([mark, k]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        const rl = r?.querySelector('.cb-row-looking');
+        return {
+          item: m && m.checkVisibility() ? (m.textContent ?? '') : '',
+          row: rl ? (rl.textContent ?? '') : '',
+          itemColor: m ? getComputedStyle(m).color : '',
+          rowColor: rl ? getComputedStyle(rl).color : '',
+          ask: !!document.querySelector(
+            '.kit-app > .kit-read:not([hidden]) .cb-look-ask',
+          ),
+        };
+      },
+      [MARK, kicker(KEY)],
+    );
+  const LOOKING = `${aName} is looking into it`;
+  // rowLooking measures the row's marker against its title and its
+  // recommendation line (if any).
+  const rowLooking = () =>
+    pg.evaluate((k) => {
+      const r = [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-row',
+        ),
+      ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+      const m = r?.querySelector('.cb-row-looking');
+      const title = r?.querySelector('.kit-title');
+      const sub = r?.querySelector('.kit-sub');
+      if (!m || !title) return { found: false };
+      const cs = getComputedStyle(m);
+      const mr = m.getBoundingClientRect();
+      const tr = title.getBoundingClientRect();
+      const lh = parseFloat(cs.lineHeight);
+      return {
+        found: true,
+        height: Math.round(mr.height),
+        line: Math.round(
+          Number.isFinite(lh) ? lh : parseFloat(cs.fontSize) * 1.5,
+        ),
+        left: Math.round(mr.left),
+        top: Math.round(mr.top),
+        titleLeft: Math.round(tr.left),
+        titleBottom: Math.round(tr.bottom),
+        ws: cs.whiteSpace,
+        overflow: cs.overflowX,
+        to: cs.textOverflow,
+        color: cs.color,
+        font: cs.fontSize,
+        sub: sub
+          ? {
+              left: Math.round(sub.getBoundingClientRect().left),
+              color: getComputedStyle(sub).color,
+              font: getComputedStyle(sub).fontSize,
+            }
+          : null,
+      };
+    }, kicker(KEY));
+  {
+    const ok = await until(
+      pg,
+      ([mark, k, want]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        return (
+          !!m?.checkVisibility() &&
+          m.textContent === want &&
+          r?.querySelector('.cb-row-looking')?.textContent === want
+        );
+      },
+      [MARK, kicker(KEY), LOOKING],
+      8000,
+    );
+    const st = (
+      await api('GET', `/api/messages?thread=${asked?.thread_id}`)
+    ).messages?.find((m) => m.id === asked?.id)?.state;
+    const got = await marks();
+    check(
+      `while the message is ${st}, the item says "${got.item}" under its question, and its row "${got.row}"`,
+      ok && st === 'queued' && got.item === LOOKING && got.row === LOOKING,
+    );
+    const agentC = await cssColor(pg, 'var(--kit-agent)');
+    check(
+      `the item's marker is the agent colour (${got.itemColor}); the row's is the recommendation line's, the kit's sub line (${got.rowColor})`,
+      got.itemColor === agentC && got.rowColor === agentC,
+    );
+    // The row's marker reads on one line, where the row's sub line goes:
+    // under the title, from its left edge, cut with an ellipsis.
+    const geo = await rowLooking();
+    check(
+      `the row's marker is one line high (${geo.height}px, line ${geo.line}px) and starts at the title's left edge (${geo.left} vs ${geo.titleLeft}), under it`,
+      geo.found &&
+        geo.height > 0 &&
+        geo.height <= geo.line * 1.2 &&
+        Math.abs(geo.left - geo.titleLeft) < 1 &&
+        geo.top >= geo.titleBottom - 1,
+    );
+    check(
+      `and it is cut with an ellipsis, not wrapped (white-space ${geo.ws}, overflow ${geo.overflow}, text-overflow ${geo.to})`,
+      geo.ws === 'nowrap' && geo.overflow === 'hidden' && geo.to === 'ellipsis',
+    );
+    check('and while it looks, the button gives way to the marker', !got.ask);
+    const under = await pg.evaluate((mark) => {
+      const m = document.querySelector(mark);
+      const q = m?.closest('.cb-decide')?.querySelector('.cb-question');
+      return (
+        !!m &&
+        !!q &&
+        m.getBoundingClientRect().top >= q.getBoundingClientRect().bottom
+      );
+    }, MARK);
+    check('the marker sits under the question', under);
+    await inThemes(t, pg, 'looking', ['light']);
+  }
+
+  // ---- the agent looks: evidence and a recommendation show live -----------
+  const d = await agent.wait(A);
+  const ids = (d?.delivery?.messages ?? []).map((m) => m.id);
+  check(
+    `the agent's turn gets the ask (${ids.length} message)`,
+    ids.includes(asked?.id) &&
+      (d?.text ?? '').includes(LOOK_INTO(KEY).slice(0, 40)),
+  );
+  const EVIDENCE =
+    'CI: the upload check fails on us-west-2 since the bucket rename.';
+  await api('POST', '/api/agent/evidence', {
+    session: A,
+    key: KEY,
+    text: EVIDENCE,
+  });
+  await agent.propose(
+    A,
+    [KEY],
+    'keep',
+    'a fix is one config line; keep it open',
+  );
+  {
+    const ok = await until(
+      pg,
+      ([r, ev]) =>
+        !!document.querySelector(`${r} .cb-proposal-card`) &&
+        (document.querySelector(`${r} .cb-item`)?.textContent ?? '').includes(
+          ev,
+        ),
+      [READ, EVIDENCE],
+      8000,
+    );
+    const c = await readCol(pg);
+    const got = await marks();
+    check(
+      `the agent's evidence and recommendation show on the open item ("${c.rec}"), no reload`,
+      ok &&
+        c.key === KEY &&
+        c.rec.includes('a fix is one config line') &&
+        c.cards
+          .filter((x) => x.rec)
+          .map((x) => x.d)
+          .join(',') === 'keep' &&
+        (await pg.evaluate(() => window.__lookNoReload === true)),
+    );
+    check(
+      `still looking while the message is worked on ("${got.item}")`,
+      got.item === LOOKING,
+    );
+    // With the recommendation on the row too (once the list has it), the
+    // marker matches its line.
+    await until(
+      pg,
+      (k) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].some(
+          (x) =>
+            x.querySelector('.kit-kicker')?.textContent === k &&
+            (x.querySelector('.kit-sub')?.textContent ?? '').includes(
+              'recommends',
+            ) &&
+            !!x.querySelector('.cb-row-looking'),
+        ),
+      kicker(KEY),
+      8000,
+    );
+    const geo = await rowLooking();
+    check(
+      `on the row, the marker matches "pi recommends …": left ${geo.left} vs ${geo.sub?.left}, colour ${geo.color} vs ${geo.sub?.color}, size ${geo.font} vs ${geo.sub?.font}; one line (${geo.height}px)`,
+      geo.found &&
+        !!geo.sub &&
+        geo.left === geo.sub.left &&
+        geo.color === geo.sub.color &&
+        geo.font === geo.sub.font &&
+        geo.height <= geo.line * 1.2,
+    );
+  }
+
+  // ---- the reply settles it: the marker goes -------------------------------
+  // A live agent keeps its presence fresh (else, past serve's "left" cutoff,
+  // the dock has no session to offer the button for).
+  await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
+  await agent.reply(
+    A,
+    ids,
+    'answered',
+    'Looked: evidence and a recommendation are on the item.',
+  );
+  {
+    const ok = await until(
+      pg,
+      ([mark, k]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        return (
+          !m?.checkVisibility() && !!r && !r.querySelector('.cb-row-looking')
+        );
+      },
+      [MARK, kicker(KEY)],
+      8000,
+    );
+    const got = await marks();
+    check(
+      `the agent's reply clears the marker on the item and its row (item "${got.item}", row "${got.row}"), and the button is back`,
+      ok && got.item === '' && got.row === '' && got.ask,
+    );
+    check(
+      'with no reload',
+      await pg.evaluate(() => window.__lookNoReload === true),
+    );
+  }
+  await inThemes(t, pg, 'look-into', ['light']);
   await pg.close();
 }
