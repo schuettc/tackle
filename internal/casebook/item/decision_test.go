@@ -2,6 +2,8 @@ package item
 
 import (
 	"encoding/json"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -101,6 +103,90 @@ func TestDecisionJSONIsSnakeCase(t *testing.T) {
 	for _, want := range []string{`"disposition":"keep"`, `"decided_by":"court"`, `"proposed_by":"rule:x"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("json %s lacks %s", b, want)
+		}
+	}
+}
+
+// TestVocabularyNotNowForms: every Not now form, once its hole is filled
+// with a sample of what it asks for, is an until condition ParseUntil reads.
+func TestVocabularyNotNowForms(t *testing.T) {
+	samples := map[string]string{
+		"days":        "2026-10-13",
+		"date":        "2026-12-01",
+		"pr":          "pr:schuettc/tackle#5",
+		"pr-or-issue": "issue:schuettc/tackle#6",
+		"repo":        "repo:schuettc/tackle",
+	}
+	ids := []string{"in-1w", "in-1m", "on-date", "pr-merges", "closes", "quiet-90", "release"}
+	forms := NotNowForms()
+	if len(forms) != len(ids) {
+		t.Fatalf("not now forms %+v, want %v", forms, ids)
+	}
+	for i, f := range forms {
+		if f.ID != ids[i] {
+			t.Errorf("form %d id %q, want %q", i, f.ID, ids[i])
+		}
+		holes := strings.Count(f.Template, "%s")
+		if f.Asks == "" {
+			if holes != 0 {
+				t.Errorf("%s is fixed but has a hole: %q", f.ID, f.Template)
+			}
+		} else if holes != 1 {
+			t.Errorf("%s asks %q but has %d holes: %q", f.ID, f.Asks, holes, f.Template)
+		}
+		until := f.Fill(samples[f.Asks])
+		if _, err := ParseUntil(until); err != nil {
+			t.Errorf("%s: %q: %v", f.ID, until, err)
+		}
+		if f.Asks == "days" && f.Days <= 0 {
+			t.Errorf("%s asks days but has none", f.ID)
+		}
+	}
+}
+
+// TestWordingNamesNoOne: product text names no person, provider or model,
+// and has no em dash.
+func TestWordingNamesNoOne(t *testing.T) {
+	re := regexp.MustCompile(`(?i)\b(court|claude|codex|openai|anthropic|gpt|gemini|opus|sonnet)\b`)
+	var texts []string
+	for _, k := range []Kind{KindRepo, KindPR, KindIssue, KindBranch, KindWorktree} {
+		texts = append(texts, Question(k))
+		for _, c := range Choices(k) {
+			texts = append(texts, c.Label, c.Says)
+		}
+	}
+	for _, f := range NotNowForms() {
+		texts = append(texts, f.Label)
+	}
+	for _, s := range texts {
+		if s == "" {
+			t.Error("empty wording")
+		}
+		if re.MatchString(s) {
+			t.Errorf("%q names someone", s)
+		}
+		if strings.Contains(s, "\u2014") {
+			t.Errorf("%q has an em dash", s)
+		}
+	}
+}
+
+// TestChoicesAreAllowed: every offered choice is a disposition the kind
+// allows, wait is offered and watch is not.
+func TestChoicesAreAllowed(t *testing.T) {
+	for _, k := range []Kind{KindRepo, KindPR, KindIssue, KindBranch, KindWorktree} {
+		var hasWait bool
+		for _, c := range Choices(k) {
+			if !slices.Contains(Allowed(k), c.Disposition) {
+				t.Errorf("%s offers %s, not allowed", k, c.Disposition)
+			}
+			if c.Disposition == Watch {
+				t.Errorf("%s offers watch", k)
+			}
+			hasWait = hasWait || c.Disposition == Wait
+		}
+		if !hasWait {
+			t.Errorf("%s doesn't offer wait", k)
 		}
 	}
 }

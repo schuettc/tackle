@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/store"
@@ -63,6 +67,44 @@ func (a *App) Decide(ctx context.Context, key, disposition string, o DecideOptio
 	}
 	pushed, err := a.push(ctx)
 	return d, pushed, err
+}
+
+// ErrNotDecided means Clear found no decision for the item: it is already
+// undecided, so there is nothing to clear.
+var ErrNotDecided = errors.New("the item has no decision")
+
+// ErrStaleDecision means the item's decision isn't the one Clear was asked
+// to remove: someone (an agent, a rule, another page) decided it since.
+var ErrStaleDecision = errors.New("the decision changed since")
+
+// Clear removes key's decision (items/<key>.toml) in one commit, but only
+// when its decided_at is decidedAt: an undo never removes a decision made
+// after the one it is undoing (ErrStaleDecision). ErrNotDecided when there
+// is no decision. It does not push; serve's background push sends it.
+func (a *App) Clear(ctx context.Context, key string, decidedAt time.Time) error {
+	k, err := item.ParseKey(key)
+	if err != nil {
+		return err
+	}
+	want := decidedAt.UTC().Truncate(time.Second)
+	// A refusal is returned from write, so nothing is committed.
+	_, err = a.Repo.Batch(ctx, "clear "+k.String()+" by "+a.Cfg.User, func() error {
+		d, err := a.Repo.ReadDecision(k)
+		if err != nil {
+			return err
+		}
+		if d == nil {
+			return ErrNotDecided
+		}
+		if !d.DecidedAt.UTC().Truncate(time.Second).Equal(want) {
+			return fmt.Errorf("%s: %w (now %s, decided at %s)", k, ErrStaleDecision, d.Disposition, d.DecidedAt.UTC().Format(time.RFC3339))
+		}
+		if err := os.Remove(filepath.Join(a.Repo.Dir, filepath.FromSlash(k.File()))); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
+	return err
 }
 
 // DecideBatch records every entry (one commit each) and pushes once. Invalid

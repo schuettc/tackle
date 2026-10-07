@@ -54,6 +54,8 @@ Allowed dispositions per kind:
 - branch: keep delete wait watch ignore
 - worktree: keep delete wait ignore
 
+`wait` and `watch` behave the same. The page offers neither word: it offers "Not now" and writes `wait`. `watch` is still read and accepted (from older decisions, agents and rule files), is treated as `wait`, and shows on the page as Not now. Clearing a decision (the page's undo) removes its file in one commit, `clear <key> by <user>`.
+
 `until` conditions:
 - `date(YYYY-MM-DD)`
 - `merged(<pr key>)`

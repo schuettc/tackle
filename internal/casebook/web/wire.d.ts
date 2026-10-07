@@ -179,6 +179,12 @@ export interface VocabularyView {
 export interface DecisionVocabView {
   kinds: KindVocab[] | null;
   until_forms: UntilForm[] | null;
+  not_now: NotNowForm[] | null;
+}
+
+export interface ClearResult {
+  cleared: boolean;
+  pushed_later: boolean;
 }
 
 export interface JobStepResult {
@@ -421,12 +427,22 @@ export interface KindVocab {
   kind: string;
   allowed: string[] | null;
   needs_until: string[] | null;
+  question: string;
+  choices: ChoiceVocab[] | null;
 }
 
 export interface UntilForm {
   op: string;
   syntax: string;
   example: string;
+}
+
+export interface NotNowForm {
+  id: string;
+  label: string;
+  template: string;
+  asks: string;
+  days?: number;
 }
 
 export interface NeedsYou {
@@ -539,6 +555,14 @@ export interface Exclusion {
   reason?: string;
   by: string;
   at: string;
+}
+
+export interface ChoiceVocab {
+  disposition: string;
+  label: string;
+  says: string;
+  outward: boolean;
+  needs_until: boolean;
 }
 
 export interface Step {

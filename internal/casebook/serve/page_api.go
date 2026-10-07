@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -215,12 +216,61 @@ func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) 
 		if needsUntil == nil {
 			needsUntil = []string{}
 		}
-		vocab.Kinds[i] = KindVocab{Kind: string(k), Allowed: strs, NeedsUntil: needsUntil}
+		var choices []ChoiceVocab
+		for _, c := range item.Choices(k) {
+			choices = append(choices, ChoiceVocab{Disposition: string(c.Disposition), Label: c.Label, Says: c.Says, Outward: c.Outward, NeedsUntil: c.NeedsUntil})
+		}
+		vocab.Kinds[i] = KindVocab{Kind: string(k), Allowed: strs, NeedsUntil: needsUntil, Question: item.Question(k), Choices: nonNil(choices)}
 	}
 	for _, f := range item.UntilForms() {
 		vocab.UntilForms = append(vocab.UntilForms, UntilForm{Op: f.Op, Syntax: f.Syntax, Example: f.Example})
 	}
+	for _, f := range item.NotNowForms() {
+		vocab.NotNow = append(vocab.NotNow, NotNowForm{ID: f.ID, Label: f.Label, Template: f.Template, Asks: f.Asks, Days: f.Days})
+	}
 	reply(w, vocab, nil)
+}
+
+// postClearDecision handles POST /api/decisions/clear: the page's undo. It
+// removes the item's decision only when its decided_at is still the one the
+// page made (409 when the agent, a rule or another page decided since), then
+// asks for the background push and rebuilds the index, as a decide does.
+func (s *Server) postClearDecision(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Key       string    `json:"key"`
+		DecidedAt time.Time `json:"decided_at"`
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	k, err := item.ParseKey(in.Key)
+	if err != nil {
+		reply(w, nil, bad("%v", err))
+		return
+	}
+	if in.DecidedAt.IsZero() {
+		reply(w, nil, bad("decided_at required"))
+		return
+	}
+	ctx := r.Context()
+	err = s.App.Clear(ctx, k.String(), in.DecidedAt)
+	switch {
+	case errors.Is(err, app.ErrNotDecided):
+		reply(w, ClearResult{Cleared: false, PushedLater: true}, nil)
+		return
+	case errors.Is(err, app.ErrStaleDecision):
+		reply(w, nil, httpError{code: http.StatusConflict, msg: err.Error()})
+		return
+	case err != nil:
+		reply(w, nil, err)
+		return
+	}
+	s.publish(ctx, "cleared", map[string]any{"keys": []string{k.String()}, "by": s.App.Cfg.User})
+	// A rebuild error isn't a failure: the clear is committed and the watch
+	// loop rebuilds on the moved HEAD (finishDecides).
+	_ = s.finishDecides(ctx, 1, nil)
+	reply(w, ClearResult{Cleared: true, PushedLater: true}, nil)
 }
 
 func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {

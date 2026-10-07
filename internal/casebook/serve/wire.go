@@ -285,16 +285,58 @@ type VocabularyView struct {
 // It is generated from the Go item package and is the single source of truth
 // for which dispositions are valid per kind and which ones require an until
 // condition.  The page deletes its hand-copied tables and reads this instead.
+//
+// It also carries all the decide wording (item.Question, item.Choices,
+// item.NotNowForms): the page writes no question, label or sentence of its
+// own.
 type DecisionVocabView struct {
 	Kinds      []KindVocab `json:"kinds"`
 	UntilForms []UntilForm `json:"until_forms"`
+	// NotNow is Not now's conditions, in the order the page offers them.
+	NotNow []NotNowForm `json:"not_now"`
 }
 
-// KindVocab describes the valid decisions for one item kind.
+// KindVocab describes the valid decisions for one item kind. Allowed and
+// NeedsUntil are what the server accepts (watch included); Question and
+// Choices are what the decide step offers (watch never: Not now writes
+// wait).
 type KindVocab struct {
-	Kind       string   `json:"kind"`
-	Allowed    []string `json:"allowed"`
-	NeedsUntil []string `json:"needs_until"`
+	Kind       string        `json:"kind"`
+	Allowed    []string      `json:"allowed"`
+	NeedsUntil []string      `json:"needs_until"`
+	Question   string        `json:"question"`
+	Choices    []ChoiceVocab `json:"choices"`
+}
+
+// ChoiceVocab is one answer card: its disposition, label and what choosing
+// it does (Says). Outward choices only go to To apply. NeedsUntil choices
+// (Not now) need a condition from DecisionVocabView.NotNow.
+type ChoiceVocab struct {
+	Disposition string `json:"disposition"`
+	Label       string `json:"label"`
+	Says        string `json:"says"`
+	Outward     bool   `json:"outward"`
+	NeedsUntil  bool   `json:"needs_until"`
+}
+
+// NotNowForm is one Not now condition. Template is an until form with one
+// %s hole filled with what Asks names: "days" (the page fills the date
+// today + Days), "date", "pr", "pr-or-issue" or "repo" (the page asks for
+// it). When Asks is "" the form is fixed and Template is the whole until.
+type NotNowForm struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Template string `json:"template"`
+	Asks     string `json:"asks"`
+	Days     int    `json:"days,omitempty"`
+}
+
+// ClearResult is the response body of POST /api/decisions/clear. Cleared is
+// false when the item had no decision. Like DecideResult it doesn't wait for
+// the push (PushedLater is always true).
+type ClearResult struct {
+	Cleared     bool `json:"cleared"`
+	PushedLater bool `json:"pushed_later"`
 }
 
 // UntilForm is one until operator with its syntax pattern and one example
