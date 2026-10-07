@@ -2864,7 +2864,26 @@ async function lookIntoScenario(context, t, s) {
       `still looking while the message is worked on ("${got.item}")`,
       got.item === LOOKING,
     );
-    // With the recommendation on the row too, the marker matches its line.
+    // With the recommendation on the row too (once the list has it), the
+    // marker matches its line.
+    await until(
+      pg,
+      (k) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].some(
+          (x) =>
+            x.querySelector('.kit-kicker')?.textContent === k &&
+            (x.querySelector('.kit-sub')?.textContent ?? '').includes(
+              'recommends',
+            ) &&
+            !!x.querySelector('.cb-row-looking'),
+        ),
+      kicker(KEY),
+      8000,
+    );
     const geo = await rowLooking();
     check(
       `on the row, the marker matches "pi recommends …": left ${geo.left} vs ${geo.sub?.left}, colour ${geo.color} vs ${geo.sub?.color}, size ${geo.font} vs ${geo.sub?.font}; one line (${geo.height}px)`,
