@@ -104,6 +104,12 @@ export interface Section {
   /**
    * onLive receives every live event, active or not, so a hidden section's
    * state (its selection, its counts) stays current for when it comes back.
+   *
+   * The stream starts where the page's first summary left the log (its
+   * cursor): what the page shows on load comes from its own first reads,
+   * never from replaying the log. 'gap' says serve pruned events this page
+   * had not heard (it was away that long): every section reloads what it
+   * shows.
    */
   onLive(type: string, data: unknown): void;
   /**
@@ -184,10 +190,22 @@ function emitLive(type: string, data: unknown): void {
 
 let booted = false;
 
+// boot asks for the summary first, then mounts the page: the summary's
+// cursor is where the live stream starts, and every first read the page
+// makes (the sections', the dock's) is sent after serve read that cursor,
+// so an event published meanwhile is heard, not missed. Without a summary
+// (serve not answering) the page still mounts, and its stream starts
+// without a cursor.
 export function boot(): void {
   if (booted) return;
   booted = true;
+  void fetch('/api/summary', { credentials: 'same-origin' })
+    .then((r) => (r.ok ? (r.json() as Promise<SummaryView>) : null))
+    .catch(() => null)
+    .then((first) => start(first));
+}
 
+function start(first: SummaryView | null): void {
   // ---- API client -----------------------------------------------------------
 
   // A restarted serve no longer knows this tab's token (spec §2.4): the first
@@ -475,6 +493,8 @@ export function boot(): void {
       poll: '/api/state',
       cursor,
       onEvent(e) {
+        // Events this page never heard were pruned: the bar asks again too.
+        if (e.type === 'gap') loadSummary();
         emitLive(e.type, e.data);
         // Every section hears every event; only the active one feeds the
         // composer's attached line (Section.show/hide).
@@ -533,7 +553,12 @@ export function boot(): void {
     handle.setLive('stale');
   }
 
-  let liveClient = startLive();
+  // From the first summary's cursor: never a replay of the log.
+  let liveClient = startLive(
+    first && typeof first.cursor === 'number'
+      ? String(first.cursor)
+      : undefined,
+  );
 
   // ---- keys -----------------------------------------------------------------
 
@@ -600,21 +625,22 @@ export function boot(): void {
     const mine = ++summaryAsked;
     void api
       .get<SummaryView>('/summary')
-      .then((s) => {
-        if (mine < summaryShown) return;
-        summaryShown = mine;
-        summary = s;
-        const counts = s.counts ?? {};
-        // 'all' is the attention total; 'to-apply' the decided items waiting
-        // to be applied. The Rules section counts its rules itself (the
-        // summary has no rules count).
-        handle.setCount('attention', counts['all'] ?? 0);
-        handle.setCount('apply', counts['to-apply'] ?? 0);
-        paintStatus();
-      })
+      .then((s) => showSummary(s, mine))
       .catch(() => {
         // non-fatal: the next index or decision asks again
       });
+  }
+  function showSummary(s: SummaryView, mine: number): void {
+    if (mine < summaryShown) return;
+    summaryShown = mine;
+    summary = s;
+    const counts = s.counts ?? {};
+    // 'all' is the attention total; 'to-apply' the decided items waiting
+    // to be applied. The Rules section counts its rules itself (the
+    // summary has no rules count).
+    handle.setCount('attention', counts['all'] ?? 0);
+    handle.setCount('apply', counts['to-apply'] ?? 0);
+    paintStatus();
   }
   // paintStatus draws the status from the last summary; "synced Nm ago"
   // follows the clock (no request: a stale tab keeps its words).
@@ -639,7 +665,9 @@ export function boot(): void {
     );
   }
   setInterval(paintStatus, 15000);
-  loadSummary();
+  // The boot's summary is the bar's first: no second request for it.
+  if (first) showSummary(first, ++summaryAsked);
+  else loadSummary();
   onLiveEvent('index', loadSummary);
   onLiveEvent('push', loadSummary);
 

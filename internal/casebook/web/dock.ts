@@ -44,6 +44,7 @@ import { fmtAge } from './time-utils.ts';
 import { go } from './router.ts';
 import { threadOrder } from './thread.ts';
 import { makeComposer } from './composer.ts';
+import { coalesced } from './coalesce.ts';
 import {
   attachedState,
   pickable,
@@ -816,9 +817,19 @@ export function makeDock(ctx: Ctx): DockHandle {
 
   // ---- data fetching --------------------------------------------------------
 
-  async function loadSessions() {
+  // loadSessions asks for the sessions the dock shows: serve's eligible
+  // ones (the chooser, "move to…") and the attached one, whatever its
+  // state (its header says when it has left). Coalesced: a burst of live
+  // events is one request in flight and one queued, never one each.
+  const loadSessions = coalesced(fetchSessions);
+  async function fetchSessions() {
     try {
-      const sv = await ctx.api.get<SessionsView>('/sessions');
+      const attached =
+        currentSessionId || (urlRead ? '' : urlSession(location.href));
+      const sv = await ctx.api.get<SessionsView>(
+        '/sessions',
+        attached ? { session: attached } : undefined,
+      );
       sessions = sv.sessions ?? [];
       if (!currentSessionId) {
         // The URL's session (read once), else the lone eligible session,
@@ -1110,6 +1121,14 @@ export function makeDock(ctx: Ctx): DockHandle {
     progLine.clear();
     void loadMessages();
     void loadSessions();
+  });
+
+  // gap: serve pruned events this page never heard (it was away that
+  // long). Whatever they said, the dock reloads all it shows.
+  ctx.on('gap', () => {
+    void loadSessions();
+    void loadThreads();
+    void loadProgress();
   });
 
   // drafts: a draft was edited, removed or reordered.

@@ -4,6 +4,39 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.2] - 2026-10-07
+
+### Fixed
+- The page no longer replays the whole event log when it loads. It
+  starts its live stream at the cursor its first summary carries
+  (`GET /api/summary`'s new `cursor`), and everything it shows on load
+  comes from its own first reads. On a machine whose log held 206,439
+  events, an item took 24.6 s to show after a click; it now shows at
+  once.
+- A heartbeat no longer publishes a `sessions` event unless it changed
+  what the page shows of the session: a new session, one crossing into
+  or out of left, a new name or label, becoming or no longer being a
+  worker, an end, a queued count. Sessions crossing into left are still
+  announced by serve's watch, and the watch now also announces a
+  delivery going stuck (or no longer stuck), which the page used to
+  learn from the next heartbeat. About 40 live sessions used to publish
+  one each every 30 s, and every one made each open page fetch the
+  session list again (14,870 fetches for one click).
+- The dock and To apply each fetch the session list with at most one
+  request in flight and one queued, however many events arrive.
+- `GET /api/sessions` answers only what the page uses: live sessions
+  that are not subagent workers, plus any named by `?session=` (comma-
+  separated: the dock's attached session, shown after it has left, and
+  To apply's jobs' sessions). `?all=1` answers every known session.
+
+### Changed
+- serve prunes the event log when it starts and every hour, keeping the
+  newest 10,000 events or the last 7 days of them, whichever is more.
+  It used to drop week-old events only after a day of uptime. A page
+  whose cursor is older than the oldest event kept hears a `gap` event
+  first (the stream and `/api/state` both send it), and reloads all it
+  shows.
+
 ## [casebook 0.4.1] - 2026-10-07
 
 ### Added

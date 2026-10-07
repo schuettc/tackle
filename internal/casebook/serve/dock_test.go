@@ -171,7 +171,8 @@ func TestLeftThreshold(t *testing.T) {
 	// Advance past the short left threshold.
 	time.Sleep(100 * time.Millisecond)
 
-	if c := r.do(t, "GET", "/api/sessions", nil, &sv); c != http.StatusOK {
+	// A session that left is listed only for the page attached to it.
+	if c := r.do(t, "GET", "/api/sessions?session=s1", nil, &sv); c != http.StatusOK {
 		t.Fatalf("sessions %d", c)
 	}
 	var found bool

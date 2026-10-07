@@ -161,6 +161,9 @@ var booted = false;
 function boot() {
   if (booted) return;
   booted = true;
+  void fetch("/api/summary", { credentials: "same-origin" }).then((r) => r.ok ? r.json() : null).catch(() => null).then((first) => start(first));
+}
+function start(first) {
   let stale = false;
   const gated = (input, init) => stale ? Promise.reject(
     new Error("casebook serve restarted: this tab has stopped")
@@ -373,6 +376,7 @@ function boot() {
       poll: "/api/state",
       cursor,
       onEvent(e) {
+        if (e.type === "gap") loadSummary();
         emitLive(e.type, e.data);
         for (const sec of sections.values()) sec.onLive(e.type, e.data);
       },
@@ -421,7 +425,9 @@ function boot() {
     setDown(false);
     handle.setLive("stale");
   }
-  let liveClient = startLive();
+  let liveClient = startLive(
+    first && typeof first.cursor === "number" ? String(first.cursor) : void 0
+  );
   for (const [k, id, label] of [
     ["g a", "attention", "go to attention"],
     ["g r", "rules", "go to rules"],
@@ -455,16 +461,17 @@ function boot() {
   let summary = null;
   function loadSummary() {
     const mine = ++summaryAsked;
-    void api.get("/summary").then((s) => {
-      if (mine < summaryShown) return;
-      summaryShown = mine;
-      summary = s;
-      const counts = s.counts ?? {};
-      handle.setCount("attention", counts["all"] ?? 0);
-      handle.setCount("apply", counts["to-apply"] ?? 0);
-      paintStatus();
-    }).catch(() => {
+    void api.get("/summary").then((s) => showSummary(s, mine)).catch(() => {
     });
+  }
+  function showSummary(s, mine) {
+    if (mine < summaryShown) return;
+    summaryShown = mine;
+    summary = s;
+    const counts = s.counts ?? {};
+    handle.setCount("attention", counts["all"] ?? 0);
+    handle.setCount("apply", counts["to-apply"] ?? 0);
+    paintStatus();
   }
   function paintStatus() {
     const s = summary;
@@ -485,7 +492,8 @@ function boot() {
     );
   }
   setInterval(paintStatus, 15e3);
-  loadSummary();
+  if (first) showSummary(first, ++summaryAsked);
+  else loadSummary();
   onLiveEvent("index", loadSummary);
   onLiveEvent("push", loadSummary);
   dispatchCurrent();
@@ -1474,6 +1482,29 @@ function urlWithSession(href, session) {
   return u.toString();
 }
 
+// coalesce.ts
+function coalesced(load) {
+  let running = null;
+  let queued = null;
+  function call() {
+    if (!running) {
+      running = load().finally(() => {
+        running = null;
+      });
+      return running;
+    }
+    if (!queued) {
+      queued = running.catch(() => {
+      }).then(() => {
+        queued = null;
+        return call();
+      });
+    }
+    return queued;
+  }
+  return call;
+}
+
 // apply.ts
 var PAGE = 200;
 var STEPS_PAGE = 200;
@@ -1845,6 +1876,7 @@ function makeApply(ctx) {
       cards = c.cards ?? [];
       if (open) patchJob(open);
       paintList();
+      askNamedSessions();
     } catch {
     }
   }
@@ -1867,6 +1899,7 @@ function makeApply(ctx) {
     });
     if (drawn) setOpen(drawn);
     else paintList();
+    askNamedSessions();
   }
   async function loadItems(offset = 0) {
     const mine = itemsSeq.next();
@@ -1891,9 +1924,31 @@ function makeApply(ctx) {
     } catch {
     }
   }
-  async function loadSessions() {
+  const loadSessions = coalesced(fetchSessions);
+  let sessionsNamed = /* @__PURE__ */ new Set();
+  function namedSessions() {
+    const ids = [
+      ctx.dockSession(),
+      courtSession,
+      open?.job.session ?? "",
+      ...jobs.map((j) => j.session)
+    ];
+    return [...new Set(ids.filter(Boolean))].sort();
+  }
+  function askNamedSessions() {
+    const missing = namedSessions().some(
+      (id) => !sessionsNamed.has(id) && !sessions.some((s) => s.id === id)
+    );
+    if (missing) mark((d) => d.sessions = true);
+  }
+  async function fetchSessions() {
     try {
-      const v = await ctx.api.get("/sessions");
+      const named = namedSessions();
+      sessionsNamed = new Set(named);
+      const v = await ctx.api.get(
+        "/sessions",
+        named.length ? { session: named.join(",") } : void 0
+      );
       sessions = v.sessions ?? [];
       paintList();
       if (open?.job.state === "planned") drawOpen();
@@ -1919,6 +1974,7 @@ function makeApply(ctx) {
       const v = await ctx.api.get("/job", { id: String(id) });
       if (!jobSeq.isLatest(mine) || openId !== id) return;
       setOpen(v);
+      askNamedSessions();
     } catch (err) {
       if (!jobSeq.isLatest(mine) || openId !== id) return;
       open = null;
@@ -2493,6 +2549,10 @@ function makeApply(ctx) {
         });
       } else if (type === "sessions") {
         mark((d) => d.sessions = true);
+      } else if (type === "gap") {
+        mark((d) => {
+          d.all = d.items = d.sessions = d.summary = true;
+        });
       } else if (type === "sync") {
         onSync(data ?? {});
       }
@@ -4173,7 +4233,17 @@ function makeAttention(ctx) {
     listKeys: () => boardHandle ? null : { nav: handle, selects: true },
     keys: () => boardHandle ? boardKeys : listKeys,
     onLive(type, data) {
-      if (type === "index") {
+      if (type === "gap") {
+        refreshSummary();
+        if (boardHandle) {
+          void boardHandle.refresh();
+        } else {
+          void reload();
+        }
+        if (currentOpenKey && currentOpenKey !== deciding) {
+          void openDetail(currentOpenKey);
+        }
+      } else if (type === "index") {
         const s = data;
         applyCounts(s?.counts ?? null);
         refreshSummary();
@@ -5392,9 +5462,14 @@ function makeDock(ctx) {
     batchTray.el.before(...cards);
     messageArea.scrollTop = messageArea.scrollHeight;
   }
-  async function loadSessions() {
+  const loadSessions = coalesced(fetchSessions);
+  async function fetchSessions() {
     try {
-      const sv = await ctx.api.get("/sessions");
+      const attached = currentSessionId || (urlRead ? "" : urlSession(location.href));
+      const sv = await ctx.api.get(
+        "/sessions",
+        attached ? { session: attached } : void 0
+      );
       sessions = sv.sessions ?? [];
       if (!currentSessionId) {
         const fromUrl = urlRead ? "" : urlSession(location.href);
@@ -5612,6 +5687,11 @@ function makeDock(ctx) {
     progLine.clear();
     void loadMessages();
     void loadSessions();
+  });
+  ctx.on("gap", () => {
+    void loadSessions();
+    void loadThreads();
+    void loadProgress();
   });
   ctx.on("drafts", () => {
     void batchTray.reload();
@@ -7368,7 +7448,8 @@ function makeRules(ctx) {
       asking = false;
     },
     onLive(type, data) {
-      if (type === "rules") {
+      if (type === "rules" || type === "gap") {
+        if (type === "gap") doc?.refresh();
         void loadList();
         const ev = data;
         if (doc && openId && (!ev?.id || ev.id === openId)) {

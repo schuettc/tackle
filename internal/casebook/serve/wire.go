@@ -48,6 +48,10 @@ type SummaryView struct {
 	// pending proposal, and those casebook_next still has to hand out.
 	Recommended    int `json:"recommended"`
 	NotRecommended int `json:"not_recommended"`
+	// Cursor is the live event log's head when serve began this answer:
+	// the page starts its live stream there (?since=), so it hears what
+	// changes after its first reads and never replays the log.
+	Cursor int64 `json:"cursor"`
 }
 
 // ItemView is an item as the page and the agent see it. Its url (engine.Item's
