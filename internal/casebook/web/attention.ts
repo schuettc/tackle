@@ -22,11 +22,16 @@ import type {
   ItemsView,
   ItemView,
   ItemDetailView,
+  Decision,
+  DecideResult,
+  AcceptResult,
+  ClearResult,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
 import { wireSelection } from './decide.ts';
-import { keyWithoutKind, pluralize } from './decide-math.ts';
+import { keyWithoutKind, pluralize, nextUndecided } from './decide-math.ts';
+import { showChoiceError } from './choices.ts';
 import { makeBoard } from './board.ts';
 import {
   agentFromSource,
@@ -132,6 +137,19 @@ export function makeAttention(ctx: Ctx): Section {
   // The detail the reading column shows (its item is currentOpenKey).
   let shownDetail: ItemDetailView | null = null;
   const viewCounts: Record<string, number> = {}; // last known counts per view chip id
+  // lastOrder is the view's keys as the list last loaded them: the order the
+  // next undecided item is found in after a decision (reload() empties
+  // loadedItems while it waits, so a decision mid-reload reads this).
+  let lastOrder: string[] = [];
+  // deciding is the key this tab is deciding now (one at a time).
+  let deciding: string | null = null;
+  // lastUndo is the last decision made in this tab, for u: the item, the
+  // decision it had before (null: none) and the new one's decided_at.
+  let lastUndo: {
+    key: string;
+    prev: Decision | null;
+    decidedAt: string;
+  } | null = null;
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
 
   // ---- empty reading-column state ------------------------------------------
@@ -417,6 +435,7 @@ export function makeAttention(ctx: Ctx): Section {
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
+      lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       handle.setItems(loadedItems);
       updateFoot();
@@ -436,6 +455,7 @@ export function makeAttention(ctx: Ctx): Section {
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(offset));
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
+      lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
@@ -486,13 +506,193 @@ export function makeAttention(ctx: Ctx): Section {
       // Another item opened meanwhile: this answer is no longer shown.
       if (currentOpenKey !== key) return;
       shownDetail = detail;
-      const el = renderItem(ctx, detail, () => {
-        // Re-render after accept/reject/change from the proposal card.
-        void openDetail(key);
+      const el = renderItem(ctx, detail, {
+        // Re-render after a reject or a change from the recommendation card.
+        onRefresh: () => void openDetail(key),
+        decide: (d, until) => void decideOpen(key, d, until),
+        accept: () => void acceptOpen(),
       });
       readEl.replaceChildren(el);
     } catch {
       // non-fatal; leave the reading column
+    }
+  }
+
+  // ---- the decide step: decide, move on, undo ------------------------------
+
+  // viewLabel is the view's name in the summary ("waiting on you").
+  function viewLabel(): string {
+    return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
+  }
+
+  // showReadError shows serve's message in the reading column: on the open
+  // item's cards, else under the summary.
+  function showReadError(message: string): void {
+    if (readEl.querySelector('.cb-choice-err')) {
+      showChoiceError(readEl, message);
+      return;
+    }
+    readEl.firstElementChild?.append(
+      h('p', { class: 'cb-choice-err' }, message),
+    );
+  }
+
+  // showDone is the reading column when the view has nothing left.
+  function showDone(): void {
+    currentOpenKey = null;
+    shownDetail = null;
+    readEl.replaceChildren(
+      h(
+        'div',
+        { class: 'cb-read-empty' },
+        h('p', { class: 'cb-read-empty-section kit-label' }, 'attention'),
+        h('p', { class: 'cb-read-done' }, `Nothing left in ${viewLabel()}.`),
+      ),
+    );
+    feedAttached();
+  }
+
+  // openKey opens key in the reading column (and the URL), as a click does.
+  // When the URL already names key (the summary after its decision keeps
+  // it), no route change comes, so it opens here.
+  function openKey(key: string): void {
+    const before = location.hash;
+    ctx.route.go('item', key);
+    if (location.hash === before) {
+      void openDetail(key);
+      void reload();
+    }
+  }
+
+  // remember records a decision this tab made on key, for u: the decision
+  // it had before, and the new one's decided_at (serve's, read back).
+  async function remember(key: string, prev: Decision | null): Promise<void> {
+    lastUndo = null;
+    try {
+      const d = await ctx.api.get<ItemDetailView>('/item', { key });
+      if (d.item.decision)
+        lastUndo = { key, prev, decidedAt: d.item.decision.decided_at };
+    } catch {
+      // Nothing to undo with: u does nothing rather than guess.
+    }
+  }
+
+  // moveOn opens the next undecided item in the view's order (order: the
+  // view's keys when key was decided), or the view's summary when none is
+  // left. The undecided ones are the view as serve lists it now, so an item
+  // decided elsewhere meanwhile is passed over and none is skipped.
+  async function moveOn(key: string, order: string[]): Promise<void> {
+    let undecided: Set<string>;
+    try {
+      const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
+      undecided = new Set((data.items ?? []).map((it) => it.key));
+    } catch {
+      void openDetail(key);
+      return;
+    }
+    undecided.delete(key);
+    // Court opened something else meanwhile: leave it open.
+    if (currentOpenKey !== key) return;
+    const next = nextUndecided(order, key, undecided);
+    if (next) openKey(next);
+    else {
+      showDone();
+      void reload();
+    }
+  }
+
+  // decideOpen decides the open item (a card, a number key) and moves on.
+  async function decideOpen(
+    key: string,
+    disposition: string,
+    until?: string,
+  ): Promise<void> {
+    if (deciding) return;
+    deciding = key;
+    const order = [...lastOrder];
+    const prev =
+      shownDetail?.item.key === key
+        ? (shownDetail.item.decision ?? null)
+        : null;
+    try {
+      const payload: Record<string, unknown> = { keys: [key], disposition };
+      if (until) payload['until'] = until;
+      const r = await ctx.api.post<DecideResult>('/decide', payload);
+      if (!(r.decided_keys ?? []).length) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was decided');
+        return;
+      }
+      selection.deselect([key]);
+      await remember(key, prev);
+      await moveOn(key, order);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
+  // acceptOpen accepts the open item's recommendation (a, or the card's
+  // accept) and moves on.
+  async function acceptOpen(): Promise<void> {
+    const p = shownProposal();
+    const key = currentOpenKey;
+    if (!p || !key || deciding) return;
+    deciding = key;
+    const order = [...lastOrder];
+    const prev = shownDetail?.item.decision ?? null;
+    try {
+      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
+        ids: [p.id],
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
+        return;
+      }
+      selection.deselect([key]);
+      await remember(key, prev);
+      await moveOn(key, order);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
+  // undo takes back the last decision this tab made: clears it when the
+  // item had none before, else decides the one it had. serve refuses a
+  // clear when the decision changed since (409); its message shows.
+  async function undo(): Promise<void> {
+    const u = lastUndo;
+    if (!u || deciding) return;
+    deciding = u.key;
+    try {
+      if (!u.prev) {
+        await ctx.api.post<ClearResult>('/decisions/clear', {
+          key: u.key,
+          decided_at: u.decidedAt,
+        });
+      } else {
+        const payload: Record<string, unknown> = {
+          keys: [u.key],
+          disposition: u.prev.disposition,
+        };
+        if (u.prev.until) payload['until'] = u.prev.until;
+        if (u.prev.note) payload['note'] = u.prev.note;
+        const r = await ctx.api.post<DecideResult>('/decide', payload);
+        if (!(r.decided_keys ?? []).length) {
+          showReadError((r.errors ?? []).join('; ') || 'nothing was undone');
+          return;
+        }
+      }
+      lastUndo = null;
+      openKey(u.key);
+    } catch (err) {
+      // A refusal stands: this decision can't be undone any more.
+      lastUndo = null;
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
     }
   }
 
@@ -582,16 +782,7 @@ export function makeAttention(ctx: Ctx): Section {
     label: 'accept proposal',
     group: 'page',
     run() {
-      const p = shownProposal();
-      if (!p || !currentOpenKey) return;
-      void ctx.api
-        .post('/proposals/accept', { ids: [p.id] })
-        .then(() => {
-          selection.deselect([currentOpenKey!]);
-          void openDetail(currentOpenKey!);
-          void reload();
-        })
-        .catch(() => {});
+      void acceptOpen();
     },
   };
 
@@ -610,7 +801,38 @@ export function makeAttention(ctx: Ctx): Section {
     },
   };
 
-  const listKeys: KeyBinding[] = [decideKey, acceptKey, rejectKey];
+  // u undoes the last decision this tab made; 1..9 pick the open item's
+  // nth card (a click on it: Not now opens its conditions).
+  const undoKey: KeyBinding = {
+    keys: 'u',
+    label: 'undo the last decision',
+    group: 'page',
+    run() {
+      if (!lastUndo) return false;
+      void undo();
+    },
+  };
+  const choiceKeys: KeyBinding[] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+    keys: String(n),
+    label: `pick choice ${n}`,
+    group: 'page',
+    run() {
+      if (!currentOpenKey) return false;
+      const card = readEl.querySelectorAll<HTMLElement>(
+        '.cb-choices .cb-choice',
+      )[n - 1];
+      if (!card) return false;
+      card.click();
+    },
+  }));
+
+  const listKeys: KeyBinding[] = [
+    decideKey,
+    acceptKey,
+    rejectKey,
+    undoKey,
+    ...choiceKeys,
+  ];
   // The board is not a list (no j/k/o/x), but it has the list's search
   // field: / focuses it there too.
   const searchKey: KeyBinding = {
@@ -786,6 +1008,15 @@ export function makeAttention(ctx: Ctx): Section {
         const decidedKeys = decidedPayload?.keys ?? [];
         if (decidedKeys.length > 0) {
           selection.deselect(decidedKeys);
+        }
+        // The open item decided elsewhere: show its decision (not while this
+        // tab is deciding it, which moves on).
+        if (
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          decidedKeys.includes(currentOpenKey)
+        ) {
+          void openDetail(currentOpenKey);
         }
         // Re-fetch summary so view-chip counts stay correct.
         void ctx.api

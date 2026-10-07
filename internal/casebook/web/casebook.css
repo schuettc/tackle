@@ -212,44 +212,6 @@
 
 /* ---- decide sheet body (.kit-float .kit-sheet) body elements -------------- */
 
-/* Disposition picker */
-.cb-sheet-disps {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
-.cb-sheet-disp {
-  font: 13px var(--kit-mono);
-  color: var(--kit-fg);
-  background: transparent;
-  border: 1.5px solid var(--kit-line);
-  border-radius: 6px;
-  padding: 4px 14px;
-  cursor: pointer;
-  transition: border-color 0.1s;
-}
-
-.cb-sheet-disp:hover {
-  border-color: var(--kit-muted);
-}
-
-.cb-sheet-disp.on {
-  background: var(--kit-signal-soft);
-  border-color: var(--kit-signal);
-  color: var(--kit-signal);
-}
-
-.cb-sheet-disp--danger {
-  color: var(--kit-danger);
-}
-
-.cb-sheet-disp--danger.on {
-  background: rgba(var(--kit-danger-rgb, 194 42 42) / 0.1);
-  border-color: var(--kit-danger);
-}
-
 /* Row: label + input */
 .cb-sheet-row {
   display: flex;
@@ -371,16 +333,145 @@
   flex-shrink: 0;
 }
 
-/* ---- decide buttons in item detail --------------------------------------- */
+/* ---- the decide step (item.ts, choices.ts) ------------------------------ */
 
-.cb-decide-btns {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+/* The question, then the recommendation, then the cards two to a row. */
+.cb-decide {
+  margin: 28px 0 0;
 }
 
-.cb-decide-btns .cb-sheet-disp {
-  padding: 4px 12px;
+.cb-question {
+  font: 600 20px/1.35 var(--kit-sans);
+  margin: 0 0 12px;
+}
+
+.cb-decide .cb-proposal-card {
+  margin: 0 0 16px;
+}
+
+.cb-choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* A card is a kit card that is one button: the number, the label, what
+   happens. Chosen: the signal border. Recommended: the number line in the
+   agent's colour. Only delete draws its label in danger. */
+.cb-choice.kit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 12px 14px;
+  font: inherit;
+  color: var(--kit-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cb-choice.kit-card:hover {
+  border-color: var(--kit-signal);
+}
+
+.cb-choice.kit-card.on {
+  border: 2px solid var(--kit-signal);
+  padding: 11px 13px;
+}
+
+.cb-choice-k {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+}
+
+.cb-choice.rec .cb-choice-k {
+  color: var(--kit-agent);
+}
+
+.cb-choice-label {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.cb-choice.danger .cb-choice-label {
+  color: var(--kit-danger);
+}
+
+.cb-choice-says {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--kit-muted);
+}
+
+/* Not now's conditions, under the cards. */
+.cb-notnow {
+  margin: 10px 0 0;
+  padding: 10px 14px 12px;
+  border: 1px dashed var(--kit-line);
+  border-radius: 8px;
+}
+
+.cb-notnow[hidden],
+.cb-notnow-field[hidden] {
+  display: none;
+}
+
+.cb-notnow .cb-notnow-chips {
+  margin-top: 0;
+}
+
+.cb-notnow-field {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* serve's refusal: plain text on a muted rule (danger is for delete). */
+.cb-choice-err {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  border-left: 2px solid var(--kit-muted);
+  padding-left: 8px;
+  margin: 10px 0 0;
+}
+
+.cb-choice-err[hidden] {
+  display: none;
+}
+
+/* The recommendation's keys. */
+.kit-doc .cb-keyhint,
+.cb-keyhint {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 8px 0 0;
+}
+
+.cb-keyhint kbd {
+  font: 11.5px var(--kit-mono);
+  border: 1px solid var(--kit-line);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+
+.kit-doc .cb-proposal-until {
+  font: 12.5px var(--kit-mono);
+  margin: 6px 0 0;
+}
+
+/* The view's summary once nothing is left. */
+.cb-read-done {
+  font-size: 15px;
+  margin: 8px 0 0;
+}
+
+/* The decide sheet holds the same two-column cards: wider than a plain sheet. */
+.kit-sheet:has(.cb-decide-sheet) {
+  width: min(640px, 92vw);
+}
+
+.cb-decide-sheet .cb-question {
+  font-size: 17px;
 }
 
 /* ---- needs-you cards (apply section) ------------------------------------- */

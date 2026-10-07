@@ -2,7 +2,7 @@
 //
 // Exported:
 //   agentFromSource(source)            — "pi:session-id" → "pi"
-//   proposalCard(ctx, detail, onDone)   — amber card above the decide section
+//   proposalCard(ctx, detail, onDone)   — the recommendation card in the decide step
 //   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
 //   bulkProposalActions(ctx, onDone)    — accept N / reject N… foot; call .update()
 
@@ -105,12 +105,22 @@ export function openRejectSheet(
 
 // ---- proposal card ----------------------------------------------------------
 
+/** What the decide step gives the recommendation card. */
+export interface ProposalCardOpts {
+  /** serve's label for the recommended choice ("Close it"). */
+  label?: string;
+  /** accept replaces the card's own accept (the decide step moves on after it). */
+  accept?: () => void;
+}
+
 /**
- * proposalCard renders the amber kit card above the decide section.
- * Returns null if the item has no pending proposal.
+ * proposalCard renders the recommendation: the amber kit card between the
+ * decide step's question and its cards. Returns null if the item has no
+ * pending proposal.
  *
- * The card head is "<agent> proposes · <disposition>" in agent colour
- * (small uppercase mono via the kit's edge:'agent' styling).
+ * The card head is "<source> proposes · <choice label>" in agent colour
+ * (small uppercase mono via the kit's edge:'agent' styling); the body is the
+ * proposal's note, its reason, and the keys that act on it (a, r).
  *
  * Buttons: accept (filled), change… (opens seeded decide sheet, posts to
  * /proposals/change), reject (opens openRejectSheet).
@@ -121,14 +131,15 @@ export function proposalCard(
   ctx: Ctx,
   detail: ItemDetailView,
   onDone?: () => void,
+  opts: ProposalCardOpts = {},
 ): HTMLElement | null {
   const proposal = detail.item.proposal;
   if (!proposal || proposal.state !== 'pending') return null;
   const p = proposal; // narrowed: non-null Proposal with state === 'pending'
 
   const agent = agentFromSource(p.source);
-  // Head: "<agent> proposes · <disposition>" — small uppercase mono via kit.
-  const head = `${agent} proposes \u00b7 ${p.disposition}`;
+  // Head: "<agent> proposes · <choice>" — small uppercase mono via kit.
+  const head = `${agent} proposes \u00b7 ${opts.label ?? p.disposition}`;
 
   const lines: (Node | string)[] = [];
   if (p.note) {
@@ -136,10 +147,27 @@ export function proposalCard(
     noteEl.textContent = p.note;
     lines.push(noteEl);
   }
+  if (p.until) {
+    lines.push(h('p', { class: 'cb-proposal-until' }, `until ${p.until}`));
+  }
+  lines.push(
+    h(
+      'p',
+      { class: 'cb-keyhint' },
+      h('kbd', null, 'a'),
+      ' accept \u00b7 ',
+      h('kbd', null, 'r'),
+      ' reject',
+    ),
+  );
 
   const bodyEl = h('div', { class: 'cb-proposal-body' }, ...lines);
 
   function doAccept(): void {
+    if (opts.accept) {
+      opts.accept();
+      return;
+    }
     void ctx.api
       .post<AcceptResult>('/proposals/accept', { ids: [p.id] })
       .then(() => {

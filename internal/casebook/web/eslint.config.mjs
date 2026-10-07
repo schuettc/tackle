@@ -43,6 +43,9 @@ export default [
           // *.test.ts files use node: imports excluded from the browser tsconfig;
           // allow them to be linted without full project type information.
           allowDefaultProject: ['*.test.ts'],
+          // One default project per test file (nine and counting); the
+          // default cap is eight.
+          maximumDefaultProjectFileMatchCount_THIS_WILL_SLOW_DOWN_LINTING: 16,
         },
         tsconfigRootDir: import.meta.dirname,
       },

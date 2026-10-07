@@ -10,13 +10,10 @@
 //   allowedForKind(vocab, kind)    — allowed dispositions for one kind
 //   allowedForKeys(vocab, keys)    — intersection for a mixed-kind selection
 //
-// openDecideSheet(ctx, keys, onDone) opens a kit sheet() with:
-//   - disposition picker (buttons for each intersected disposition)
-//   - optional `until` field (shown/hidden by vocab's needs_until per kind)
-//   - note field
-//   - live preview ("close 4 items")
-//   - debounced dry-run validation of `until` (server's error message shown)
-//   - a filled "Decide N" button that POSTs to /api/decide
+// openDecideSheet(ctx, keys, onDone) opens a kit sheet for a selection: the
+// item's question, the same cards the open item shows (choices.ts), a note
+// field, and a filled "<choice> · <n> <kind>s" button that POSTs to
+// /api/decide.
 //
 // wireSelection(ctx, listHandle) subscribes to the shared selection store and
 // updates the bar primary button and the .cb-sel-count element.
@@ -35,8 +32,11 @@ import {
   kindFromKey,
   allowedForKind,
   allowedForKeys,
+  choicesForKeys,
+  fillLabel,
   pluralize,
 } from './decide-math.ts';
+import { renderChoices, showChoiceError, asNotNow } from './choices.ts';
 
 // Re-export the pure functions so callers only need one import.
 export { kindFromKey, allowedForKind, allowedForKeys };
@@ -53,41 +53,26 @@ export async function getVocab(ctx: Ctx): Promise<DecisionVocabView> {
   return _vocab;
 }
 
-// ---- helpers ----------------------------------------------------------------
-
-/** Returns true when a given disposition requires an `until` condition for
- *  any of the selected keys' kinds (after intersection they'll all agree). */
-function dispositionNeedsUntil(
-  vocab: DecisionVocabView,
-  keys: string[],
-  disp: string,
-): boolean {
-  const selectedKinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
-  return (vocab.kinds ?? [])
-    .filter((k) => selectedKinds.includes(k.kind))
-    .some((k) => (k.needs_until ?? []).includes(disp));
-}
-
-// Dispositions that are destructive (rendered with danger styling).
-// Exported so item.ts can import it instead of duplicating.
+// Dispositions that are destructive (rendered with danger styling by Rules
+// and To apply). The decide step's cards draw only delete in danger.
 export const DANGER_DISPS = new Set(['close', 'delete', 'archive']);
 
 // ---- openDecideSheet --------------------------------------------------------
 
 /**
  * openDecideSheet fetches the decision vocabulary (cached after the first
- * call) and opens a kit sheet with:
- *  - disposition picker (buttons for the intersection of allowed dispositions)
- *  - optional `until` field (shown when the disposition needs it, per vocab)
- *  - note field
- *  - live preview ("close 4 items")
- *  - debounced dry-run until validation (server's error message shown while typing)
- *  - a filled "Decide N" button that POSTs once to /api/decide
+ * call) and opens a kit sheet for several items that asks the item's
+ * question with the same cards the open item shows (choices.ts), then:
+ *  - Not now's conditions under the cards when Not now is picked
+ *  - a note field
+ *  - a filled button that names the choice and the count
+ *    ("Close it · 4 issues") and POSTs once to /api/decide
  *
- * On success, calls onDone(keys) with the keys that were decided.
+ * Picking a card decides nothing: the fill does. Serve's errors show in the
+ * sheet. On success, calls onDone(keys) with the keys that were decided.
  * Esc or a backdrop click closes the sheet without deciding.
  *
- * Optional `seed` pre-populates disposition/until/note (used by change…).
+ * Optional `seed` pre-picks disposition/until/note (used by change…).
  * Optional `customPost` replaces the default /api/decide POST (also used by
  * change… to post to /api/proposals/change instead).
  */
@@ -112,102 +97,47 @@ function openDecideSheetWithVocab(
   customPost?: (disp: string, until: string, note: string) => Promise<string[]>,
 ): void {
   const n = keys.length;
-  const allowed = allowedForKeys(vocab, keys);
+  const choices = choicesForKeys(vocab, keys);
+  const kinds = [...new Set(keys.map(kindFromKey))];
+  const question =
+    kinds.length === 1
+      ? ((vocab.kinds ?? []).find((k) => k.kind === kinds[0])?.question ?? '')
+      : '';
 
-  let disposition = seed?.disposition ?? '';
+  let disposition = asNotNow(seed?.disposition) ?? '';
   let until = seed?.until ?? '';
   let note = seed?.note ?? '';
   let submitting = false;
   let sh: SheetHandle | null = null;
-  let dryRunTimer: ReturnType<typeof setTimeout> | null = null;
-  let lastDryRunError: string | null = null;
 
-  // ---- preview ---------------------------------------------------------------
+  const labelOf = (d: string) =>
+    choices.find((c) => c.disposition === d)?.label ?? d;
+  const needsUntil = (d: string) =>
+    choices.find((c) => c.disposition === d)?.needs_until ?? false;
 
-  const previewEl = h('p', { class: 'cb-sheet-preview' });
-  // Seed the preview text with the seeded disposition if provided.
-  previewEl.textContent = disposition
-    ? `${disposition} ${pluralize(n, 'item')}`
-    : pluralize(n, 'item');
-
-  function updatePreview(): void {
-    previewEl.textContent = `${disposition || '\u2026'} ${pluralize(n, 'item')}`;
+  // The until a Not now condition made (or the seed's), shown under the cards.
+  const untilEl = h('p', { class: 'cb-sheet-preview' });
+  function updateFill(): void {
+    const fill = sh?.el.querySelector<HTMLElement>('.kit-btn.fill');
+    if (fill)
+      fill.textContent = fillLabel(labelOf(disposition) || 'Decide', keys);
+    untilEl.textContent = until ? `until ${until}` : '';
+    untilEl.hidden = !until || !needsUntil(disposition);
   }
 
-  // ---- until field -----------------------------------------------------------
-
-  const untilInputEl = h('input', {
-    type: 'text',
-    class: 'cb-sheet-input',
-    placeholder:
-      (vocab.until_forms ?? []).map((f) => f.syntax).join(', ') ||
-      'date(YYYY-MM-DD), inactive(90d) \u2026',
-  }) as HTMLInputElement;
-  // Seed the until field if a seed value was provided.
-  if (seed?.until) {
-    untilInputEl.value = seed.until;
-  }
-
-  const untilRow = h(
-    'div',
-    { class: 'cb-sheet-row' },
-    h('label', { class: 'cb-sheet-label' }, 'until'),
-    untilInputEl,
-  );
-  // Show the until row if the seed has a value or if the seeded disposition needs it.
-  untilRow.hidden =
-    !seed?.until && !dispositionNeedsUntil(vocab, keys, disposition);
-
-  // ---- error display ---------------------------------------------------------
-
-  const errEl = h('p', { class: 'cb-sheet-err' });
-  errEl.hidden = true;
-
-  // ---- dry-run validator ------------------------------------------------------
-
-  async function runDryRun(): Promise<void> {
-    if (!disposition) return;
-    if (!dispositionNeedsUntil(vocab, keys, disposition)) return;
-    const currentUntil = untilInputEl.value.trim();
-    if (!currentUntil) {
-      lastDryRunError = `until is required for ${disposition}`;
-      errEl.textContent = lastDryRunError;
-      errEl.hidden = false;
-      return;
-    }
-    try {
-      const result = await ctx.api.post<DecideResult>('/decide', {
-        keys,
-        disposition,
-        until: currentUntil,
-        dry_run: true,
-      });
-      if (result.errors && result.errors.length > 0) {
-        lastDryRunError = result.errors.join('; ');
-        errEl.textContent = lastDryRunError;
-        errEl.hidden = false;
-      } else {
-        lastDryRunError = null;
-        errEl.hidden = true;
-      }
-    } catch {
-      // Ignore network errors during debounced typing; the submit will catch them.
-    }
-  }
-
-  untilInputEl.addEventListener('input', () => {
-    until = untilInputEl.value;
-    lastDryRunError = null;
-    errEl.hidden = true;
-    if (dryRunTimer !== null) clearTimeout(dryRunTimer);
-    dryRunTimer = setTimeout(() => void runDryRun(), 400);
+  const cards = renderChoices(ctx, kinds[0] ?? '', {
+    keys,
+    chosen: disposition || undefined,
+    onPick(d, u) {
+      disposition = d;
+      until = u ?? '';
+      updateFill();
+    },
   });
-
-  // ---- note field ------------------------------------------------------------
 
   const noteInputEl = noteField({
     placeholder: 'optional note',
-    value: seed?.note ?? '',
+    value: note,
     onCommit(v: string) {
       note = v;
     },
@@ -219,88 +149,39 @@ function openDecideSheetWithVocab(
     noteInputEl,
   );
 
-  // ---- disposition buttons ---------------------------------------------------
-
-  const dispContainer = h('div', { class: 'cb-sheet-disps' });
-
-  for (const d of allowed) {
-    const isSeeded = d === disposition;
-    const btn = h(
-      'button',
-      {
-        type: 'button',
-        class:
-          'cb-sheet-disp' +
-          (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger' : '') +
-          (isSeeded ? ' on' : ''),
-        onclick() {
-          disposition = d;
-          updatePreview();
-          const needsUntil = dispositionNeedsUntil(vocab, keys, d);
-          untilRow.hidden = !needsUntil;
-          errEl.hidden = true;
-          lastDryRunError = null;
-          if (dryRunTimer !== null) clearTimeout(dryRunTimer);
-          for (const el of dispContainer.querySelectorAll('.cb-sheet-disp')) {
-            el.classList.toggle('on', el === btn);
-          }
-        },
-      },
-      d,
-    );
-    dispContainer.append(btn);
-  }
-
-  // ---- body ------------------------------------------------------------------
-
   const body = h(
     'div',
-    { class: 'cb-sheet-body' },
-    dispContainer,
-    untilRow,
+    { class: 'cb-sheet-body cb-decide-sheet' },
+    question ? h('p', { class: 'cb-question' }, question) : null,
+    cards,
+    untilEl,
     noteRow,
-    previewEl,
-    errEl,
   );
-
-  // ---- decide action ---------------------------------------------------------
 
   async function doDecide(): Promise<void> {
     if (submitting) return;
+    // The note field commits on blur or Enter; the fill reads it as typed.
+    note = noteInputEl.value;
     if (!disposition) {
-      errEl.textContent = 'select a disposition';
-      errEl.hidden = false;
+      showChoiceError(cards, 'Pick a choice first.');
       return;
     }
-    if (dispositionNeedsUntil(vocab, keys, disposition)) {
-      const currentUntil = untilInputEl.value.trim();
-      if (!currentUntil) {
-        errEl.textContent = `until is required for ${disposition}`;
-        errEl.hidden = false;
-        return;
-      }
-      // Cancel any pending debounce and run a blocking dry run before submit.
-      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
-      await runDryRun();
-      if (lastDryRunError) {
-        // runDryRun already updated errEl.
-        return;
-      }
-      until = currentUntil;
-    } else {
-      until = '';
+    if (needsUntil(disposition) && !until) {
+      showChoiceError(cards, 'Pick when to bring it back.');
+      return;
     }
+    const u = needsUntil(disposition) ? until : '';
     submitting = true;
-    errEl.hidden = true;
+    showChoiceError(cards, '');
     try {
       let decidedKeys: string[];
       let errors: string[] = [];
       if (customPost) {
         // Custom post (e.g. /proposals/change): caller owns the endpoint.
-        decidedKeys = await customPost(disposition, until, note);
+        decidedKeys = await customPost(disposition, u, note);
       } else {
         const payload: Record<string, unknown> = { keys, disposition };
-        if (until) payload['until'] = until;
+        if (u) payload['until'] = u;
         if (note) payload['note'] = note;
         const result = await ctx.api.post<DecideResult>('/decide', payload);
         decidedKeys = result.decided_keys ?? [];
@@ -310,28 +191,26 @@ function openDecideSheetWithVocab(
         onDone(decidedKeys);
       }
       if (errors.length > 0) {
-        errEl.textContent = errors.join('; ');
-        errEl.hidden = false;
+        showChoiceError(cards, errors.join('; '));
         submitting = false;
       } else {
         sh?.close();
       }
     } catch (err) {
-      errEl.textContent =
-        err instanceof Error ? err.message : 'decide failed — try again';
-      errEl.hidden = false;
+      showChoiceError(
+        cards,
+        err instanceof Error ? err.message : 'decide failed, try again',
+      );
       submitting = false;
     }
   }
-
-  // ---- open the sheet --------------------------------------------------------
 
   sh = sheet({
     title: `decide ${pluralize(n, 'item')}`,
     body,
     actions: [
       {
-        label: `Decide ${n}`,
+        label: fillLabel(labelOf(disposition) || 'Decide', keys),
         fill: true,
         run() {
           void doDecide();
@@ -340,9 +219,9 @@ function openDecideSheetWithVocab(
     ],
     onClose() {
       sh = null;
-      if (dryRunTimer !== null) clearTimeout(dryRunTimer);
     },
   });
+  updateFill();
 }
 
 // ---- wireSelection ----------------------------------------------------------
