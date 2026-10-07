@@ -107,6 +107,16 @@ export interface StatusView {
   page_open: boolean;
 }
 
+export interface NextView {
+  done: boolean;
+  left: number;
+  item: ItemDetailView | null;
+  choices: ChoiceVocab[] | null;
+  not_now: NotNowForm[] | null;
+  guide: string;
+  propose_how: string;
+}
+
 export interface InterruptedView {
   started_at: string;
   deliveries: number[] | null;
@@ -393,6 +403,22 @@ export interface SkippedMessage {
   reason: string;
 }
 
+export interface ChoiceVocab {
+  disposition: string;
+  label: string;
+  says: string;
+  outward: boolean;
+  needs_until: boolean;
+}
+
+export interface NotNowForm {
+  id: string;
+  label: string;
+  template: string;
+  asks: string;
+  days?: number;
+}
+
 export interface Rule {
   id: string;
   name: string;
@@ -435,14 +461,6 @@ export interface UntilForm {
   op: string;
   syntax: string;
   example: string;
-}
-
-export interface NotNowForm {
-  id: string;
-  label: string;
-  template: string;
-  asks: string;
-  days?: number;
 }
 
 export interface NeedsYou {
@@ -555,14 +573,6 @@ export interface Exclusion {
   reason?: string;
   by: string;
   at: string;
-}
-
-export interface ChoiceVocab {
-  disposition: string;
-  label: string;
-  says: string;
-  outward: boolean;
-  needs_until: boolean;
 }
 
 export interface Step {

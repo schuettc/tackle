@@ -620,6 +620,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/evidence", s.agentEvidence)
 	m.HandleFunc("POST /api/agent/progress", s.agentProgress)
 	m.HandleFunc("GET /api/agent/status", s.agentStatus)
+	m.HandleFunc("GET /api/agent/next", s.agentNext)
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
 	m.HandleFunc("GET /api/agent/interrupted", s.agentInterrupted)

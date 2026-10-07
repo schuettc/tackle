@@ -29,8 +29,10 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`)},
 		{Name: "casebook_history", Description: "Every journaled action and decision commit for an item.",
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`)},
+		{Name: "casebook_next", Description: "The next item that needs a recommendation: its evidence and history, the choices its kind allows with what each does, and how to recommend. Answer with casebook_propose and a one-line reason in note. Returns done: true when every item that needs a decision has a recommendation.",
+			InputSchema: schema(`{"type":"object","properties":{}}`)},
 		{Name: "casebook_propose", Description: "Propose a decision for one or more items. The user accepts, changes or rejects it on the page; you never decide. disposition: keep, archive, close, delete, merge, wait, watch, ignore (wait and watch need until: date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d), released(<repo>)). A newer proposal from you for the same item replaces the older one.",
-			InputSchema: schema(`{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}},"disposition":{"type":"string"},"until":{"type":"string"},"note":{"type":"string","description":"why, shown to the user"}},"required":["keys","disposition"]}`)},
+			InputSchema: schema(`{"type":"object","properties":{"keys":{"type":"array","items":{"type":"string"}},"disposition":{"type":"string"},"until":{"type":"string"},"note":{"type":"string","description":"why, shown to the user"},"from_next":{"type":"boolean","description":"true when recommending an item casebook_next handed you; note is then required"}},"required":["keys","disposition"]}`)},
 		{Name: "casebook_evidence", Description: "Attach a finding to an item (shown on the page under evidence, attributed to you).",
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string"},"text":{"type":"string"}},"required":["key","text"]}`)},
 		{Name: "casebook_progress", Description: "Set your live progress line on the page while you work (replaces the previous one).",
@@ -74,6 +76,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		Step        int64    `json:"step"`
 		Detail      string   `json:"detail"`
 		Question    string   `json:"question"`
+		FromNext    bool     `json:"from_next"`
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
@@ -147,7 +150,16 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		return ch.callSessionBound(ctx, func() (string, error) {
 			var out map[string]any
 			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/propose", map[string]any{"session": ch.ID.Session, "keys": a.Keys,
-				"disposition": a.Disposition, "until": a.Until, "note": a.Note}, &out)
+				"disposition": a.Disposition, "until": a.Until, "note": a.Note, "from_next": a.FromNext}, &out)
+			return pretty(out), err
+		})
+	case "casebook_next":
+		if err := needSession(); err != nil {
+			return "", err
+		}
+		return ch.callSessionBound(ctx, func() (string, error) {
+			var out map[string]any
+			_, err := ch.Client.Do(ctx, http.MethodGet, "/api/agent/next?"+q("session", ch.ID.Session), nil, &out)
 			return pretty(out), err
 		})
 	case "casebook_evidence":

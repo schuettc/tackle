@@ -108,6 +108,13 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, httpError{code: http.StatusNotFound, msg: k.String() + " is not a known item"})
 		return
 	}
+	reply(w, s.itemDetail(ctx, it, k), nil)
+}
+
+// itemDetail is one item with its pending proposal, its proposals, evidence,
+// recent history (the last 50 events) and decision log: GET /api/item and
+// casebook_next.
+func (s *Server) itemDetail(ctx context.Context, it engine.Item, k item.Key) ItemDetailView {
 	v := ItemView{Item: it}
 	pending, _ := s.Props.Pending(ctx)
 	if p, ok := pending[it.ID]; ok {
@@ -121,13 +128,13 @@ func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
 		hist = hist[len(hist)-50:]
 	}
 	log, _ := s.App.Repo.Log(ctx, k.File())
-	reply(w, ItemDetailView{
+	return ItemDetailView{
 		Item:      v,
 		Proposals: nonNil(proposals),
 		Evidence:  nonNil(evidence),
 		History:   nonNil(hist),
 		Decisions: nonNil(log),
-	}, nil)
+	}
 }
 
 func nonNil[T any](s []T) []T {
@@ -197,7 +204,9 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 	return n, done, errs
 }
 
-func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
+// decisionVocab is the decision vocabulary: GET /api/decisions/vocabulary
+// returns it, and casebook_next renders its guide and choices from it.
+func decisionVocab() DecisionVocabView {
 	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
 	vocab := DecisionVocabView{
 		Kinds:      make([]KindVocab, len(kinds)),
@@ -228,7 +237,11 @@ func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) 
 	for _, f := range item.NotNowForms() {
 		vocab.NotNow = append(vocab.NotNow, NotNowForm{ID: f.ID, Label: f.Label, Template: f.Template, Asks: f.Asks, Days: f.Days})
 	}
-	reply(w, vocab, nil)
+	return vocab
+}
+
+func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
+	reply(w, decisionVocab(), nil)
 }
 
 // postClearDecision handles POST /api/decisions/clear: the page's undo. It

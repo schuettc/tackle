@@ -331,6 +331,21 @@ type NotNowForm struct {
 	Days     int    `json:"days,omitempty"`
 }
 
+// NextView is the response body of GET /api/agent/next (casebook_next):
+// the next item that needs a recommendation, with the choices its kind
+// offers, Not now's conditions, the guide and how to answer. Done is true,
+// and Item nil, when every item that needs a decision has a pending
+// proposal. Left counts those still without one, this item included.
+type NextView struct {
+	Done       bool            `json:"done"`
+	Left       int             `json:"left"`
+	Item       *ItemDetailView `json:"item"`
+	Choices    []ChoiceVocab   `json:"choices"`
+	NotNow     []NotNowForm    `json:"not_now"`
+	Guide      string          `json:"guide"`
+	ProposeHow string          `json:"propose_how"`
+}
+
 // ClearResult is the response body of POST /api/decisions/clear. Cleared is
 // false when the item had no decision. Like DecideResult it doesn't wait for
 // the push (PushedLater is always true).

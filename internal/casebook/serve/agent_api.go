@@ -16,6 +16,7 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/propose"
+	"github.com/schuettc/tackle/internal/casebook/recommend"
 )
 
 // source names a session as a proposer or author: "<harness>:<id>".
@@ -236,6 +237,9 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		Disposition string   `json:"disposition"`
 		Until       string   `json:"until"`
 		Note        string   `json:"note"`
+		// FromNext marks a recommendation for an item casebook_next handed
+		// out: it must carry a reason.
+		FromNext bool `json:"from_next"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -245,6 +249,10 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 	sess, err := s.session(ctx, in.Session)
 	if err != nil {
 		reply(w, nil, err)
+		return
+	}
+	if in.FromNext && strings.TrimSpace(in.Note) == "" {
+		reply(w, nil, bad("a recommendation needs a one-line reason in note"))
 		return
 	}
 
@@ -292,6 +300,82 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		s.publish(ctx, "proposals", map[string]any{"ids": ids, "state": "pending", "source": source(sess)})
 	}
 	reply(w, ProposeResult{Proposed: len(ps), Proposals: nonNil(ps), Errors: nonNil(msgs)}, nil)
+}
+
+// nextViews is the order casebook_next works through: the items most
+// likely to need the user first.
+var nextViews = []string{ViewWaiting, ViewDue, ViewNew}
+
+// needsRecommendation lists the items that need a decision and have no
+// pending proposal, in nextViews order and, within a view, the index's
+// order. An item in two views is listed once, at the first.
+func (s *Server) needsRecommendation(pending map[string]propose.Proposal) []ItemView {
+	seen := map[string]bool{}
+	var out []ItemView
+	for _, view := range nextViews {
+		for offset := 0; ; {
+			page, total := s.Index.List(Query{View: view, Offset: offset, Limit: 500}, pending)
+			for _, it := range page {
+				if seen[it.ID] || it.Proposal != nil {
+					continue
+				}
+				seen[it.ID] = true
+				out = append(out, it)
+			}
+			offset += len(page)
+			if len(page) == 0 || offset >= total {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// agentNext is casebook_next: the next item that needs a recommendation,
+// its detail, its kind's choices, Not now's conditions, the guide and how
+// to answer; done when every item that needs a decision has a proposal.
+// Two sessions asking at once may get the same item (the newer proposal
+// replaces the older), but a decided item is never handed out: only the
+// waiting, due and new views are read.
+func (s *Server) agentNext(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, err := s.session(ctx, r.URL.Query().Get("session")); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	pending, err := s.Props.Pending(ctx)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	vocab := decisionVocab()
+	kinds := make([]recommend.KindChoices, 0, len(vocab.Kinds))
+	for _, k := range vocab.Kinds {
+		kc := recommend.KindChoices{Kind: k.Kind}
+		for _, c := range k.Choices {
+			kc.Choices = append(kc.Choices, recommend.Choice{Disposition: c.Disposition, Label: c.Label, Outward: c.Outward, NeedsUntil: c.NeedsUntil})
+		}
+		kinds = append(kinds, kc)
+	}
+	v := NextView{Done: true, Choices: []ChoiceVocab{}, NotNow: nonNil(vocab.NotNow),
+		Guide: recommend.Guide(kinds), ProposeHow: recommend.ProposeHow}
+	left := s.needsRecommendation(pending)
+	if len(left) > 0 {
+		it := left[0].Item
+		k, err := item.ParseKey(it.ID)
+		if err != nil {
+			reply(w, nil, err)
+			return
+		}
+		d := s.itemDetail(ctx, it, k)
+		v.Done, v.Left, v.Item = false, len(left), &d
+		for _, kv := range vocab.Kinds {
+			if kv.Kind == string(it.Kind) {
+				v.Choices = nonNil(kv.Choices)
+			}
+		}
+	}
+	reply(w, v, nil)
 }
 
 func (s *Server) agentEvidence(w http.ResponseWriter, r *http.Request) {
