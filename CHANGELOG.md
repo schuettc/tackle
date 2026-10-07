@@ -28,11 +28,16 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   waits for the end of the agent's turn.
 - While that message is queued or being worked on, the item says
   "‹session› is looking into it" under its question, and its list row says
-  so too. It goes when the agent answers, declines or fails the message;
-  the evidence and recommendation it added show on the open item as they
-  come. serve marks the item (`looking` on the item's view) from the
-  message itself: Court's unsettled message that starts "Look into
-  ‹key›:" with that item attached.
+  so on one line, as the row's "pi recommends …" does. It goes when the
+  agent answers, declines or fails the message; the evidence and
+  recommendation it added show on the open item as they come. serve marks
+  the item (`looking` on the item's view) from the message's purpose: the
+  button posts it with `purpose: "look-into"`, stored on the message (a
+  new `messages.purpose` column, schema version 4). A message you type
+  with the same words is just a message.
+- The decision vocabulary carries the button's words: `look_into` with
+  its `label` ("ask {session} to look into it") and `message` ({key}
+  filled in by the page).
 - The recommending guide asks the agent, when asked to look into an item,
   to read its CI and recent activity with gh and record what it finds with
   casebook_evidence before recommending.

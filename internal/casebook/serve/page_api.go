@@ -242,6 +242,7 @@ func decisionVocab() DecisionVocabView {
 	vocab := DecisionVocabView{
 		Kinds:      make([]KindVocab, len(kinds)),
 		UntilForms: nil,
+		LookInto:   LookIntoVocab{Label: lookIntoLabel, Message: lookIntoMessage},
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)
@@ -719,9 +720,24 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		// thread that belongs to another one now (moved behind the page's
 		// back) is refused: see ownedBy.
 		Session string `json:"session"`
+		// Purpose: what the page posts the message for. "" is a message
+		// Court wrote; PurposeLookInto is "ask ‹session› to look into it"
+		// (an item attached), which marks the item while it is underway.
+		Purpose string `json:"purpose"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
+		return
+	}
+	switch in.Purpose {
+	case "":
+	case PurposeLookInto:
+		if len(in.Attached.Keys) == 0 {
+			reply(w, nil, bad("a %s message needs an item attached", PurposeLookInto))
+			return
+		}
+	default:
+		reply(w, nil, bad("unknown message purpose %q", in.Purpose))
 		return
 	}
 	ctx := r.Context()
@@ -734,7 +750,7 @@ func (s *Server) postMessage(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	m, err := s.Queue.Post(ctx, in.Thread, in.Body, in.Attached, in.Batch)
+	m, err := s.Queue.PostFor(ctx, in.Thread, in.Body, in.Attached, in.Batch, in.Purpose)
 	if err != nil {
 		reply(w, nil, bad("%v", err))
 		return

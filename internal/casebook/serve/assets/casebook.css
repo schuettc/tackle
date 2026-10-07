@@ -287,8 +287,12 @@
   display: none;
 }
 .kit-row .cb-row-looking {
-  font: 12px var(--kit-mono);
-  color: color-mix(in srgb, var(--kit-agent) 70%, var(--kit-muted));
+  font-size: 12.5px;
+  color: var(--kit-agent);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cb-look {
   display: flex;

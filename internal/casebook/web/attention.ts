@@ -60,16 +60,6 @@ import {
 export const RECOMMEND_THE_REST =
   'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
 
-/**
- * lookIntoText is what "ask ‹session› to look into it" sends the dock's
- * session about key, with key attached: a normal message, delivered when
- * its turn ends. serve knows the session is looking into the item by this
- * text (serve.LookIntoText, the same words), until the message settles.
- */
-export function lookIntoText(key: string): string {
-  return `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
-}
-
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
 const PAGE_SIZE = 200;
@@ -558,12 +548,14 @@ export function makeAttention(ctx: Ctx): Section {
     });
     // "‹session› is looking into it" (muted, agent colour) on the rows a
     // session is looking into.
+    // It goes where the row's sub line goes: in the text column, under the
+    // title (and any recommendation line), one line.
     shown.forEach((it, i) => {
-      const el = rowEls[i];
-      if (!el) return;
-      el.querySelector('.cb-row-looking')?.remove();
+      const col = rowEls[i]?.querySelector('.kit-title')?.parentElement;
+      if (!col) return;
+      col.querySelector('.cb-row-looking')?.remove();
       const says = lookingLine(it.looking);
-      if (says) el.append(h('div', { class: 'cb-row-looking' }, says));
+      if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
     });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
@@ -769,7 +761,8 @@ export function makeAttention(ctx: Ctx): Section {
 
   // renderAsk puts "ask ‹session› to look into it" under the open item's
   // cards: only with a session attached, and not while one is looking
-  // into it already (the item says so under its question).
+  // into it already (the item says so under its question). Its words are
+  // serve's (the vocabulary's look_into: {session} and {key} filled in).
   function renderAsk(): void {
     readEl.querySelector('.cb-look')?.remove();
     const key = currentOpenKey;
@@ -777,6 +770,8 @@ export function makeAttention(ctx: Ctx): Section {
     const cards = readEl.querySelector('.cb-decide .cb-choices-wrap');
     if (!key || !t || !cards || shownDetail?.item.key !== key) return;
     if (shownDetail.item.looking) return;
+    const words = vocab?.look_into;
+    if (!words) return; // the vocabulary's load renders it
     const note = h('span', { class: 'cb-look-note' });
     const btn = h(
       'button',
@@ -786,13 +781,17 @@ export function makeAttention(ctx: Ctx): Section {
         async onclick() {
           if (btn.disabled) return;
           btn.disabled = true;
-          const why = await ctx.askSession(lookIntoText(key), { keys: [key] });
+          const why = await ctx.askSession(
+            words.message.replaceAll('{key}', key),
+            { keys: [key] },
+            'look-into',
+          );
           btn.disabled = false;
           if (why) note.textContent = why;
           else void refreshLooking(key);
         },
       },
-      `ask ${t.name} to look into it`,
+      words.label.replaceAll('{session}', t.name),
     ) as HTMLButtonElement;
     cards.after(h('div', { class: 'cb-look' }, btn, note));
   }
@@ -1276,6 +1275,7 @@ export function makeAttention(ctx: Ctx): Section {
       vocab = v;
       setRows();
       updateAgree();
+      renderAsk();
     })
     .catch(() => {});
 

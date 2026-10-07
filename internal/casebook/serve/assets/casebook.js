@@ -341,9 +341,9 @@ function start(first) {
     onDockTarget(cb) {
       dockTargetListeners.push(cb);
     },
-    askSession(body, attached) {
+    askSession(body, attached, purpose) {
       const d = dockHandles[0];
-      return d ? d.sendText(body, attached) : Promise.resolve("no agent session");
+      return d ? d.sendText(body, attached, purpose) : Promise.resolve("no agent session");
     }
   };
   const sections = /* @__PURE__ */ new Map();
@@ -3410,9 +3410,6 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
 
 // attention.ts
 var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.";
-function lookIntoText(key) {
-  return `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
-}
 var PAGE_SIZE2 = 200;
 var selection = createSelection();
 var VIEWS2 = [
@@ -3765,11 +3762,11 @@ function makeAttention(ctx) {
       if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
     });
     shown.forEach((it, i) => {
-      const el = rowEls[i];
-      if (!el) return;
-      el.querySelector(".cb-row-looking")?.remove();
+      const col = rowEls[i]?.querySelector(".kit-title")?.parentElement;
+      if (!col) return;
+      col.querySelector(".cb-row-looking")?.remove();
       const says = lookingLine(it.looking);
-      if (says) el.append(h8("div", { class: "cb-row-looking" }, says));
+      if (says) col.append(h8("div", { class: "cb-row-looking" }, says));
     });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
@@ -3936,6 +3933,8 @@ function makeAttention(ctx) {
     const cards = readEl.querySelector(".cb-decide .cb-choices-wrap");
     if (!key || !t || !cards || shownDetail?.item.key !== key) return;
     if (shownDetail.item.looking) return;
+    const words = vocab2?.look_into;
+    if (!words) return;
     const note = h8("span", { class: "cb-look-note" });
     const btn = h8(
       "button",
@@ -3945,13 +3944,17 @@ function makeAttention(ctx) {
         async onclick() {
           if (btn.disabled) return;
           btn.disabled = true;
-          const why = await ctx.askSession(lookIntoText(key), { keys: [key] });
+          const why = await ctx.askSession(
+            words.message.replaceAll("{key}", key),
+            { keys: [key] },
+            "look-into"
+          );
           btn.disabled = false;
           if (why) note.textContent = why;
           else void refreshLooking(key);
         }
       },
-      `ask ${t.name} to look into it`
+      words.label.replaceAll("{session}", t.name)
     );
     cards.after(h8("div", { class: "cb-look" }, btn, note));
   }
@@ -4300,6 +4303,7 @@ function makeAttention(ctx) {
     vocab2 = v;
     setRows();
     updateAgree();
+    renderAsk();
   }).catch(() => {
   });
   function getBoardFilters() {
@@ -4731,7 +4735,7 @@ function makeComposer(ctx, dock) {
     say(text) {
       note.textContent = text;
     },
-    async sendText(body, attached = {}) {
+    async sendText(body, attached = {}, purpose = "") {
       const why = dock.blocked();
       if (why) {
         note.textContent = why;
@@ -4748,7 +4752,8 @@ function makeComposer(ctx, dock) {
           body,
           attached,
           batch: false,
-          session: dock.currentSession()
+          session: dock.currentSession(),
+          ...purpose ? { purpose } : {}
         });
         return "";
       } catch (err) {
@@ -5917,8 +5922,8 @@ function makeDock(ctx) {
     currentSession() {
       return currentSessionId;
     },
-    sendText(body, attached) {
-      return composer.sendText(body, attached);
+    sendText(body, attached, purpose) {
+      return composer.sendText(body, attached, purpose);
     }
   };
 }

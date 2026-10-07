@@ -366,6 +366,8 @@ type DecisionVocabView struct {
 	UntilForms []UntilForm `json:"until_forms"`
 	// NotNow is Not now's conditions, in the order the page offers them.
 	NotNow []NotNowForm `json:"not_now"`
+	// LookInto is "ask ‹session› to look into it": its label and message.
+	LookInto LookIntoVocab `json:"look_into"`
 }
 
 // KindVocab describes the valid decisions for one item kind. Allowed and

@@ -14,7 +14,7 @@ import (
 
 var ctx = context.Background()
 
-func TestFreshDatabaseMigratesToVersion3(t *testing.T) {
+func TestFreshDatabaseMigratesToVersion4(t *testing.T) {
 	d, err := Open(ctx, filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -27,12 +27,19 @@ func TestFreshDatabaseMigratesToVersion3(t *testing.T) {
 	if v != SchemaVersion {
 		t.Fatalf("user_version %d, want %d", v, SchemaVersion)
 	}
-	if v != 3 {
-		t.Fatalf("expected version 3, got %d", v)
+	if v != 4 {
+		t.Fatalf("expected version 4, got %d", v)
 	}
 	// v3: a session has a name, a parent and an end.
 	if _, err := d.ExecContext(ctx, `INSERT INTO sessions(id, first_seen, last_seen, name, parent, ended_at) VALUES ('s', 1, 1, 'tools-workspace/casebook', 'p', 2)`); err != nil {
 		t.Fatalf("sessions.name/parent/ended_at: %v", err)
+	}
+	// v4: a message has the purpose the page posted it with ('' by default).
+	if _, err := d.ExecContext(ctx, `INSERT INTO threads(session_id, name, created_at) VALUES ('s', 't', 1)`); err != nil {
+		t.Fatalf("thread: %v", err)
+	}
+	if _, err := d.ExecContext(ctx, `INSERT INTO messages(thread_id, author, body, state, created_at, purpose) VALUES (1, 'court', 'b', 'queued', 1, 'look-into')`); err != nil {
+		t.Fatalf("messages.purpose: %v", err)
 	}
 	// jobs table exists; insert a row
 	now := int64(1000000)
@@ -90,8 +97,8 @@ func TestAdoptsAP1aVersion1Database(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != 3 {
-		t.Fatalf("version %d, want 3", v)
+	if v != 4 {
+		t.Fatalf("version %d, want 4", v)
 	}
 	// sessions table from schemaV1 still intact
 	var n int

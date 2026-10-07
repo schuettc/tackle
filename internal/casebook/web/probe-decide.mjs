@@ -2663,13 +2663,14 @@ async function lookIntoScenario(context, t, s) {
   await pg.click(ASK);
   let asked = null;
   check(
-    "the button puts exactly the ask, with the item attached, in the attached session's thread, once",
+    "the button puts exactly the ask (serve's words), with the item attached and the look-into purpose, in the attached session's thread, once",
     await eventually(async () => {
       const mine = (await msgsOf(A)).filter((m) => m.body === LOOK_INTO(KEY));
       asked = mine[0] ?? null;
       return (
         mine.length === 1 &&
-        JSON.stringify(asked.attached?.keys ?? []) === JSON.stringify([KEY])
+        JSON.stringify(asked.attached?.keys ?? []) === JSON.stringify([KEY]) &&
+        asked.purpose === 'look-into'
       );
     }),
   );
@@ -2712,6 +2713,47 @@ async function lookIntoScenario(context, t, s) {
       [MARK, kicker(KEY)],
     );
   const LOOKING = `${aName} is looking into it`;
+  // rowLooking measures the row's marker against its title and its
+  // recommendation line (if any).
+  const rowLooking = () =>
+    pg.evaluate((k) => {
+      const r = [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-row',
+        ),
+      ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+      const m = r?.querySelector('.cb-row-looking');
+      const title = r?.querySelector('.kit-title');
+      const sub = r?.querySelector('.kit-sub');
+      if (!m || !title) return { found: false };
+      const cs = getComputedStyle(m);
+      const mr = m.getBoundingClientRect();
+      const tr = title.getBoundingClientRect();
+      const lh = parseFloat(cs.lineHeight);
+      return {
+        found: true,
+        height: Math.round(mr.height),
+        line: Math.round(
+          Number.isFinite(lh) ? lh : parseFloat(cs.fontSize) * 1.5,
+        ),
+        left: Math.round(mr.left),
+        top: Math.round(mr.top),
+        titleLeft: Math.round(tr.left),
+        titleBottom: Math.round(tr.bottom),
+        ws: cs.whiteSpace,
+        overflow: cs.overflowX,
+        to: cs.textOverflow,
+        color: cs.color,
+        font: cs.fontSize,
+        sub: sub
+          ? {
+              left: Math.round(sub.getBoundingClientRect().left),
+              color: getComputedStyle(sub).color,
+              font: getComputedStyle(sub).fontSize,
+            }
+          : null,
+      };
+    }, kicker(KEY));
   {
     const ok = await until(
       pg,
@@ -2740,13 +2782,24 @@ async function lookIntoScenario(context, t, s) {
       ok && st === 'queued' && got.item === LOOKING && got.row === LOOKING,
     );
     const agentC = await cssColor(pg, 'var(--kit-agent)');
-    const mutedC = await cssColor(pg, 'var(--kit-muted)');
     check(
-      `the item's marker is the agent colour (${got.itemColor}); the row's a muted agent colour (${got.rowColor})`,
-      got.itemColor === agentC &&
-        !!got.rowColor &&
-        got.rowColor !== agentC &&
-        got.rowColor !== mutedC,
+      `the item's marker is the agent colour (${got.itemColor}); the row's is the recommendation line's, the kit's sub line (${got.rowColor})`,
+      got.itemColor === agentC && got.rowColor === agentC,
+    );
+    // The row's marker reads on one line, where the row's sub line goes:
+    // under the title, from its left edge, cut with an ellipsis.
+    const geo = await rowLooking();
+    check(
+      `the row's marker is one line high (${geo.height}px, line ${geo.line}px) and starts at the title's left edge (${geo.left} vs ${geo.titleLeft}), under it`,
+      geo.found &&
+        geo.height > 0 &&
+        geo.height <= geo.line * 1.2 &&
+        Math.abs(geo.left - geo.titleLeft) < 1 &&
+        geo.top >= geo.titleBottom - 1,
+    );
+    check(
+      `and it is cut with an ellipsis, not wrapped (white-space ${geo.ws}, overflow ${geo.overflow}, text-overflow ${geo.to})`,
+      geo.ws === 'nowrap' && geo.overflow === 'hidden' && geo.to === 'ellipsis',
     );
     check('and while it looks, the button gives way to the marker', !got.ask);
     const under = await pg.evaluate((mark) => {
@@ -2811,9 +2864,23 @@ async function lookIntoScenario(context, t, s) {
       `still looking while the message is worked on ("${got.item}")`,
       got.item === LOOKING,
     );
+    // With the recommendation on the row too, the marker matches its line.
+    const geo = await rowLooking();
+    check(
+      `on the row, the marker matches "pi recommends …": left ${geo.left} vs ${geo.sub?.left}, colour ${geo.color} vs ${geo.sub?.color}, size ${geo.font} vs ${geo.sub?.font}; one line (${geo.height}px)`,
+      geo.found &&
+        !!geo.sub &&
+        geo.left === geo.sub.left &&
+        geo.color === geo.sub.color &&
+        geo.font === geo.sub.font &&
+        geo.height <= geo.line * 1.2,
+    );
   }
 
   // ---- the reply settles it: the marker goes -------------------------------
+  // A live agent keeps its presence fresh (else, past serve's "left" cutoff,
+  // the dock has no session to offer the button for).
+  await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
   await agent.reply(
     A,
     ids,

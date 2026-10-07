@@ -197,6 +197,7 @@ export interface DecisionVocabView {
   kinds: KindVocab[] | null;
   until_forms: UntilForm[] | null;
   not_now: NotNowForm[] | null;
+  look_into: LookIntoVocab;
 }
 
 export interface ClearResult {
@@ -396,6 +397,7 @@ export interface MessageView {
   batch_pos?: number;
   delivery_id?: number;
   reply_to?: number;
+  purpose?: string;
   state: string;
   created_at: string;
   queued_at?: string;
@@ -413,6 +415,7 @@ export interface Message {
   batch_pos?: number;
   delivery_id?: number;
   reply_to?: number;
+  purpose?: string;
   state: string;
   created_at: string;
   queued_at?: string;
@@ -483,6 +486,11 @@ export interface UntilForm {
   op: string;
   syntax: string;
   example: string;
+}
+
+export interface LookIntoVocab {
+  label: string;
+  message: string;
 }
 
 export interface NeedsYou {
