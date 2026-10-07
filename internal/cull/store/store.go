@@ -147,6 +147,24 @@ func (s *Store) Project(ctx context.Context, root string) (Project, error) {
 }
 
 // ProjectByID returns a registered project; sql.ErrNoRows if unknown.
+// Projects lists every project, oldest first.
+func (s *Store) Projects(ctx context.Context) ([]Project, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root, owner_session, owner_label FROM projects ORDER BY id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Project
+	for rows.Next() {
+		var p Project
+		if err := rows.Scan(&p.ID, &p.Root, &p.OwnerSession, &p.OwnerLabel); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ProjectByID(ctx context.Context, id int64) (Project, error) {
 	p := Project{ID: id}
 	err := s.db.QueryRowContext(ctx, `SELECT root, owner_session, owner_label FROM projects WHERE id = ?`, id).

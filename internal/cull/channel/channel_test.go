@@ -147,10 +147,18 @@ func writeFile(t *testing.T, root, rel, content string) {
 // project makes a temp Go module that allows egress.
 func project(t *testing.T) string {
 	t.Helper()
+	return projectIn(t, t.TempDir())
+}
+
+// projectIn makes the fixture project at root.
+func projectIn(t *testing.T, root string) string {
+	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH")
 	}
-	root := t.TempDir()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if r, err := filepath.EvalSymlinks(root); err == nil {
 		root = r
 	}
@@ -363,6 +371,7 @@ const wantInstructions = `cull judges automated tests with Jev and removes the o
 - If cull_check reports to_review above 0, run cull_review once to open the page for Court, tell him how many items wait, and carry on with other work. Never ask Court about a test anywhere but the page, and never open the page repeatedly.
 - Court's answers arrive as a channel event from cull. Follow its steps: cull_check, then cull_apply for his cuts; rewrite each group he chose to merge as one table test that keeps every row the event lists, then run cull_check_group on it and fix what it reports.
 - cull_status tells you what is open, answered and sent for this project.
+- When your session runs in a folder that holds several repositories (a workspace), pass the repository's path to every cull tool. The event from Court names the repository's path; use it.
 - You never answer for Court. If cull reports an error, say what failed; don't work around it by editing tests by hand.`
 
 func TestInstructionsAreExact(t *testing.T) {
@@ -734,5 +743,61 @@ func TestClientSerializesServeStarts(t *testing.T) {
 	wg.Wait()
 	if starts != 1 || maxActive != 1 {
 		t.Errorf("starts %d, max concurrent %d; want 1, 1", starts, maxActive)
+	}
+}
+
+// A session started in a workspace folder works on a repository inside it:
+// cull_check, cull_review and cull_status take the repository's path, the
+// session owns that repository's review, and Court's Send reaches it.
+func TestWorkspaceSessionReviewsARepositoryInside(t *testing.T) {
+	e := newEnv(t, true)
+	ws := t.TempDir()
+	if r, err := filepath.EvalSymlinks(ws); err == nil {
+		ws = r
+	}
+	repo := projectIn(t, filepath.Join(ws, "shop"))
+	e.jev.set(map[string]float64{`"test_name":"TestMaybe"`: 0.4})
+	c := e.connect(ident{"s-ws", "claude · workspace", ws})
+
+	var ck checkResult
+	c.toolJSON("cull_check", map[string]any{"path": "shop"}, &ck)
+	if ck.ToReview != 1 {
+		t.Fatalf("check = %+v", ck)
+	}
+	var rv struct {
+		URL  string `json:"url"`
+		Open int    `json:"open"`
+	}
+	c.toolJSON("cull_review", map[string]any{"path": "shop"}, &rv)
+	if rv.Open != 1 {
+		t.Fatalf("review = %+v", rv)
+	}
+	select {
+	case <-c.opened:
+	default:
+		t.Fatal("the page was not opened")
+	}
+	p, err := e.st.Project(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.OwnerSession != "s-ws" {
+		t.Fatalf("owner = %q", p.OwnerSession)
+	}
+	var st struct {
+		Open int `json:"open"`
+	}
+	c.toolJSON("cull_status", map[string]any{"path": "shop"}, &st)
+	if st.Open != 1 {
+		t.Fatalf("status open = %d", st.Open)
+	}
+
+	answerAndSend(t, e, repo)
+	ev, ok := c.expectEvent(10 * time.Second)
+	if !ok {
+		t.Fatal("the workspace session never got the send")
+	}
+	if !strings.Contains(ev.Content, "with path "+repo) || ev.Meta["project"] != repo {
+		t.Fatalf("event %q meta %v", ev.Content, ev.Meta)
 	}
 }

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mattn/go-isatty"
 	"github.com/schuettc/tackle/internal/creel"
 	"github.com/schuettc/tackle/internal/cull/check"
+	"github.com/schuettc/tackle/internal/cull/discover"
 	"github.com/schuettc/tackle/internal/cull/key"
 	tools "github.com/schuettc/tools-common"
 )
@@ -47,7 +49,7 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		if !isTerminal(stdin) {
 			return tools.Exitf(2, "cull init needs a terminal: run cull init yourself, in a terminal")
 		}
-		root, _, err := check.ResolveConfig(path, true)
+		root, cfg, err := check.ResolveConfig(path, true)
 		if err != nil {
 			return tools.Exitf(2, "%v", err)
 		}
@@ -67,6 +69,18 @@ func runInit(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 				return tools.Exitf(2, "key not saved: %v", err)
 			}
 			_, _ = fmt.Fprintf(out, "key: saved to %s\n", key.Path())
+		}
+
+		// A workspace root (no tests of its own, repositories inside): the
+		// key is machine-wide, but sending test source is decided per
+		// repository, so point at them instead of deciding for the folder.
+		if repos := workspaceRepos(root, cfg.Exclude); len(repos) > 0 {
+			_, _ = fmt.Fprintf(out, "%s has no tests of its own; cull judges each repository inside it on its own.\n", root)
+			_, _ = fmt.Fprintln(out, "Run cull init in each repository you want judged (the key is saved; it only asks whether to send that repository's tests):")
+			for _, r := range repos {
+				_, _ = fmt.Fprintf(out, "  cull init %s\n", r)
+			}
+			return nil
 		}
 
 		if err := initEgress(root, bufio.NewReader(stdin), out); err != nil {
@@ -145,4 +159,26 @@ func ensureGitignore(root string) (bool, error) {
 		s += "\n"
 	}
 	return true, tools.WriteFileAtomic(p, []byte(s+".cull/\n"), 0o644)
+}
+
+// workspaceRepos lists the git repositories directly inside root when root
+// has no test files of its own (nil otherwise).
+func workspaceRepos(root string, exclude []string) []string {
+	if files, err := discover.Suite(root, "", exclude); err != nil || len(files) > 0 {
+		return nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var repos []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, e.Name(), ".git")); err == nil {
+			repos = append(repos, e.Name())
+		}
+	}
+	return repos
 }

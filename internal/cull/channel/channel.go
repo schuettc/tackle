@@ -35,6 +35,7 @@ const Instructions = `cull judges automated tests with Jev and removes the ones 
 - If cull_check reports to_review above 0, run cull_review once to open the page for Court, tell him how many items wait, and carry on with other work. Never ask Court about a test anywhere but the page, and never open the page repeatedly.
 - Court's answers arrive as a channel event from cull. Follow its steps: cull_check, then cull_apply for his cuts; rewrite each group he chose to merge as one table test that keeps every row the event lists, then run cull_check_group on it and fix what it reports.
 - cull_status tells you what is open, answered and sent for this project.
+- When your session runs in a folder that holds several repositories (a workspace), pass the repository's path to every cull tool. The event from Court names the repository's path; use it.
 - You never answer for Court. If cull reports an error, say what failed; don't work around it by editing tests by hand.`
 
 // Identity is the session this channel serves.
@@ -98,6 +99,16 @@ func New(id Identity, c *Client, version string) *Channel {
 	return ch
 }
 
+// scope is the session's folder: the session covers the repository that
+// contains it and every repository inside it (a workspace root), so Court's
+// Send for any of them reaches this session.
+func (ch *Channel) scope() string {
+	if abs, err := filepath.Abs(ch.ID.CWD); err == nil {
+		return abs
+	}
+	return ch.root
+}
+
 // Run serves MCP on r/w and, when the session and its project are known, the
 // presence and wake loop.
 func (ch *Channel) Run(ctx context.Context, r io.Reader, w io.Writer) error {
@@ -117,7 +128,7 @@ func (ch *Channel) Run(ctx context.Context, r io.Reader, w io.Writer) error {
 
 func (ch *Channel) presence(ctx context.Context) error {
 	_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/presence", map[string]any{
-		"session": ch.ID.Session, "harness": ch.ID.Harness, "label": ch.ID.Label, "root": ch.root}, nil)
+		"session": ch.ID.Session, "harness": ch.ID.Harness, "label": ch.ID.Label, "root": ch.scope()}, nil)
 	return err
 }
 
@@ -150,7 +161,7 @@ func (ch *Channel) loop(ctx context.Context) {
 			Text string `json:"text"`
 		}
 		code, err := ch.Client.Do(ctx, http.MethodGet, "/api/agent/wait?"+q(
-			"session", ch.ID.Session, "root", ch.root, "timeout", strconv.Itoa(max(int(ch.Poll.Seconds()), 1))), nil, &got)
+			"session", ch.ID.Session, "root", ch.scope(), "timeout", strconv.Itoa(max(int(ch.Poll.Seconds()), 1))), nil, &got)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {

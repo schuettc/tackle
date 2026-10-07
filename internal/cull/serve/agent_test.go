@@ -286,14 +286,14 @@ func TestSendTextFormat(t *testing.T) {
 	}
 	want := "Court sent his answers for shop: 2 cut, 1 keep, 1 merge, 0 separate.\n" +
 		"Notes:\n- TestA: keep, it guards X\n- table group: same shape\n" +
-		"Next: run cull_check, then cull_apply to remove the cuts.\n" +
+		"Next: run cull_check with path /home/dev/shop, then cull_apply with path /home/dev/shop to remove the cuts.\n" +
 		"Then rewrite each group he chose to merge as one table test and run cull_check_group on it."
 	if got := SendText(s, "/home/dev/shop"); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
 	s.Counts.Merge, s.Notes = 0, nil
 	want = "Court sent his answers for shop: 2 cut, 1 keep, 0 merge, 0 separate.\n" +
-		"Next: run cull_check, then cull_apply to remove the cuts."
+		"Next: run cull_check with path /home/dev/shop, then cull_apply with path /home/dev/shop to remove the cuts."
 	if got := SendText(s, "/home/dev/shop"); got != want {
 		t.Fatalf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -315,5 +315,68 @@ func TestSendGoesToTheCurrentOwnerAfterOwnershipMoves(t *testing.T) {
 	}
 	if w := a.wait("B", root, 3); w.Code != 200 {
 		t.Fatalf("current owner got %d", w.Code)
+	}
+}
+
+// A session started in a workspace folder covers every repository inside it:
+// it receives Court's Send for a repository below its folder, and a session
+// whose folder doesn't contain the repository never does.
+func TestWorkspaceSessionClaimsSendsForReposInside(t *testing.T) {
+	a := newAgentFx(t)
+	ws := t.TempDir()
+	repo := filepath.Join(ws, "nfl")
+	if err := exec.Command("git", "init", "-q", repo).Run(); err != nil {
+		t.Skip("git unavailable")
+	}
+	elsewhere := filepath.Join(ws, "notes")
+	_ = exec.Command("mkdir", elsewhere).Run()
+	top, _ := exec.Command("git", "-C", repo, "rev-parse", "--show-toplevel").Output()
+	p := a.answered(strings.TrimSpace(string(top)), "")
+
+	a.presence("ws", "pi: workspace", ws)
+	a.presence("other", "pi: notes", elsewhere)
+	a.sendNow(p)
+	if w := a.wait("other", elsewhere, 3); w.Code != 204 {
+		t.Fatalf("a session outside the repository got %d %s", w.Code, w.Body)
+	}
+	w := a.wait("ws", ws, 3)
+	if w.Code != 200 {
+		t.Fatalf("workspace session got %d %s", w.Code, w.Body)
+	}
+	var got struct {
+		Root string `json:"root"`
+		Text string `json:"text"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Root != p.Root || !strings.Contains(got.Text, "with path "+p.Root) {
+		t.Fatalf("root %q text %q, want project %q", got.Root, got.Text, p.Root)
+	}
+}
+
+// The workspace session can own a repository's review (cull_review with a
+// path), and then it alone receives that repository's Send.
+func TestWorkspaceSessionOwnsARepositorysReview(t *testing.T) {
+	a := newAgentFx(t)
+	ws := t.TempDir()
+	repo := filepath.Join(ws, "nfl")
+	if err := exec.Command("git", "init", "-q", repo).Run(); err != nil {
+		t.Skip("git unavailable")
+	}
+	a.presence("ws", "pi: workspace", ws)
+	a.presence("inside", "pi: inside", repo)
+	m := a.review2("ws", repo)
+	p, err := a.st.ProjectByID(context.Background(), int64(m["project"].(float64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.answered(p.Root, "")
+	if r := a.sendNow(p); r["to"] != "pi: workspace" {
+		t.Fatalf("to %v", r["to"])
+	}
+	if w := a.wait("inside", repo, 3); w.Code != 204 {
+		t.Fatalf("non-owner got %d", w.Code)
+	}
+	if w := a.wait("ws", ws, 3); w.Code != 200 {
+		t.Fatalf("owner in the workspace got %d %s", w.Code, w.Body)
 	}
 }

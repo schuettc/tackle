@@ -33,10 +33,10 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"description":"remove exactly these test ids instead of every cut"},` + pathProp + `}}`)},
 		{Name: "cull_check_group", Description: "Verify your rewrite of a near-duplicate group (an id from cull_check's merge list) as one table test: the originals are gone, one new test keeps every row, Jev does not flag it, and the tests pass. Returns the four checks and their results.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"the group id"},` + pathProp + `},"required":["id"]}`)},
-		{Name: "cull_review", Description: "Open cull's review page for this project in Court's browser and make this session the one his answers are sent to. Returns the page URL and how many items are open. Says so, and opens nothing, when there is nothing to review. Use once; never repeatedly.",
-			InputSchema: schema(`{"type":"object","properties":{}}`)},
-		{Name: "cull_status", Description: "What is open, answered and sent for this project, who owns the review, and any sends not yet delivered.",
-			InputSchema: schema(`{"type":"object","properties":{}}`)},
+		{Name: "cull_review", Description: "Open cull's review page for this project (or the repository at path) in Court's browser and make this session the one his answers are sent to. Returns the page URL and how many items are open. Says so, and opens nothing, when there is nothing to review. Use once; never repeatedly.",
+			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
+		{Name: "cull_status", Description: "What is open, answered and sent for this project (or the repository at path), who owns the review, and any sends not yet delivered.",
+			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
 	}
 }
 
@@ -92,9 +92,9 @@ func (ch *Channel) call(ctx context.Context, name string, args json.RawMessage) 
 		}
 		return ch.checkGroup(ctx, a.Path, a.ID)
 	case "cull_review":
-		return ch.review(ctx)
+		return ch.review(ctx, a.Path)
 	case "cull_status":
-		return ch.status(ctx)
+		return ch.status(ctx, a.Path)
 	}
 	return "", fmt.Errorf("unknown tool %q", name)
 }
@@ -271,15 +271,8 @@ type agentStatus struct {
 	Owner    string `json:"owner"`
 }
 
-func (ch *Channel) serveRoot() (string, error) {
-	if ch.rootErr != nil {
-		return "", ch.rootErr
-	}
-	return ch.root, nil
-}
-
-func (ch *Channel) status(ctx context.Context) (string, error) {
-	root, err := ch.serveRoot()
+func (ch *Channel) status(ctx context.Context, path string) (string, error) {
+	root, err := ch.where(path)
 	if err != nil {
 		return "", err
 	}
@@ -290,8 +283,8 @@ func (ch *Channel) status(ctx context.Context) (string, error) {
 	return pretty(out), nil
 }
 
-func (ch *Channel) review(ctx context.Context) (string, error) {
-	root, err := ch.serveRoot()
+func (ch *Channel) review(ctx context.Context, path string) (string, error) {
+	root, err := ch.where(path)
 	if err != nil {
 		return "", err
 	}
