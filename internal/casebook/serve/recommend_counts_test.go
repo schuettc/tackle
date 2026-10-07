@@ -211,3 +211,33 @@ func TestUntilNamingUntrackedItemIsAccepted(t *testing.T) {
 		t.Fatalf("malformed until: %+v", dec)
 	}
 }
+
+// TestItemsTrackedViewListsEveryItem: view=tracked searches every item
+// casebook tracks (the Not now picker's search), decided ones included,
+// with the kind and q filters.
+func TestItemsTrackedViewListsEveryItem(t *testing.T) {
+	r := newRig(t)
+	r.decideOne(t, "pr:schuettc/hail#3", "keep")
+	ids := func(path string) []string {
+		var list ItemsView
+		if c := r.do(t, "GET", path, nil, &list); c != 200 {
+			t.Fatalf("%s: %d", path, c)
+		}
+		var out []string
+		for _, it := range list.Items {
+			out = append(out, it.ID)
+		}
+		return out
+	}
+	if got := ids("/api/items?view=all&kind=pr&q=hail%233"); len(got) != 0 {
+		t.Fatalf("a kept PR in attention: %v", got)
+	}
+	if got := ids("/api/items?view=tracked&kind=pr&q=hail%233"); len(got) != 1 || got[0] != "pr:schuettc/hail#3" {
+		t.Fatalf("tracked pr hail#3: %v", got)
+	}
+	for _, id := range ids("/api/items?view=tracked&kind=issue") {
+		if !strings.HasPrefix(id, "issue:") {
+			t.Fatalf("kind=issue listed %s", id)
+		}
+	}
+}

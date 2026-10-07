@@ -10,7 +10,10 @@
 //   the question, from serve, per kind
 //   the recommendation card above the choice cards; a accepts it
 //   one click decides, with no sheet; a number key picks a card
-//   Not now: a condition picked from chips; one serve refuses decides nothing
+//   Not now: a condition picked from chips; "when a PR merges…" searches
+//     the tracked items (a title finds the PR) or takes a pasted URL (an
+//     untracked PR is offered as not tracked); junk offers and decides nothing
+//   a Not now naming a PR a sync couldn't find comes back, saying why
 //   the next undecided item opens; the last shows the view's summary
 //   u undoes the last decision; a decision changed since is refused (409)
 //   a live decide elsewhere doesn't skip the item after it
@@ -582,16 +585,117 @@ async function decideScenario(context, t, s) {
       ),
   );
   await shoot(t, pg, 'notnow', ['light']);
-  await pg.click(
-    '.kit-app > .kit-read:not([hidden]) .cb-notnow .kit-chip[data-id="pr-merges"]',
-  );
-  const field = pg.locator(
-    '.kit-app > .kit-read:not([hidden]) .cb-notnow-field input',
-  );
-  check(
-    '"when a PR merges…" asks for one value (one field shows)',
-    (await field.count()) === 1 && (await field.isVisible()),
-  );
+  {
+    const READ = '.kit-app > .kit-read:not([hidden])';
+    const FIELD = `${READ} .cb-notnow-field input`;
+    const field = pg.locator(FIELD);
+    // prMerges picks Not now's "when a PR merges…" on the open item.
+    const prMerges = async () => {
+      const chip = `${READ} .cb-notnow:not([hidden]) .kit-chip`;
+      if (!(await pg.$(chip))) {
+        await pg.click(`${READ} .cb-choice[data-d="wait"]`);
+        await until(pg, (sel) => !!document.querySelector(sel), chip);
+      }
+      await pg.click(`${READ} .cb-notnow .kit-chip[data-id="pr-merges"]`);
+    };
+    // searchFor types text, waits for its search to be in, and returns what
+    // the field offers: each option's key and text.
+    const searchFor = async (text) => {
+      await field.fill(text);
+      await until(
+        pg,
+        ([sel, v]) => document.querySelector(sel)?.dataset.searched === v,
+        [FIELD, text],
+      );
+      return pg.$$eval(
+        `${READ} .cb-pick-opts:not([hidden]) .cb-pick-opt`,
+        (els) =>
+          els.map((e) => ({
+            key: e.getAttribute('data-key') ?? '',
+            says: e.textContent ?? '',
+          })),
+      );
+    };
+
+    await prMerges();
+    check(
+      '"when a PR merges…" asks for one value (one field shows)',
+      (await field.count()) === 1 && (await field.isVisible()),
+    );
+    const eg = await pg.evaluate(
+      (sel) =>
+        document.querySelector(sel)?.checkVisibility() === true
+          ? document.querySelector(sel).textContent
+          : '',
+      `${READ} .cb-pick-eg`,
+    );
+    check(
+      `under the field, what it takes ("${eg}")`,
+      eg === 'tackle#58, a title, or https://github.com/owner/repo/pull/58',
+    );
+
+    // Junk: no options, and Enter decides nothing.
+    const junk = await searchFor('zzqx nothing like it');
+    check(`junk offers nothing (${junk.length} options)`, junk.length === 0);
+    await field.press('Enter');
+    await pg.waitForTimeout(400);
+    col = await readCol(pg);
+    check(
+      `and Enter decides nothing: issue #5 stays undecided and open (${col.key})`,
+      (await decisionOf(ISSUE(5))) === null && col.key === ISSUE(5),
+    );
+
+    // A title finds the tracked pull request; choosing it decides.
+    const byTitle = await searchFor('retry');
+    checkList(
+      'typing "retry" finds the tracked pull request by its title',
+      byTitle.map((o) => `${o.key} | ${o.says}`),
+      [`${PR(7)} | ${PR(7)} \u00b7 Add a retry to the uploader`],
+    );
+    await shoot(t, pg, 'pick', ['light']);
+    await pg.click(`${READ} .cb-pick-opt[data-key="${PR(7)}"]`);
+    check(
+      `choosing it decides issue #5 wait until merged(${PR(7)})`,
+      await eventually(async () => {
+        const d = await decisionOf(ISSUE(5));
+        return d?.disposition === 'wait' && d.until === `merged(${PR(7)})`;
+      }),
+    );
+    check('and issue #6 opens next', await opened(t, pg, ISSUE(6)));
+    await press(pg, 'u');
+    check(
+      'u undoes it: issue #5 is undecided again and opens',
+      (await eventually(async () => (await decisionOf(ISSUE(5))) === null)) &&
+        (await opened(t, pg, ISSUE(5))),
+    );
+
+    // A pasted URL of a pull request casebook doesn't track.
+    const UP = 'pr:up/stream#58';
+    await prMerges();
+    const byUrl = await searchFor(
+      'https://github.com/Up/Stream/pull/58/files?w=1#diff',
+    );
+    checkList(
+      'a pasted URL of an untracked pull request is offered as not tracked',
+      byUrl.map((o) => `${o.key} | ${o.says}`),
+      [`${UP} | ${UP} \u00b7 not tracked; checked on the next sync`],
+    );
+    await pg.click(`${READ} .cb-pick-opt[data-key="${UP}"]`);
+    check(
+      `choosing it decides issue #5 wait until merged(${UP})`,
+      await eventually(async () => {
+        const d = await decisionOf(ISSUE(5));
+        return d?.disposition === 'wait' && d.until === `merged(${UP})`;
+      }),
+    );
+    check('and issue #6 opens next again', await opened(t, pg, ISSUE(6)));
+    await press(pg, 'u');
+    check(
+      'u undoes that too: issue #5 opens, undecided',
+      (await eventually(async () => (await decisionOf(ISSUE(5))) === null)) &&
+        (await opened(t, pg, ISSUE(5))),
+    );
+  }
 
   // ---- a live decide of the next item elsewhere doesn't skip the one after --
   await api('POST', '/api/decide', { keys: [ISSUE(6)], disposition: 'keep' });

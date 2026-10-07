@@ -16,6 +16,7 @@ import {
   agreeGroups,
   agreeText,
   recommendedLine,
+  pastedKeys,
 } from './decide-math.ts';
 import type { DecisionVocabView, NotNowForm } from './wire.d.ts';
 
@@ -320,5 +321,82 @@ describe('recommendedLine', () => {
   test('the counts', () => {
     assert.equal(recommendedLine(18, 13), '18 recommended \u00b7 13 not yet');
     assert.equal(recommendedLine(0, 0), '0 recommended \u00b7 0 not yet');
+  });
+});
+
+describe('pastedKeys', () => {
+  test('a pull request URL', () => {
+    assert.deepEqual(
+      pastedKeys('https://github.com/owner/repo/pull/58', 'pr'),
+      ['pr:owner/repo#58'],
+    );
+  });
+  test('an issues URL, for a PR or issue', () => {
+    assert.deepEqual(
+      pastedKeys('https://github.com/owner/repo/issues/58', 'pr-or-issue'),
+      ['issue:owner/repo#58'],
+    );
+  });
+  test('an issues URL is no PR', () => {
+    assert.equal(
+      pastedKeys('https://github.com/owner/repo/issues/58', 'pr'),
+      null,
+    );
+  });
+  test('a trailing slash, a tab, a #fragment and a query string', () => {
+    for (const url of [
+      'https://github.com/owner/repo/pull/58/',
+      'https://github.com/owner/repo/pull/58/files',
+      'https://github.com/owner/repo/pull/58#issuecomment-1',
+      'https://github.com/owner/repo/pull/58?notification_referrer_id=x',
+      '  https://www.github.com/Owner/Repo/pull/58/files?w=1#diff  ',
+    ])
+      assert.deepEqual(pastedKeys(url, 'pr'), ['pr:owner/repo#58'], url);
+  });
+  test('a key, with or without its kind', () => {
+    assert.deepEqual(pastedKeys('pr:owner/repo#58', 'pr'), [
+      'pr:owner/repo#58',
+    ]);
+    assert.deepEqual(pastedKeys('owner/repo#58', 'pr'), ['pr:owner/repo#58']);
+    assert.deepEqual(pastedKeys('owner/repo#58', 'pr-or-issue'), [
+      'pr:owner/repo#58',
+      'issue:owner/repo#58',
+    ]);
+    assert.deepEqual(pastedKeys('issue:o.x/r_y-z#7', 'pr-or-issue'), [
+      'issue:o.x/r_y-z#7',
+    ]);
+  });
+  test('a repo', () => {
+    assert.deepEqual(pastedKeys('https://github.com/owner/repo', 'repo'), [
+      'repo:owner/repo',
+    ]);
+    assert.deepEqual(
+      pastedKeys('https://github.com/owner/repo/releases/', 'repo'),
+      ['repo:owner/repo'],
+    );
+    assert.deepEqual(pastedKeys('owner/repo', 'repo'), ['repo:owner/repo']);
+    assert.deepEqual(pastedKeys('repo:owner/repo', 'repo'), [
+      'repo:owner/repo',
+    ]);
+    assert.equal(
+      pastedKeys('https://github.com/owner/repo/pull/58', 'repo'),
+      null,
+    );
+  });
+  test('junk, a title or a number is no key', () => {
+    for (const s of [
+      '',
+      'zzqx',
+      'Add a retry to the uploader',
+      'tackle#58',
+      '#58',
+      '58',
+      'https://example.com/owner/repo/pull/58',
+      'https://github.com/owner/repo/pull/abc',
+      'https://github.com/owner',
+      'pr:owner/repo#0',
+      'branch:owner/repo@main',
+    ])
+      assert.equal(pastedKeys(s, 'pr'), null, s);
   });
 });

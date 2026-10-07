@@ -6,7 +6,9 @@
 //     the agent's colour), the chosen one has the signal border;
 //   - Not now's conditions (serve's not_now forms) as chips under the cards,
 //     shown when Not now is picked, with one field when a condition asks for a
-//     value (a date, a PR key, a repo key);
+//     value: a date, or (a PR, a PR or issue, a repo) a search of the items
+//     casebook tracks that also takes a pasted GitHub URL or key, offering
+//     an untracked one as "‹key› · not tracked; checked on the next sync";
 //   - an error line (.cb-choice-err) for serve's answer when it refuses.
 //
 // Picking a card calls opts.onPick(disposition); Not now calls
@@ -16,10 +18,16 @@
 // shows an error with showChoiceError(root, message).
 
 import { h } from '/_kit/kit.js';
-import type { ChoiceVocab, NotNowForm } from './wire.d.ts';
+import type { ChoiceVocab, ItemsView, NotNowForm } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { getVocab } from './decide.ts';
-import { choicesForKeys, notNowUntil } from './decide-math.ts';
+import {
+  PICK_KINDS,
+  kindFromKey as kindOf,
+  choicesForKeys,
+  notNowUntil,
+  pastedKeys,
+} from './decide-math.ts';
 
 export interface ChoicesOpts {
   /** The disposition a pending proposal recommends. */
@@ -36,13 +44,18 @@ export function asNotNow(d: string | undefined): string | undefined {
   return d === 'watch' ? 'wait' : d;
 }
 
-// What each value a Not now form asks for is written as: key syntax, not
-// decision wording.
-const ASKS_PLACEHOLDER: Record<string, string> = {
-  pr: 'pr:owner/repo#1',
-  'pr-or-issue': 'pr:owner/repo#1 or issue:owner/repo#1',
-  repo: 'repo:owner/name',
+// Under a search field: what it takes.
+const PICK_EXAMPLE: Record<string, string> = {
+  pr: 'tackle#58, a title, or https://github.com/owner/repo/pull/58',
+  'pr-or-issue': 'tackle#58, a title, or https://github.com/owner/repo/pull/58',
+  repo: 'tackle, a name, or https://github.com/owner/repo',
 };
+
+/** One thing the search offers: a key, and what the option says. */
+interface PickOption {
+  key: string;
+  says: string;
+}
 
 /** showChoiceError shows message on root's error line (hides it when ''). */
 export function showChoiceError(root: ParentNode, message: string): void {
@@ -122,20 +135,72 @@ export function renderChoices(
   }
 
   // notNowPicker is the chips (one per form) and the one field a form that
-  // asks for a value shows.
+  // asks for a value shows: a date, or a search (PICK_KINDS) whose options
+  // decide.
   function notNowPicker(forms: NotNowForm[]): HTMLElement[] {
     const input = h('input', { class: 'cb-sheet-input' }) as HTMLInputElement;
     let form: NotNowForm | null = null;
+    const searching = (): boolean => !!form && form.asks in PICK_KINDS;
     const commit = (): void => {
       if (!form) return;
       const until = notNowUntil(form, input.value, new Date());
       if (until) opts.onPick('wait', until);
     };
+    const choose = (key: string): void => {
+      if (form) opts.onPick('wait', form.template.replace('%s', key));
+    };
+    const options = h('div', {
+      class: 'cb-pick-opts',
+      role: 'listbox',
+      hidden: true,
+    });
+    const example = h('p', { class: 'cb-pick-eg', hidden: true });
+    const show = (found: PickOption[]): void => {
+      options.replaceChildren(
+        ...found.map((o) =>
+          h(
+            'button',
+            {
+              type: 'button',
+              class: 'cb-pick-opt',
+              role: 'option',
+              dataset: { key: o.key },
+              onclick: () => choose(o.key),
+            },
+            o.says,
+          ),
+        ),
+      );
+      options.hidden = found.length === 0;
+    };
+    // The newest search wins: a slower answer to an older one is dropped.
+    let seq = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const search = async (): Promise<void> => {
+      const my = ++seq;
+      const asks = form?.asks ?? '';
+      const text = input.value.trim();
+      const found = text ? await pick(asks, text) : [];
+      if (my !== seq) return;
+      show(found);
+      input.dataset.searched = text;
+    };
+    input.addEventListener('input', () => {
+      if (!searching()) return;
+      delete input.dataset.searched;
+      clearTimeout(timer);
+      timer = setTimeout(() => void search(), 150);
+    });
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (!searching()) {
         commit();
+        return;
       }
+      // Enter takes the first option, once the search for this text is in.
+      const first = options.querySelector<HTMLElement>('.cb-pick-opt');
+      if (input.dataset.searched === input.value.trim() && first) first.click();
     });
     // A date input is complete when a date is picked.
     input.addEventListener('change', () => {
@@ -149,7 +214,7 @@ export function renderChoices(
     const field = h(
       'div',
       { class: 'cb-notnow-field', hidden: true },
-      input,
+      h('div', { class: 'cb-pick' }, input, example, options),
       set,
     );
     const chips = h(
@@ -172,9 +237,14 @@ export function renderChoices(
                 commit();
                 return;
               }
+              seq++;
+              show([]);
+              delete input.dataset.searched;
               input.type = f.asks === 'date' ? 'date' : 'text';
               input.value = '';
-              input.placeholder = ASKS_PLACEHOLDER[f.asks] ?? '';
+              example.textContent = PICK_EXAMPLE[f.asks] ?? '';
+              example.hidden = !searching();
+              set.hidden = searching();
               field.hidden = false;
               input.focus();
             },
@@ -184,6 +254,45 @@ export function renderChoices(
       ),
     );
     return [chips, field];
+  }
+
+  // pick is what the search offers for text: the keys a pasted URL or key
+  // names (each the tracked item's, or "not tracked"), or the tracked items
+  // of the form's kinds whose key or title holds text.
+  async function pick(asks: string, text: string): Promise<PickOption[]> {
+    const kinds = PICK_KINDS[asks] ?? [];
+    const tracked = async (kind: string, q: string, limit: number) =>
+      (
+        await ctx.api
+          .get<ItemsView>('/items', {
+            view: 'tracked',
+            kind,
+            q,
+            limit: String(limit),
+          })
+          .catch(() => ({ items: [] }) as unknown as ItemsView)
+      ).items ?? [];
+    const says = (key: string, title?: string): PickOption => ({
+      key,
+      says: title ? `${key} \u00b7 ${title}` : key,
+    });
+    const pasted = pastedKeys(text, asks);
+    if (pasted) {
+      const hits = (
+        await Promise.all(
+          pasted.map(async (key) =>
+            (await tracked(kindOf(key), key, 5)).find((it) => it.key === key),
+          ),
+        )
+      ).filter((it) => !!it);
+      if (hits.length) return hits.map((it) => says(it.key, it.title));
+      return pasted.map((key) => ({
+        key,
+        says: `${key} \u00b7 not tracked; checked on the next sync`,
+      }));
+    }
+    const lists = await Promise.all(kinds.map((k) => tracked(k, text, 8)));
+    return lists.flat().map((it) => says(it.key, it.title));
   }
 
   return root;

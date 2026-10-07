@@ -328,3 +328,57 @@ export function agreeText(g: AgreeGroup): { says: string; action: string } {
 export function recommendedLine(recommended: number, notYet: number): string {
   return `${recommended} recommended \u00b7 ${notYet} not yet`;
 }
+
+// The kinds each Not now form that names something searches and accepts.
+export const PICK_KINDS: Record<string, string[]> = {
+  pr: ['pr'],
+  'pr-or-issue': ['pr', 'issue'],
+  repo: ['repo'],
+};
+
+const NAME = '[\\w.-]+';
+const GH_URL = new RegExp(
+  `^https?://(?:www\\.)?github\\.com/(${NAME})/(${NAME})(?:/(pull|issues)/(\\d+))?(?:[/?#].*)?$`,
+  'i',
+);
+const KIND_KEY = new RegExp(`^(pr|issue):(${NAME})/(${NAME})#(\\d+)$`, 'i');
+const REPO_KEY = new RegExp(`^(?:repo:)?(${NAME})/(${NAME})$`, 'i');
+const BARE_KEY = new RegExp(`^(${NAME})/(${NAME})#(\\d+)$`);
+
+/**
+ * pastedKeys turns a pasted GitHub URL (…/pull/58, …/issues/58, a repo's
+ * page) or a key (pr:owner/repo#58, owner/repo#58, repo:owner/repo,
+ * owner/repo) into the keys it names that the form asks for (PICK_KINDS):
+ * one, or two for owner/repo#58 under "pr-or-issue" (it may be either).
+ * Owner and repo are lower-cased, as casebook's keys are. Anything else (a
+ * title, a number, a URL of another kind) is null.
+ */
+export function pastedKeys(text: string, asks: string): string[] | null {
+  const kinds = PICK_KINDS[asks] ?? [];
+  const s = text.trim();
+  const repo = (o: string, r: string): string =>
+    `${o}/${r.replace(/\.git$/i, '')}`.toLowerCase();
+  const num = (n: string): number | null => (Number(n) > 0 ? Number(n) : null);
+  const url = GH_URL.exec(s);
+  const kindKey = KIND_KEY.exec(s);
+  const repoKey = REPO_KEY.exec(s);
+  const bare = BARE_KEY.exec(s);
+  let out: string[] = [];
+  if (url) {
+    const [, o, r, part, n] = url;
+    if (!part) out = [`repo:${repo(o, r)}`];
+    else if (num(n) !== null)
+      out = [`${part === 'pull' ? 'pr' : 'issue'}:${repo(o, r)}#${num(n)}`];
+  } else if (kindKey) {
+    const [, k, o, r, n] = kindKey;
+    if (num(n) !== null) out = [`${k.toLowerCase()}:${repo(o, r)}#${num(n)}`];
+  } else if (repoKey) {
+    out = [`repo:${repo(repoKey[1], repoKey[2])}`];
+  } else if (bare) {
+    const [, o, r, n] = bare;
+    if (num(n) !== null)
+      out = ['pr', 'issue'].map((k) => `${k}:${repo(o, r)}#${num(n)}`);
+  }
+  out = out.filter((k) => kinds.includes(kindFromKey(k)));
+  return out.length ? out : null;
+}

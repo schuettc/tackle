@@ -635,6 +635,47 @@ function agreeText(g) {
 function recommendedLine(recommended, notYet) {
   return `${recommended} recommended · ${notYet} not yet`;
 }
+var PICK_KINDS = {
+  pr: ["pr"],
+  "pr-or-issue": ["pr", "issue"],
+  repo: ["repo"]
+};
+var NAME = "[\\w.-]+";
+var GH_URL = new RegExp(
+  `^https?://(?:www\\.)?github\\.com/(${NAME})/(${NAME})(?:/(pull|issues)/(\\d+))?(?:[/?#].*)?$`,
+  "i"
+);
+var KIND_KEY = new RegExp(`^(pr|issue):(${NAME})/(${NAME})#(\\d+)$`, "i");
+var REPO_KEY = new RegExp(`^(?:repo:)?(${NAME})/(${NAME})$`, "i");
+var BARE_KEY = new RegExp(`^(${NAME})/(${NAME})#(\\d+)$`);
+function pastedKeys(text, asks) {
+  const kinds = PICK_KINDS[asks] ?? [];
+  const s = text.trim();
+  const repo = (o, r) => `${o}/${r.replace(/\.git$/i, "")}`.toLowerCase();
+  const num = (n) => Number(n) > 0 ? Number(n) : null;
+  const url = GH_URL.exec(s);
+  const kindKey = KIND_KEY.exec(s);
+  const repoKey = REPO_KEY.exec(s);
+  const bare = BARE_KEY.exec(s);
+  let out = [];
+  if (url) {
+    const [, o, r, part, n] = url;
+    if (!part) out = [`repo:${repo(o, r)}`];
+    else if (num(n) !== null)
+      out = [`${part === "pull" ? "pr" : "issue"}:${repo(o, r)}#${num(n)}`];
+  } else if (kindKey) {
+    const [, k, o, r, n] = kindKey;
+    if (num(n) !== null) out = [`${k.toLowerCase()}:${repo(o, r)}#${num(n)}`];
+  } else if (repoKey) {
+    out = [`repo:${repo(repoKey[1], repoKey[2])}`];
+  } else if (bare) {
+    const [, o, r, n] = bare;
+    if (num(n) !== null)
+      out = ["pr", "issue"].map((k) => `${k}:${repo(o, r)}#${num(n)}`);
+  }
+  out = out.filter((k) => kinds.includes(kindFromKey(k)));
+  return out.length ? out : null;
+}
 
 // decide.ts
 import {
@@ -648,10 +689,10 @@ import { h as h2 } from "/_kit/kit.js";
 function asNotNow(d) {
   return d === "watch" ? "wait" : d;
 }
-var ASKS_PLACEHOLDER = {
-  pr: "pr:owner/repo#1",
-  "pr-or-issue": "pr:owner/repo#1 or issue:owner/repo#1",
-  repo: "repo:owner/name"
+var PICK_EXAMPLE = {
+  pr: "tackle#58, a title, or https://github.com/owner/repo/pull/58",
+  "pr-or-issue": "tackle#58, a title, or https://github.com/owner/repo/pull/58",
+  repo: "tackle, a name, or https://github.com/owner/repo"
 };
 function showChoiceError(root, message3) {
   const err = root.querySelector(".cb-choice-err");
@@ -717,16 +758,65 @@ function renderChoices(ctx, kind, opts) {
   function notNowPicker(forms) {
     const input = h2("input", { class: "cb-sheet-input" });
     let form = null;
+    const searching = () => !!form && form.asks in PICK_KINDS;
     const commit = () => {
       if (!form) return;
       const until = notNowUntil(form, input.value, /* @__PURE__ */ new Date());
       if (until) opts.onPick("wait", until);
     };
+    const choose = (key) => {
+      if (form) opts.onPick("wait", form.template.replace("%s", key));
+    };
+    const options = h2("div", {
+      class: "cb-pick-opts",
+      role: "listbox",
+      hidden: true
+    });
+    const example = h2("p", { class: "cb-pick-eg", hidden: true });
+    const show = (found) => {
+      options.replaceChildren(
+        ...found.map(
+          (o) => h2(
+            "button",
+            {
+              type: "button",
+              class: "cb-pick-opt",
+              role: "option",
+              dataset: { key: o.key },
+              onclick: () => choose(o.key)
+            },
+            o.says
+          )
+        )
+      );
+      options.hidden = found.length === 0;
+    };
+    let seq = 0;
+    let timer;
+    const search = async () => {
+      const my = ++seq;
+      const asks = form?.asks ?? "";
+      const text = input.value.trim();
+      const found = text ? await pick(asks, text) : [];
+      if (my !== seq) return;
+      show(found);
+      input.dataset.searched = text;
+    };
+    input.addEventListener("input", () => {
+      if (!searching()) return;
+      delete input.dataset.searched;
+      clearTimeout(timer);
+      timer = setTimeout(() => void search(), 150);
+    });
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      if (!searching()) {
         commit();
+        return;
       }
+      const first = options.querySelector(".cb-pick-opt");
+      if (input.dataset.searched === input.value.trim() && first) first.click();
     });
     input.addEventListener("change", () => {
       if (input.type === "date") commit();
@@ -739,7 +829,7 @@ function renderChoices(ctx, kind, opts) {
     const field = h2(
       "div",
       { class: "cb-notnow-field", hidden: true },
-      input,
+      h2("div", { class: "cb-pick" }, input, example, options),
       set
     );
     const chips = h2(
@@ -762,9 +852,14 @@ function renderChoices(ctx, kind, opts) {
                 commit();
                 return;
               }
+              seq++;
+              show([]);
+              delete input.dataset.searched;
               input.type = f.asks === "date" ? "date" : "text";
               input.value = "";
-              input.placeholder = ASKS_PLACEHOLDER[f.asks] ?? "";
+              example.textContent = PICK_EXAMPLE[f.asks] ?? "";
+              example.hidden = !searching();
+              set.hidden = searching();
               field.hidden = false;
               input.focus();
             }
@@ -774,6 +869,34 @@ function renderChoices(ctx, kind, opts) {
       )
     );
     return [chips, field];
+  }
+  async function pick(asks, text) {
+    const kinds = PICK_KINDS[asks] ?? [];
+    const tracked = async (kind2, q, limit) => (await ctx.api.get("/items", {
+      view: "tracked",
+      kind: kind2,
+      q,
+      limit: String(limit)
+    }).catch(() => ({ items: [] }))).items ?? [];
+    const says = (key, title) => ({
+      key,
+      says: title ? `${key} · ${title}` : key
+    });
+    const pasted = pastedKeys(text, asks);
+    if (pasted) {
+      const hits = (await Promise.all(
+        pasted.map(
+          async (key) => (await tracked(kindFromKey(key), key, 5)).find((it) => it.key === key)
+        )
+      )).filter((it) => !!it);
+      if (hits.length) return hits.map((it) => says(it.key, it.title));
+      return pasted.map((key) => ({
+        key,
+        says: `${key} · not tracked; checked on the next sync`
+      }));
+    }
+    const lists = await Promise.all(kinds.map((k) => tracked(k, text, 8)));
+    return lists.flat().map((it) => says(it.key, it.title));
   }
   return root;
 }

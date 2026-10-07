@@ -75,6 +75,10 @@ const (
 	// applied (spec §5.1). They aren't attention items; this view reads every
 	// item.
 	ViewToApply = "to-apply"
+	// ViewTracked is every item casebook tracks, in key order: the Not now
+	// picker searches it (with kind and q) for the PR, issue or repo a
+	// condition names.
+	ViewTracked = "tracked"
 )
 
 // Query filters a view.
@@ -189,7 +193,7 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	src := x.res.Attention()
-	if q.View == ViewToApply {
+	if q.View == ViewToApply || q.View == ViewTracked {
 		src = x.res.Items
 	}
 	var out []ItemView
@@ -206,8 +210,8 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	// In an Attention view the recommended items (a pending proposal) come
-	// first, each group in key order. To apply keeps key order.
-	if q.View != ViewToApply {
+	// first, each group in key order. To apply and tracked keep key order.
+	if q.View != ViewToApply && q.View != ViewTracked {
 		sort.SliceStable(out, func(i, j int) bool { return out[i].Proposal != nil && out[j].Proposal == nil })
 	}
 	total := len(out)

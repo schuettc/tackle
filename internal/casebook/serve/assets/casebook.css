@@ -338,8 +338,53 @@
 }
 .cb-notnow-field {
   display: flex;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 10px;
+}
+.cb-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.cb-pick-eg {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  margin: 0;
+}
+.cb-pick-opts {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.cb-pick-opt {
+  font: 13px var(--kit-mono);
+  color: var(--kit-fg);
+  text-align: left;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--kit-line);
+  padding: 7px 10px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cb-pick-opt:first-child {
+  border-top: 0;
+}
+.cb-pick-opt:hover,
+.cb-pick-opt:focus-visible {
+  box-shadow: inset 3px 0 0 var(--kit-signal);
+}
+.cb-pick-eg[hidden],
+.cb-pick-opts[hidden],
+.cb-notnow-field .kit-btn[hidden] {
+  display: none;
 }
 .cb-choice-err {
   font: 12.5px var(--kit-mono);
