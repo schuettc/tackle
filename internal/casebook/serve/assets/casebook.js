@@ -721,6 +721,14 @@ var CLOSE = "close";
 var COMMENT_PLACEHOLDER = "closing comment, posted when you approve the plan";
 var CLOSE_WITH = "close with this comment";
 var CLOSE_WITHOUT = "close without comment";
+var commentFields = /* @__PURE__ */ new WeakMap();
+function askClosingComment(root, onNote) {
+  const wrap = root.querySelector(".cb-choices-wrap");
+  const field = wrap ? commentFields.get(wrap) : void 0;
+  if (!field) return false;
+  field.open(onNote);
+  return true;
+}
 function asNotNow(d) {
   return d === "watch" ? "wait" : d;
 }
@@ -748,6 +756,7 @@ function renderChoices(ctx, kind, opts) {
     comment?.el ?? null,
     err
   );
+  if (comment) commentFields.set(root, comment);
   void getVocab(ctx).then((vocab2) => {
     const choices2 = opts.keys ? choicesForKeys(vocab2, opts.keys) : (vocab2.kinds ?? []).find((k) => k.kind === kind)?.choices ?? [];
     const rec = asNotNow(opts.recommended);
@@ -805,6 +814,7 @@ function renderChoices(ctx, kind, opts) {
     return card6;
   }
   function closeComment() {
+    let answer = null;
     const field = noteField({
       value: "",
       placeholder: COMMENT_PLACEHOLDER,
@@ -814,7 +824,8 @@ function renderChoices(ctx, kind, opts) {
     });
     field.setAttribute("aria-label", "closing comment");
     const decide = (note) => {
-      opts.onPick(CLOSE, void 0, note.trim());
+      if (answer) answer(note.trim());
+      else opts.onPick(CLOSE, void 0, note.trim());
     };
     field.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.isComposing) decide(field.value);
@@ -847,8 +858,10 @@ function renderChoices(ctx, kind, opts) {
       el.hidden = true;
       document.removeEventListener("keydown", onEsc, true);
     }
-    function open() {
-      field.value = opts.chosen === CLOSE ? opts.note ?? "" : "";
+    function open(onNote) {
+      answer = onNote ?? null;
+      field.value = !onNote && opts.chosen === CLOSE ? opts.note ?? "" : "";
+      if (onNote) mark(CLOSE);
       el.hidden = false;
       document.addEventListener("keydown", onEsc, true);
       field.focus();
@@ -3896,17 +3909,19 @@ function makeAttention(ctx) {
       deciding = null;
     }
   }
-  async function acceptOpen() {
+  async function acceptOpen(note) {
     const p = shownProposal();
     const key = currentOpenKey;
     if (!p || !key || deciding) return;
+    if (note === void 0 && p.disposition === "close" && askClosingComment(readEl, (n) => void acceptOpen(n)))
+      return;
     deciding = key;
     const order = await orderFor(key);
     const prev = shownDetail?.item.decision ?? null;
     try {
-      const r = await ctx.api.post("/proposals/accept", {
-        ids: [p.id]
-      });
+      const body = { ids: [p.id] };
+      if (note) body["note"] = note;
+      const r = await ctx.api.post("/proposals/accept", body);
       if (!r.accepted) {
         showReadError((r.errors ?? []).join("; ") || "nothing was accepted");
         return;

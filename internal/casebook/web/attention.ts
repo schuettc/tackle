@@ -42,7 +42,7 @@ import {
   agreeGroups,
   type AgreeGroup,
 } from './decide-math.ts';
-import { showChoiceError } from './choices.ts';
+import { showChoiceError, askClosingComment } from './choices.ts';
 import { makeBoard } from './board.ts';
 import {
   agreeWithAll,
@@ -837,18 +837,27 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // acceptOpen accepts the open item's recommendation (a, or the card's
-  // accept) and moves on.
-  async function acceptOpen(): Promise<void> {
+  // accept) and moves on. A close first asks for Court's closing comment
+  // (the field a close card opens, empty: the recommendation's reason is
+  // written to Court and is never the comment); its buttons accept, with
+  // that comment or none.
+  async function acceptOpen(note?: string): Promise<void> {
     const p = shownProposal();
     const key = currentOpenKey;
     if (!p || !key || deciding) return;
+    if (
+      note === undefined &&
+      p.disposition === 'close' &&
+      askClosingComment(readEl, (n) => void acceptOpen(n))
+    )
+      return;
     deciding = key;
     const order = await orderFor(key);
     const prev = shownDetail?.item.decision ?? null;
     try {
-      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
-        ids: [p.id],
-      });
+      const body: Record<string, unknown> = { ids: [p.id] };
+      if (note) body['note'] = note;
+      const r = await ctx.api.post<AcceptResult>('/proposals/accept', body);
       if (!r.accepted) {
         showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
         return;

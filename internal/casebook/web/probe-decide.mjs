@@ -443,13 +443,55 @@ async function decideScenario(context, t, s) {
   await shoot(t, pg, 'decide', ['light', 'dark']);
   await setTheme(pg, 'light');
 
-  // ---- a accepts the recommendation; the next undecided opens -------------
+  // ---- a on a close recommendation asks for the closing comment ----------
+  // The recommendation's reason is written to Court: it is never the
+  // comment. The field opens empty; nothing is decided until a button.
   await press(pg, 'a');
+  {
+    const FIELD = '.kit-app > .kit-read:not([hidden]) .cb-close-comment';
+    const shown = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      FIELD,
+    );
+    const f = await pg.evaluate(
+      (sel) => ({
+        value: document.querySelector(`${sel} input.kit-note`)?.value ?? null,
+        focused:
+          document.activeElement ===
+          document.querySelector(`${sel} input.kit-note`),
+        closeOn: !!document
+          .querySelector(
+            '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="close"]',
+          )
+          ?.classList.contains('on'),
+      }),
+      FIELD,
+    );
+    await pg.waitForTimeout(400);
+    check(
+      `a on a close recommendation opens the closing-comment field, empty ("${f.value}"), focused, on "Close it"`,
+      shown && f.value === '' && f.focused && f.closeOn,
+    );
+    check(
+      'and accepts nothing yet: issue #1 is undecided, its recommendation pending',
+      (await decisionOf(ISSUE(1))) === null &&
+        (await api('GET', `/api/item?key=${encodeURIComponent(ISSUE(1))}`)).item
+          .proposal?.state === 'pending',
+    );
+    await pg
+      .locator(`${FIELD} .kit-btn`, { hasText: /^close without comment$/ })
+      .click();
+  }
   check(
-    'a accepts the recommendation: issue #1 is decided close, proposed by the session',
+    '"close without comment" accepts the recommendation: issue #1 is decided close, proposed by the session, with no note',
     await eventually(async () => {
       const d = await decisionOf(ISSUE(1));
-      return d?.disposition === 'close' && (d.proposed_by ?? '').includes(sid);
+      return (
+        d?.disposition === 'close' &&
+        (d.proposed_by ?? '').includes(sid) &&
+        !d.note
+      );
     }),
   );
   check(
@@ -1301,6 +1343,45 @@ async function recommendScenario(context, t, s) {
     'and still no job',
     ((await api('GET', '/api/jobs')).jobs ?? []).length === 0,
   );
+
+  // ---- the recommendation's reason is never the closing comment -----------
+  {
+    const ds = await Promise.all([RPR(9), RPR(10)].map(decisionOf));
+    check(
+      `agreeing with the closes records no note: the reason ("superseded") stays on the proposals (notes: ${ds.map((d) => JSON.stringify(d?.note ?? '')).join(', ')})`,
+      ds.every((d) => d?.disposition === 'close' && !d.note),
+    );
+    const plan = await api('POST', '/api/apply/plan', {
+      keys: [RPR(9), RPR(10)],
+    });
+    await pg.evaluate((j) => {
+      location.hash = `#/apply/${j}`;
+    }, plan.job?.id);
+    await until(
+      pg,
+      () => document.querySelectorAll('.cb-plan .cb-plan-step').length === 2,
+      undefined,
+      8000,
+    );
+    const shown = await pg.$$eval('.cb-plan .cb-plan-step', (els) =>
+      els.map(
+        (e) =>
+          `${e.dataset.key} :: ${e.querySelector('.cb-cmd')?.textContent ?? ''}`,
+      ),
+    );
+    checkList(
+      "To apply's steps for the agreed closes post no comment",
+      shown.sort(),
+      [9, 10]
+        .map((n) => `${RPR(n)} :: gh pr close ${n} -R 'schuettc/${REC}'`)
+        .sort(),
+    );
+    const steps = plan.job?.steps ?? [];
+    check(
+      `and serve's steps post nothing (${steps.map((st) => st.posts === true).join(', ')})`,
+      steps.length === 2 && steps.every((st) => !st.posts),
+    );
+  }
   await pg.close();
 }
 
@@ -1777,6 +1858,48 @@ async function closeCommentScenario(context, t, s) {
     check(
       `serve's step for issue #1 posts (it shows the comment again before it's posted); issue #3's posts nothing`,
       posts(CISSUE(1)) && !posts(CISSUE(3)),
+    );
+  }
+
+  // ---- the card's accept on a close recommendation asks too ---------------
+  {
+    const sid = 'probe-lc-close';
+    const REASON = 'Superseded by the new uploader; the author agreed.';
+    await agent.presence(sid, 'pi \u00b7 lc', '/home/court/lc', 'pi');
+    await agent.propose(sid, [CPR(4)], 'close', REASON);
+    check('pr #4 opens, recommended', await openByHash(CPR(4)));
+    await until(
+      pg,
+      (read) =>
+        !!document.querySelector(`${read} .cb-proposal-card .kit-btn.fill`),
+      READ,
+    );
+    await pg.click(`${READ} .cb-proposal-card .kit-btn.fill`);
+    await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      FIELD,
+    );
+    const f = await fieldState();
+    await pg.waitForTimeout(400);
+    check(
+      `the card's accept opens the closing-comment field, empty ("${f.value}"), not the reason, and accepts nothing yet`,
+      f.shown && f.value === '' && (await decisionOf(CPR(4))) === null,
+    );
+    await pg.locator(`${FIELD} input`).fill(SAID);
+    await pg
+      .locator(`${FIELD} .kit-btn`, { hasText: /^close with this comment$/ })
+      .click();
+    check(
+      `"close with this comment" accepts it: pr #4 is decided close, proposed by the session, with Court's comment as its note`,
+      await eventually(async () => {
+        const d = await decisionOf(CPR(4));
+        return (
+          d?.disposition === 'close' &&
+          (d.proposed_by ?? '').includes(sid) &&
+          d.note === SAID
+        );
+      }),
     );
   }
   await pg.close();

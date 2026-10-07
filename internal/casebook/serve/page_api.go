@@ -401,17 +401,30 @@ func (s *Server) postDecide(w http.ResponseWriter, r *http.Request) {
 	reply(w, DecideResult{Decided: n, DecidedKeys: nonNil(done), Errors: nonNil(errs), Decisions: made}, nil)
 }
 
+// proposalOpts is how a proposal is decided when it is accepted. Its note is
+// the recommendation's reason, written to Court; a close posts its decision's
+// note as the public closing comment, so a close takes no note from its
+// proposal (the reason stays on the proposal). Other dispositions post
+// nothing and keep it.
 func proposalOpts(p propose.Proposal) app.DecideOptions {
 	o := app.DecideOptions{Until: p.Until, Note: p.Note, ProposedBy: p.Source}
+	if item.Disposition(p.Disposition) == item.Close {
+		o.Note = ""
+	}
 	if id, ok := strings.CutPrefix(p.Source, "rule:"); ok {
 		o.Rule = id
 	}
 	return o
 }
 
+// postAccept is POST /api/proposals/accept. note, when given, is Court's
+// closing comment for an accepted close (the page's closing-comment field);
+// without it an accepted close records no note, so nothing is posted. It
+// does nothing for other dispositions.
 func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		IDs []int64 `json:"ids"`
+		IDs  []int64 `json:"ids"`
+		Note string  `json:"note"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -428,7 +441,11 @@ func (s *Server) postAccept(w http.ResponseWriter, r *http.Request) {
 			errs = append(errs, fmt.Sprintf("proposal %d is not pending", id))
 			continue
 		}
-		normed, c, err := s.decideOneKey(ctx, p.Key, p.Disposition, proposalOpts(p), p.ID)
+		o := proposalOpts(p)
+		if item.Disposition(p.Disposition) == item.Close {
+			o.Note = in.Note
+		}
+		normed, c, err := s.decideOneKey(ctx, p.Key, p.Disposition, o, p.ID)
 		if err != nil {
 			errs = append(errs, err.Error())
 			continue

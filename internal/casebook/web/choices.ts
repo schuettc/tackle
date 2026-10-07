@@ -15,6 +15,10 @@
 //     and "close without comment" (no note); Esc cancels it;
 //   - an error line (.cb-choice-err) for serve's answer when it refuses.
 //
+// askClosingComment(root, onNote) opens the same field for accepting a close
+// recommendation: empty (the recommendation's reason is never the comment),
+// its buttons calling onNote(note) instead of opts.onPick.
+//
 // Picking a card calls opts.onPick(disposition); Not now calls
 // opts.onPick('wait', until) once its condition is complete; a close (one
 // item) calls opts.onPick('close', undefined, note) from its buttons, note
@@ -55,6 +59,29 @@ const CLOSE = 'close';
 const COMMENT_PLACEHOLDER = 'closing comment, posted when you approve the plan';
 const CLOSE_WITH = 'close with this comment';
 const CLOSE_WITHOUT = 'close without comment';
+
+// The open closing-comment fields, by their choices' root: what
+// askClosingComment opens.
+const commentFields = new WeakMap<
+  HTMLElement,
+  { open(onNote?: (note: string) => void): void }
+>();
+
+/**
+ * askClosingComment opens root's closing-comment field (renderChoices for one
+ * item), empty, on its close card; its buttons call onNote(note), '' for
+ * none. False when root has none (a selection's cards).
+ */
+export function askClosingComment(
+  root: ParentNode,
+  onNote: (note: string) => void,
+): boolean {
+  const wrap = root.querySelector<HTMLElement>('.cb-choices-wrap');
+  const field = wrap ? commentFields.get(wrap) : undefined;
+  if (!field) return false;
+  field.open(onNote);
+  return true;
+}
 
 /** asNotNow maps watch, which the page no longer offers, onto Not now. */
 export function asNotNow(d: string | undefined): string | undefined {
@@ -101,6 +128,7 @@ export function renderChoices(
     comment?.el ?? null,
     err,
   );
+  if (comment) commentFields.set(root, comment);
 
   void getVocab(ctx).then((vocab) => {
     const choices: ChoiceVocab[] = opts.keys
@@ -172,9 +200,11 @@ export function renderChoices(
   // in the field); Esc, wherever focus is, closes it and unpicks the card.
   function closeComment(): {
     el: HTMLElement;
-    open(): void;
+    open(onNote?: (note: string) => void): void;
     close(): void;
   } {
+    // Whom the buttons answer: the decide (a close card), or an accept.
+    let answer: ((note: string) => void) | null = null;
     const field = noteField({
       value: '',
       placeholder: COMMENT_PLACEHOLDER,
@@ -183,7 +213,8 @@ export function renderChoices(
     });
     field.setAttribute('aria-label', 'closing comment');
     const decide = (note: string): void => {
-      opts.onPick(CLOSE, undefined, note.trim());
+      if (answer) answer(note.trim());
+      else opts.onPick(CLOSE, undefined, note.trim());
     };
     field.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.isComposing) decide(field.value);
@@ -221,9 +252,12 @@ export function renderChoices(
       el.hidden = true;
       document.removeEventListener('keydown', onEsc, true);
     }
-    function open(): void {
-      // A decided close starts from its comment; anything else, empty.
-      field.value = opts.chosen === CLOSE ? (opts.note ?? '') : '';
+    function open(onNote?: (note: string) => void): void {
+      answer = onNote ?? null;
+      // A decided close starts from its comment; an accept, and anything
+      // else, empty.
+      field.value = !onNote && opts.chosen === CLOSE ? (opts.note ?? '') : '';
+      if (onNote) mark(CLOSE);
       el.hidden = false;
       document.addEventListener('keydown', onEsc, true);
       field.focus();

@@ -339,8 +339,10 @@ func TestProposeAcceptWritesDecision(t *testing.T) {
 	if acc["accepted"].(float64) != 1 {
 		t.Fatalf("accept %v", acc)
 	}
+	// A close takes no note from its proposal: the reason is never the
+	// closing comment (TestAcceptingACloseRecommendationRecordsNoComment).
 	d, _ := r.App.Repo.ReadDecision(item.IssueKey("schuettc/hail", 4))
-	if d == nil || d.Disposition != "close" || d.ProposedBy != "pi:s1" || d.DecidedBy != "schuettc" || d.Note != "fixed upstream" {
+	if d == nil || d.Disposition != "close" || d.ProposedBy != "pi:s1" || d.DecidedBy != "schuettc" || d.Note != "" {
 		t.Fatalf("decision %+v", d)
 	}
 	r.do(t, "GET", "/api/items?view=proposed", nil, &list)
