@@ -205,9 +205,7 @@ export async function ownerScenarios(context, t) {
           !!(await pg.$(`.cb-dock-threads [data-thread="${threadA.id}"].on`)) &&
             !(await chooser(pg)).shown,
         );
-        check('the screenshot is light', await isLight(pg));
-        await pg.screenshot({ path: '/tmp/owner-attached.png' });
-        console.log('  screenshot: /tmp/owner-attached.png');
+        check('the page is light', await isLight(pg));
 
         // A message goes to the attached session, and only there.
         await pg.click('[data-testid="composer-input"]');
@@ -332,6 +330,8 @@ export async function ownerScenarios(context, t) {
         await pg.click('[data-testid="composer-input"]');
         await pg.keyboard.type('after the move');
         await pg.keyboard.press('Enter');
+        // Kept: the message must reach no thread of B's; a window for a send
+        // in flight to land.
         await pg.waitForTimeout(800);
         const inMoved = (
           (await agent.messages(threadA.id)).messages ?? []
@@ -488,9 +488,7 @@ export async function ownerScenarios(context, t) {
           foot.length === 2 &&
             foot.every((f) => f.text && f.h > 0 && f.h < f.line * 1.5),
         );
-        check('the screenshot is light', await isLight(pg));
-        await pg.screenshot({ path: '/tmp/owner-chooser.png' });
-        console.log('  screenshot: /tmp/owner-chooser.png');
+        check('the page is light', await isLight(pg));
         // Choosing attaches the page, and the URL keeps it.
         await pg
           .click(
@@ -657,6 +655,7 @@ export async function ownerScenarios(context, t) {
         await pg
           .click('[data-testid="batch-tray"] .cb-batch-send', { timeout: 5000 })
           .catch(() => {});
+        // Kept: nothing may be queued; a window for a send to land.
         await pg.waitForTimeout(500);
         check(
           "the batch tray's send is refused too: the draft stays a draft, nothing queued",
@@ -669,9 +668,7 @@ export async function ownerScenarios(context, t) {
               () => document.querySelector('.cb-comp-note')?.textContent,
             )) === 'your session left',
         );
-        check('the screenshot is light', await isLight(pg));
-        await pg.screenshot({ path: '/tmp/owner-left.png' });
-        console.log('  screenshot: /tmp/owner-left.png');
+        check('the page is light', await isLight(pg));
         // Court chooses: the page is now A's.
         await pg
           .click(

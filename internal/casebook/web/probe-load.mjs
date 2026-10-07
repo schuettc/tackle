@@ -181,6 +181,7 @@ async function loadScenario(context, t, s, agent, ids) {
     );
     const windowEnd = t0 + 3000;
     const wait = windowEnd - Date.now();
+    // Kept: the check counts requests over the 3 s after the click.
     if (wait > 0) await pg.waitForTimeout(wait);
     const inWindow = sessionsAsked.filter((at) => at >= t0 && at <= windowEnd);
     check(

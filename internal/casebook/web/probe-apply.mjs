@@ -121,10 +121,10 @@ const pressWithFocus = async (pg, k) => {
   await pg.keyboard.press(k);
 };
 
-// shoot takes the light and the dark screenshot (or only those named),
-// asserting the theme. Focus is let go first: a focused control's ring is
-// the probe's click, not the page.
-async function shoot(t, pg, name, themes = ['light', 'dark']) {
+// inThemes shows the page light and dark (or only the themes named),
+// asserting the theme took and that nothing is focused (a focused control's
+// ring is the probe's click, not the page).
+async function inThemes(t, pg, name, themes = ['light', 'dark']) {
   const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
   for (const theme of themes) {
     for (let i = 0; i < 3; i++) {
@@ -143,10 +143,9 @@ async function shoot(t, pg, name, themes = ['light', 'dark']) {
       () => document.activeElement === document.body,
     );
     t.check(
-      `/tmp/t9-${name}-${theme}.png is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
+      `the ${name} view is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
       got.theme === theme && got.bg === bgs[theme] && focused,
     );
-    await pg.screenshot({ path: `/tmp/t9-${name}-${theme}.png` });
   }
   for (let i = 0; i < 3; i++) {
     const th = await pg.evaluate(() => document.documentElement.dataset.theme);
@@ -484,6 +483,8 @@ async function applyScenariosOn(context, t, serveHandle) {
     await pg.click('.kit-primary', { clickCount: 2 });
     const planView = await (await planResp).json();
     const jobId = planView.job.id;
+    // Kept: the check is that the second press posts nothing; a window for
+    // a second POST to go out.
     await pg.waitForTimeout(500);
     pg.off('request', onPlanPost);
     const jobsAfterPlan = (await agent.api('GET', '/api/jobs')).jobs ?? [];
@@ -603,7 +604,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       ),
     );
     await pressWithFocus(pg, 'a');
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: "a" must approve nothing; a window for it
     check(
       '"a" with no session approves nothing (serve still has a plan)',
       (await job(jobId)).job.state === 'planned',
@@ -710,7 +711,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       await pg.$eval('[data-testid="approve"]', (e) =>
         e.scrollIntoView({ block: 'end' }),
       );
-      await shoot(t, pg, 'plan');
+      await inThemes(t, pg, 'plan');
 
       // Approve from the keyboard: "a" is To apply's approve here (Attention
       // and Rules bind "a" too).
@@ -868,7 +869,7 @@ async function applyScenariosOn(context, t, serveHandle) {
         jv = await job(jobId);
         finished = finishedOf(jv);
         if (row.meta === `${finished}/${jv.job.steps.length}`) break;
-        await pg.waitForTimeout(100);
+        await pg.waitForTimeout(100); // kept: the poll's interval (it breaks when they agree)
       }
       checkList('the row names its lanes in their colours', row.lanes, [
         `casebook \u00b7 local=${signal}`,
@@ -951,7 +952,9 @@ async function applyScenariosOn(context, t, serveHandle) {
 
       // ---- a burst of live events -----------------------------------------
       console.log('\nscenario: to apply — a burst of live events');
-      await pg.waitForTimeout(500); // the resume's own reloads settle
+      // Kept: the resume's own reloads settle, so the count below is the
+      // burst's alone.
+      await pg.waitForTimeout(500);
       const fetched = [];
       const onFetch = (r) => {
         const u = r.url();
@@ -972,6 +975,8 @@ async function applyScenariosOn(context, t, serveHandle) {
         pg,
         () => document.querySelector('.kit-primary')?.textContent === 'Resume',
       );
+      // Kept: the check bounds how many fetches the burst makes; a window
+      // for any extra one to go out.
       await pg.waitForTimeout(600);
       pg.off('request', onFetch);
       check(
@@ -991,6 +996,7 @@ async function applyScenariosOn(context, t, serveHandle) {
 
       // ---- a stale reload never draws over a newer one ------------------
       console.log('\nscenario: to apply — reloads in order');
+      // Kept: the reloads before this settle, so the one held is the event's.
       await pg.waitForTimeout(500);
       // Hold every /api/job reload: the first (running) is released after
       // Court's own pause has drawn, the rest after the check.
@@ -1013,6 +1019,7 @@ async function applyScenariosOn(context, t, serveHandle) {
         () => document.querySelector('.kit-primary')?.textContent === 'Resume',
       );
       await heldJob.shift()?.();
+      // Kept: the older reply must not be drawn; a window for it to be.
       await pg.waitForTimeout(500);
       const after = await read.primary(pg);
       const kick = await pg.$eval('.cb-job .kit-kick', (e) => e.textContent);
@@ -1090,7 +1097,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       await pg.$eval('.cb-job .kit-kick', (e) =>
         e.scrollIntoView({ block: 'start' }),
       );
-      await shoot(t, pg, 'job');
+      await inThemes(t, pg, 'job');
       // edit text: the text becomes a field; saving sends it to serve.
       await pg.click(
         '.cb-needs-card[data-kind="text"] .kit-btn:has-text("edit text")',
@@ -1117,6 +1124,7 @@ async function applyScenariosOn(context, t, serveHandle) {
             .state === 'running',
         repoA.id,
       );
+      // Kept: the redraw must not replace the field; a window for a late one.
       await pg.waitForTimeout(300);
       const replaced = await pg.evaluate(
         ([el, sel]) => el !== document.querySelector(sel),
@@ -1340,6 +1348,8 @@ async function applyScenariosOn(context, t, serveHandle) {
       );
       // A live event under the hidden section: the job pauses.
       await agent.api('POST', '/api/jobs/pause', { id: jobId });
+      // Kept: the hidden section's event must not change the line; a window
+      // for the event to reach the page.
       await pg.waitForTimeout(800);
       check(
         `a live job event while To apply is hidden leaves the attached line alone ("${onAttention}")`,
@@ -1348,7 +1358,7 @@ async function applyScenariosOn(context, t, serveHandle) {
           !onAttention.includes(`job #${jobId}`),
       );
       await pressWithFocus(pg, 'p');
-      await pg.waitForTimeout(500);
+      await pg.waitForTimeout(500); // kept: "p" must resume nothing; a window for it
       check(
         'on Attention, "p" does not resume the hidden job',
         (await job(jobId)).job.paused === true,
@@ -1502,7 +1512,7 @@ async function applyScenariosOn(context, t, serveHandle) {
             ?.classList.contains('on') ?? false,
       );
       await pressWithFocus(pg, 'a');
-      await pg.waitForTimeout(600);
+      await pg.waitForTimeout(600); // kept: "a" must approve nothing; a window for it
       check(
         'on Attention, "a" does not approve the hidden open plan',
         (await job(second.job.id)).job.state === 'planned',
@@ -1773,7 +1783,7 @@ async function staleScenario(context, t, serveHandle) {
       'no job was made',
       ((await agent.api('GET', '/api/jobs')).jobs ?? []).length === 0,
     );
-    await shoot(t, pg, 'stale', ['light']);
+    await inThemes(t, pg, 'stale', ['light']);
 
     // A second tab, refused too. Court presses sync first in the first
     // tab only: the plan is built again there, not here.
@@ -1840,7 +1850,7 @@ async function staleScenario(context, t, serveHandle) {
       .catch(() => null);
     await pg.click('[data-testid="refusal"] .kit-btn:has-text("sync first")');
     const plan = await (await replanned)?.json().catch(() => null);
-    await pg.waitForTimeout(300);
+    await pg.waitForTimeout(300); // kept: no second sync or plan may follow
     pg.off('request', onReq);
     check(
       `sync first asks serve to sync once (${syncPosts.length} POST /api/sync), and the page said it was syncing`,
@@ -1882,7 +1892,7 @@ async function staleScenario(context, t, serveHandle) {
         !document.querySelector('[data-testid="refusal"]') &&
         document.querySelector('.kit-primary')?.textContent !== 'Sync first',
     );
-    await pg2.waitForTimeout(300);
+    await pg2.waitForTimeout(300); // kept: this tab may not re-plan
     pg2.off('request', onReq2);
     check(
       `the tab that didn't ask re-plans nothing (${tab2Plans.length} POST /api/apply/plan) and no longer shows the refusal`,
