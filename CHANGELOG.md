@@ -146,6 +146,23 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   refused push keeps the commit, prints the report and says the next sync
   pushes it.
 
+## [cull 0.1.2] - 2026-10-06
+
+### Fixed
+- An agent session started in a folder that holds several repositories (a
+  workspace) can now use cull on the repositories inside it.
+  `cull_review` and `cull_status` take a repository's path, like
+  `cull_check` already did; the session owns that repository's review; and
+  your Send for any repository inside the session's folder reaches it.
+  Before, the session counted only for the folder it started in, so the
+  review opened empty and Send never reached it. `cull wait` follows the
+  same rule.
+- The message an agent gets on Send names the repository's path, so an agent
+  working from a workspace knows where to run `cull_check` and `cull_apply`.
+- `cull init` at a workspace folder (no tests of its own, repositories inside)
+  saves the key and lists the repositories to run it in, instead of allowing
+  the workspace folder to send test source.
+
 ## [cull 0.1.1] - 2026-10-06
 
 ### Fixed

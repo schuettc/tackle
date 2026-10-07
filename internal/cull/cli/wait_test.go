@@ -118,7 +118,7 @@ func TestWaitPrintsTheSendAndExits0(t *testing.T) {
 	case r := <-res:
 		want := "Court sent his answers for " + filepath.Base(root) + ": 1 cut, 0 keep, 0 merge, 0 separate.\n" +
 			"Notes:\n- TestMaybe: not needed\n" +
-			"Next: run cull_check, then cull_apply to remove the cuts.\n"
+			"Next: run cull_check with path " + root + ", then cull_apply with path " + root + " to remove the cuts.\n"
 		if r.code != 0 || r.out != want {
 			t.Errorf("code %d\nout  %q\nwant %q\nerr  %q", r.code, r.out, want, r.errw)
 		}
@@ -151,5 +151,22 @@ func TestWaitBadTimeoutIsUsage(t *testing.T) {
 	code, _, errw := run(t, "", "wait", "--timeout", "0s")
 	if code != 2 || !strings.Contains(errw, "--timeout") {
 		t.Errorf("code %d err %q", code, errw)
+	}
+}
+
+// cull wait in a workspace folder takes a Send for a repository inside it.
+func TestWaitInAWorkspaceTakesARepositorysSend(t *testing.T) {
+	st := waitRig(t)
+	ws := waitProject(t)
+	repo := filepath.Join(ws, "shop")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := startWait(ws, "--timeout", "10s")
+	time.Sleep(300 * time.Millisecond)
+	answerAndPressSend(t, st, repo)
+	r := <-res
+	if r.code != 0 || !strings.Contains(r.out, "with path "+repo) {
+		t.Errorf("code %d out %q err %q", r.code, r.out, r.errw)
 	}
 }

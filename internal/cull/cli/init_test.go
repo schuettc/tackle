@@ -127,3 +127,33 @@ func TestInitSavesFileEvenWithEnvKey(t *testing.T) {
 		t.Errorf("out %q", out)
 	}
 }
+
+// At a workspace root (no tests of its own, repositories inside) init saves
+// the key but leaves the per-repository question to each repository.
+func TestInitAtAWorkspaceRootPointsAtTheRepositories(t *testing.T) {
+	initSeams(t, true, initFakeKey)
+	ws := t.TempDir()
+	for _, name := range []string{"shop", "site"} {
+		if err := os.MkdirAll(filepath.Join(ws, name, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out, errw := run(t, "y\n", "init", ws)
+	if code != 0 {
+		t.Fatalf("code %d errw %q", code, errw)
+	}
+	if k, _, err := key.Load(); err != nil || k != initFakeKey {
+		t.Fatalf("key not saved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".cull.toml")); err == nil {
+		t.Error("wrote .cull.toml at the workspace root")
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".gitignore")); err == nil {
+		t.Error("wrote .gitignore at the workspace root")
+	}
+	for _, want := range []string{"cull init shop", "cull init site"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+}

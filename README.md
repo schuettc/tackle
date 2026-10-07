@@ -245,8 +245,9 @@ merge them.
 
 **Install:** `kempt apply -manifest cmd/cull/kempt.toml -packages cull`. This
 installs the binary and registers the `cull` channel for Claude Code and pi.
-Then run `cull init` in each project: it stores your TypeSafe key, allows the
-project to send test code to Jev, and adds `.cull/` to the project's ignore file.
+Then run `cull init` in each project: the first time it stores your TypeSafe
+key (once per machine); in each project it asks whether that project may send
+test code to Jev, and adds `.cull/` to the project's ignore file.
 
 **Commands**
 
@@ -260,8 +261,14 @@ project to send test code to Jev, and adds `.cull/` to the project's ignore file
 **The agent loop.** An agent in your project has five channel tools:
 `cull_check`, `cull_check_group`, `cull_review`, `cull_apply` and `cull_status`.
 On its own it checks the tests it wrote and applies the cuts Jev is sure of. It
-sends the unsure ones to the page with `cull_review`, then stops and waits for
-you.
+sends the unsure ones to the page with `cull_review` and carries on with other
+work until your answers arrive.
+
+**Working from a workspace folder.** If your agent session starts in a folder
+that holds several repositories, cull works on each repository inside it: the
+agent passes the repository's path to the tools, owns that repository's review,
+and receives your answers for it. `cull init` at such a folder lists the
+repositories to run it in.
 
 **The page.** For each test you see the code, Jev's verdict and why, and
 you choose cut or keep. Duplicate groups ask whether to merge or keep separate.

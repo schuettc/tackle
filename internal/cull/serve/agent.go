@@ -149,7 +149,8 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "session is required")
 		return
 	}
-	if _, ok := s.agentProject(w, r, b.Root); !ok {
+	if !filepath.IsAbs(b.Root) {
+		writeErr(w, http.StatusBadRequest, "root must be an absolute path")
 		return
 	}
 	s.touch(b.Session, b.Harness, b.Label)
@@ -191,6 +192,10 @@ func (s *Server) ownerPresent(p store.Project) (string, bool) {
 	return "", false
 }
 
+// agentWait is a session's long poll for Court's Sends. root is the
+// session's folder (its scope): the session covers the repository that
+// contains that folder and every repository inside it, so an agent started
+// at a workspace root hears Sends for each repository in the workspace.
 func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	id := q.Get("session")
@@ -198,8 +203,9 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "session is required")
 		return
 	}
-	p, ok := s.agentProject(w, r, q.Get("root"))
-	if !ok {
+	scope := q.Get("root")
+	if !filepath.IsAbs(scope) {
+		writeErr(w, http.StatusBadRequest, "root must be an absolute path")
 		return
 	}
 	secs := 30
@@ -213,13 +219,18 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 	for {
 		wake := s.waker()
 		s.touch(id, "", "") // a connected long poll is a live session
-		cur, err := s.st.ProjectByID(r.Context(), p.ID)
+		ps, err := s.covered(r, scope)
 		if err != nil {
+			if r.Context().Err() != nil {
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		owner, present := s.ownerPresent(cur)
-		if !present || owner == id {
+		for _, p := range ps {
+			if owner, present := s.ownerPresent(p); present && owner != id {
+				continue // the present owner takes this project's Sends
+			}
 			sd, ok, err := s.st.ClaimSend(r.Context(), p.ID, id)
 			if err != nil {
 				if r.Context().Err() != nil {
@@ -244,6 +255,36 @@ func (s *Server) agentWait(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+}
+
+// covered is every project a session whose folder is scope covers: the one
+// containing scope, and every known project inside it.
+func (s *Server) covered(r *http.Request, scope string) ([]store.Project, error) {
+	top, err := discover.Root(scope)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.st.Projects(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	in := realPath(scope)
+	var out []store.Project
+	for _, p := range all {
+		pr := realPath(p.Root)
+		if p.Root == top || pr == in || strings.HasPrefix(pr, in+string(filepath.Separator)) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+// realPath resolves symlinks (macOS's /var is /private/var), or returns p.
+func realPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 func (s *Server) agentStatus(w http.ResponseWriter, r *http.Request) {
@@ -308,7 +349,7 @@ func SendText(sd store.Send, root string) string {
 			fmt.Fprintf(&b, "- %s: %s\n", n.Name, n.Note)
 		}
 	}
-	b.WriteString("Next: run cull_check, then cull_apply to remove the cuts.")
+	fmt.Fprintf(&b, "Next: run cull_check with path %s, then cull_apply with path %s to remove the cuts.", root, root)
 	if c.Merge > 0 {
 		b.WriteString("\nThen rewrite each group he chose to merge as one table test and run cull_check_group on it.")
 	}
