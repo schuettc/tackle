@@ -30,7 +30,7 @@ func TestGuideIsShortAndGeneric(t *testing.T) {
 	if len(g) >= 2500 {
 		t.Errorf("guide is %d bytes, want under 2,500:\n%s", len(g), g)
 	}
-	if !strings.HasPrefix(g, Fixed) {
+	if !strings.HasPrefix(g, Fixed(v)) {
 		t.Error("the guide doesn't start with the fixed text")
 	}
 	re := regexp.MustCompile(`(?i)\b(court|schuettc|claude|codex|openai|anthropic|gpt|gemini|opus|sonnet|pi)\b`)
@@ -52,9 +52,39 @@ func TestGuideIsShortAndGeneric(t *testing.T) {
 			}
 		}
 	}
-	for _, s := range []string{ProposeHow} {
+	for _, s := range []string{ProposeHow(v)} {
 		if m := re.FindString(s); m != "" {
 			t.Errorf("ProposeHow names %q", m)
 		}
+	}
+}
+
+// TestGuideReadsItsLabelsFromTheVocabulary: the guide's prose names the
+// choices by the vocabulary's labels, so renaming one renames it there.
+func TestGuideReadsItsLabelsFromTheVocabulary(t *testing.T) {
+	v := vocab()
+	for i := range v {
+		for j, c := range v[i].Choices {
+			switch c.Disposition {
+			case "wait":
+				v[i].Choices[j].Label = "Later"
+			case "ignore":
+				v[i].Choices[j].Label = "Forget it"
+			}
+		}
+	}
+	g, how := Guide(v), ProposeHow(v)
+	for _, old := range []string{"Not now", "Stop tracking"} {
+		if strings.Contains(g, old) || strings.Contains(how, old) {
+			t.Errorf("the guide still says %q after the label changed:\n%s\n%s", old, g, how)
+		}
+	}
+	for _, want := range []string{"- Use Later when the item depends", "- In a Later condition, name only", "- Forget it only when the user will never act on it"} {
+		if !strings.Contains(g, want) {
+			t.Errorf("the guide doesn't say %q:\n%s", want, g)
+		}
+	}
+	if !strings.Contains(how, "For wait (Later)") {
+		t.Errorf("ProposeHow doesn't name the label: %s", how)
 	}
 }

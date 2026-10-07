@@ -382,7 +382,7 @@ func (s *Server) agentNext(w http.ResponseWriter, r *http.Request) {
 		kinds = append(kinds, kc)
 	}
 	v := NextView{Done: true, Choices: []ChoiceVocab{}, NotNow: nonNil(vocab.NotNow),
-		Guide: recommend.Guide(kinds), ProposeHow: recommend.ProposeHow}
+		Guide: recommend.Guide(kinds), ProposeHow: recommend.ProposeHow(kinds)}
 	left := s.needsRecommendation(pending)
 	if len(left) > 0 {
 		it := left[0].Item
