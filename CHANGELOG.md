@@ -4,7 +4,7 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
-## [casebook 0.4.3] - 2026-10-07
+## [casebook 0.4.4] - 2026-10-07
 
 ### Changed
 - "Leave it open" (and "Keep it" for a branch, worktree or repository)
@@ -41,6 +41,10 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   them. Stop tracking it is unchanged. casebook-data's format is
   unchanged: this is how status is computed from the decisions you
   already have.
+
+## [casebook 0.4.3] - 2026-10-07
+
+- The same code as 0.4.2: it was tagged before the change listed under 0.4.4 had merged.
 
 ## [casebook 0.4.2] - 2026-10-07
 
