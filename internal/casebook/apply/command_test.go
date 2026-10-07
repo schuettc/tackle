@@ -112,3 +112,12 @@ func TestIssueCloseCommandIsExact(t *testing.T) {
 		t.Errorf("issueCloseCmd = %q, want %q", cmd, want)
 	}
 }
+
+func TestCloseCommandsWithoutCommentHaveNoCommentFlag(t *testing.T) {
+	if got, want := prCloseCmd(42, "schuettc/myrepo", ""), "gh pr close 42 -R 'schuettc/myrepo'"; got != want {
+		t.Errorf("prCloseCmd(no comment) = %q, want %q", got, want)
+	}
+	if got, want := issueCloseCmd(13, "schuettc/myrepo", ""), "gh issue close 13 -R 'schuettc/myrepo'"; got != want {
+		t.Errorf("issueCloseCmd(no comment) = %q, want %q", got, want)
+	}
+}

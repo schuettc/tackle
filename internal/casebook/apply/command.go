@@ -48,10 +48,10 @@ func repoDeleteCmd(repo string) string {
 	return fmt.Sprintf("gh repo delete %s --yes", shellQuote(repo))
 }
 
-// prCloseCmd renders the exact command to close a pull request with a comment.
+// prCloseCmd renders the exact command to close a pull request, with the
+// closing comment when there is one ("" closes without a comment).
 func prCloseCmd(n int, repo, comment string) string {
-	return fmt.Sprintf("gh pr close %d -R %s --comment %s",
-		n, shellQuote(repo), shellQuote(comment))
+	return fmt.Sprintf("gh pr close %d -R %s", n, shellQuote(repo)) + commentFlag(comment)
 }
 
 // prMergeCmd renders the exact command to merge a pull request.
@@ -59,8 +59,17 @@ func prMergeCmd(n int, repo string) string {
 	return fmt.Sprintf("gh pr merge %d -R %s", n, shellQuote(repo))
 }
 
-// issueCloseCmd renders the exact command to close an issue with a comment.
+// issueCloseCmd renders the exact command to close an issue, with the
+// closing comment when there is one ("" closes without a comment).
 func issueCloseCmd(n int, repo, comment string) string {
-	return fmt.Sprintf("gh issue close %d -R %s --comment %s",
-		n, shellQuote(repo), shellQuote(comment))
+	return fmt.Sprintf("gh issue close %d -R %s", n, shellQuote(repo)) + commentFlag(comment)
+}
+
+// commentFlag is a close command's " --comment '<comment>'", or "" for no
+// comment.
+func commentFlag(comment string) string {
+	if comment == "" {
+		return ""
+	}
+	return " --comment " + shellQuote(comment)
 }

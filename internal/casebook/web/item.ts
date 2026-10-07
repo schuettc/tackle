@@ -134,8 +134,9 @@ function renderHistory(
 export interface ItemHooks {
   /** Re-render after a reject or a change from the recommendation card. */
   onRefresh?: () => void;
-  /** A card was picked: decide the item (Not now with its until). */
-  decide?: (disposition: string, until?: string) => void;
+  /** A card was picked: decide the item (Not now with its until, a close
+   * with its closing comment: note, '' for none). */
+  decide?: (disposition: string, until?: string, note?: string) => void;
   /** The recommendation's accept (the card's button, like the a key). */
   accept?: () => void;
 }
@@ -156,8 +157,9 @@ function renderDecideSection(
   const cards = renderChoices(ctx, it.kind, {
     recommended: pending?.disposition,
     chosen: it.decision?.disposition,
-    onPick(d, until) {
-      hooks.decide?.(d, until);
+    note: it.decision?.note,
+    onPick(d, until, note) {
+      hooks.decide?.(d, until, note);
     },
   });
   section.append(question, recSlot, cards);
@@ -192,12 +194,22 @@ export function renderItem(
   const el = h('article', { class: 'cb-item', dataset: { key: it.key } });
 
   // ---- kicker ---------------------------------------------------------------
-  // Show the kind prefix once, then the key without its kind prefix.
+  // Show the kind prefix once, then the key without its kind prefix. The key
+  // links to the item's GitHub page (serve's url: a PR, an issue, a repo) in
+  // a new tab; a branch or a worktree has none, and its key is plain text.
   const displayKey = keyWithoutKind(it.key);
-  const kickerParts = [it.kind, displayKey, it.relation]
-    .filter(Boolean)
-    .join(' · ');
-  el.append(h('p', { class: 'cb-kicker kit-kick' }, kickerParts));
+  const keyEl: Node | string = it.url
+    ? h('a', { href: it.url, target: '_blank', rel: 'noopener' }, displayKey)
+    : displayKey;
+  const kicker = h('p', { class: 'cb-kicker kit-kick' });
+  const parts = [it.kind, keyEl, it.relation].filter(
+    (part): part is Node | string => !!part,
+  );
+  parts.forEach((part, i) => {
+    if (i > 0) kicker.append(' \u00b7 ');
+    kicker.append(part);
+  });
+  el.append(kicker);
 
   // ---- title ----------------------------------------------------------------
   // Fallback: use the display key (without kind prefix) so titleless items

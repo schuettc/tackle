@@ -4,6 +4,36 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.1] - 2026-10-07
+
+### Added
+- The open item's key links to its page on GitHub (a pull request, an
+  issue or a repository), in a new tab. serve builds the link from the
+  key (the item's `url`). A branch or a worktree has no page, so its key
+  stays plain text.
+- Choosing "Close it" (an issue) or "Close it without merging" (a pull
+  request) opens a closing-comment field under the cards. **close with
+  this comment** (or ↵) decides with the text as the decision's note.
+  **close without comment** decides with no note. Esc cancels. Nothing
+  is decided until you press one of them. Number keys still pick the card.
+  Selecting several items and agree with all work as before.
+- Accepting a close recommendation on the open item (`a`, or the card's
+  accept) opens the same closing-comment field, empty, and accepts from
+  its buttons. `POST /api/proposals/accept` takes an optional `note`:
+  Court's closing comment for an accepted close.
+
+### Changed
+- A close posts its decision's note as the closing comment, and nothing
+  else. A close with no note now closes without a comment: the command
+  has no `--comment` and the step doesn't post. It used to post
+  "Closing.". casebook-data's format is unchanged.
+- A recommendation's note (the agent's or a rule's reason, written to
+  you) is never the closing comment. Accepting a close recommendation
+  records no note unless you give the comment yourself: agree with all,
+  accept N and an API accept close without a comment. The reason stays
+  on the recommendation. Accepting any other recommendation keeps its
+  note, as before (it is never posted).
+
 ## [casebook 0.4.0] - 2026-10-07
 
 ### Changed
