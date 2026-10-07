@@ -2888,7 +2888,7 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   if (!proposal || proposal.state !== "pending") return null;
   const p = proposal;
   const agent = agentFromSource(p.source);
-  const head = `${agent} proposes · ${opts.label ?? p.disposition}`;
+  const head = `${agent} recommends · ${opts.label ?? p.disposition}`;
   const lines = [];
   if (p.note) {
     const noteEl = h5("p", { class: "cb-proposal-note" });
@@ -3262,7 +3262,7 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
     }
     if (it.proposal) {
       const propEl = h7("div", { class: "cb-card-prop" });
-      propEl.textContent = `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`;
+      propEl.textContent = `${agentFromSource(it.proposal.source)} recommends ${it.proposal.disposition}`;
       card6.append(propEl);
     }
     titleEl.addEventListener("click", (e) => {

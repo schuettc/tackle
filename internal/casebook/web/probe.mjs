@@ -7114,7 +7114,7 @@ async function run() {
         );
 
         if (hasCard) {
-          // Card head: "<agent> proposes · <disposition>" not "pending proposal".
+          // Card head: "<agent> recommends · <choice>" not "pending proposal".
           const cardHead = await propGeoPage
             .$eval(
               '.cb-proposal-card .kit-card-head',
@@ -7122,8 +7122,9 @@ async function run() {
             )
             .catch(() => '');
           check(
-            'proposal card head contains "proposes ·"',
-            cardHead.includes('proposes \u00b7'),
+            `proposal card head contains "recommends ·" ("${cardHead}")`,
+            cardHead.includes('recommends \u00b7') &&
+              !cardHead.includes('proposes'),
           );
           check(
             'proposal card head uses real agent name (pi), not hardcoded string',
@@ -7170,7 +7171,7 @@ async function run() {
             cardInDoc,
           );
         } else {
-          check('proposal card head contains "proposes ·"', false);
+          check('proposal card head contains "recommends ·"', false);
           check(
             'proposal card head uses real agent name (pi), not hardcoded string',
             false,

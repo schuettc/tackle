@@ -114,7 +114,7 @@ export interface ProposalCardOpts {
  * decide step's question and its cards. Returns null if the item has no
  * pending proposal.
  *
- * The card head is "<source> proposes · <choice label>" in agent colour
+ * The card head is "<source> recommends · <choice label>" in agent colour
  * (small uppercase mono via the kit's edge:'agent' styling); the body is the
  * proposal's note, its reason, and the keys that act on it (a, r).
  *
@@ -134,8 +134,9 @@ export function proposalCard(
   const p = proposal; // narrowed: non-null Proposal with state === 'pending'
 
   const agent = agentFromSource(p.source);
-  // Head: "<agent> proposes · <choice>" — small uppercase mono via kit.
-  const head = `${agent} proposes \u00b7 ${opts.label ?? p.disposition}`;
+  // Head: "<agent> recommends · <choice>" (as the list's rows say) — small
+  // uppercase mono via kit.
+  const head = `${agent} recommends \u00b7 ${opts.label ?? p.disposition}`;
 
   const lines: (Node | string)[] = [];
   if (p.note) {

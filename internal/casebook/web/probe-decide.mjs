@@ -69,6 +69,8 @@
 //   with the closing comment typed, or the Not now picker open, the open
 //     item isn't re-rendered under Court: "pi recommends ‹label› · show"
 //     shows instead, and "show" re-renders it
+//   the card's head and the board's cards say "recommends", as the list's
+//     rows do: "pi recommends · Close it without merging"
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -2494,5 +2496,29 @@ async function openRecScenario(context, t, s) {
     );
   }
   check('still no reload', await noReload());
+
+  // ---- "recommends", as the list's rows say -------------------------------
+  {
+    await row(pg, OPR(4)).click();
+    await opened(t, pg, OPR(4));
+    const head = await pg
+      .locator(`${READ} .cb-proposal-card .kit-card-head`)
+      .textContent({ timeout: 8000 })
+      .catch(() => '');
+    check(
+      `the recommendation card's head reads "pi recommends · Close it without merging" ("${head}")`,
+      head === 'pi recommends \u00b7 Close it without merging',
+    );
+    await pg.evaluate(() => {
+      location.hash = '#/attention/board';
+    });
+    const sel = `.cb-board .kit-card[data-id="${OPR(4)}"] .cb-card-prop`;
+    const ok = await until(pg, (q) => !!document.querySelector(q), sel, 8000);
+    const prop = ok ? ((await pg.textContent(sel)) ?? '') : '';
+    check(
+      `the board's card says "recommends" too ("${prop}")`,
+      prop === 'pi recommends close',
+    );
+  }
   await pg.close();
 }

@@ -19,6 +19,10 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   (`keys`), and a rule's new proposals (propose once, or an active rule
   after a sync) publish one too, from `rule:<id>`.
 
+### Changed
+- The recommendation card's head and the board's cards say "recommends",
+  as the list's rows do: "pi recommends · Leave it open".
+
 ## [casebook 0.4.4] - 2026-10-07
 
 ### Changed
