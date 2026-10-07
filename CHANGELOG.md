@@ -4,6 +4,26 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.1] - 2026-10-07
+
+### Added
+- The open item's key links to its page on GitHub (a pull request, an
+  issue or a repository), in a new tab. serve builds the link from the
+  key (the item's `url`). A branch or a worktree has no page, so its key
+  stays plain text.
+- Choosing "Close it" (an issue) or "Close it without merging" (a pull
+  request) opens a closing-comment field under the cards. **close with
+  this comment** (or ↵) decides with the text as the decision's note.
+  **close without comment** decides with no note. Esc cancels. Nothing
+  is decided until you press one of them. Number keys still pick the card.
+  Selecting several items and agree with all work as before.
+
+### Changed
+- A close posts its decision's note as the closing comment, and nothing
+  else. A close with no note now closes without a comment: the command
+  has no `--comment` and the step doesn't post. It used to post
+  "Closing.". casebook-data's format is unchanged.
+
 ## [casebook 0.4.0] - 2026-10-07
 
 ### Changed

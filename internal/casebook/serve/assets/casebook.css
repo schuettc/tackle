@@ -390,6 +390,18 @@
 .cb-notnow-field .kit-btn[hidden] {
   display: none;
 }
+.cb-close-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 0;
+  padding: 10px 14px 12px;
+  border: 1px dashed var(--kit-line);
+  border-radius: 8px;
+}
+.cb-close-comment[hidden] {
+  display: none;
+}
 .cb-choice-err {
   font: 12.5px var(--kit-mono);
   color: var(--kit-fg);

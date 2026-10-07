@@ -497,7 +497,7 @@ import {
   list,
   h as h4,
   facts,
-  buttons,
+  buttons as buttons2,
   card
 } from "/_kit/kit.js";
 
@@ -712,11 +712,15 @@ function latestSearch(find, publish, delay, stale) {
 import {
   sheet,
   h as h3,
-  noteField
+  noteField as noteField2
 } from "/_kit/kit.js";
 
 // choices.ts
-import { h as h2 } from "/_kit/kit.js";
+import { h as h2, noteField, buttons } from "/_kit/kit.js";
+var CLOSE = "close";
+var COMMENT_PLACEHOLDER = "closing comment, posted when you approve the plan";
+var CLOSE_WITH = "close with this comment";
+var CLOSE_WITHOUT = "close without comment";
 function asNotNow(d) {
   return d === "watch" ? "wait" : d;
 }
@@ -734,8 +738,16 @@ function showChoiceError(root, message3) {
 function renderChoices(ctx, kind, opts) {
   const grid = h2("div", { class: "cb-choices" });
   const notNow = h2("div", { class: "cb-notnow", hidden: true });
+  const comment = opts.keys ? null : closeComment();
   const err = h2("p", { class: "cb-choice-err", hidden: true });
-  const root = h2("div", { class: "cb-choices-wrap" }, grid, notNow, err);
+  const root = h2(
+    "div",
+    { class: "cb-choices-wrap" },
+    grid,
+    notNow,
+    comment?.el ?? null,
+    err
+  );
   void getVocab(ctx).then((vocab2) => {
     const choices2 = opts.keys ? choicesForKeys(vocab2, opts.keys) : (vocab2.kinds ?? []).find((k) => k.kind === kind)?.choices ?? [];
     const rec = asNotNow(opts.recommended);
@@ -771,10 +783,16 @@ function renderChoices(ctx, kind, opts) {
           showChoiceError(root, "");
           mark(c.disposition);
           if (c.needs_until) {
+            comment?.close();
             notNow.hidden = false;
             return;
           }
           notNow.hidden = true;
+          if (comment && c.disposition === CLOSE) {
+            comment.open();
+            return;
+          }
+          comment?.close();
           opts.onPick(c.disposition);
         }
       },
@@ -785,6 +803,57 @@ function renderChoices(ctx, kind, opts) {
     const k = card6.querySelector(".cb-choice-k");
     if (k) k.textContent = kickText(card6);
     return card6;
+  }
+  function closeComment() {
+    const field = noteField({
+      value: "",
+      placeholder: COMMENT_PLACEHOLDER,
+      // The buttons read the field as typed; a blur's commit decides nothing.
+      onCommit() {
+      }
+    });
+    field.setAttribute("aria-label", "closing comment");
+    const decide = (note) => {
+      opts.onPick(CLOSE, void 0, note.trim());
+    };
+    field.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) decide(field.value);
+    });
+    const el = h2(
+      "div",
+      { class: "cb-close-comment", hidden: true },
+      field,
+      buttons([
+        { label: CLOSE_WITH, fill: true, run: () => decide(field.value) },
+        { label: CLOSE_WITHOUT, run: () => decide("") }
+      ])
+    );
+    const onEsc = (e) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (!el.isConnected || el.hidden) {
+        document.removeEventListener("keydown", onEsc, true);
+        return;
+      }
+      const t = e.target;
+      if (t !== field && t instanceof HTMLElement && (t.isContentEditable || t.matches("input, textarea, select")))
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      mark(asNotNow(opts.chosen));
+    };
+    function close() {
+      if (document.activeElement === field) field.blur();
+      el.hidden = true;
+      document.removeEventListener("keydown", onEsc, true);
+    }
+    function open() {
+      field.value = opts.chosen === CLOSE ? opts.note ?? "" : "";
+      el.hidden = false;
+      document.addEventListener("keydown", onEsc, true);
+      field.focus();
+    }
+    return { el, open, close };
   }
   function notNowPicker(forms) {
     const input = h2("input", { class: "cb-sheet-input" });
@@ -980,7 +1049,7 @@ function openDecideSheetWithVocab(ctx, keys, vocab2, onDone, seed, customPost) {
       updateFill();
     }
   });
-  const noteInputEl = noteField({
+  const noteInputEl = noteField2({
     placeholder: "optional note",
     value: note,
     onCommit(v) {
@@ -1688,7 +1757,7 @@ function makeApply(ctx) {
       bs.push({ label: `plan ${n}`, run: () => plan(selectedKeys()) });
     if (can && !refusal)
       bs.push({ label: `plan all ${can}`, run: () => plan("all") });
-    footBtns.replaceChildren(bs.length ? buttons(bs) : "");
+    footBtns.replaceChildren(bs.length ? buttons2(bs) : "");
   }
   function paintObs() {
     const o = builtAt ? observations(builtAt, intervalMs, Date.now()) : { text: "", stale: false };
@@ -2064,7 +2133,7 @@ function makeApply(ctx) {
           fill: !n,
           run: () => plan("all")
         });
-      doc.append(buttons(bs));
+      doc.append(buttons2(bs));
     }
     const keep = focusSnapshot(readEl);
     readEl.replaceChildren(h4("div", { class: "kit-doc" }, doc));
@@ -2151,7 +2220,7 @@ function makeApply(ctx) {
     return doc;
   }
   function discardButtons(j) {
-    return buttons([{ label: "discard", run: () => void discard(j.id) }]);
+    return buttons2([{ label: "discard", run: () => void discard(j.id) }]);
   }
   function approveBlock(j) {
     const steps = j.steps ?? [];
@@ -2228,7 +2297,7 @@ function makeApply(ctx) {
       bs.push({ label: "approve and run", fill: true, run: () => approve() });
     }
     bs.push({ label: "discard", run: () => void discard(j.id) });
-    el.append(buttons(bs));
+    el.append(buttons2(bs));
     if (note)
       el.append(h4("p", { class: "cb-apply-note", role: "status" }, note));
     return el;
@@ -2570,7 +2639,7 @@ function needsCard(c, step, j, agent, hooks) {
         field.addEventListener("input", () => hooks.edit(c.id, field.value));
         quote.replaceWith(field);
         el.querySelector(".kit-btns")?.replaceWith(
-          buttons([
+          buttons2([
             {
               label: "save text",
               fill: true,
@@ -2586,7 +2655,7 @@ function needsCard(c, step, j, agent, hooks) {
               run() {
                 hooks.edit(c.id, null);
                 field.replaceWith(quote);
-                el.querySelector(".kit-btns")?.replaceWith(buttons(four));
+                el.querySelector(".kit-btns")?.replaceWith(buttons2(four));
               }
             }
           ])
@@ -2674,12 +2743,12 @@ import {
 import { h as h6, facts as facts2, fold } from "/_kit/kit.js";
 
 // proposals.ts
-import { card as card2, sheet as sheet2, noteField as noteField2, h as h5 } from "/_kit/kit.js";
+import { card as card2, sheet as sheet2, noteField as noteField3, h as h5 } from "/_kit/kit.js";
 function openRejectSheet(ctx, ids, onDone) {
   let reason = "";
   let submitting = false;
   let sh = null;
-  const reasonInput = noteField2({
+  const reasonInput = noteField3({
     placeholder: "reason (optional)",
     onCommit(v) {
       reason = v;
@@ -2975,8 +3044,9 @@ function renderDecideSection(ctx, detail, hooks) {
   const cards = renderChoices(ctx, it.kind, {
     recommended: pending?.disposition,
     chosen: it.decision?.disposition,
-    onPick(d, until) {
-      hooks.decide?.(d, until);
+    note: it.decision?.note,
+    onPick(d, until, note) {
+      hooks.decide?.(d, until, note);
     }
   });
   section.append(question, recSlot, cards);
@@ -2998,8 +3068,16 @@ function renderItem(ctx, detail, hooks = {}) {
   const it = detail.item;
   const el = h6("article", { class: "cb-item", dataset: { key: it.key } });
   const displayKey = keyWithoutKind(it.key);
-  const kickerParts = [it.kind, displayKey, it.relation].filter(Boolean).join(" · ");
-  el.append(h6("p", { class: "cb-kicker kit-kick" }, kickerParts));
+  const keyEl = it.url ? h6("a", { href: it.url, target: "_blank", rel: "noopener" }, displayKey) : displayKey;
+  const kicker = h6("p", { class: "cb-kicker kit-kick" });
+  const parts = [it.kind, keyEl, it.relation].filter(
+    (part) => !!part
+  );
+  parts.forEach((part, i) => {
+    if (i > 0) kicker.append(" · ");
+    kicker.append(part);
+  });
+  el.append(kicker);
   el.append(
     h6("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
   );
@@ -3706,7 +3784,7 @@ function makeAttention(ctx) {
       const el = renderItem(ctx, detail, {
         // Re-render after a reject or a change from the recommendation card.
         onRefresh: () => void openDetail(key),
-        decide: (d, until) => void decideOpen(key, d, until),
+        decide: (d, until, note) => void decideOpen(key, d, until, note),
         accept: () => void acceptOpen()
       });
       readEl.replaceChildren(el);
@@ -3795,7 +3873,7 @@ function makeAttention(ctx) {
       void reload();
     }
   }
-  async function decideOpen(key, disposition, until) {
+  async function decideOpen(key, disposition, until, note) {
     if (deciding) return;
     deciding = key;
     const order = await orderFor(key);
@@ -3803,6 +3881,7 @@ function makeAttention(ctx) {
     try {
       const payload = { keys: [key], disposition };
       if (until) payload["until"] = until;
+      if (note) payload["note"] = note;
       const r = await ctx.api.post("/decide", payload);
       if (!(r.decided_keys ?? []).length) {
         showReadError((r.errors ?? []).join("; ") || "nothing was decided");
@@ -4425,7 +4504,7 @@ function makeComposer(ctx, dock) {
 }
 
 // progress.ts
-import { h as h10, card as card3, fold as fold2, noteField as noteField3 } from "/_kit/kit.js";
+import { h as h10, card as card3, fold as fold2, noteField as noteField4 } from "/_kit/kit.js";
 function makeBatchTray(ctx, dock) {
   let thread = 0;
   let batch = 0;
@@ -4521,7 +4600,7 @@ function makeBatchTray(ctx, dock) {
       if (editing === field) editing = null;
       render();
     };
-    const field = noteField3({
+    const field = noteField4({
       value: d.body,
       onCommit(v) {
         const body = v.trim();
@@ -5580,7 +5659,7 @@ import {
   list as list3,
   h as h13,
   facts as facts3,
-  buttons as buttons2,
+  buttons as buttons3,
   card as card5,
   sheet as sheet3,
   ApiError as ApiError3
@@ -6851,7 +6930,7 @@ ${dispositions.join(" ")}`;
     if (isDraft() && !saved.invalid) {
       bs.push({ label: "propose once", run: () => void proposeOnce() });
     }
-    actionsEl.replaceChildren(bs.length ? buttons2(bs) : "", note);
+    actionsEl.replaceChildren(bs.length ? buttons3(bs) : "", note);
   }
   function edited() {
     note.textContent = "";

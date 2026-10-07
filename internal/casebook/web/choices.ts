@@ -9,15 +9,21 @@
 //     value: a date, or (a PR, a PR or issue, a repo) a search of the items
 //     casebook tracks that also takes a pasted GitHub URL or key, offering
 //     an untracked one as "‹key› · not tracked; checked on the next sync";
+//   - for one item, the closing comment a close asks for (.cb-close-comment)
+//     under the cards, shown when a close card is picked: the kit's note
+//     field and two buttons, "close with this comment" (↵ in the field too)
+//     and "close without comment" (no note); Esc cancels it;
 //   - an error line (.cb-choice-err) for serve's answer when it refuses.
 //
 // Picking a card calls opts.onPick(disposition); Not now calls
-// opts.onPick('wait', until) once its condition is complete. Every word the
-// cards and chips show comes from GET /api/decisions/vocabulary. The element
-// is the only state: a number key clicks its nth .cb-choice, and the caller
-// shows an error with showChoiceError(root, message).
+// opts.onPick('wait', until) once its condition is complete; a close (one
+// item) calls opts.onPick('close', undefined, note) from its buttons, note
+// '' for none. Every word the cards and chips show comes from GET
+// /api/decisions/vocabulary. The element is the only state: a number key
+// clicks its nth .cb-choice, and the caller shows an error with
+// showChoiceError(root, message).
 
-import { h } from '/_kit/kit.js';
+import { h, noteField, buttons } from '/_kit/kit.js';
 import type { ChoiceVocab, ItemsView, NotNowForm } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { getVocab } from './decide.ts';
@@ -37,8 +43,18 @@ export interface ChoicesOpts {
   chosen?: string;
   /** A selection's keys: its shared cards rather than kind's. */
   keys?: string[];
-  onPick(d: string, until?: string): void;
+  /** The decided close's note: what the closing-comment field starts with. */
+  note?: string;
+  onPick(d: string, until?: string, note?: string): void;
 }
+
+// The disposition that closes a PR or an issue: it asks for a comment.
+const CLOSE = 'close';
+
+// The closing comment's words (the page's, like Not now's "set").
+const COMMENT_PLACEHOLDER = 'closing comment, posted when you approve the plan';
+const CLOSE_WITH = 'close with this comment';
+const CLOSE_WITHOUT = 'close without comment';
 
 /** asNotNow maps watch, which the page no longer offers, onto Not now. */
 export function asNotNow(d: string | undefined): string | undefined {
@@ -73,8 +89,18 @@ export function renderChoices(
 ): HTMLElement {
   const grid = h('div', { class: 'cb-choices' });
   const notNow = h('div', { class: 'cb-notnow', hidden: true });
+  // A close asks for its comment only for one item: a selection's sheet (and
+  // agree with all) closes as before, with the sheet's own note.
+  const comment = opts.keys ? null : closeComment();
   const err = h('p', { class: 'cb-choice-err', hidden: true });
-  const root = h('div', { class: 'cb-choices-wrap' }, grid, notNow, err);
+  const root = h(
+    'div',
+    { class: 'cb-choices-wrap' },
+    grid,
+    notNow,
+    comment?.el ?? null,
+    err,
+  );
 
   void getVocab(ctx).then((vocab) => {
     const choices: ChoiceVocab[] = opts.keys
@@ -119,10 +145,16 @@ export function renderChoices(
           showChoiceError(root, '');
           mark(c.disposition);
           if (c.needs_until) {
+            comment?.close();
             notNow.hidden = false;
             return;
           }
           notNow.hidden = true;
+          if (comment && c.disposition === CLOSE) {
+            comment.open();
+            return;
+          }
+          comment?.close();
           opts.onPick(c.disposition);
         },
       },
@@ -133,6 +165,70 @@ export function renderChoices(
     const k = card.querySelector<HTMLElement>('.cb-choice-k');
     if (k) k.textContent = kickText(card);
     return card;
+  }
+
+  // closeComment is the closing-comment field a close card opens: the kit's
+  // note field and its two buttons. Nothing is decided until a button (or ↵
+  // in the field); Esc, wherever focus is, closes it and unpicks the card.
+  function closeComment(): {
+    el: HTMLElement;
+    open(): void;
+    close(): void;
+  } {
+    const field = noteField({
+      value: '',
+      placeholder: COMMENT_PLACEHOLDER,
+      // The buttons read the field as typed; a blur's commit decides nothing.
+      onCommit() {},
+    });
+    field.setAttribute('aria-label', 'closing comment');
+    const decide = (note: string): void => {
+      opts.onPick(CLOSE, undefined, note.trim());
+    };
+    field.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) decide(field.value);
+    });
+    const el = h(
+      'div',
+      { class: 'cb-close-comment', hidden: true },
+      field,
+      buttons([
+        { label: CLOSE_WITH, fill: true, run: () => decide(field.value) },
+        { label: CLOSE_WITHOUT, run: () => decide('') },
+      ]),
+    );
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || e.isComposing) return;
+      if (!el.isConnected || el.hidden) {
+        document.removeEventListener('keydown', onEsc, true);
+        return;
+      }
+      // Another field's Esc (the dock's composer, a sheet's) is its own.
+      const t = e.target;
+      if (
+        t !== field &&
+        t instanceof HTMLElement &&
+        (t.isContentEditable || t.matches('input, textarea, select'))
+      )
+        return;
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+      mark(asNotNow(opts.chosen));
+    };
+    function close(): void {
+      if (document.activeElement === field) field.blur();
+      el.hidden = true;
+      document.removeEventListener('keydown', onEsc, true);
+    }
+    function open(): void {
+      // A decided close starts from its comment; anything else, empty.
+      field.value = opts.chosen === CLOSE ? (opts.note ?? '') : '';
+      el.hidden = false;
+      document.addEventListener('keydown', onEsc, true);
+      field.focus();
+    }
+    return { el, open, close };
   }
 
   // notNowPicker is the chips (one per form) and the one field a form that

@@ -678,7 +678,7 @@ export function makeAttention(ctx: Ctx): Section {
       const el = renderItem(ctx, detail, {
         // Re-render after a reject or a change from the recommendation card.
         onRefresh: () => void openDetail(key),
-        decide: (d, until) => void decideOpen(key, d, until),
+        decide: (d, until, note) => void decideOpen(key, d, until, note),
         accept: () => void acceptOpen(),
       });
       readEl.replaceChildren(el);
@@ -807,6 +807,7 @@ export function makeAttention(ctx: Ctx): Section {
     key: string,
     disposition: string,
     until?: string,
+    note?: string,
   ): Promise<void> {
     if (deciding) return;
     deciding = key;
@@ -818,6 +819,8 @@ export function makeAttention(ctx: Ctx): Section {
     try {
       const payload: Record<string, unknown> = { keys: [key], disposition };
       if (until) payload['until'] = until;
+      // A close's closing comment ('' or none: it closes without one).
+      if (note) payload['note'] = note;
       const r = await ctx.api.post<DecideResult>('/decide', payload);
       if (!(r.decided_keys ?? []).length) {
         showReadError((r.errors ?? []).join('; ') || 'nothing was decided');
