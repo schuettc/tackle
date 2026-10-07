@@ -10,7 +10,10 @@ type fakeFacts struct {
 	state map[string]string
 	rel   map[string]time.Time
 	act   map[string]time.Time
+	gone  map[string]bool
 }
+
+func (f fakeFacts) Missing(k Key) bool { return f.gone[k.String()] }
 
 func (f fakeFacts) State(k Key) (string, bool) { s, ok := f.state[k.String()]; return s, ok }
 func (f fakeFacts) LatestRelease(k Key) (time.Time, bool) {

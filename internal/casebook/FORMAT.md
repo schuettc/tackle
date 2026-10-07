@@ -63,6 +63,8 @@ Allowed dispositions per kind:
 - `inactive(<n>h|<n>d|<n>w)`
 - `released(<repo key>)`: a release published after `decided_at`
 
+The key may name anything, tracked or not. When a sync's lookup gets a definite "not found" from GitHub for it, the item comes back as `due` (the page says "its condition names ‹key›, which GitHub can't find"); before a lookup, or after one that failed otherwise, it keeps waiting.
+
 **Races.** When two machines decide the same item between syncs, the later `decided_at` wins. The loser is kept under `[conflict]`, and the item's status is `conflict` until someone decides again.
 
 ## Journal: `journal/<machine>/<YYYY>/<MM-DD>.jsonl`

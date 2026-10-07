@@ -32,6 +32,7 @@ type Item struct {
 	URL         string            `json:"url,omitempty"`
 	Relation    string            `json:"relation,omitempty"`
 	Status      item.Status       `json:"status"`
+	DueReason   string            `json:"due_reason,omitempty"` // why a Not now came back other than its condition being met
 	Decision    *item.Decision    `json:"decision,omitempty"`
 	Hits        []item.Hit        `json:"hits,omitempty"`
 	Observed    item.Observed     `json:"observed"`
@@ -443,6 +444,9 @@ func (b *builder) unobserved() {
 func (b *builder) finish(it *Item) {
 	seen := it.Decision != nil && b.in.Seen[it.ID].Equal(it.Decision.DecidedAt) && !it.Decision.DecidedAt.IsZero()
 	it.Status = item.Compute(it.Key, it.Decision, it.Observed, b.f, b.in.Now, seen)
+	if ref, gone := item.MissingRef(it.Decision, b.f); gone && it.Status == item.StatusDue {
+		it.DueReason = "its condition names " + ref.String() + ", which GitHub can't find"
+	}
 	// Undecided is true when the item has no decision at all, OR when a
 	// wait/watch decision has lapsed (its until condition is now met) — meaning
 	// the item has returned to attention and Court needs to decide again.

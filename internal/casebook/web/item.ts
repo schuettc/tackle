@@ -219,6 +219,10 @@ export function renderItem(
     factPairs.push(['labels', it.labels.join(', ')]);
   if (it.landed) factPairs.push(['landed', it.landed_how ?? it.landed]);
   el.append(facts(factPairs));
+  // Why a Not now came back other than its condition being met (serve's
+  // words: its condition names something GitHub can't find).
+  if (it.due_reason)
+    el.append(h('p', { class: 'cb-due-reason' }, it.due_reason));
 
   // ---- body -----------------------------------------------------------------
   if (it.body) {

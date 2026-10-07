@@ -265,6 +265,7 @@ export interface ItemView {
   url?: string;
   relation?: string;
   status: string;
+  due_reason?: string;
   decision?: Decision;
   hits?: Hit[];
   observed: Observed;

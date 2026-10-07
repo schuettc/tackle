@@ -495,6 +495,14 @@
   display: none;
 }
 
+/* Why a Not now came back: serve's reason, under the facts. */
+.kit-doc .cb-due-reason {
+  font-size: 14px;
+  border-left: 2px solid var(--kit-signal);
+  padding-left: 8px;
+  margin: 10px 0 0;
+}
+
 /* The recommendation's keys. */
 .kit-doc .cb-keyhint,
 .cb-keyhint {

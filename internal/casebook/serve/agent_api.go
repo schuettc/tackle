@@ -255,11 +255,6 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("a recommendation needs a one-line reason in note"))
 		return
 	}
-	if err := s.untilRefKnown(in.Until, in.Keys); err != nil {
-		reply(w, nil, err)
-		return
-	}
-
 	// Proposals are only valid for items that exist in the casebook index and
 	// are currently in attention (awaiting Court's decision). Agents receive
 	// keys from casebook's own tools (casebook_show, casebook_status), so an

@@ -351,6 +351,12 @@
 .cb-choice-err[hidden] {
   display: none;
 }
+.kit-doc .cb-due-reason {
+  font-size: 14px;
+  border-left: 2px solid var(--kit-signal);
+  padding-left: 8px;
+  margin: 10px 0 0;
+}
 .kit-doc .cb-keyhint,
 .cb-keyhint {
   font: 12px var(--kit-mono);

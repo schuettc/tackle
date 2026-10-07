@@ -2854,6 +2854,8 @@ function renderItem(ctx, detail, hooks = {}) {
     factPairs.push(["labels", it.labels.join(", ")]);
   if (it.landed) factPairs.push(["landed", it.landed_how ?? it.landed]);
   el.append(facts2(factPairs));
+  if (it.due_reason)
+    el.append(h6("p", { class: "cb-due-reason" }, it.due_reason));
   if (it.body) {
     const excerpt = it.body.slice(0, BODY_CAP);
     const rest = it.body.slice(BODY_CAP);

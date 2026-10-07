@@ -21,6 +21,7 @@ const Fixed = `Recommend one choice for this item, with a one-line reason the us
 - A branch whose commits are all on the default branch or a merged PR, with nothing unpushed, can be deleted. A branch with unpushed or unmerged commits is kept.
 - A worktree with no uncommitted changes whose branch has landed can be removed.
 - Use Not now when the item depends on something that hasn't happened yet, and pick the condition that names it (a PR merging, an issue closing, a date). Don't use it to postpone a choice you could make now.
+- In a Not now condition, name only a PR, issue or repo you have seen in this item's evidence or history, or found with gh. Never guess a number.
 - Use Stop tracking only for things the user will never act on (someone else's repo, an archived experiment).
 - Recommend one choice. Outward choices (close, merge, archive, delete) only go to To apply; the user approves them again there.`
 

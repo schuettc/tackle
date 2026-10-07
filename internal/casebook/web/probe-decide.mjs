@@ -50,6 +50,8 @@ function seed() {
     updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
   });
   return {
+    // A sync's lookup found no PR #404: GitHub answered "not found".
+    seedRefs: { [PR(404)]: { exists: false } },
     seedRepos: [
       {
         repo: `schuettc/${REPO}`,
@@ -568,7 +570,7 @@ async function decideScenario(context, t, s) {
   );
   check('and issue #5 opens next', await opened(t, pg, ISSUE(5)));
 
-  // ---- Not now → a PR merges…, with a key serve refuses --------------------
+  // ---- Not now → a PR merges… ----------------------------------------------
   await pg.click(
     '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="wait"]',
   );
@@ -589,35 +591,6 @@ async function decideScenario(context, t, s) {
   check(
     '"when a PR merges…" asks for one value (one field shows)',
     (await field.count()) === 1 && (await field.isVisible()),
-  );
-  // A well-formed key to a pull request that isn't there: serve refuses it.
-  const NO_PR = `pr:schuettc/${REPO}#999`;
-  const NO_PR_MSG = `${NO_PR} isn't an item casebook knows; sync first if it's new`;
-  await field.fill(NO_PR);
-  await field.press('Enter');
-  const errShown = () =>
-    pg.evaluate(
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-read:not([hidden]) .cb-choice-err:not([hidden])',
-        )?.textContent ?? '',
-    );
-  await until(
-    pg,
-    () =>
-      !!document.querySelector(
-        '.kit-app > .kit-read:not([hidden]) .cb-choice-err:not([hidden])',
-      ),
-  );
-  const shownErr = await errShown();
-  check(
-    `a PR that doesn't exist shows serve's message ("${shownErr}")`,
-    shownErr === NO_PR_MSG,
-  );
-  col = await readCol(pg);
-  check(
-    `and decides nothing: issue #5 stays undecided and open (${col.key})`,
-    (await decisionOf(ISSUE(5))) === null && col.key === ISSUE(5),
   );
 
   // ---- a live decide of the next item elsewhere doesn't skip the one after --
@@ -676,6 +649,38 @@ async function decideScenario(context, t, s) {
     'and no sheet opened for any single item',
     (await sheets()) === sheetsBefore,
   );
+
+  // ---- a Not now naming a PR GitHub can't find comes back, saying why -----
+  {
+    const GONE = PR(404);
+    const WHY = `its condition names ${GONE}, which GitHub can't find`;
+    const dec = await api('POST', '/api/decide', {
+      keys: [ISSUE(4)],
+      disposition: 'wait',
+      until: `merged(${GONE})`,
+    });
+    check(
+      `serve accepts a Not now naming a PR it doesn't track (decided ${dec.decided}, errors ${JSON.stringify(dec.errors)})`,
+      dec.decided === 1 && (dec.errors ?? []).length === 0,
+    );
+    const it = (
+      await api('GET', `/api/item?key=${encodeURIComponent(ISSUE(4))}`)
+    ).item;
+    check(
+      `a sync found ${GONE} doesn't exist: issue #4 is due ("${it.status}", "${it.due_reason ?? ''}")`,
+      it.status === 'due' && it.due_reason === WHY,
+    );
+    await row(pg, ISSUE(4)).waitFor({ timeout: 8000 });
+    await row(pg, ISSUE(4)).click();
+    await opened(t, pg, ISSUE(4));
+    const shown = await pg.evaluate(
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-read:not([hidden]) .cb-due-reason',
+        )?.textContent ?? '',
+    );
+    check(`the page shows why issue #4 came back ("${shown}")`, shown === WHY);
+  }
   await pg.close();
 }
 

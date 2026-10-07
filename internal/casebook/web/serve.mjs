@@ -145,6 +145,9 @@ let homes = 0;
 //
 // seedFiles adds any other files to the casebook-data repo, committed with
 // the machines ({'rules/x.toml': '…'}), e.g. a rule file as a person wrote it.
+//
+// seedRefs adds individual lookups to the GitHub cache, as a sync's lookups
+// left them ({'pr:o/r#9': {exists: false}}: GitHub answered "not found").
 function setupHome(
   seedRepos = [],
   seedMachines = [],
@@ -153,6 +156,7 @@ function setupHome(
   syncInterval = '30m',
   slowRemote = false,
   conflictRemote = false,
+  seedRefs = {},
 ) {
   const fixture = join(here, 'testdata', 'home');
   const home =
@@ -215,6 +219,12 @@ function setupHome(
     for (const r of seedRepos) {
       cache.merged_prs[r.repo] = { fetched: true, at: cache.authored_at };
     }
+    writeFileSync(cachePath, JSON.stringify(cache, null, 2));
+  }
+  if (Object.keys(seedRefs).length) {
+    const cachePath = join(home, 'state', 'github.json');
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8'));
+    cache.refs = { ...(cache.refs ?? {}), ...seedRefs };
     writeFileSync(cachePath, JSON.stringify(cache, null, 2));
   }
 
@@ -421,6 +431,7 @@ export async function startServe(opts = {}) {
     opts.syncInterval,
     opts.slowRemote,
     opts.conflictRemote,
+    opts.seedRefs,
   );
   const advertPath = join(home, 'state', 'live', 'serve.json');
 

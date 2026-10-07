@@ -56,6 +56,11 @@ func Compute(k Key, d *Decision, obs Observed, f Facts, now time.Time, seenDone 
 			if met, known := c.Met(k, d.DecidedAt, f, now); known && met {
 				return StatusDue
 			}
+			// A condition naming something GitHub can't find would hide
+			// the item for good: it asks again (never counted as met).
+			if _, gone := MissingRef(d, f); gone {
+				return StatusDue
+			}
 			if d.Disposition == Wait || d.Disposition == Watch {
 				return StatusWaiting
 			}

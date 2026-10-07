@@ -2,7 +2,6 @@ package serve
 
 import (
 	"context"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -180,48 +179,35 @@ func TestAgreeAllOutwardGoesToApply(t *testing.T) {
 	}
 }
 
-// TestUntilNamingUnknownItemIsRefused: a Not now condition naming an item
-// casebook doesn't know (a well-formed key to a PR that isn't there) is
-// refused with a 400 the page shows, and nothing is decided or proposed.
-func TestUntilNamingUnknownItemIsRefused(t *testing.T) {
+// TestUntilNamingUntrackedItemIsAccepted: a Not now condition may name any
+// well-formed key, tracked or not (an upstream PR); a sync that can't find it
+// brings the item back. A malformed condition is still refused.
+func TestUntilNamingUntrackedItemIsAccepted(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
-	const unknown = "pr:schuettc/hail#999"
-	want := unknown + " isn't an item casebook knows; sync first if it's new"
-	for _, until := range []string{"merged(" + unknown + ")", "closed(issue:schuettc/hail#998)", "released(repo:schuettc/nowhere)"} {
-		var e struct {
-			Error string `json:"error"`
-		}
-		c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "wait", "until": until}, &e)
-		if c != http.StatusBadRequest || !strings.Contains(e.Error, "isn't an item casebook knows; sync first if it's new") {
-			t.Fatalf("decide until %s: %d %q", until, c, e.Error)
-		}
-	}
-	var e struct {
-		Error string `json:"error"`
-	}
-	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "wait", "until": "merged(" + unknown + ")"}, &e)
-	if e.Error != want {
-		t.Fatalf("message %q, want %q", e.Error, want)
-	}
-	if d, _ := r.App.Repo.ReadDecision(item.IssueKey("schuettc/hail", 4)); d != nil {
-		t.Fatalf("decided anyway: %+v", d)
-	}
-	// The agent's recommendation is refused the same way.
-	var pe struct {
-		Error    string `json:"error"`
-		Proposed int    `json:"proposed"`
-	}
-	c := r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"issue:schuettc/hail#4"}, "disposition": "wait", "until": "merged(" + unknown + ")", "note": "after the fix"}, &pe)
-	if c != http.StatusBadRequest || pe.Error != want {
+	// The agent's recommendation may name an untracked PR too.
+	var pe ProposeResult
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": []string{"issue:schuettc/hail#4"}, "disposition": "wait", "until": "merged(pr:up/stream#58)", "note": "after the fix"}, &pe); c != 200 || len(pe.Errors) != 0 || pe.Proposed != 1 {
 		t.Fatalf("propose: %d %+v", c, pe)
 	}
-	if got := r.recCounts(t); got.Recommended != 0 {
-		t.Fatalf("proposed anyway: %+v", got)
+	for key, until := range map[string]string{
+		"issue:schuettc/hail#4": "merged(pr:schuettc/hail#999)",
+		"issue:schuettc/hail#5": "closed(issue:up/stream#998)",
+		"pr:schuettc/hail#3":    "released(repo:schuettc/nowhere)",
+	} {
+		var dec DecideResult
+		if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{key}, "disposition": "wait", "until": until}, &dec); c != 200 || dec.Decided != 1 || len(dec.Errors) != 0 {
+			t.Fatalf("decide %s until %s: %d %+v", key, until, c, dec)
+		}
+		d, err := r.App.Repo.ReadDecision(mustKey(t, key))
+		if err != nil || d == nil || d.Until != until {
+			t.Fatalf("%s decision %+v %v, want until %s", key, d, err, until)
+		}
 	}
-	// A key casebook knows is accepted.
+	// A malformed key is still refused, and nothing is decided.
 	var dec DecideResult
-	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#4"}, "disposition": "wait", "until": "merged(pr:schuettc/hail#3)"}, &dec); c != 200 || dec.Decided != 1 {
-		t.Fatalf("known key: %d %+v", c, dec)
+	r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"issue:schuettc/hail#5"}, "disposition": "wait", "until": "merged(tackle#58)"}, &dec)
+	if dec.Decided != 0 || len(dec.Errors) != 1 || !strings.Contains(dec.Errors[0], "invalid until") {
+		t.Fatalf("malformed until: %+v", dec)
 	}
 }
