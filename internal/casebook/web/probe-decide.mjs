@@ -2405,7 +2405,7 @@ async function openRecScenario(context, t, s) {
       kicker(OISSUE(2)),
       8000,
     );
-    await pg.waitForTimeout(400);
+    await pg.waitForTimeout(400); // kept: the open item must not re-render; a window for it
     const after = await readCol(pg);
     check(
       `a proposal for issue #2 (the list heard it: ${heard}) leaves the open issue #1 as it was: not re-rendered, no card, nothing recommended`,
@@ -2609,7 +2609,7 @@ async function lookIntoScenario(context, t, s) {
 
   // ---- no session attached: no button --------------------------------------
   {
-    await pg.waitForTimeout(500);
+    await pg.waitForTimeout(500); // kept: no button may appear; a window for it
     const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
     check(
       `with no session attached (dock: ${attach}) there is no "look into it" button`,
@@ -2814,7 +2814,7 @@ async function lookIntoScenario(context, t, s) {
       );
     }, MARK);
     check('the marker sits under the question', under);
-    await shoot(t, pg, 'looking', ['light']);
+    await inThemes(t, pg, 'looking', ['light']);
   }
 
   // ---- the agent looks: evidence and a recommendation show live -----------
@@ -2935,6 +2935,6 @@ async function lookIntoScenario(context, t, s) {
       await pg.evaluate(() => window.__lookNoReload === true),
     );
   }
-  await shoot(t, pg, 'look-into', ['light']);
+  await inThemes(t, pg, 'look-into', ['light']);
   await pg.close();
 }
