@@ -593,3 +593,54 @@ func remoteFixture(t *testing.T, branch, upstream string, gone bool) (engine.Ite
 	}})
 	return it, snap
 }
+
+// TestCloseCommentIsTheDecisionsNote: a close posts the decision's note as
+// its closing comment, and nothing else. A note left empty (or blank) means
+// no comment: the command has no --comment and the step posts nothing (no
+// "Closing." stand-in).
+func TestCloseCommentIsTheDecisionsNote(t *testing.T) {
+	builtAt := epoch.Add(-5 * time.Minute)
+	closing := func(k item.Key, note string) engine.Item {
+		return engine.Item{
+			Key:      k,
+			ID:       k.String(),
+			Kind:     k.Kind,
+			Status:   item.StatusToApply,
+			Decision: decided(item.Close, note),
+		}
+	}
+	for _, tc := range []struct {
+		name, note, wantCmd string
+		posts               bool
+	}{
+		{"pr with a comment", "Thanks! Superseded by #9.", "gh pr close 42 -R 'schuettc/myrepo' --comment 'Thanks! Superseded by #9.'", true},
+		{"pr without comment", "", "gh pr close 42 -R 'schuettc/myrepo'", false},
+		{"pr with a blank note", "  \n", "gh pr close 42 -R 'schuettc/myrepo'", false},
+		{"issue with a comment", "Fixed in v2; it's in the release notes.", `gh issue close 13 -R 'schuettc/myrepo' --comment 'Fixed in v2; it'"'"'s in the release notes.'`, true},
+		{"issue without comment", "", "gh issue close 13 -R 'schuettc/myrepo'", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			k := item.PRKey("schuettc/myrepo", 42)
+			if strings.HasPrefix(tc.name, "issue") {
+				k = item.IssueKey("schuettc/myrepo", 13)
+			}
+			plan, err := Build([]engine.Item{closing(k, tc.note)}, snapWith("mymachine", nil), epoch, builtAt, 30*time.Minute)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if len(plan.Steps) != 1 {
+				t.Fatalf("want 1 step, got %d: %v", len(plan.Steps), plan.Steps)
+			}
+			st := plan.Steps[0]
+			if st.Command != tc.wantCmd {
+				t.Errorf("Command =\n  %q\nwant\n  %q", st.Command, tc.wantCmd)
+			}
+			if st.Posts != tc.posts {
+				t.Errorf("Posts = %v, want %v", st.Posts, tc.posts)
+			}
+			if strings.Contains(st.Command, "Closing.") {
+				t.Errorf("Command %q posts the old stand-in comment", st.Command)
+			}
+		})
+	}
+}

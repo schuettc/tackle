@@ -372,17 +372,14 @@ func prSteps(it engine.Item) []Step {
 	n := it.Key.Number
 	switch it.Decision.Disposition {
 	case item.Close:
-		comment := it.Decision.Note
-		if comment == "" {
-			comment = "Closing."
-		}
+		comment := closingComment(it.Decision)
 		return []Step{{
 			Key:          it.ID,
 			Action:       "pr-close",
 			Lane:         LaneAgent,
 			Command:      prCloseCmd(n, repo, comment),
 			Precondition: "pr-no-new-activity",
-			Posts:        true,
+			Posts:        comment != "",
 		}}
 	case item.Merge:
 		return []Step{{
@@ -403,15 +400,22 @@ func issueSteps(it engine.Item) []Step {
 	}
 	repo := it.Key.Repo()
 	n := it.Key.Number
-	comment := it.Decision.Note
-	if comment == "" {
-		comment = "Closing."
-	}
+	comment := closingComment(it.Decision)
 	return []Step{{
 		Key:     it.ID,
 		Action:  "issue-close",
 		Lane:    LaneAgent,
 		Command: issueCloseCmd(n, repo, comment),
-		Posts:   true,
+		Posts:   comment != "",
 	}}
+}
+
+// closingComment is what a close posts: the decision's note, as written. A
+// note left empty (or blank) means no comment: the close posts nothing, and
+// its step doesn't post (Posts is false), so no comment is drafted for it.
+func closingComment(d *item.Decision) string {
+	if strings.TrimSpace(d.Note) == "" {
+		return ""
+	}
+	return d.Note
 }

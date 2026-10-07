@@ -63,7 +63,7 @@ var (
 	keepIt    = Choice{Disposition: Keep, Label: "Keep it", Says: "It stays as it is and stops asking for your attention."}
 	notNow    = Choice{Disposition: Wait, Label: "Not now", Says: "Hidden until a date or an event you pick, then it asks again.", NeedsUntil: true}
 	stopTrack = Choice{Disposition: Ignore, Label: "Stop tracking it", Says: "casebook never asks about it again. Nothing is done on GitHub."}
-	closeSays = "Goes to To apply. Nothing changes until you approve the plan. You can add a closing comment there."
+	closeSays = "Goes to To apply with your closing comment. Nothing changes until you approve the plan, and you see the comment again before it's posted."
 )
 
 // choices lists what the decide step offers per kind, in the order shown.
