@@ -2148,8 +2148,10 @@ async function keyScopeScenariosOn(context, serveHandle) {
       await pg.waitForTimeout(300); // only after a failed check
     }
 
+    // A wrong accept is a POST after ordering, not synchronous: give it the
+    // full window.
     await pressWithFocus(pg, 'a');
-    await pg.waitForTimeout(500);
+    await pg.waitForTimeout(1500);
     check(
       'on #/rules, "a" does not accept Attention\'s hidden open proposal',
       (await proposalState()) === 'pending',
@@ -9334,11 +9336,16 @@ async function run() {
           },
         );
         await silentPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        // The dock has loaded the session while it is still here, so only
-        // serve's push can tell it the session left.
-        await until(
+        // The dock has loaded this session (its header names it) while it is
+        // still here, so only serve's push can tell it the session left. The
+        // header exists, unnamed and without data-left, before the load.
+        const loadedHere = await until(
           silentPage,
-          () => !!document.querySelector('.cb-dock-header:not([data-left])'),
+          (id) => {
+            const hd = document.querySelector('.cb-dock-header');
+            return hd?.title === id && !hd.hasAttribute('data-left');
+          },
+          sId,
         );
 
         // Wait for CASEBOOK_LEFT_AFTER=3s to elapse (use 4s to be safe).
@@ -9352,7 +9359,7 @@ async function run() {
           .catch(() => false);
         check(
           'silent session goes left without any other activity',
-          silentLeftVisible,
+          loadedHere && silentLeftVisible,
         );
       } finally {
         await silentPage.close();
