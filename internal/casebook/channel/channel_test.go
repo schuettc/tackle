@@ -477,7 +477,7 @@ func TestNoSessionIsReadOnly(t *testing.T) {
 		t.Fatalf("reply without session %q %v", out, isErr)
 	}
 	res := m.call("tools/list", map[string]any{})
-	if n := len(res["tools"].([]any)); n != 12 {
+	if n := len(res["tools"].([]any)); n != 13 {
 		t.Fatalf("%d tools", n)
 	}
 }

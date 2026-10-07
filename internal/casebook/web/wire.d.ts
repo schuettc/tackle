@@ -29,6 +29,8 @@ export interface SummaryView {
   sessions: number;
   sync_interval_ms: number;
   syncing: boolean;
+  recommended: number;
+  not_recommended: number;
 }
 
 export interface ItemsView {
@@ -48,11 +50,13 @@ export interface DecideResult {
   decided: number;
   decided_keys: string[] | null;
   errors: string[] | null;
+  decisions: Record<string, Committed> | null;
 }
 
 export interface AcceptResult {
   accepted: number;
   errors: string[] | null;
+  decisions: Record<string, Committed> | null;
 }
 
 export interface RejectResult {
@@ -105,6 +109,16 @@ export interface StatusView {
   counts: Record<string, number> | null;
   since: string;
   page_open: boolean;
+}
+
+export interface NextView {
+  done: boolean;
+  left: number;
+  item: ItemDetailView | null;
+  choices: ChoiceVocab[] | null;
+  not_now: NotNowForm[] | null;
+  guide: string;
+  propose_how: string;
 }
 
 export interface InterruptedView {
@@ -179,6 +193,17 @@ export interface VocabularyView {
 export interface DecisionVocabView {
   kinds: KindVocab[] | null;
   until_forms: UntilForm[] | null;
+  not_now: NotNowForm[] | null;
+}
+
+export interface ClearResult {
+  cleared: boolean;
+  pushed_later: boolean;
+}
+
+export interface DecisionUndoResult {
+  undone: boolean;
+  decision: Committed | null;
 }
 
 export interface JobStepResult {
@@ -247,6 +272,7 @@ export interface ItemView {
   url?: string;
   relation?: string;
   status: string;
+  due_reason?: string;
   decision?: Decision;
   hits?: Hit[];
   observed: Observed;
@@ -310,6 +336,13 @@ export interface LogEntry {
   Commit: string;
   Time: string;
   Subject: string;
+}
+
+export interface Committed {
+  disposition: string;
+  until: string;
+  note: string;
+  decided_at: string;
 }
 
 export interface Session {
@@ -387,6 +420,22 @@ export interface SkippedMessage {
   reason: string;
 }
 
+export interface ChoiceVocab {
+  disposition: string;
+  label: string;
+  says: string;
+  outward: boolean;
+  needs_until: boolean;
+}
+
+export interface NotNowForm {
+  id: string;
+  label: string;
+  template: string;
+  asks: string;
+  days?: number;
+}
+
 export interface Rule {
   id: string;
   name: string;
@@ -421,6 +470,8 @@ export interface KindVocab {
   kind: string;
   allowed: string[] | null;
   needs_until: string[] | null;
+  question: string;
+  choices: ChoiceVocab[] | null;
 }
 
 export interface UntilForm {

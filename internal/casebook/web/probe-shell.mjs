@@ -180,6 +180,8 @@ const EXPECT = {
     'd',
     'a',
     'r',
+    'u',
+    ...'123456789',
   ],
   board: ['/', ...FAMILY, ...PAGE_KEYS, 'd'],
   rules: [...MOVE_OPEN, ...FAMILY, ...PAGE_KEYS, 'a'],
@@ -347,7 +349,7 @@ async function keyboardScenario(shared, t) {
         // x selects the cursor's row; ⇧x selects the range to it; d decides
         // the selection, and it is decided on serve.
         rows = await rowsOf(pg);
-        const hasProposal = (r) => r.sub.includes('proposes');
+        const hasProposal = (r) => r.sub.includes(' recommends ');
         let from = -1;
         for (let i = 0; i + 2 < rows.length; i++) {
           if (![0, 1, 2].some((d) => hasProposal(rows[i + d]))) {
@@ -407,8 +409,8 @@ async function keyboardScenario(shared, t) {
           `d opens decide for the selection ("${sheetTitle}")`,
           sheetTitle.includes('decide 3 items'),
         );
-        await pg.click('.kit-sheet .cb-sheet-disp:has-text("keep")');
-        await pg.click('.kit-sheet .kit-btn:has-text("Decide 3")');
+        await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
+        await pg.click('.kit-sheet .kit-btn.fill:has-text("· 3 ")');
         check(
           'and deciding there decides the three on serve (keep)',
           await eventually(async () => {
@@ -1597,9 +1599,9 @@ async function slowPushScenario(shared, t) {
           );
           await pg.click('.kit-primary');
           await until(pg, () => !!document.querySelector('.kit-sheet'));
-          await pg.click('.kit-sheet .cb-sheet-disp:has-text("keep")');
+          await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
           const t0 = Date.now();
-          await pg.click('.kit-sheet .kit-btn:has-text("Decide 1")');
+          await pg.click('.kit-sheet .kit-btn.fill:has-text("· 1 ")');
           const closed = await until(
             pg,
             () => !document.querySelector('.kit-sheet'),

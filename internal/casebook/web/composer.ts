@@ -74,6 +74,14 @@ export interface ComposerHandle {
   input: HTMLTextAreaElement;
   /** Show a note in the footer (why something wasn't sent). */
   say(text: string): void;
+  /**
+   * sendText sends body to the attached session as ↵ would, with nothing
+   * attached and without touching the field: a message the page writes
+   * ("ask … to recommend the rest"). It goes into the delivery queue, so it
+   * waits for the session's turn to end. Resolves '' when it was posted,
+   * else why not (the footer says so too).
+   */
+  sendText(body: string): Promise<string>;
 }
 
 // threadName names a new thread from its first request (spec §3.5 item 2).
@@ -297,6 +305,34 @@ export function makeComposer(ctx: Ctx, dock: ComposerDock): ComposerHandle {
     },
     say(text: string): void {
       note.textContent = text;
+    },
+    async sendText(body: string): Promise<string> {
+      const why = dock.blocked();
+      if (why) {
+        note.textContent = why;
+        return why;
+      }
+      try {
+        const thread = await threadFor(body);
+        if (!thread) {
+          note.textContent = 'no agent session';
+          return note.textContent;
+        }
+        await ctx.api.post('/messages', {
+          thread,
+          body,
+          attached: {},
+          batch: false,
+          session: dock.currentSession(),
+        });
+        return '';
+      } catch (err) {
+        const moved = movedNote(err);
+        note.textContent = moved || 'not sent';
+        if (moved) dock.threadMoved();
+        console.error('[composer] sendText:', err);
+        return note.textContent;
+      }
     },
   };
 }

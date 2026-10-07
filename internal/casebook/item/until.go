@@ -21,6 +21,9 @@ type Facts interface {
 	State(k Key) (state string, ok bool)         // pr/issue: OPEN, CLOSED or MERGED
 	LatestRelease(k Key) (at time.Time, ok bool) // repo
 	LastActivity(k Key) (at time.Time, ok bool)  // any item
+	// Missing: a sync looked k up and GitHub answered that it doesn't
+	// exist. Not looked up yet, or a lookup that failed otherwise, is false.
+	Missing(k Key) bool
 }
 
 var refKinds = map[string][]Kind{
@@ -116,6 +119,19 @@ func (c Cond) Met(it Key, decidedAt time.Time, f Facts, now time.Time) (met, kno
 		return ok && !now.Before(at.Add(c.Dur)), ok
 	}
 	return false, false
+}
+
+// MissingRef returns the key a wait or watch decision's condition names when
+// GitHub has said that key doesn't exist: the condition can never be met.
+func MissingRef(d *Decision, f Facts) (Key, bool) {
+	if d == nil || (d.Disposition != Wait && d.Disposition != Watch) {
+		return Key{}, false
+	}
+	c, err := ParseUntil(d.Until)
+	if err != nil || c.Ref.Kind == "" || !f.Missing(c.Ref) {
+		return Key{}, false
+	}
+	return c.Ref, true
 }
 
 // ParseDuration parses casebook's duration syntax: <n>h, <n>d or <n>w.

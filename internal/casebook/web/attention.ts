@@ -22,18 +22,39 @@ import type {
   ItemsView,
   ItemView,
   ItemDetailView,
+  Decision,
+  DecideResult,
+  AcceptResult,
+  Committed,
+  DecisionUndoResult,
+  DecisionVocabView,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
-import { wireSelection } from './decide.ts';
-import { keyWithoutKind, pluralize } from './decide-math.ts';
+import { wireSelection, getVocab } from './decide.ts';
+import {
+  keyWithoutKind,
+  pluralize,
+  nextInView,
+  MORE,
+  recommendLine,
+  recommendedLine,
+  agreeGroups,
+  type AgreeGroup,
+} from './decide-math.ts';
+import { showChoiceError } from './choices.ts';
 import { makeBoard } from './board.ts';
 import {
-  agentFromSource,
+  agreeWithAll,
   bulkProposalActions,
   openRejectSheet,
   type BulkProposalActions,
 } from './proposals.ts';
+
+// RECOMMEND_THE_REST is what "ask … to recommend the rest" sends the dock's
+// session: a normal message, delivered when its turn ends.
+export const RECOMMEND_THE_REST =
+  'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
@@ -132,7 +153,30 @@ export function makeAttention(ctx: Ctx): Section {
   // The detail the reading column shows (its item is currentOpenKey).
   let shownDetail: ItemDetailView | null = null;
   const viewCounts: Record<string, number> = {}; // last known counts per view chip id
+  // lastOrder is the view's keys as the list last loaded them: the order the
+  // next undecided item is found in after a decision (reload() empties
+  // loadedItems while it waits, so a decision mid-reload reads this).
+  let lastOrder: string[] = [];
+  // deciding is the key this tab is deciding now (one at a time).
+  let deciding: string | null = null;
+  // lastUndo is the last decision made in this tab, for u: the item, the
+  // decision it had before (null: none) and the one this tab's decide or
+  // accept committed (serve's reply), which undo expects to find.
+  let lastUndo: {
+    key: string;
+    prev: Decision | null;
+    expect: Committed;
+  } | null = null;
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
+  // serve's decision vocabulary (the rows' "pi recommends Close it" and the
+  // agree-with-all labels); null until it loads.
+  let vocab: DecisionVocabView | null = null;
+  // The summary's counts of the items that need a decision: recommended
+  // and not yet (null until the summary loads).
+  let recCounts: { rec: number; notYet: number } | null = null;
+  // syncingOpen: the list's open row is being moved to the open item (no
+  // onOpen for it).
+  let syncingOpen = false;
 
   // ---- empty reading-column state ------------------------------------------
 
@@ -319,9 +363,15 @@ export function makeAttention(ctx: Ctx): Section {
       const displayKey = it.kind ? keyWithoutKind(it.key) : it.key;
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const age = ageOf(it);
-      const proposal = it.proposal
-        ? `${agentFromSource(it.proposal.source)} proposes ${it.proposal.disposition}`
-        : undefined;
+      const proposal =
+        it.proposal && it.proposal.state === 'pending'
+          ? recommendLine(
+              vocab,
+              it.key,
+              it.proposal.source,
+              it.proposal.disposition,
+            )
+          : undefined;
       return {
         id: it.key,
         key: kindKey,
@@ -350,6 +400,7 @@ export function makeAttention(ctx: Ctx): Section {
       }
     },
     onOpen(it: ItemView) {
+      if (syncingOpen) return;
       // Navigate to the item's hash URL and load the detail.
       ctx.route.go('item', it.key);
       void openDetail(it.key);
@@ -417,8 +468,11 @@ export function makeAttention(ctx: Ctx): Section {
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
+      lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       handle.setItems(loadedItems);
+      markOpenRow();
+      updateAgree();
       updateFoot();
       updateReadEmptyCount();
       updateProposalBulk(selection.ids());
@@ -436,10 +490,13 @@ export function makeAttention(ctx: Ctx): Section {
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(offset));
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
+      lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
       handle.setItems(loadedItems);
+      markOpenRow();
+      updateAgree();
       updateFoot();
       updateProposalBulk(selection.ids());
     } catch {
@@ -478,21 +535,359 @@ export function makeAttention(ctx: Ctx): Section {
     footEl.hidden = false;
   }
 
+  // markOpenRow moves the list's open row to the item the reading column
+  // shows (the next item move-on opened goes through the route, not a click
+  // on its row). Nothing when the row already is the open one, so a reload
+  // leaves the cursor where it was.
+  function markOpenRow(): void {
+    if (!currentOpenKey || boardHandle) return;
+    const i = loadedItems.findIndex((it) => it.key === currentOpenKey);
+    if (i < 0) return;
+    const rowEl = handle.el.querySelectorAll('.kit-rows > .kit-row')[i];
+    if (rowEl?.classList.contains('open')) return;
+    syncingOpen = true;
+    try {
+      handle.open(i);
+    } finally {
+      syncingOpen = false;
+    }
+  }
+
+  // ---- recommendations: the line at the top, agree with all at the foot ---
+
+  // The line at the top of the list: "n recommended · m not yet", and while
+  // some aren't and the dock has a session here, the offer to ask it.
+  const recCountsEl = h('span', { class: 'cb-rec-counts' });
+  const askBtn = h('button', {
+    class: 'kit-btn cb-rec-ask',
+    type: 'button',
+    hidden: true,
+    onclick() {
+      void askTheRest();
+    },
+  }) as HTMLButtonElement;
+  const askNote = h('span', { class: 'cb-rec-note' });
+  const recLine = h(
+    'div',
+    { class: 'cb-rec-line', hidden: true },
+    recCountsEl,
+    askBtn,
+    askNote,
+  );
+  handle.el.querySelector('.kit-lh')?.append(recLine);
+  // asked is the session this page asked to recommend the rest: the offer
+  // gives way to "asked …" for it, so one click sends one message.
+  let asked = '';
+
+  function renderRecLine(): void {
+    if (!recCounts) {
+      recLine.hidden = true;
+      return;
+    }
+    recLine.hidden = false;
+    recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
+    // Everything recommended: a later item that needs one is offered anew.
+    if (recCounts.notYet === 0) asked = '';
+    const t = ctx.dockTarget();
+    const offer = recCounts.notYet > 0 && !!t;
+    askBtn.hidden = !offer || asked === t?.id;
+    if (t) askBtn.textContent = `ask ${t.name} to recommend the rest`;
+    askNote.textContent = offer && asked === t?.id ? `asked ${t.name}` : '';
+  }
+  ctx.onDockTarget(() => renderRecLine());
+
+  async function askTheRest(): Promise<void> {
+    const t = ctx.dockTarget();
+    if (!t || askBtn.disabled) return;
+    askBtn.disabled = true;
+    try {
+      const why = await ctx.askSession(RECOMMEND_THE_REST);
+      if (why) askNote.textContent = why;
+      else asked = t.id;
+    } finally {
+      askBtn.disabled = false;
+    }
+    if (asked) renderRecLine();
+  }
+
+  // refreshSummary reads serve's summary: the view chips' counts and the
+  // recommended line.
+  function refreshSummary(): void {
+    void ctx.api
+      .get<SummaryView>('/summary')
+      .then((sv) => {
+        applyCounts(sv.counts);
+        recCounts = {
+          rec: sv.recommended ?? 0,
+          notYet: sv.not_recommended ?? 0,
+        };
+        renderRecLine();
+      })
+      .catch(() => {});
+  }
+
+  // The foot's agree-with-all band sits above the selection foot.
+  const agree = agreeWithAll(agreeAll);
+  handle.el.querySelector('.kit-foot')?.before(agree.el);
+
+  function updateAgree(): void {
+    agree.update(vocab && !boardHandle ? agreeGroups(vocab, loadedItems) : []);
+  }
+
+  // agreeAll accepts exactly a group's proposals. An outward choice only
+  // goes to To apply. When the open item was one of them, the next
+  // undecided item opens; with none open, the first undecided one does.
+  async function agreeAll(g: AgreeGroup): Promise<void> {
+    if (deciding) return;
+    const open = currentOpenKey;
+    deciding = open ?? '\u0000agree';
+    const order = await orderFor(open);
+    try {
+      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
+        ids: g.ids,
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
+        return;
+      }
+      selection.deselect(g.keys);
+      lastUndo = null;
+      if (!open || g.keys.includes(open)) {
+        await moveOn(open ?? '', order);
+      } else {
+        void reload();
+      }
+      const errs = r.errors ?? [];
+      if (errs.length) showReadError(errs.join('; '));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
   async function openDetail(key: string): Promise<void> {
     currentOpenKey = key;
+    markOpenRow();
     feedAttached();
     try {
       const detail = await ctx.api.get<ItemDetailView>('/item', { key });
       // Another item opened meanwhile: this answer is no longer shown.
       if (currentOpenKey !== key) return;
       shownDetail = detail;
-      const el = renderItem(ctx, detail, () => {
-        // Re-render after accept/reject/change from the proposal card.
-        void openDetail(key);
+      const el = renderItem(ctx, detail, {
+        // Re-render after a reject or a change from the recommendation card.
+        onRefresh: () => void openDetail(key),
+        decide: (d, until) => void decideOpen(key, d, until),
+        accept: () => void acceptOpen(),
       });
       readEl.replaceChildren(el);
     } catch {
       // non-fatal; leave the reading column
+    }
+  }
+
+  // ---- the decide step: decide, move on, undo ------------------------------
+
+  // viewLabel is the view's name in the summary ("waiting on you").
+  function viewLabel(): string {
+    return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
+  }
+
+  // showReadError shows serve's message in the reading column: on the open
+  // item's cards, else under the summary.
+  function showReadError(message: string): void {
+    if (readEl.querySelector('.cb-choice-err')) {
+      showChoiceError(readEl, message);
+      return;
+    }
+    readEl.firstElementChild?.append(
+      h('p', { class: 'cb-choice-err' }, message),
+    );
+  }
+
+  // showDone is the reading column when the view has nothing left.
+  function showDone(): void {
+    currentOpenKey = null;
+    shownDetail = null;
+    readEl.replaceChildren(
+      h(
+        'div',
+        { class: 'cb-read-empty' },
+        h('p', { class: 'cb-read-empty-section kit-label' }, 'attention'),
+        h('p', { class: 'cb-read-done' }, `Nothing left in ${viewLabel()}.`),
+      ),
+    );
+    feedAttached();
+  }
+
+  // openKey opens key in the reading column (and the URL), as a click does.
+  // When the URL already names key (the summary after its decision keeps
+  // it), no route change comes, so it opens here.
+  function openKey(key: string): void {
+    const before = location.hash;
+    ctx.route.go('item', key);
+    if (location.hash === before) {
+      void openDetail(key);
+      void reload();
+    }
+  }
+
+  // remember records a decision this tab made on key, for u: the decision
+  // it had before, and the one serve's reply says the decide or accept
+  // committed. With no such reply, u does nothing rather than guess.
+  function remember(
+    key: string,
+    prev: Decision | null,
+    made: Record<string, Committed> | null,
+  ): void {
+    const expect = made?.[key];
+    lastUndo = expect ? { key, prev, expect } : null;
+  }
+
+  // orderFor is the view's order to move on from key in: the list's rows,
+  // or, when key is on a page the list no longer holds (opening an item
+  // reloads the first page), the view fetched a page at a time up to key.
+  async function orderFor(key: string | null): Promise<string[]> {
+    if (!key || lastOrder.includes(key)) return [...lastOrder];
+    const keys: string[] = [];
+    try {
+      for (let total = Infinity; keys.length < total;) {
+        const data = await ctx.api.get<ItemsView>(
+          '/items',
+          buildQuery(keys.length),
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        keys.push(...got);
+        total = Math.min(total, data.total);
+        if (!got.length || got.includes(key)) break;
+      }
+    } catch {
+      return [...lastOrder];
+    }
+    return keys.includes(key) ? keys : [...lastOrder];
+  }
+
+  // moveOn opens the next undecided item in the view's order (order: the
+  // view's keys when key was decided), or the view's summary when none is
+  // left. The undecided ones are the view as serve lists it now, fetched a
+  // page at a time until the next one is known (at most the view's total),
+  // so an item decided elsewhere meanwhile is passed over, none is skipped,
+  // and an item on a later page is found before wrapping to the first.
+  async function moveOn(key: string, order: string[]): Promise<void> {
+    const fresh: string[] = [];
+    let next: string | null | typeof MORE = MORE;
+    try {
+      for (let total = Infinity; next === MORE;) {
+        const data = await ctx.api.get<ItemsView>(
+          '/items',
+          buildQuery(fresh.length),
+        );
+        const got = (data.items ?? []).map((it) => it.key);
+        fresh.push(...got);
+        total = Math.min(total, data.total);
+        const complete = got.length === 0 || fresh.length >= total;
+        next = nextInView(order, key, fresh, complete);
+      }
+    } catch {
+      if (key) void openDetail(key);
+      return;
+    }
+    // Court opened something else meanwhile: leave it open.
+    if ((currentOpenKey ?? '') !== key) return;
+    if (next) openKey(next);
+    else {
+      showDone();
+      void reload();
+    }
+  }
+
+  // decideOpen decides the open item (a card, a number key) and moves on.
+  async function decideOpen(
+    key: string,
+    disposition: string,
+    until?: string,
+  ): Promise<void> {
+    if (deciding) return;
+    deciding = key;
+    const order = await orderFor(key);
+    const prev =
+      shownDetail?.item.key === key
+        ? (shownDetail.item.decision ?? null)
+        : null;
+    try {
+      const payload: Record<string, unknown> = { keys: [key], disposition };
+      if (until) payload['until'] = until;
+      const r = await ctx.api.post<DecideResult>('/decide', payload);
+      if (!(r.decided_keys ?? []).length) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was decided');
+        return;
+      }
+      selection.deselect([key]);
+      remember(key, prev, r.decisions);
+      await moveOn(key, order);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
+  // acceptOpen accepts the open item's recommendation (a, or the card's
+  // accept) and moves on.
+  async function acceptOpen(): Promise<void> {
+    const p = shownProposal();
+    const key = currentOpenKey;
+    if (!p || !key || deciding) return;
+    deciding = key;
+    const order = await orderFor(key);
+    const prev = shownDetail?.item.decision ?? null;
+    try {
+      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
+        ids: [p.id],
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
+        return;
+      }
+      selection.deselect([key]);
+      remember(key, prev, r.decisions);
+      await moveOn(key, order);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
+  // undo takes back the last decision this tab made, in one step serve
+  // checks: it restores the decision the item had before (or clears it when
+  // it had none) only while the item's decision is still the one this tab
+  // committed. serve refuses otherwise (409); its message shows.
+  async function undo(): Promise<void> {
+    const u = lastUndo;
+    if (!u || deciding) return;
+    deciding = u.key;
+    try {
+      await ctx.api.post<DecisionUndoResult>('/decisions/undo', {
+        key: u.key,
+        expect: u.expect,
+        restore: u.prev
+          ? {
+              disposition: u.prev.disposition,
+              until: u.prev.until ?? '',
+              note: u.prev.note ?? '',
+            }
+          : null,
+      });
+      lastUndo = null;
+      openKey(u.key);
+    } catch (err) {
+      // A refusal stands: this decision can't be undone any more.
+      lastUndo = null;
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
     }
   }
 
@@ -582,16 +977,7 @@ export function makeAttention(ctx: Ctx): Section {
     label: 'accept proposal',
     group: 'page',
     run() {
-      const p = shownProposal();
-      if (!p || !currentOpenKey) return;
-      void ctx.api
-        .post('/proposals/accept', { ids: [p.id] })
-        .then(() => {
-          selection.deselect([currentOpenKey!]);
-          void openDetail(currentOpenKey!);
-          void reload();
-        })
-        .catch(() => {});
+      void acceptOpen();
     },
   };
 
@@ -610,7 +996,38 @@ export function makeAttention(ctx: Ctx): Section {
     },
   };
 
-  const listKeys: KeyBinding[] = [decideKey, acceptKey, rejectKey];
+  // u undoes the last decision this tab made; 1..9 pick the open item's
+  // nth card (a click on it: Not now opens its conditions).
+  const undoKey: KeyBinding = {
+    keys: 'u',
+    label: 'undo the last decision',
+    group: 'page',
+    run() {
+      if (!lastUndo) return false;
+      void undo();
+    },
+  };
+  const choiceKeys: KeyBinding[] = [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({
+    keys: String(n),
+    label: `pick choice ${n}`,
+    group: 'page',
+    run() {
+      if (!currentOpenKey) return false;
+      const card = readEl.querySelectorAll<HTMLElement>(
+        '.cb-choices .cb-choice',
+      )[n - 1];
+      if (!card) return false;
+      card.click();
+    },
+  }));
+
+  const listKeys: KeyBinding[] = [
+    decideKey,
+    acceptKey,
+    rejectKey,
+    undoKey,
+    ...choiceKeys,
+  ];
   // The board is not a list (no j/k/o/x), but it has the list's search
   // field: / focuses it there too.
   const searchKey: KeyBinding = {
@@ -623,11 +1040,14 @@ export function makeAttention(ctx: Ctx): Section {
   };
   const boardKeys: KeyBinding[] = [decideKey, searchKey];
 
-  // Load summary for initial counts.
-  void ctx.api
-    .get<SummaryView>('/summary')
-    .then((s) => {
-      applyCounts(s.counts);
+  // Load summary for initial counts and the recommended line.
+  refreshSummary();
+  // The vocabulary words the rows' recommendations and agree with all.
+  void getVocab(ctx)
+    .then((v) => {
+      vocab = v;
+      handle.setItems(loadedItems);
+      updateAgree();
     })
     .catch(() => {});
 
@@ -664,6 +1084,7 @@ export function makeAttention(ctx: Ctx): Section {
     const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
+    agree.update([]);
     boardHandle = makeBoard(
       ctx,
       selection,
@@ -699,6 +1120,7 @@ export function makeAttention(ctx: Ctx): Section {
     const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
     if (kitRows) kitRows.hidden = false;
     if (kitFoot) kitFoot.hidden = false;
+    updateAgree();
   }
 
   // ---- show(sub) -- router hook --------------------------------------------
@@ -772,6 +1194,8 @@ export function makeAttention(ctx: Ctx): Section {
         // refresh the list (or the board when it is active).
         const s = data as { counts?: Record<string, number> };
         applyCounts(s?.counts ?? null);
+        // The recommended line's counts change with the index too.
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {
@@ -787,11 +1211,17 @@ export function makeAttention(ctx: Ctx): Section {
         if (decidedKeys.length > 0) {
           selection.deselect(decidedKeys);
         }
+        // The open item decided elsewhere: show its decision (not while this
+        // tab is deciding it, which moves on).
+        if (
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          decidedKeys.includes(currentOpenKey)
+        ) {
+          void openDetail(currentOpenKey);
+        }
         // Re-fetch summary so view-chip counts stay correct.
-        void ctx.api
-          .get<SummaryView>('/summary')
-          .then((s) => applyCounts(s.counts))
-          .catch(() => {});
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {
@@ -829,10 +1259,7 @@ export function makeAttention(ctx: Ctx): Section {
         }
 
         // Re-fetch summary to update view-chip counts (particularly 'proposed').
-        void ctx.api
-          .get<SummaryView>('/summary')
-          .then((s) => applyCounts(s.counts))
-          .catch(() => {});
+        refreshSummary();
         if (boardHandle) {
           void boardHandle.refresh();
         } else {

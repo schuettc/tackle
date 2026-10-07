@@ -90,7 +90,7 @@ casebook-probe: _casebook-web-deps
     go build -o bin/casebook ./cmd/casebook
     cd {{ casebook_web }} && KIT_BROWSER=required CASEBOOK_BIN="$PWD/../../../bin/casebook" node probe.mjs
 
-# One group of the probe (composer, keys, rules, apply, shell, owner), on purpose: a partial run,
+# One group of the probe (composer, keys, rules, apply, shell, owner, decide), on purpose: a partial run,
 # which the full probe above refuses (a leftover PROBE_ONLY must not turn
 # verify-slow into a partial run). Not part of any gate.
 casebook-probe-only group: _casebook-web-deps

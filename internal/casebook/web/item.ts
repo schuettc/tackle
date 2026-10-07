@@ -2,8 +2,8 @@
 //
 // renderItem(ctx, detail) produces the full item reading column:
 //   kicker · h1 title · facts · body excerpt (foldable) ·
-//   pending-proposal card slot · decide buttons (wired Task 4) ·
-//   evidence section · history section
+//   the decide step (serve's question, the recommendation card, the choice
+//   cards: choices.ts) · evidence section · history section
 //
 // The returned element replaces the .kit-read content; it is a plain
 // HTMLElement, not a kit component, so it can be replaced at will.
@@ -11,12 +11,8 @@
 import { h, facts, fold } from '/_kit/kit.js';
 import type { ItemDetailView, Evidence, Event, LogEntry } from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import {
-  openDecideSheet,
-  DANGER_DISPS,
-  getVocab,
-  allowedForKind,
-} from './decide.ts';
+import { getVocab } from './decide.ts';
+import { renderChoices, asNotNow } from './choices.ts';
 import { keyWithoutKind, stripOwnKey } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 import { proposalCard } from './proposals.ts';
@@ -132,43 +128,53 @@ function renderHistory(
   return section;
 }
 
-// proposal card is rendered by proposals.ts (proposalCard)
+// ---- the decide step ---------------------------------------------------------
 
-// ---- decide buttons ---------------------------------------------------------
+/** What the decide step does with a pick and an accept (attention.ts). */
+export interface ItemHooks {
+  /** Re-render after a reject or a change from the recommendation card. */
+  onRefresh?: () => void;
+  /** A card was picked: decide the item (Not now with its until). */
+  decide?: (disposition: string, until?: string) => void;
+  /** The recommendation's accept (the card's button, like the a key). */
+  accept?: () => void;
+}
 
-function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
+// renderDecideSection is the decide step: serve's question for the kind,
+// the recommendation card when a proposal is pending, then the cards.
+function renderDecideSection(
+  ctx: Ctx,
+  detail: ItemDetailView,
+  hooks: ItemHooks,
+): HTMLElement {
+  const it = detail.item;
   const section = h('section', { class: 'cb-decide' });
-  section.append(h('h3', { class: 'kit-label' }, 'decide'));
+  const question = h('h2', { class: 'cb-question' });
+  const recSlot = h('div', { class: 'cb-rec-slot' });
+  const pending =
+    it.proposal && it.proposal.state === 'pending' ? it.proposal : null;
+  const cards = renderChoices(ctx, it.kind, {
+    recommended: pending?.disposition,
+    chosen: it.decision?.disposition,
+    onPick(d, until) {
+      hooks.decide?.(d, until);
+    },
+  });
+  section.append(question, recSlot, cards);
 
-  const dispRow = h('div', { class: 'cb-decide-btns' });
-  section.append(dispRow);
-
-  // The vocabulary is fetched once and cached; this resolves instantly after the
-  // first call.  Buttons appear after the micro-task queue drains.
+  // The vocabulary is fetched once and cached: this resolves at once after
+  // the first item.
   void getVocab(ctx).then((vocab: DecisionVocabView) => {
-    const vocabKind = (vocab.kinds ?? []).find((k) => k.kind === kind);
-    const kindAllowed = allowedForKind(vocab, kind);
-    const needsUntilSet = new Set(vocabKind?.needs_until ?? []);
-    for (const d of kindAllowed) {
-      const label = needsUntilSet.has(d) ? `${d}\u2026` : d;
-      dispRow.append(
-        h(
-          'button',
-          {
-            type: 'button',
-            class:
-              'kit-btn cb-sheet-disp' +
-              (DANGER_DISPS.has(d) ? ' cb-sheet-disp--danger danger' : ''),
-            onclick() {
-              openDecideSheet(ctx, [key], () => {
-                // The 'decided' live event triggers a list reload.
-              });
-            },
-          },
-          label,
-        ),
-      );
-    }
+    const kv = (vocab.kinds ?? []).find((k) => k.kind === it.kind);
+    question.textContent = kv?.question ?? '';
+    const rec = asNotNow(pending?.disposition);
+    const label = kv?.choices?.find((c) => c.disposition === rec)?.label;
+    const card = proposalCard(ctx, detail, hooks.onRefresh, {
+      label,
+      accept: hooks.accept,
+    });
+    if (card) recSlot.replaceWith(card);
+    else recSlot.remove();
   });
 
   return section;
@@ -179,11 +185,11 @@ function renderDecideSection(ctx: Ctx, key: string, kind: string): HTMLElement {
 export function renderItem(
   ctx: Ctx,
   detail: ItemDetailView,
-  onRefresh?: () => void,
+  hooks: ItemHooks = {},
 ): HTMLElement {
   const it = detail.item;
 
-  const el = h('article', { class: 'cb-item' });
+  const el = h('article', { class: 'cb-item', dataset: { key: it.key } });
 
   // ---- kicker ---------------------------------------------------------------
   // Show the kind prefix once, then the key without its kind prefix.
@@ -213,6 +219,10 @@ export function renderItem(
     factPairs.push(['labels', it.labels.join(', ')]);
   if (it.landed) factPairs.push(['landed', it.landed_how ?? it.landed]);
   el.append(facts(factPairs));
+  // Why a Not now came back other than its condition being met (serve's
+  // words: its condition names something GitHub can't find).
+  if (it.due_reason)
+    el.append(h('p', { class: 'cb-due-reason' }, it.due_reason));
 
   // ---- body -----------------------------------------------------------------
   if (it.body) {
@@ -226,14 +236,8 @@ export function renderItem(
     el.append(bodyWrap);
   }
 
-  // ---- pending proposal card ------------------------------------------------
-  const propCard = proposalCard(ctx, detail, onRefresh);
-  if (propCard) {
-    el.append(propCard);
-  }
-
-  // ---- decide ---------------------------------------------------------------
-  el.append(renderDecideSection(ctx, it.key, it.kind));
+  // ---- decide: the question, the recommendation, the cards -----------------
+  el.append(renderDecideSection(ctx, detail, hooks));
 
   // ---- evidence -------------------------------------------------------------
   el.append(renderEvidence(detail.evidence ?? []));

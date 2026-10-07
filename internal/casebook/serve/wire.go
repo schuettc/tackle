@@ -40,6 +40,11 @@ type SummaryView struct {
 	SyncIntervalMS int64 `json:"sync_interval_ms"`
 	// Syncing: a sync POST /api/sync started is running.
 	Syncing bool `json:"syncing"`
+	// Recommended and NotRecommended count the items that need a decision
+	// (the waiting, due and new views, each item once): those with a
+	// pending proposal, and those casebook_next still has to hand out.
+	Recommended    int `json:"recommended"`
+	NotRecommended int `json:"not_recommended"`
 }
 
 // ItemsView is the response body of GET /api/items.
@@ -65,6 +70,9 @@ type DecideResult struct {
 	Decided     int      `json:"decided"`
 	DecidedKeys []string `json:"decided_keys"`
 	Errors      []string `json:"errors"`
+	// Decisions is, per decided key, the decision this request committed:
+	// what an undo of it expects to find (POST /api/decisions/undo).
+	Decisions map[string]Committed `json:"decisions"`
 }
 
 // AcceptResult is the response body of POST /api/proposals/accept. Like
@@ -72,6 +80,25 @@ type DecideResult struct {
 type AcceptResult struct {
 	Accepted int      `json:"accepted"`
 	Errors   []string `json:"errors"`
+	// Decisions is, per decided key, the decision this request committed.
+	Decisions map[string]Committed `json:"decisions"`
+}
+
+// Committed is a decision as a request committed it, decided_at to the
+// second: what POST /api/decisions/undo compares the item's decision with.
+type Committed struct {
+	Disposition string    `json:"disposition"`
+	Until       string    `json:"until"`
+	Note        string    `json:"note"`
+	DecidedAt   time.Time `json:"decided_at"`
+}
+
+// DecisionUndoResult is the response body of POST /api/decisions/undo:
+// Decision is the decision the undo restored, null when it removed one.
+// Like DecideResult it doesn't wait for the push.
+type DecisionUndoResult struct {
+	Undone   bool       `json:"undone"`
+	Decision *Committed `json:"decision"`
 }
 
 // Push states, as the "push" live event says them.
@@ -285,16 +312,73 @@ type VocabularyView struct {
 // It is generated from the Go item package and is the single source of truth
 // for which dispositions are valid per kind and which ones require an until
 // condition.  The page deletes its hand-copied tables and reads this instead.
+//
+// It also carries all the decide wording (item.Question, item.Choices,
+// item.NotNowForms): the page writes no question, label or sentence of its
+// own.
 type DecisionVocabView struct {
 	Kinds      []KindVocab `json:"kinds"`
 	UntilForms []UntilForm `json:"until_forms"`
+	// NotNow is Not now's conditions, in the order the page offers them.
+	NotNow []NotNowForm `json:"not_now"`
 }
 
-// KindVocab describes the valid decisions for one item kind.
+// KindVocab describes the valid decisions for one item kind. Allowed and
+// NeedsUntil are what the server accepts (watch included); Question and
+// Choices are what the decide step offers (watch never: Not now writes
+// wait).
 type KindVocab struct {
-	Kind       string   `json:"kind"`
-	Allowed    []string `json:"allowed"`
-	NeedsUntil []string `json:"needs_until"`
+	Kind       string        `json:"kind"`
+	Allowed    []string      `json:"allowed"`
+	NeedsUntil []string      `json:"needs_until"`
+	Question   string        `json:"question"`
+	Choices    []ChoiceVocab `json:"choices"`
+}
+
+// ChoiceVocab is one answer card: its disposition, label and what choosing
+// it does (Says). Outward choices only go to To apply. NeedsUntil choices
+// (Not now) need a condition from DecisionVocabView.NotNow.
+type ChoiceVocab struct {
+	Disposition string `json:"disposition"`
+	Label       string `json:"label"`
+	Says        string `json:"says"`
+	Outward     bool   `json:"outward"`
+	NeedsUntil  bool   `json:"needs_until"`
+}
+
+// NotNowForm is one Not now condition. Template is an until form with one
+// %s hole filled with what Asks names: "days" (the page fills the date
+// today + Days), "date", "pr", "pr-or-issue" or "repo" (the page asks for
+// it). When Asks is "" the form is fixed and Template is the whole until.
+type NotNowForm struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Template string `json:"template"`
+	Asks     string `json:"asks"`
+	Days     int    `json:"days,omitempty"`
+}
+
+// NextView is the response body of GET /api/agent/next (casebook_next):
+// the next item that needs a recommendation, with the choices its kind
+// offers, Not now's conditions, the guide and how to answer. Done is true,
+// and Item nil, when every item that needs a decision has a pending
+// proposal. Left counts those still without one, this item included.
+type NextView struct {
+	Done       bool            `json:"done"`
+	Left       int             `json:"left"`
+	Item       *ItemDetailView `json:"item"`
+	Choices    []ChoiceVocab   `json:"choices"`
+	NotNow     []NotNowForm    `json:"not_now"`
+	Guide      string          `json:"guide"`
+	ProposeHow string          `json:"propose_how"`
+}
+
+// ClearResult is the response body of POST /api/decisions/clear. Cleared is
+// false when the item had no decision. Like DecideResult it doesn't wait for
+// the push (PushedLater is always true).
+type ClearResult struct {
+	Cleared     bool `json:"cleared"`
+	PushedLater bool `json:"pushed_later"`
 }
 
 // UntilForm is one until operator with its syntax pattern and one example

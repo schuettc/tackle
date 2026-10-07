@@ -4,6 +4,33 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.0] - 2026-10-07
+
+### Changed
+- Deciding asks a question ("What should happen to this pull request?")
+  and offers its answers as cards that say what each one does and when.
+  One click decides; number keys pick a card; `u` undoes. After a
+  decision the next undecided item opens. Selecting several items asks
+  the same question with the same cards.
+- wait and watch are one choice, "Not now". It offers conditions to pick
+  (in 1 week, on a date, when a PR merges, when it goes quiet for 90
+  days, ...). A PR, issue or repo is found by searching casebook's items
+  or pasting a GitHub URL. Existing `watch` decisions read as Not now.
+- The server holds all of this wording (`GET /api/decisions/vocabulary`):
+  the page and the agent's guide read the same words.
+
+### Added
+- `casebook_next`: an agent works through the items that need a
+  recommendation, one at a time, with a guide on how to recommend. A
+  recommendation from it needs a one-line reason.
+- Recommended items sort first. Attention shows "N recommended · M not
+  yet" and can ask the attached session to recommend the rest.
+  "agree with all N" accepts a group of matching recommendations; close,
+  merge, archive and delete still only go to To apply.
+- `POST /api/decisions/clear` removes a decision (undo).
+- A Not now condition naming a PR, issue or repo that GitHub can't find
+  brings the item back to attention, saying so, after the next sync.
+
 ## [casebook 0.3.1] - 2026-10-06
 
 ### Fixed

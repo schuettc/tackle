@@ -50,3 +50,13 @@ func (f facts) LastActivity(k item.Key) (time.Time, bool) {
 	}
 	return time.Time{}, false
 }
+
+// Missing reports that a lookup found k doesn't exist on GitHub, and no
+// listing has seen it since.
+func (f facts) Missing(k item.Key) bool {
+	if it := f.items[k.String()]; it != nil && it.Observed.Known && it.Observed.Exists {
+		return false
+	}
+	r, ok := f.refs[k.String()]
+	return ok && !r.Exists
+}

@@ -21,6 +21,7 @@ import { createAgent } from './agent.mjs';
 import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
 import { shellScenarios, stopShellServes } from './probe-shell.mjs';
 import { ownerScenarios, stopOwnerServes } from './probe-owner.mjs';
+import { decideScenarios, stopDecideServes } from './probe-decide.mjs';
 
 const { chromium } = pkg;
 
@@ -82,6 +83,7 @@ function cleanup() {
   stopApplyServes();
   stopShellServes();
   stopOwnerServes();
+  stopDecideServes();
 }
 
 process.on('SIGTERM', () => {
@@ -3554,8 +3556,8 @@ async function rulesScenariosOn(context, serveHandle) {
           );
         })(),
         [
-          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule proposes delete',
-          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule proposes delete',
+          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule recommends Delete it',
+          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule recommends Delete it',
         ],
       );
 
@@ -5032,7 +5034,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 712;
+const MIN_CHECKS = 813;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5044,7 +5046,15 @@ const only = process.env.PROBE_ONLY ?? '';
 const keyClashes = [];
 const underCI = !!process.env.CI;
 const partial = process.env.PROBE_PARTIAL === '1';
-const PROBE_GROUPS = ['composer', 'keys', 'rules', 'apply', 'shell', 'owner'];
+const PROBE_GROUPS = [
+  'composer',
+  'keys',
+  'rules',
+  'apply',
+  'shell',
+  'owner',
+  'decide',
+];
 const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
 const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
 
@@ -5164,6 +5174,12 @@ async function run() {
     // (probe-owner.mjs, their own serve).
     if (process.env.PROBE_ONLY === 'owner') {
       await ownerScenarios(context, applyHelpers);
+      return;
+    }
+    // PROBE_ONLY=decide runs only the decide step's scenario
+    // (probe-decide.mjs, its own serve).
+    if (process.env.PROBE_ONLY === 'decide') {
+      await decideScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -5592,14 +5608,14 @@ async function run() {
         .catch(() => {});
       await page.waitForTimeout(200);
 
-      const dispTexts = await page.$$eval('.kit-sheet .cb-sheet-disp', (btns) =>
-        btns.map((b) => (b.textContent ?? '').trim()),
+      const dispTexts = await page.$$eval('.kit-sheet .cb-choice', (btns) =>
+        btns.map((b) => b.getAttribute('data-d') ?? ''),
       );
 
       // 'merge' is valid only for pr: — must not appear for a mixed selection.
       check(
-        'mixed-kind selection does not offer pr-only disposition (merge)',
-        !dispTexts.includes('merge'),
+        `mixed-kind selection does not offer pr-only disposition (merge) (cards: ${dispTexts.join(', ')})`,
+        dispTexts.includes('keep') && !dispTexts.includes('merge'),
       );
 
       // Close without deciding and deselect.
@@ -5686,27 +5702,20 @@ async function run() {
           await partialPage.waitForTimeout(200);
 
           // Pick the first available disposition.
-          const firstDisp = await partialPage.$('.kit-sheet .cb-sheet-disp');
+          const firstDisp = await partialPage.$('.kit-sheet .cb-choice');
           if (firstDisp) {
             await firstDisp.click();
             await partialPage.waitForTimeout(100);
           }
 
-          // Click the filled Decide N button.
-          const sheetBtns = await partialPage.$$('.kit-sheet button');
-          for (const btn of sheetBtns) {
-            const t = (await btn.textContent()) ?? '';
-            if (/^decide\s+\d+/i.test(t.trim())) {
-              await btn.click();
-              break;
-            }
-          }
+          // Click the sheet's fill ("<choice> · N items").
+          await partialPage.click('.kit-sheet .kit-btn.fill');
           await partialPage.waitForTimeout(800);
 
           // The error for the failed key must be visible inside the sheet.
           const errVisible = await partialPage
             .$eval(
-              '.cb-sheet-err',
+              '.kit-sheet .cb-choice-err',
               (el) =>
                 el.offsetParent !== null && (el.textContent || '').length > 0,
             )
@@ -5783,48 +5792,33 @@ async function run() {
         const sheetEl = await page.$('.kit-sheet');
         if (sheetEl) {
           // Click the first available disposition button (keep is valid for all kinds).
-          const dispBtns = await page.$$('.kit-sheet .cb-sheet-disp');
-          let clickedDisp = false;
-          let clickedLabel = '';
-          // Try 'keep' first (valid for all kinds); fall back to any button.
-          for (const btn of dispBtns) {
-            const t = (await btn.textContent()) ?? '';
-            if (t.trim() === 'keep') {
-              await btn.click();
-              clickedDisp = true;
-              clickedLabel = 'keep';
-              break;
-            }
-          }
-          if (!clickedDisp && dispBtns.length > 0) {
-            const t = (await dispBtns[0].textContent()) ?? '';
-            await dispBtns[0].click();
-            clickedDisp = true;
-            clickedLabel = t.trim();
-          }
+          // 'keep' is valid for all kinds.
+          const keepCard = await page.$('.kit-sheet .cb-choice[data-d="keep"]');
+          const clickedLabel = keepCard
+            ? await keepCard.$eval(
+                '.cb-choice-label',
+                (el) => el.textContent ?? '',
+              )
+            : '';
+          if (keepCard) await keepCard.click();
           await page.waitForTimeout(150);
 
-          // 2. Preview shows '<disposition> N items'.
-          const preview = await page
-            .$eval('.cb-sheet-preview', (el) => el.textContent ?? '')
+          // 2. The fill names the choice and the count:
+          //    "<label> · N <kind>s" (items when the kinds differ).
+          const fill = await page
+            .$eval('.kit-sheet .kit-btn.fill', (el) => el.textContent ?? '')
             .catch(() => '');
           check(
-            'the sheet previews the count',
-            clickedDisp &&
-              preview.includes(clickedLabel) &&
-              preview.includes(`${selectCount} item`),
+            `the sheet's fill names the choice and the count ("${fill}")`,
+            !!keepCard &&
+              fill.startsWith(`${clickedLabel} \u00b7 ${selectCount} `),
           );
 
-          // Click the filled Decide N button.
-          const allSheetBtns = await page.$$('.kit-sheet button');
+          // Click the fill.
           let decided = false;
-          for (const btn of allSheetBtns) {
-            const t = (await btn.textContent()) ?? '';
-            if (/^decide\s+\d+/i.test(t.trim())) {
-              await btn.click();
-              decided = true;
-              break;
-            }
+          if (keepCard) {
+            await page.click('.kit-sheet .kit-btn.fill');
+            decided = true;
           }
 
           // Wait for the API call and list refresh.
@@ -5843,12 +5837,12 @@ async function run() {
             decided && (rowsAfter === 0 || primaryHidden),
           );
         } else {
-          check('the sheet previews the count', false);
+          check("the sheet's fill names the choice and the count", false);
           check('deciding removes the items and clears the count', false);
         }
       } else {
         check('selecting rows updates the primary', false);
-        check('the sheet previews the count', false);
+        check("the sheet's fill names the choice and the count", false);
         check('deciding removes the items and clears the count', false);
       }
     }
@@ -5915,72 +5909,48 @@ async function run() {
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
 
+        // The first row of 'new', or a direct link to a repo item.
         const firstRow = await detailPage.$('.kit-row');
         if (firstRow) {
           await firstRow.dblclick();
-          await detailPage
-            .waitForSelector('.kit-read .cb-item', { timeout: 5000 })
-            .catch(() => {});
-          await detailPage.waitForTimeout(300);
-
-          // Click a disposition button in the decide section.
-          const decideButtons = await detailPage.$$(
-            '.cb-decide .cb-sheet-disp',
-          );
-          if (decideButtons.length > 0) {
-            await decideButtons[0].click();
-            await detailPage.waitForTimeout(300);
-
-            // The sheet must appear and mention 1 item (not the selection count).
-            const sheetText = await detailPage
-              .$eval('.kit-sheet', (el) => (el.textContent ?? '').toLowerCase())
-              .catch(() => '');
-            check(
-              'a disposition button opens the sheet for that one key',
-              sheetText.includes('1 item'),
-            );
-
-            // Close without deciding.
-            await detailPage.keyboard.press('Escape');
-            await detailPage.waitForTimeout(200);
-          } else {
-            check(
-              'a disposition button opens the sheet for that one key',
-              false,
-            );
-          }
         } else {
-          // Fall back: use a direct item link to a repo item (which hasn't been decided above).
           await detailPage.evaluate(() => {
             location.hash = '#/item/repo:schuettc/hail';
           });
-          await detailPage
-            .waitForSelector('.kit-read .cb-item', { timeout: 5000 })
-            .catch(() => {});
-          await detailPage.waitForTimeout(300);
-
-          const decideButtons = await detailPage.$$(
-            '.cb-decide .cb-sheet-disp',
-          );
-          if (decideButtons.length > 0) {
-            await decideButtons[0].click();
-            await detailPage.waitForTimeout(300);
-            const sheetText = await detailPage
-              .$eval('.kit-sheet', (el) => (el.textContent ?? '').toLowerCase())
-              .catch(() => '');
-            check(
-              'a disposition button opens the sheet for that one key',
-              sheetText.includes('1 item'),
-            );
-            await detailPage.keyboard.press('Escape');
-            await detailPage.waitForTimeout(200);
-          } else {
-            check(
-              'a disposition button opens the sheet for that one key',
-              false,
-            );
-          }
         }
+        await detailPage
+          .waitForSelector('.kit-read .cb-item .cb-choice', { timeout: 5000 })
+          .catch(() => {});
+
+        // The decide step is in the reading column: one click on a card
+        // acts there, with no sheet (probe-decide.mjs decides with them).
+        // Not now decides nothing until a condition is picked, so this
+        // shared serve keeps its items.
+        const cards = await detailPage.$$eval(
+          '.kit-read .cb-decide .cb-choice',
+          (els) => els.map((e) => e.getAttribute('data-d') ?? ''),
+        );
+        await detailPage
+          .click('.kit-read .cb-decide .cb-choice[data-d="wait"]')
+          .catch(() => {});
+        const shown = await detailPage
+          .waitForFunction(
+            () =>
+              !!document.querySelector(
+                '.kit-read .cb-notnow:not([hidden]) .kit-chip',
+              ),
+            undefined,
+            { timeout: 3000 },
+          )
+          .then(() => true)
+          .catch(() => false);
+        const sheetOpen = await detailPage.evaluate(
+          () => !!document.querySelector('.kit-sheet'),
+        );
+        check(
+          `the open item's Not now card opens its conditions in place, no sheet (cards: ${cards.join(', ')})`,
+          cards.includes('wait') && shown && !sheetOpen,
+        );
       } finally {
         await detailPage.close();
       }
@@ -6302,23 +6272,14 @@ async function run() {
           await boardDecidePage.waitForTimeout(200);
 
           // Pick the first disposition.
-          const firstDisp = await boardDecidePage.$(
-            '.kit-sheet .cb-sheet-disp',
-          );
+          const firstDisp = await boardDecidePage.$('.kit-sheet .cb-choice');
           if (firstDisp) {
             await firstDisp.click();
             await boardDecidePage.waitForTimeout(100);
           }
 
-          // Click the filled Decide N button.
-          const sheetBtns = await boardDecidePage.$$('.kit-sheet button');
-          for (const btn of sheetBtns) {
-            const t = (await btn.textContent()) ?? '';
-            if (/^decide\s+\d+/i.test(t.trim())) {
-              await btn.click();
-              break;
-            }
-          }
+          // Click the sheet's fill ("<choice> · N items").
+          await boardDecidePage.click('.kit-sheet .kit-btn.fill');
           await boardDecidePage.waitForTimeout(2500);
 
           // The decided card must be gone or selection cleared.
@@ -7160,19 +7121,35 @@ async function run() {
             cardHead.toLowerCase().startsWith('pi'),
           );
 
-          // Geometry: proposal card bottom <= decide section top.
+          // Geometry: the recommendation sits between the decide step's
+          // question and its cards.
           const cardBottom = await propGeoPage
             .$eval(
               '.cb-proposal-card',
               (el) => el.getBoundingClientRect().bottom,
             )
             .catch(() => -1);
-          const decideTop = await propGeoPage
-            .$eval('.cb-decide', (el) => el.getBoundingClientRect().top)
+          const cardTop = await propGeoPage
+            .$eval('.cb-proposal-card', (el) => el.getBoundingClientRect().top)
+            .catch(() => -1);
+          const questionBottom = await propGeoPage
+            .$eval(
+              '.cb-decide .cb-question',
+              (el) => el.getBoundingClientRect().bottom,
+            )
+            .catch(() => -1);
+          const cardsTop = await propGeoPage
+            .$eval(
+              '.cb-decide .cb-choices',
+              (el) => el.getBoundingClientRect().top,
+            )
             .catch(() => -1);
           check(
-            'proposal card is above the decide section (geometry)',
-            cardBottom > 0 && decideTop > 0 && cardBottom <= decideTop,
+            'proposal card is between the question and the choice cards (geometry)',
+            questionBottom > 0 &&
+              questionBottom <= cardTop &&
+              cardBottom > 0 &&
+              cardBottom <= cardsTop,
           );
 
           // Proposal card is inside the reading document (.kit-doc).
@@ -7189,11 +7166,14 @@ async function run() {
             'proposal card head uses real agent name (pi), not hardcoded string',
             false,
           );
-          check('proposal card is above the decide section (geometry)', false);
+          check(
+            'proposal card is between the question and the choice cards (geometry)',
+            false,
+          );
           check('proposal card is inside the .kit-doc reading document', false);
         }
 
-        // List row in proposed view must show "<agent> proposes <disposition>".
+        // List row in proposed view must show "<agent> recommends <label>".
         await propGeoPage.evaluate(() => {
           location.hash = '#/attention/proposed';
         });
@@ -7210,9 +7190,11 @@ async function run() {
             els.map((e) => e.textContent ?? ''),
           )
           .catch(() => []);
-        const hasProposesText = subTexts.some((t) => t.includes('proposes'));
+        const hasProposesText = subTexts.some((t) =>
+          / recommends [A-Z]/.test(t),
+        );
         check(
-          'list row in proposed view shows "<agent> proposes <disposition>"',
+          `list row in proposed view shows "<agent> recommends <label>" (${subTexts.join(', ')})`,
           hasProposesText,
         );
       } finally {
@@ -7257,24 +7239,31 @@ async function run() {
             .catch(() => false);
 
           if (cardBeforeAccept) {
-            // Click the 'accept' button.
+            // Click the 'accept' button: the item is decided and the
+            // reading column moves on (to the next undecided item, or the
+            // view's summary), so its card goes with it.
             await acceptPage.click('.cb-proposal-card .kit-btn.fill');
-            // Wait for the item to be decided and the card to disappear.
-            await acceptPage
+            const movedOn = await acceptPage
               .waitForFunction(
-                () => !document.querySelector('.cb-proposal-card'),
+                () =>
+                  document
+                    .querySelector('.kit-read .cb-item')
+                    ?.getAttribute('data-key') !== 'issue:schuettc/hail#6',
+                undefined,
                 { timeout: 5000 },
               )
-              .catch(() => {});
-            await acceptPage.waitForTimeout(500);
-
-            const cardAfterAccept = await acceptPage
-              .$('.cb-proposal-card')
-              .then((el) => Boolean(el))
+              .then(() => true)
               .catch(() => false);
+            const decision = await fetch(
+              `${serveHandle.base}/api/item?key=${encodeURIComponent('issue:schuettc/hail#6')}`,
+              { headers: { 'X-Local-Token': serveHandle.token } },
+            )
+              .then((r) => r.json())
+              .then((d) => d.item?.decision?.disposition ?? '')
+              .catch(() => '');
             check(
-              'accept removes the proposal card from item detail',
-              !cardAfterAccept,
+              `accept decides the item (${decision}) and the reading column moves off it with its card`,
+              movedOn && decision === 'keep',
             );
 
             // Navigate to proposed view: the item should no longer be there.
@@ -7294,7 +7283,10 @@ async function run() {
               !proposedRows.includes('issue:schuettc/hail#6'),
             );
           } else {
-            check('accept removes the proposal card from item detail', false);
+            check(
+              'accept decides the item and the reading column moves off it with its card',
+              false,
+            );
             check('accepted item leaves the proposed view', false);
           }
         } else {
@@ -7504,8 +7496,8 @@ async function run() {
               // The seeded disposition 'keep' must be pre-selected.
               const keepIsSelected = await changePage
                 .$eval(
-                  '.kit-sheet .cb-sheet-disp.on',
-                  (el) => (el.textContent ?? '').trim() === 'keep',
+                  '.kit-sheet .cb-choice.on',
+                  (el) => el.getAttribute('data-d') === 'keep',
                 )
                 .catch(() => false);
               check(
@@ -7515,7 +7507,7 @@ async function run() {
 
               // Change to a different disposition (e.g. 'close').
               const closeBtn = await changePage.$(
-                '.kit-sheet .cb-sheet-disp:not(.on)',
+                '.kit-sheet .cb-choice[data-d="close"]:not(.on)',
               );
               if (closeBtn) {
                 await closeBtn.click();
@@ -7642,17 +7634,36 @@ async function run() {
               });
               await keyPage.waitForTimeout(100);
 
-              // Press 'a' to accept the proposal.
+              // Press 'a' to accept the proposal: serve decides the item,
+              // and the reading column moves on off it (the next undecided
+              // item in the view, which may hold a card of its own, or the
+              // view's summary).
+              const openKey = await keyPage.$eval(
+                '.kit-read .cb-item',
+                (el) => el.getAttribute('data-key') ?? '',
+              );
               await keyPage.keyboard.press('a');
-              await keyPage.waitForTimeout(1500);
-
-              const cardAfterKey = await keyPage
-                .$('.cb-proposal-card')
-                .then((el) => Boolean(el))
+              const movedOff = await keyPage
+                .waitForFunction(
+                  (k) =>
+                    document
+                      .querySelector('.kit-read .cb-item')
+                      ?.getAttribute('data-key') !== k,
+                  openKey,
+                  { timeout: 5000 },
+                )
+                .then(() => true)
                 .catch(() => false);
+              const decided = await fetch(
+                `${serveHandle.base}/api/item?key=${encodeURIComponent(openKey)}`,
+                { headers: { 'X-Local-Token': serveHandle.token } },
+              )
+                .then((r) => r.json())
+                .then((d) => d.item?.decision?.disposition ?? '')
+                .catch(() => '');
               check(
-                '"a" key accepts the open item\'s proposal (card disappears)',
-                !cardAfterKey,
+                `"a" key accepts the open item's proposal (${openKey} decided ${decided}, its card gone with it)`,
+                openKey !== '' && decided !== '' && movedOff,
               );
             } else {
               check(
@@ -9455,6 +9466,9 @@ async function run() {
 
     // ---- the page belongs to the session that opened it (its own serve) ---
     await ownerScenarios(context, applyHelpers);
+
+    // ---- the decide step: question, cards, Not now, move-on (its own serve)
+    await decideScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

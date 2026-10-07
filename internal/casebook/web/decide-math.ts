@@ -6,7 +6,7 @@
 //   allowedForKind — look up allowed dispositions for one kind from server vocab
 //   allowedForKeys — intersect allowed sets for a mixed-kind selection
 
-import type { DecisionVocabView } from './wire.d.ts';
+import type { ChoiceVocab, DecisionVocabView, NotNowForm } from './wire.d.ts';
 
 /**
  * kindFromKey extracts the kind from a key by taking the prefix before the
@@ -96,4 +96,348 @@ export function stripOwnKey(subject: string, key: string): string {
     return subject.replace(key, '');
   }
   return subject;
+}
+
+// ---- the decide step ---------------------------------------------------------
+
+/**
+ * nextInView is the item to open after current is decided: the first key
+ * after current in order (the view's rows as the page had them, every page
+ * it loaded) that is still in the view, then the view's rows past the last
+ * of those, then (wrapping) the view's first row. fresh is the view as serve
+ * lists it after the decision, in its order, as far as it has been fetched;
+ * complete says it holds the whole view. An item decided elsewhere meanwhile
+ * is not in fresh and is passed over, never counted as a step. MORE when
+ * the answer may be in a page of fresh not fetched yet; null when nothing is
+ * left. When current is no longer in order, the search starts at order's
+ * beginning.
+ */
+/** MORE is nextInView's answer when a page not fetched yet may hold it. */
+export const MORE: unique symbol = Symbol('more');
+
+export function nextInView(
+  order: string[],
+  current: string,
+  fresh: string[],
+  complete: boolean,
+): string | null | typeof MORE {
+  const live = fresh.filter((k) => k !== current);
+  const inView = new Set(live);
+  const pos = new Map(order.map((k, i) => [k, i]));
+  // The furthest row of order fresh has reached: a row before it that isn't
+  // in fresh has left the view; a row after it may be on a later page.
+  let reached = -1;
+  for (const k of live) reached = Math.max(reached, pos.get(k) ?? -1);
+  const i = order.indexOf(current);
+  for (const k of i >= 0 ? order.slice(i + 1) : order) {
+    if (inView.has(k)) return k;
+    if (!complete && (pos.get(k) ?? 0) > reached) return MORE;
+  }
+  // Past order's rows: the first row of fresh after the last one order holds.
+  let last = -1;
+  live.forEach((k, j) => {
+    if (pos.has(k)) last = j;
+  });
+  const past = live.slice(last + 1).find((k) => !pos.has(k));
+  if (past) return past;
+  if (!complete) return MORE;
+  return live[0] ?? null;
+}
+
+/** localDate is d's calendar date where the page runs, YYYY-MM-DD. */
+export function localDate(d: Date): string {
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+/**
+ * notNowUntil is the until condition a Not now form makes with value (what
+ * the form asks for), or null while it is incomplete. A "days" form fills its
+ * hole with today + the days serve sends; a fixed form (asks "") is complete
+ * as it is; any other fills its hole with the trimmed value.
+ */
+export function notNowUntil(
+  form: NotNowForm,
+  value: string,
+  now: Date,
+): string | null {
+  if (!form.asks) return form.template;
+  let v = value.trim();
+  if (form.asks === 'days') {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    d.setDate(d.getDate() + (form.days ?? 0));
+    v = localDate(d);
+  }
+  if (!v) return null;
+  return form.template.replace('%s', v);
+}
+
+/**
+ * choicesForKeys is the cards a selection shares: the dispositions every
+ * selected kind allows, in the first kind's order, each with serve's label
+ * and sentence. When the kinds word a choice differently, their labels are
+ * joined ("Leave it open / Keep it") and the first kind's sentence is kept.
+ */
+export function choicesForKeys(
+  vocab: DecisionVocabView,
+  keys: string[],
+): ChoiceVocab[] {
+  const kinds = [...new Set(keys.map(kindFromKey).filter(Boolean))];
+  const lists = kinds.map(
+    (k) => (vocab.kinds ?? []).find((v) => v.kind === k)?.choices ?? [],
+  );
+  if (lists.length === 0) return [];
+  const out: ChoiceVocab[] = [];
+  for (const first of lists[0]) {
+    const same = lists.map((l) =>
+      l.find((x) => x.disposition === first.disposition),
+    );
+    if (same.some((x) => !x)) continue;
+    const labels = [...new Set(same.map((x) => x!.label))];
+    out.push({
+      ...first,
+      label: labels.join(' / '),
+      outward: same.some((x) => x!.outward),
+    });
+  }
+  return out;
+}
+
+// The nouns the sheet counts a selection of one kind in.
+const KIND_NOUN: Record<string, [string, string]> = {
+  pr: ['pull request', 'pull requests'],
+  issue: ['issue', 'issues'],
+  branch: ['branch', 'branches'],
+  worktree: ['worktree', 'worktrees'],
+  repo: ['repository', 'repositories'],
+};
+
+/**
+ * fillLabel is the decide sheet's fill button: the choice and how many it
+ * covers, in the kind's noun when the selection is one kind
+ * ("Close it · 4 issues"), else in items.
+ */
+export function fillLabel(label: string, keys: string[]): string {
+  const kinds = [...new Set(keys.map(kindFromKey))];
+  const noun = kinds.length === 1 ? KIND_NOUN[kinds[0]] : undefined;
+  const count = noun
+    ? pluralize(keys.length, noun[0], noun[1])
+    : pluralize(keys.length, 'item');
+  return `${label} \u00b7 ${count}`;
+}
+
+// ---- recommendations in the list --------------------------------------------
+
+/**
+ * agentFromSource is the name a proposal's source shows as: "pi:session-id"
+ * → "pi", "rule:id" → "rule".
+ */
+export function agentFromSource(source: string): string {
+  const i = source.indexOf(':');
+  return i === -1 ? source : source.slice(0, i);
+}
+
+/**
+ * choiceLabel is serve's label for disposition on key's kind ("Close it");
+ * watch reads as Not now. The disposition itself before the vocabulary has
+ * loaded, or when serve has no card for it.
+ */
+export function choiceLabel(
+  vocab: DecisionVocabView | null,
+  key: string,
+  disposition: string,
+): string {
+  const d = disposition === 'watch' ? 'wait' : disposition;
+  if (!vocab) return disposition;
+  return (
+    choicesForKeys(vocab, [key]).find((c) => c.disposition === d)?.label ??
+    disposition
+  );
+}
+
+/** recommendLine is a list row's line for its pending proposal. */
+export function recommendLine(
+  vocab: DecisionVocabView | null,
+  key: string,
+  source: string,
+  disposition: string,
+): string {
+  return `${agentFromSource(source)} recommends ${choiceLabel(vocab, key, disposition)}`;
+}
+
+/** What agreeGroups reads from a list row. */
+export interface Recommendable {
+  key: string;
+  proposal?: {
+    id: number;
+    disposition: string;
+    source: string;
+    state: string;
+  } | null;
+}
+
+/** A group of rows whose pending proposals share an agent and a choice. */
+export interface AgreeGroup {
+  agent: string;
+  disposition: string;
+  /** serve's label, joined when the kinds word it differently. */
+  label: string;
+  /** The choice goes to To apply (close, merge, archive, delete). */
+  outward: boolean;
+  ids: number[];
+  keys: string[];
+}
+
+/**
+ * agreeGroups groups the rows shown whose pending proposals come from the
+ * same agent and recommend the same choice, two or more to a group, in the
+ * order each group first appears. "agree with all" accepts exactly a
+ * group's ids.
+ */
+export function agreeGroups(
+  vocab: DecisionVocabView,
+  items: Recommendable[],
+): AgreeGroup[] {
+  const groups = new Map<
+    string,
+    { agent: string; d: string; rows: Recommendable[] }
+  >();
+  for (const it of items) {
+    const p = it.proposal;
+    if (!p || p.state !== 'pending') continue;
+    const agent = agentFromSource(p.source);
+    const d = p.disposition === 'watch' ? 'wait' : p.disposition;
+    const id = `${agent}\u0000${d}`;
+    const g = groups.get(id) ?? { agent, d, rows: [] };
+    g.rows.push(it);
+    groups.set(id, g);
+  }
+  const out: AgreeGroup[] = [];
+  for (const g of groups.values()) {
+    if (g.rows.length < 2) continue;
+    const keys = g.rows.map((r) => r.key);
+    const c = choicesForKeys(vocab, keys).find((x) => x.disposition === g.d);
+    out.push({
+      agent: g.agent,
+      disposition: g.d,
+      label: c?.label ?? g.d,
+      outward: c?.outward ?? false,
+      ids: g.rows.map((r) => r.proposal!.id),
+      keys,
+    });
+  }
+  return out;
+}
+
+/**
+ * agreeText is a group's line in the list foot: what is recommended, and the
+ * action ("agree with all 3"; an outward choice "send all 2 to To apply").
+ */
+export function agreeText(g: AgreeGroup): { says: string; action: string } {
+  const n = g.ids.length;
+  return {
+    says: `${g.agent} recommends ${g.label} for ${n}`,
+    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`,
+  };
+}
+
+/** recommendedLine is the line at the top of Attention. */
+export function recommendedLine(recommended: number, notYet: number): string {
+  return `${recommended} recommended \u00b7 ${notYet} not yet`;
+}
+
+// The kinds each Not now form that names something searches and accepts.
+export const PICK_KINDS: Record<string, string[]> = {
+  pr: ['pr'],
+  'pr-or-issue': ['pr', 'issue'],
+  repo: ['repo'],
+};
+
+const NAME = '[\\w.-]+';
+const GH_URL = new RegExp(
+  `^https?://(?:www\\.)?github\\.com/(${NAME})/(${NAME})(?:/(pull|issues)/(\\d+))?(?:[/?#].*)?$`,
+  'i',
+);
+const KIND_KEY = new RegExp(`^(pr|issue):(${NAME})/(${NAME})#(\\d+)$`, 'i');
+const REPO_KEY = new RegExp(`^(?:repo:)?(${NAME})/(${NAME})$`, 'i');
+const BARE_KEY = new RegExp(`^(${NAME})/(${NAME})#(\\d+)$`);
+
+/**
+ * pastedKeys turns a pasted GitHub URL (…/pull/58, …/issues/58, a repo's
+ * page) or a key (pr:owner/repo#58, owner/repo#58, repo:owner/repo,
+ * owner/repo) into the keys it names that the form asks for (PICK_KINDS):
+ * one, or two for owner/repo#58 under "pr-or-issue" (it may be either).
+ * Owner and repo are lower-cased, as casebook's keys are. Anything else (a
+ * title, a number, a URL of another kind) is null.
+ */
+export function pastedKeys(text: string, asks: string): string[] | null {
+  const kinds = PICK_KINDS[asks] ?? [];
+  const s = text.trim();
+  const repo = (o: string, r: string): string =>
+    `${o}/${r.replace(/\.git$/i, '')}`.toLowerCase();
+  const num = (n: string): number | null => (Number(n) > 0 ? Number(n) : null);
+  const url = GH_URL.exec(s);
+  const kindKey = KIND_KEY.exec(s);
+  const repoKey = REPO_KEY.exec(s);
+  const bare = BARE_KEY.exec(s);
+  let out: string[] = [];
+  if (url) {
+    const [, o, r, part, n] = url;
+    if (!part) out = [`repo:${repo(o, r)}`];
+    else if (num(n) !== null)
+      out = [`${part === 'pull' ? 'pr' : 'issue'}:${repo(o, r)}#${num(n)}`];
+  } else if (kindKey) {
+    const [, k, o, r, n] = kindKey;
+    if (num(n) !== null) out = [`${k.toLowerCase()}:${repo(o, r)}#${num(n)}`];
+  } else if (repoKey) {
+    out = [`repo:${repo(repoKey[1], repoKey[2])}`];
+  } else if (bare) {
+    const [, o, r, n] = bare;
+    if (num(n) !== null)
+      out = ['pr', 'issue'].map((k) => `${k}:${repo(o, r)}#${num(n)}`);
+  }
+  out = out.filter((k) => kinds.includes(kindFromKey(k)));
+  return out.length ? out : null;
+}
+
+/** A LatestSearch runs a search per input, after a pause in typing. */
+export interface LatestSearch {
+  /** input is the field's text changing. */
+  input(text: string): void;
+  /** cancel drops any search under way or waiting. */
+  cancel(): void;
+}
+
+/**
+ * latestSearch searches with find delay ms after the last input and
+ * publishes what it found for that text. Every input makes what was shown
+ * stale at once (stale) and drops any answer still to come for older text,
+ * so only the answer for the newest text is ever published.
+ */
+export function latestSearch<T>(
+  find: (text: string) => Promise<T>,
+  publish: (text: string, found: T) => void,
+  delay: number,
+  stale: () => void,
+): LatestSearch {
+  let seq = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const run = async (my: number, text: string): Promise<void> => {
+    const found = await find(text);
+    if (my !== seq) return;
+    publish(text, found);
+  };
+  return {
+    input(text) {
+      const my = ++seq;
+      stale();
+      clearTimeout(timer);
+      timer = setTimeout(() => void run(my, text), delay);
+    },
+    cancel() {
+      seq++;
+      clearTimeout(timer);
+    },
+  };
 }
