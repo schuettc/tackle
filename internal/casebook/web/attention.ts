@@ -25,7 +25,8 @@ import type {
   Decision,
   DecideResult,
   AcceptResult,
-  ClearResult,
+  Committed,
+  DecisionUndoResult,
   DecisionVocabView,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
@@ -158,11 +159,12 @@ export function makeAttention(ctx: Ctx): Section {
   // deciding is the key this tab is deciding now (one at a time).
   let deciding: string | null = null;
   // lastUndo is the last decision made in this tab, for u: the item, the
-  // decision it had before (null: none) and the new one's decided_at.
+  // decision it had before (null: none) and the one this tab's decide or
+  // accept committed (serve's reply), which undo expects to find.
   let lastUndo: {
     key: string;
     prev: Decision | null;
-    decidedAt: string;
+    expect: Committed;
   } | null = null;
   let boardHandle: ReturnType<typeof makeBoard> | null = null;
   // serve's decision vocabulary (the rows' "pi recommends Close it" and the
@@ -731,16 +733,15 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // remember records a decision this tab made on key, for u: the decision
-  // it had before, and the new one's decided_at (serve's, read back).
-  async function remember(key: string, prev: Decision | null): Promise<void> {
-    lastUndo = null;
-    try {
-      const d = await ctx.api.get<ItemDetailView>('/item', { key });
-      if (d.item.decision)
-        lastUndo = { key, prev, decidedAt: d.item.decision.decided_at };
-    } catch {
-      // Nothing to undo with: u does nothing rather than guess.
-    }
+  // it had before, and the one serve's reply says the decide or accept
+  // committed. With no such reply, u does nothing rather than guess.
+  function remember(
+    key: string,
+    prev: Decision | null,
+    made: Record<string, Committed> | null,
+  ): void {
+    const expect = made?.[key];
+    lastUndo = expect ? { key, prev, expect } : null;
   }
 
   // moveOn opens the next undecided item in the view's order (order: the
@@ -789,7 +790,7 @@ export function makeAttention(ctx: Ctx): Section {
         return;
       }
       selection.deselect([key]);
-      await remember(key, prev);
+      remember(key, prev, r.decisions);
       await moveOn(key, order);
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -816,7 +817,7 @@ export function makeAttention(ctx: Ctx): Section {
         return;
       }
       selection.deselect([key]);
-      await remember(key, prev);
+      remember(key, prev, r.decisions);
       await moveOn(key, order);
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -825,32 +826,26 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
-  // undo takes back the last decision this tab made: clears it when the
-  // item had none before, else decides the one it had. serve refuses a
-  // clear when the decision changed since (409); its message shows.
+  // undo takes back the last decision this tab made, in one step serve
+  // checks: it restores the decision the item had before (or clears it when
+  // it had none) only while the item's decision is still the one this tab
+  // committed. serve refuses otherwise (409); its message shows.
   async function undo(): Promise<void> {
     const u = lastUndo;
     if (!u || deciding) return;
     deciding = u.key;
     try {
-      if (!u.prev) {
-        await ctx.api.post<ClearResult>('/decisions/clear', {
-          key: u.key,
-          decided_at: u.decidedAt,
-        });
-      } else {
-        const payload: Record<string, unknown> = {
-          keys: [u.key],
-          disposition: u.prev.disposition,
-        };
-        if (u.prev.until) payload['until'] = u.prev.until;
-        if (u.prev.note) payload['note'] = u.prev.note;
-        const r = await ctx.api.post<DecideResult>('/decide', payload);
-        if (!(r.decided_keys ?? []).length) {
-          showReadError((r.errors ?? []).join('; ') || 'nothing was undone');
-          return;
-        }
-      }
+      await ctx.api.post<DecisionUndoResult>('/decisions/undo', {
+        key: u.key,
+        expect: u.expect,
+        restore: u.prev
+          ? {
+              disposition: u.prev.disposition,
+              until: u.prev.until ?? '',
+              note: u.prev.note ?? '',
+            }
+          : null,
+      });
       lastUndo = null;
       openKey(u.key);
     } catch (err) {

@@ -50,11 +50,13 @@ export interface DecideResult {
   decided: number;
   decided_keys: string[] | null;
   errors: string[] | null;
+  decisions: Record<string, Committed> | null;
 }
 
 export interface AcceptResult {
   accepted: number;
   errors: string[] | null;
+  decisions: Record<string, Committed> | null;
 }
 
 export interface RejectResult {
@@ -199,6 +201,11 @@ export interface ClearResult {
   pushed_later: boolean;
 }
 
+export interface DecisionUndoResult {
+  undone: boolean;
+  decision: Committed | null;
+}
+
 export interface JobStepResult {
   job_id: number;
   step_id: number;
@@ -329,6 +336,13 @@ export interface LogEntry {
   Commit: string;
   Time: string;
   Subject: string;
+}
+
+export interface Committed {
+  disposition: string;
+  until: string;
+  note: string;
+  decided_at: string;
 }
 
 export interface Session {

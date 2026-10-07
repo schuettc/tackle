@@ -69,6 +69,7 @@ var wireRoots = []any{
 	VocabularyView{},
 	DecisionVocabView{},
 	ClearResult{},
+	DecisionUndoResult{},
 	JobStepResult{},
 	JobAskResult{},
 	PlanView{},

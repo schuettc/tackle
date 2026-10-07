@@ -15,7 +15,9 @@
 //     untracked PR is offered as not tracked); junk offers and decides nothing
 //   a Not now naming a PR a sync couldn't find comes back, saying why
 //   the next undecided item opens; the last shows the view's summary
-//   u undoes the last decision; a decision changed since is refused (409)
+//   u undoes the last decision; a decision changed since is refused (409),
+//     even in the same second; u after a re-decide puts the previous back,
+//     and is refused too when the item changed since
 //   a live decide elsewhere doesn't skip the item after it
 //   the multi-select sheet asks with the same cards: "Close it · 2 issues"
 //
@@ -495,8 +497,7 @@ async function decideScenario(context, t, s) {
 
   // ---- u refuses a decision changed since: serve's 409 message -------------
   {
-    // decided_at has second precision: the change must be a later second.
-    await new Promise((r) => setTimeout(r, 1100));
+    // In the same second: serve compares the whole decision, not the second.
     await api('POST', '/api/decide', {
       keys: [ISSUE(3)],
       disposition: 'ignore',
@@ -784,6 +785,66 @@ async function decideScenario(context, t, s) {
         )?.textContent ?? '',
     );
     check(`the page shows why issue #4 came back ("${shown}")`, shown === WHY);
+
+    // ---- u after a re-decide puts the previous decision back --------------
+    const WAS = `merged(${GONE})`;
+    await pg.click(
+      '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]',
+    );
+    check(
+      're-deciding issue #4 keep',
+      await eventually(
+        async () => (await decisionOf(ISSUE(4)))?.disposition === 'keep',
+      ),
+    );
+    await press(pg, 'u');
+    check(
+      `u puts back issue #4's previous decision (wait until ${WAS}) and opens it`,
+      (await eventually(async () => {
+        const d = await decisionOf(ISSUE(4));
+        return d?.disposition === 'wait' && d.until === WAS;
+      })) && (await opened(t, pg, ISSUE(4))),
+    );
+
+    // ---- u after a re-decide refuses a change made since -------------------
+    // Within the same second: serve compares the whole decision.
+    await pg.click(
+      '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]',
+    );
+    check(
+      're-deciding issue #4 keep again',
+      await eventually(
+        async () => (await decisionOf(ISSUE(4)))?.disposition === 'keep',
+      ),
+    );
+    await api('POST', '/api/decide', {
+      keys: [ISSUE(4)],
+      disposition: 'ignore',
+      note: 'changed by the agent',
+    });
+    await press(pg, 'u');
+    const ERR = '.kit-app > .kit-read:not([hidden]) .cb-choice-err';
+    const refused = await until(
+      pg,
+      (sel) =>
+        [...document.querySelectorAll(sel)].some(
+          (e) => !e.hidden && (e.textContent ?? '').includes('changed since'),
+        ),
+      ERR,
+      5000,
+    );
+    const errShown = await pg.$$eval(ERR, (els) =>
+      els.map((e) => e.textContent ?? '').join(' | '),
+    );
+    check(
+      `u after issue #4 changed elsewhere shows serve's refusal ("${errShown}")`,
+      refused,
+    );
+    const after = await decisionOf(ISSUE(4));
+    check(
+      `and the change stands (issue #4 is ${after?.disposition}, "${after?.note ?? ''}")`,
+      after?.disposition === 'ignore' && after.note === 'changed by the agent',
+    );
   }
   await pg.close();
 }

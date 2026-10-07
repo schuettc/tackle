@@ -70,6 +70,9 @@ type DecideResult struct {
 	Decided     int      `json:"decided"`
 	DecidedKeys []string `json:"decided_keys"`
 	Errors      []string `json:"errors"`
+	// Decisions is, per decided key, the decision this request committed:
+	// what an undo of it expects to find (POST /api/decisions/undo).
+	Decisions map[string]Committed `json:"decisions"`
 }
 
 // AcceptResult is the response body of POST /api/proposals/accept. Like
@@ -77,6 +80,25 @@ type DecideResult struct {
 type AcceptResult struct {
 	Accepted int      `json:"accepted"`
 	Errors   []string `json:"errors"`
+	// Decisions is, per decided key, the decision this request committed.
+	Decisions map[string]Committed `json:"decisions"`
+}
+
+// Committed is a decision as a request committed it, decided_at to the
+// second: what POST /api/decisions/undo compares the item's decision with.
+type Committed struct {
+	Disposition string    `json:"disposition"`
+	Until       string    `json:"until"`
+	Note        string    `json:"note"`
+	DecidedAt   time.Time `json:"decided_at"`
+}
+
+// DecisionUndoResult is the response body of POST /api/decisions/undo:
+// Decision is the decision the undo restored, null when it removed one.
+// Like DecideResult it doesn't wait for the push.
+type DecisionUndoResult struct {
+	Undone   bool       `json:"undone"`
+	Decision *Committed `json:"decision"`
 }
 
 // Push states, as the "push" live event says them.

@@ -3709,14 +3709,9 @@ function makeAttention(ctx) {
       void reload();
     }
   }
-  async function remember(key, prev) {
-    lastUndo = null;
-    try {
-      const d = await ctx.api.get("/item", { key });
-      if (d.item.decision)
-        lastUndo = { key, prev, decidedAt: d.item.decision.decided_at };
-    } catch {
-    }
+  function remember(key, prev, made) {
+    const expect = made?.[key];
+    lastUndo = expect ? { key, prev, expect } : null;
   }
   async function moveOn(key, order) {
     let undecided;
@@ -3750,7 +3745,7 @@ function makeAttention(ctx) {
         return;
       }
       selection.deselect([key]);
-      await remember(key, prev);
+      remember(key, prev, r.decisions);
       await moveOn(key, order);
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -3774,7 +3769,7 @@ function makeAttention(ctx) {
         return;
       }
       selection.deselect([key]);
-      await remember(key, prev);
+      remember(key, prev, r.decisions);
       await moveOn(key, order);
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -3787,24 +3782,15 @@ function makeAttention(ctx) {
     if (!u || deciding) return;
     deciding = u.key;
     try {
-      if (!u.prev) {
-        await ctx.api.post("/decisions/clear", {
-          key: u.key,
-          decided_at: u.decidedAt
-        });
-      } else {
-        const payload = {
-          keys: [u.key],
-          disposition: u.prev.disposition
-        };
-        if (u.prev.until) payload["until"] = u.prev.until;
-        if (u.prev.note) payload["note"] = u.prev.note;
-        const r = await ctx.api.post("/decide", payload);
-        if (!(r.decided_keys ?? []).length) {
-          showReadError((r.errors ?? []).join("; ") || "nothing was undone");
-          return;
-        }
-      }
+      await ctx.api.post("/decisions/undo", {
+        key: u.key,
+        expect: u.expect,
+        restore: u.prev ? {
+          disposition: u.prev.disposition,
+          until: u.prev.until ?? "",
+          note: u.prev.note ?? ""
+        } : null
+      });
       lastUndo = null;
       openKey(u.key);
     } catch (err) {
