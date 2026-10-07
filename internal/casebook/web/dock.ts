@@ -1196,8 +1196,8 @@ export function makeDock(ctx: Ctx): DockHandle {
     currentSession(): string {
       return currentSessionId;
     },
-    sendText(body: string): Promise<string> {
-      return composer.sendText(body);
+    sendText(body: string, attached?: Attached): Promise<string> {
+      return composer.sendText(body, attached);
     },
   };
 }

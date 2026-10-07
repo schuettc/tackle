@@ -28,6 +28,7 @@ import type {
   Committed,
   DecisionUndoResult,
   DecisionVocabView,
+  Message,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
@@ -46,6 +47,7 @@ import {
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { makeBoard } from './board.ts';
+import { lookingLine } from './sessions.ts';
 import {
   agreeWithAll,
   bulkProposalActions,
@@ -57,6 +59,16 @@ import {
 // session: a normal message, delivered when its turn ends.
 export const RECOMMEND_THE_REST =
   'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
+
+/**
+ * lookIntoText is what "ask ‹session› to look into it" sends the dock's
+ * session about key, with key attached: a normal message, delivered when
+ * its turn ends. serve knows the session is looking into the item by this
+ * text (serve.LookIntoText, the same words), until the message settles.
+ */
+export function lookIntoText(key: string): string {
+  return `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+}
 
 // PAGE_SIZE is the number of items fetched per page. The kit is tested to 500
 // rendered rows; we paginate at 200 to stay safe.
@@ -544,6 +556,15 @@ export function makeAttention(ctx: Ctx): Section {
     loadedItems.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add('cb-new-activity');
     });
+    // "‹session› is looking into it" (muted, agent colour) on the rows a
+    // session is looking into.
+    shown.forEach((it, i) => {
+      const el = rowEls[i];
+      if (!el) return;
+      el.querySelector('.cb-row-looking')?.remove();
+      const says = lookingLine(it.looking);
+      if (says) el.append(h('div', { class: 'cb-row-looking' }, says));
+    });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
       rowEls[i]?.classList.add('cb-left-open');
@@ -741,6 +762,81 @@ export function makeAttention(ctx: Ctx): Section {
       accept: () => void acceptOpen(),
     });
     readEl.replaceChildren(el);
+    renderAsk();
+  }
+
+  // ---- ask the session to look into it ------------------------------------
+
+  // renderAsk puts "ask ‹session› to look into it" under the open item's
+  // cards: only with a session attached, and not while one is looking
+  // into it already (the item says so under its question).
+  function renderAsk(): void {
+    readEl.querySelector('.cb-look')?.remove();
+    const key = currentOpenKey;
+    const t = ctx.dockTarget();
+    const cards = readEl.querySelector('.cb-decide .cb-choices-wrap');
+    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
+    if (shownDetail.item.looking) return;
+    const note = h('span', { class: 'cb-look-note' });
+    const btn = h(
+      'button',
+      {
+        type: 'button',
+        class: 'kit-btn cb-look-ask',
+        async onclick() {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const why = await ctx.askSession(lookIntoText(key), { keys: [key] });
+          btn.disabled = false;
+          if (why) note.textContent = why;
+          else void refreshLooking(key);
+        },
+      },
+      `ask ${t.name} to look into it`,
+    ) as HTMLButtonElement;
+    cards.after(h('div', { class: 'cb-look' }, btn, note));
+  }
+  ctx.onDockTarget(() => renderAsk());
+
+  // refreshLooking reads whether a session is looking into key (the open
+  // item) and shows it in place, under the question, without re-rendering
+  // the item (Court may be mid-input on it).
+  let lookingSeq = 0;
+  async function refreshLooking(key: string): Promise<void> {
+    const mine = ++lookingSeq;
+    let detail: ItemDetailView;
+    try {
+      detail = await ctx.api.get<ItemDetailView>('/item', { key });
+    } catch {
+      return;
+    }
+    if (mine !== lookingSeq || currentOpenKey !== key) return;
+    if (shownDetail?.item.key !== key) return;
+    shownDetail = {
+      ...shownDetail,
+      item: { ...shownDetail.item, looking: detail.item.looking },
+    };
+    const says = lookingLine(detail.item.looking);
+    const el = readEl.querySelector<HTMLElement>('.cb-looking');
+    if (el) {
+      el.textContent = says;
+      el.hidden = !says;
+    }
+    renderAsk();
+  }
+
+  // lookingShown: the open item or a shown row says a session is looking
+  // into it (a message settling may take that away).
+  function lookingShown(): boolean {
+    return !!shownDetail?.item.looking || shown.some((it) => !!it.looking);
+  }
+
+  // lookingMayHaveChanged: a message moved (posted, answered, declined,
+  // failed; a turn ended): the open item's marker and the rows' follow.
+  function lookingMayHaveChanged(): void {
+    if (currentOpenKey) void refreshLooking(currentOpenKey);
+    if (boardHandle) return;
+    void reload();
   }
 
   // midInput: Court is in the middle of answering the open item: its
@@ -756,12 +852,15 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // proposalsChanged: a proposal for the open item came, or went (a live
-  // "proposals" event naming key). The item re-renders, so its
+  // "proposals" event naming key), or evidence for it came (why). The item re-renders, so its
   // recommendation card and the "recommended" mark appear or go; while
   // Court is mid-input it doesn't, and a quiet line under the question
   // says what changed, with "show" to re-render.
   let freshSeq = 0;
-  async function proposalsChanged(key: string): Promise<void> {
+  async function proposalsChanged(
+    key: string,
+    why: 'proposals' | 'evidence' = 'proposals',
+  ): Promise<void> {
     const mine = ++freshSeq;
     let detail: ItemDetailView;
     try {
@@ -778,9 +877,11 @@ export function makeAttention(ctx: Ctx): Section {
     }
     const p = detail.item.proposal;
     const says =
-      p && p.state === 'pending'
-        ? recommendLine(vocab, key, p.source, p.disposition)
-        : 'the recommendation changed';
+      why === 'evidence'
+        ? 'new evidence'
+        : p && p.state === 'pending'
+          ? recommendLine(vocab, key, p.source, p.disposition)
+          : 'the recommendation changed';
     const show = h(
       'button',
       {
@@ -1401,6 +1502,33 @@ export function makeAttention(ctx: Ctx): Section {
         } else {
           void reload();
         }
+      } else if (type === 'evidence') {
+        // New evidence for the open item: shown as a recommendation is.
+        const key = (data as { key?: string })?.key ?? '';
+        if (
+          currentOpenKey &&
+          currentOpenKey !== deciding &&
+          key === currentOpenKey
+        )
+          void proposalsChanged(currentOpenKey, 'evidence');
+      } else if (type === 'message') {
+        // Court's message posted (this tab or another): an ask to look into
+        // an item marks it.
+        const keys = (data as Message | null)?.attached?.keys ?? [];
+        if (
+          keys.some(
+            (k) => k === currentOpenKey || shown.some((it) => it.key === k),
+          )
+        )
+          lookingMayHaveChanged();
+      } else if (
+        type === 'messages' ||
+        type === 'settled' ||
+        type === 'delivery' ||
+        type === 'interrupted'
+      ) {
+        // A message settled (or a turn ended): a marker may go.
+        if (lookingShown()) lookingMayHaveChanged();
       }
     },
     primary() {

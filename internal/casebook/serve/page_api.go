@@ -107,6 +107,9 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	group := query
 	group.Offset = 0
 	left, leftTotal := s.Index.LeftOpen(group, pending)
+	looking := s.lookingInto(ctx)
+	withLooking(items, looking)
+	withLooking(left, looking)
 	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal}, nil)
 }
 
@@ -135,6 +138,7 @@ func (s *Server) itemDetail(ctx context.Context, it engine.Item, k item.Key) Ite
 		prop = &p
 	}
 	v := newItemView(it, prop)
+	v.Looking = s.lookingInto(ctx)[it.ID]
 	proposals, _ := s.Props.ForKey(ctx, it.ID)
 	evidence, _ := s.Props.Evidence(ctx, it.ID)
 	events, _ := s.App.Events()

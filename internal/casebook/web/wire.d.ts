@@ -294,6 +294,7 @@ export interface ItemView {
   landed_via?: string[];
   landed_tips?: Record<string, string>;
   proposal?: Proposal;
+  looking?: Looking;
 }
 
 export interface Proposal {
@@ -552,6 +553,11 @@ export interface Observed {
   exists: boolean;
   archived?: boolean;
   state?: string;
+}
+
+export interface Looking {
+  message: number;
+  session: Session;
 }
 
 export interface Action {

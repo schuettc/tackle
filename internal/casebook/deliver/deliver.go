@@ -478,6 +478,41 @@ func (q *Queue) messages(ctx context.Context, where string, args ...any) ([]Mess
 	return out, rows.Err()
 }
 
+// Underway lists Court's messages sent and not yet settled (queued,
+// delivered, received or being worked on: no draft, nothing final), each
+// with the session its thread belongs to, oldest first.
+func (q *Queue) Underway(ctx context.Context) ([]UnderwayMessage, error) {
+	rows, err := q.DB.QueryContext(ctx, `SELECT m.id, m.body, m.attached, t.session_id
+		FROM messages m JOIN threads t ON t.id = m.thread_id
+		WHERE m.author = 'court' AND m.state IN (?, ?, ?, ?) ORDER BY m.id`,
+		Queued, Delivered, Received, Working)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []UnderwayMessage
+	for rows.Next() {
+		var u UnderwayMessage
+		var att string
+		if err := rows.Scan(&u.ID, &u.Body, &att, &u.Session); err != nil {
+			return nil, err
+		}
+		if att != "" {
+			_ = json.Unmarshal([]byte(att), &u.Attached)
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// UnderwayMessage is one of Underway's messages.
+type UnderwayMessage struct {
+	ID       int64
+	Body     string
+	Attached Attached
+	Session  string
+}
+
 // Messages lists a thread's messages in order.
 func (q *Queue) Messages(ctx context.Context, thread int64) ([]Message, error) {
 	return q.messages(ctx, "thread_id = ? ORDER BY id", thread)

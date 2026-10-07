@@ -12,7 +12,7 @@
 // serve computes which sessions are eligible (live and not a subagent
 // worker); the chooser offers only those, sorted by what it shows.
 
-import type { Session } from './wire.d.ts';
+import type { Looking, Session } from './wire.d.ts';
 
 /** folderOf is the session's working folder (the cwd's last part). */
 export function folderOf(s: Session): string {
@@ -92,4 +92,12 @@ export function urlWithSession(href: string, session: string): string {
   if (session) u.searchParams.set('session', session);
   else u.searchParams.delete('session');
   return u.toString();
+}
+
+/**
+ * lookingLine is what an item says while a session is looking into it
+ * ("‹session› is looking into it"), or '' when none is.
+ */
+export function lookingLine(l: Looking | null | undefined): string {
+  return l ? `${sessionTitle(l.session)} is looking into it` : '';
 }

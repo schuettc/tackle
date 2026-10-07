@@ -71,6 +71,18 @@
 //     shows instead, and "show" re-renders it
 //   the card's head and the board's cards say "recommends", as the list's
 //     rows do: "pi recommends · Close it without merging"
+//
+// And "ask ‹session› to look into it" (casebook 0.4.5), on a serve and repo
+// of their own:
+//
+//   with no session attached there is no button under the cards
+//   with one, the button sends exactly the ask, the item attached, to that
+//     session's thread only
+//   while the message is queued (and worked on), the item says "‹session›
+//     is looking into it" under its question, and its row says so (muted,
+//     agent colour)
+//   the agent's evidence and recommendation show on the open item with no
+//     reload; its reply clears the marker
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -248,6 +260,7 @@ export async function decideScenarios(shared, t) {
     ],
     ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
     ['a new recommendation on the open item', openRecScenario, openRecSeed()],
+    ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -2520,5 +2533,320 @@ async function openRecScenario(context, t, s) {
       prop === 'pi recommends close',
     );
   }
+  await pg.close();
+}
+
+// ---- ask the session to look into it (casebook 0.4.5) ---------------------
+
+const LK = 'rd-look';
+const KISSUE = (n) => `issue:schuettc/${LK}#${n}`;
+const LOOK_INTO = (key) =>
+  `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+
+function lookIntoSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${LK}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${LK}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues: [
+          [1, 'Uploads fail on the second region', 'alice'],
+          [2, 'README typo', 'carol'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function lookIntoScenario(context, t, s) {
+  const { check, until, eventually } = t;
+  console.log('\nscenario: ask the session to look into it');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const ASK = `${READ} .cb-look-ask`;
+  const MARK = `${READ} .cb-looking`;
+  const KEY = KISSUE(1);
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !k.includes(`/${LK}`));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  // Two sessions, so the dock attaches to neither on its own; B has a
+  // thread of its own the ask must not reach.
+  const A = 'probe-look-a';
+  const B = 'probe-look-b';
+  await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 look-b', '/home/court/look-b', 'pi');
+  const bThread = await agent.newThread(B, 'b work');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await pg.evaluate(() => {
+    window.__lookNoReload = true;
+  });
+  await row(pg, KEY).click();
+  check('issue #1 opens', await opened(t, pg, KEY));
+
+  // ---- no session attached: no button --------------------------------------
+  {
+    await pg.waitForTimeout(500);
+    const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
+    check(
+      `with no session attached (dock: ${attach}) there is no "look into it" button`,
+      attach === 'none' && (await pg.locator(ASK).count()) === 0,
+    );
+  }
+
+  // ---- attach A: the button names it, under the cards ----------------------
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      ASK,
+    );
+    const got = await pg.evaluate((sel) => {
+      const b = document.querySelector(sel);
+      const cards = b?.closest('.cb-decide')?.querySelector('.cb-choices-wrap');
+      return {
+        text: b?.textContent ?? '',
+        below:
+          !!b &&
+          !!cards &&
+          b.getBoundingClientRect().top >= cards.getBoundingClientRect().bottom,
+      };
+    }, ASK);
+    check(
+      `with ${aName} attached, "${got.text}" shows under the cards`,
+      ok && got.text === `ask ${aName} to look into it` && got.below,
+    );
+  }
+
+  // ---- the ask: exactly the text, the item attached, A's thread only -------
+  const msgsOf = async (session) => {
+    const tv = await api(
+      'GET',
+      `/api/threads?session=${encodeURIComponent(session)}`,
+    );
+    const out = [];
+    for (const th of tv.threads ?? []) {
+      const mv = await agent.messages(th.id);
+      for (const m of mv.messages ?? []) out.push(m);
+    }
+    return out;
+  };
+  await pg.click(ASK);
+  let asked = null;
+  check(
+    "the button puts exactly the ask, with the item attached, in the attached session's thread, once",
+    await eventually(async () => {
+      const mine = (await msgsOf(A)).filter((m) => m.body === LOOK_INTO(KEY));
+      asked = mine[0] ?? null;
+      return (
+        mine.length === 1 &&
+        JSON.stringify(asked.attached?.keys ?? []) === JSON.stringify([KEY])
+      );
+    }),
+  );
+  {
+    const b = await msgsOf(B);
+    const bt = (await agent.messages(bThread.id)).messages ?? [];
+    check(
+      `and nothing in any other session's thread (B has ${b.length} messages)`,
+      b.every((m) => !m.body.startsWith('Look into')) &&
+        bt.every((m) => !m.body.startsWith('Look into')),
+    );
+    check(
+      `it decides nothing (issue #1 undecided: ${JSON.stringify((await api('GET', `/api/item?key=${encodeURIComponent(KEY)}`)).item.decision ?? null)})`,
+      !(await api('GET', `/api/item?key=${encodeURIComponent(KEY)}`)).item
+        .decision,
+    );
+  }
+
+  // ---- the marker, while the message is queued -----------------------------
+  const marks = () =>
+    pg.evaluate(
+      ([mark, k]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        const rl = r?.querySelector('.cb-row-looking');
+        return {
+          item: m && m.checkVisibility() ? (m.textContent ?? '') : '',
+          row: rl ? (rl.textContent ?? '') : '',
+          itemColor: m ? getComputedStyle(m).color : '',
+          rowColor: rl ? getComputedStyle(rl).color : '',
+          ask: !!document.querySelector(
+            '.kit-app > .kit-read:not([hidden]) .cb-look-ask',
+          ),
+        };
+      },
+      [MARK, kicker(KEY)],
+    );
+  const LOOKING = `${aName} is looking into it`;
+  {
+    const ok = await until(
+      pg,
+      ([mark, k, want]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        return (
+          !!m?.checkVisibility() &&
+          m.textContent === want &&
+          r?.querySelector('.cb-row-looking')?.textContent === want
+        );
+      },
+      [MARK, kicker(KEY), LOOKING],
+      8000,
+    );
+    const st = (
+      await api('GET', `/api/messages?thread=${asked?.thread_id}`)
+    ).messages?.find((m) => m.id === asked?.id)?.state;
+    const got = await marks();
+    check(
+      `while the message is ${st}, the item says "${got.item}" under its question, and its row "${got.row}"`,
+      ok && st === 'queued' && got.item === LOOKING && got.row === LOOKING,
+    );
+    const agentC = await cssColor(pg, 'var(--kit-agent)');
+    const mutedC = await cssColor(pg, 'var(--kit-muted)');
+    check(
+      `the item's marker is the agent colour (${got.itemColor}); the row's a muted agent colour (${got.rowColor})`,
+      got.itemColor === agentC &&
+        !!got.rowColor &&
+        got.rowColor !== agentC &&
+        got.rowColor !== mutedC,
+    );
+    check('and while it looks, the button gives way to the marker', !got.ask);
+    const under = await pg.evaluate((mark) => {
+      const m = document.querySelector(mark);
+      const q = m?.closest('.cb-decide')?.querySelector('.cb-question');
+      return (
+        !!m &&
+        !!q &&
+        m.getBoundingClientRect().top >= q.getBoundingClientRect().bottom
+      );
+    }, MARK);
+    check('the marker sits under the question', under);
+    await shoot(t, pg, 'looking', ['light']);
+  }
+
+  // ---- the agent looks: evidence and a recommendation show live -----------
+  const d = await agent.wait(A);
+  const ids = (d?.delivery?.messages ?? []).map((m) => m.id);
+  check(
+    `the agent's turn gets the ask (${ids.length} message)`,
+    ids.includes(asked?.id) &&
+      (d?.text ?? '').includes(LOOK_INTO(KEY).slice(0, 40)),
+  );
+  const EVIDENCE =
+    'CI: the upload check fails on us-west-2 since the bucket rename.';
+  await api('POST', '/api/agent/evidence', {
+    session: A,
+    key: KEY,
+    text: EVIDENCE,
+  });
+  await agent.propose(
+    A,
+    [KEY],
+    'keep',
+    'a fix is one config line; keep it open',
+  );
+  {
+    const ok = await until(
+      pg,
+      ([r, ev]) =>
+        !!document.querySelector(`${r} .cb-proposal-card`) &&
+        (document.querySelector(`${r} .cb-item`)?.textContent ?? '').includes(
+          ev,
+        ),
+      [READ, EVIDENCE],
+      8000,
+    );
+    const c = await readCol(pg);
+    const got = await marks();
+    check(
+      `the agent's evidence and recommendation show on the open item ("${c.rec}"), no reload`,
+      ok &&
+        c.key === KEY &&
+        c.rec.includes('a fix is one config line') &&
+        c.cards
+          .filter((x) => x.rec)
+          .map((x) => x.d)
+          .join(',') === 'keep' &&
+        (await pg.evaluate(() => window.__lookNoReload === true)),
+    );
+    check(
+      `still looking while the message is worked on ("${got.item}")`,
+      got.item === LOOKING,
+    );
+  }
+
+  // ---- the reply settles it: the marker goes -------------------------------
+  await agent.reply(
+    A,
+    ids,
+    'answered',
+    'Looked: evidence and a recommendation are on the item.',
+  );
+  {
+    const ok = await until(
+      pg,
+      ([mark, k]) => {
+        const m = document.querySelector(mark);
+        const r = [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ),
+        ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        return (
+          !m?.checkVisibility() && !!r && !r.querySelector('.cb-row-looking')
+        );
+      },
+      [MARK, kicker(KEY)],
+      8000,
+    );
+    const got = await marks();
+    check(
+      `the agent's reply clears the marker on the item and its row (item "${got.item}", row "${got.row}"), and the button is back`,
+      ok && got.item === '' && got.row === '' && got.ask,
+    );
+    check(
+      'with no reload',
+      await pg.evaluate(() => window.__lookNoReload === true),
+    );
+  }
+  await shoot(t, pg, 'look-into', ['light']);
   await pg.close();
 }

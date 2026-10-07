@@ -401,6 +401,36 @@
   margin: 0 0 12px;
 }
 
+/* "‹session› is looking into it": under the open item's question, and on
+ * its list row (muted, agent colour). */
+.cb-looking {
+  margin: -4px 0 12px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-agent);
+}
+
+.cb-looking[hidden] {
+  display: none;
+}
+
+.kit-row .cb-row-looking {
+  font: 12px var(--kit-mono);
+  color: color-mix(in srgb, var(--kit-agent) 70%, var(--kit-muted));
+}
+
+/* "ask ‹session› to look into it", under the open item's cards. */
+.cb-look {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.cb-look-note {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+}
+
 /* A recommendation that came while Court was mid-input on the open item:
  * "pi recommends ‹label› · show" under the question (quiet: mono, agent
  * colour), instead of re-rendering under him. */

@@ -341,9 +341,9 @@ function start(first) {
     onDockTarget(cb) {
       dockTargetListeners.push(cb);
     },
-    askSession(body) {
+    askSession(body, attached) {
       const d = dockHandles[0];
-      return d ? d.sendText(body) : Promise.resolve("no agent session");
+      return d ? d.sendText(body, attached) : Promise.resolve("no agent session");
     }
   };
   const sections = /* @__PURE__ */ new Map();
@@ -1490,6 +1490,9 @@ function urlWithSession(href, session) {
   if (session) u.searchParams.set("session", session);
   else u.searchParams.delete("session");
   return u.toString();
+}
+function lookingLine(l) {
+  return l ? `${sessionTitle(l.session)} is looking into it` : "";
 }
 
 // coalesce.ts
@@ -3122,6 +3125,8 @@ function renderDecideSection(ctx, detail, hooks) {
   const it = detail.item;
   const section = h6("section", { class: "cb-decide" });
   const question = h6("h2", { class: "cb-question" });
+  const looking = lookingLine(it.looking);
+  const lookingEl = h6("p", { class: "cb-looking", hidden: !looking }, looking);
   const recSlot = h6("div", { class: "cb-rec-slot" });
   const pending = it.proposal && it.proposal.state === "pending" ? it.proposal : null;
   const cards = renderChoices(ctx, it.kind, {
@@ -3132,7 +3137,7 @@ function renderDecideSection(ctx, detail, hooks) {
       hooks.decide?.(d, until, note);
     }
   });
-  section.append(question, recSlot, cards);
+  section.append(question, lookingEl, recSlot, cards);
   void getVocab(ctx).then((vocab2) => {
     const kv = (vocab2.kinds ?? []).find((k) => k.kind === it.kind);
     question.textContent = kv?.question ?? "";
@@ -3405,6 +3410,9 @@ function makeBoard(ctx, sel, filters, onOpen, onRefresh) {
 
 // attention.ts
 var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.";
+function lookIntoText(key) {
+  return `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+}
 var PAGE_SIZE2 = 200;
 var selection = createSelection();
 var VIEWS2 = [
@@ -3756,6 +3764,13 @@ function makeAttention(ctx) {
     loadedItems.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
     });
+    shown.forEach((it, i) => {
+      const el = rowEls[i];
+      if (!el) return;
+      el.querySelector(".cb-row-looking")?.remove();
+      const says = lookingLine(it.looking);
+      if (says) el.append(h8("div", { class: "cb-row-looking" }, says));
+    });
     if (!group.length) return;
     for (let i = loadedItems.length; i < shown.length; i++) {
       rowEls[i]?.classList.add("cb-left-open");
@@ -3912,6 +3927,65 @@ function makeAttention(ctx) {
       accept: () => void acceptOpen()
     });
     readEl.replaceChildren(el);
+    renderAsk();
+  }
+  function renderAsk() {
+    readEl.querySelector(".cb-look")?.remove();
+    const key = currentOpenKey;
+    const t = ctx.dockTarget();
+    const cards = readEl.querySelector(".cb-decide .cb-choices-wrap");
+    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
+    if (shownDetail.item.looking) return;
+    const note = h8("span", { class: "cb-look-note" });
+    const btn = h8(
+      "button",
+      {
+        type: "button",
+        class: "kit-btn cb-look-ask",
+        async onclick() {
+          if (btn.disabled) return;
+          btn.disabled = true;
+          const why = await ctx.askSession(lookIntoText(key), { keys: [key] });
+          btn.disabled = false;
+          if (why) note.textContent = why;
+          else void refreshLooking(key);
+        }
+      },
+      `ask ${t.name} to look into it`
+    );
+    cards.after(h8("div", { class: "cb-look" }, btn, note));
+  }
+  ctx.onDockTarget(() => renderAsk());
+  let lookingSeq = 0;
+  async function refreshLooking(key) {
+    const mine = ++lookingSeq;
+    let detail;
+    try {
+      detail = await ctx.api.get("/item", { key });
+    } catch {
+      return;
+    }
+    if (mine !== lookingSeq || currentOpenKey !== key) return;
+    if (shownDetail?.item.key !== key) return;
+    shownDetail = {
+      ...shownDetail,
+      item: { ...shownDetail.item, looking: detail.item.looking }
+    };
+    const says = lookingLine(detail.item.looking);
+    const el = readEl.querySelector(".cb-looking");
+    if (el) {
+      el.textContent = says;
+      el.hidden = !says;
+    }
+    renderAsk();
+  }
+  function lookingShown() {
+    return !!shownDetail?.item.looking || shown.some((it) => !!it.looking);
+  }
+  function lookingMayHaveChanged() {
+    if (currentOpenKey) void refreshLooking(currentOpenKey);
+    if (boardHandle) return;
+    void reload();
   }
   function midInput() {
     const comment = readEl.querySelector(".cb-close-comment");
@@ -3921,7 +3995,7 @@ function makeAttention(ctx) {
     return !!notNow && !notNow.hidden;
   }
   let freshSeq = 0;
-  async function proposalsChanged(key) {
+  async function proposalsChanged(key, why = "proposals") {
     const mine = ++freshSeq;
     let detail;
     try {
@@ -3935,7 +4009,7 @@ function makeAttention(ctx) {
       return;
     }
     const p = detail.item.proposal;
-    const says = p && p.state === "pending" ? recommendLine(vocab2, key, p.source, p.disposition) : "the recommendation changed";
+    const says = why === "evidence" ? "new evidence" : p && p.state === "pending" ? recommendLine(vocab2, key, p.source, p.disposition) : "the recommendation changed";
     const show2 = h8(
       "button",
       {
@@ -4375,6 +4449,18 @@ function makeAttention(ctx) {
         } else {
           void reload();
         }
+      } else if (type === "evidence") {
+        const key = data?.key ?? "";
+        if (currentOpenKey && currentOpenKey !== deciding && key === currentOpenKey)
+          void proposalsChanged(currentOpenKey, "evidence");
+      } else if (type === "message") {
+        const keys = data?.attached?.keys ?? [];
+        if (keys.some(
+          (k) => k === currentOpenKey || shown.some((it) => it.key === k)
+        ))
+          lookingMayHaveChanged();
+      } else if (type === "messages" || type === "settled" || type === "delivery" || type === "interrupted") {
+        if (lookingShown()) lookingMayHaveChanged();
       }
     },
     primary() {
@@ -4645,7 +4731,7 @@ function makeComposer(ctx, dock) {
     say(text) {
       note.textContent = text;
     },
-    async sendText(body) {
+    async sendText(body, attached = {}) {
       const why = dock.blocked();
       if (why) {
         note.textContent = why;
@@ -4660,7 +4746,7 @@ function makeComposer(ctx, dock) {
         await ctx.api.post("/messages", {
           thread,
           body,
-          attached: {},
+          attached,
           batch: false,
           session: dock.currentSession()
         });
@@ -5831,8 +5917,8 @@ function makeDock(ctx) {
     currentSession() {
       return currentSessionId;
     },
-    sendText(body) {
-      return composer.sendText(body);
+    sendText(body, attached) {
+      return composer.sendText(body, attached);
     }
   };
 }

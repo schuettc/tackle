@@ -278,6 +278,28 @@
   font: 600 20px/1.35 var(--kit-sans);
   margin: 0 0 12px;
 }
+.cb-looking {
+  margin: -4px 0 12px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-agent);
+}
+.cb-looking[hidden] {
+  display: none;
+}
+.kit-row .cb-row-looking {
+  font: 12px var(--kit-mono);
+  color: color-mix(in srgb, var(--kit-agent) 70%, var(--kit-muted));
+}
+.cb-look {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+.cb-look-note {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+}
 .cb-rec-fresh {
   margin: -4px 0 12px;
   font: 12.5px var(--kit-mono);

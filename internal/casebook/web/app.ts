@@ -72,10 +72,10 @@ export interface Ctx {
   onDockTarget(cb: (t: DockTarget | null) => void): void;
   /**
    * askSession sends body to the dock's session through the composer's send
-   * path (queued until its turn ends), with nothing attached. Resolves ''
-   * when posted, else why not.
+   * path (queued until its turn ends), with attached (nothing by default).
+   * Resolves '' when posted, else why not.
    */
-  askSession(body: string): Promise<string>;
+  askSession(body: string, attached?: Attached): Promise<string>;
 }
 
 /** The session the dock's composer sends to. */
@@ -149,7 +149,7 @@ export interface DockHandle {
   currentThread(): number;
   currentSession(): string;
   /** sendText: the composer's sendText (see Ctx.askSession). */
-  sendText(body: string): Promise<string>;
+  sendText(body: string, attached?: Attached): Promise<string>;
 }
 
 // ---- section + dock registry ------------------------------------------------
@@ -439,9 +439,11 @@ function start(first: SummaryView | null): void {
     onDockTarget(cb) {
       dockTargetListeners.push(cb);
     },
-    askSession(body) {
+    askSession(body, attached) {
       const d = dockHandles[0];
-      return d ? d.sendText(body) : Promise.resolve('no agent session');
+      return d
+        ? d.sendText(body, attached)
+        : Promise.resolve('no agent session');
     },
   };
 

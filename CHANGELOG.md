@@ -19,9 +19,30 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   (`keys`), and a rule's new proposals (propose once, or an active rule
   after a sync) publish one too, from `rule:<id>`.
 
+### Added
+- "ask ‹session› to look into it" under the cards of the item you have
+  open, when a session is attached to the page. It decides nothing: it
+  sends that session a normal message, with the item attached, asking it
+  to check the item's CI, recent activity and anything blocking it, add
+  what it finds as evidence and recommend what to do. Like any message, it
+  waits for the end of the agent's turn.
+- While that message is queued or being worked on, the item says
+  "‹session› is looking into it" under its question, and its list row says
+  so too. It goes when the agent answers, declines or fails the message;
+  the evidence and recommendation it added show on the open item as they
+  come. serve marks the item (`looking` on the item's view) from the
+  message itself: Court's unsettled message that starts "Look into
+  ‹key›:" with that item attached.
+- The recommending guide asks the agent, when asked to look into an item,
+  to read its CI and recent activity with gh and record what it finds with
+  casebook_evidence before recommending.
+
 ### Changed
 - The recommendation card's head and the board's cards say "recommends",
   as the list's rows do: "pi recommends · Leave it open".
+- New evidence for the item you have open shows on it at once (with the
+  same "· show" line instead while you are mid-answer: "new evidence ·
+  show").
 
 ## [casebook 0.4.4] - 2026-10-07
 

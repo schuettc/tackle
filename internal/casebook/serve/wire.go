@@ -60,6 +60,9 @@ type SummaryView struct {
 type ItemView struct {
 	engine.Item
 	Proposal *propose.Proposal `json:"proposal,omitempty"`
+	// Looking: a session is looking into the item ("ask ‹session› to look
+	// into it", not yet settled); nil when none is.
+	Looking *Looking `json:"looking,omitempty"`
 }
 
 // newItemView is it as the page and the agent see it, with its proposal
