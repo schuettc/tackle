@@ -49,11 +49,51 @@ func (s *Server) agentPresence(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("id required"))
 		return
 	}
-	err := s.Queue.Touch(r.Context(), deliver.Session{ID: in.ID, Harness: in.Harness, Label: in.Label, CWD: in.CWD, PID: in.PID})
+	ctx := r.Context()
+	before := s.shownSession(ctx, in.ID)
+	err := s.Queue.Touch(ctx, deliver.Session{ID: in.ID, Harness: in.Harness, Label: in.Label, CWD: in.CWD, PID: in.PID})
 	if err == nil {
-		s.publish(r.Context(), "sessions", map[string]string{"id": in.ID})
+		s.publishSessionChange(ctx, in.ID, before)
 	}
 	reply(w, nil, err)
+}
+
+// shownSession is what the page shows of a session, for telling whether a
+// presence or session-info report changed it; nil when serve doesn't know
+// the session.
+func (s *Server) shownSession(ctx context.Context, id string) *shownSessionFacts {
+	sess, err := s.Queue.Session(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return &shownSessionFacts{Name: sess.Name, Label: sess.Label, Harness: sess.Harness, CWD: sess.CWD, PID: sess.PID,
+		Left: sess.Left, Worker: sess.Worker, Eligible: sess.Eligible, Busy: sess.Busy, Queued: sess.Queued}
+}
+
+// shownSessionFacts are the session facts the page shows (the dock's
+// header, chooser and "move to…" picker, To apply's session picker): the
+// heartbeat time is not one of them.
+type shownSessionFacts struct {
+	Name, Label, Harness, CWD    string
+	PID                          int
+	Left, Worker, Eligible, Busy bool
+	Queued                       int
+}
+
+// publishSessionChange publishes "sessions" when a report changed what the
+// page shows of the session (it appeared, crossed into or out of left, was
+// renamed or relabelled, became or stopped being a worker, ended, its
+// queued count moved). A heartbeat that changed nothing publishes nothing:
+// about 40 live sessions each beat every 30 s, and every "sessions" event
+// makes each open page fetch the session list again. A session crossing
+// into left without a report is the watch's to announce
+// (checkLeftCrossings).
+func (s *Server) publishSessionChange(ctx context.Context, id string, before *shownSessionFacts) {
+	after := s.shownSession(ctx, id)
+	if before != nil && after != nil && *before == *after {
+		return
+	}
+	s.publish(ctx, "sessions", map[string]string{"id": id})
 }
 
 // agentSessionInfo is pi-casebook telling serve what pi knows about a
@@ -70,9 +110,11 @@ func (s *Server) agentSessionInfo(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("id required"))
 		return
 	}
-	err := s.Queue.SetInfo(r.Context(), in)
+	ctx := r.Context()
+	before := s.shownSession(ctx, in.ID)
+	err := s.Queue.SetInfo(ctx, in)
 	if err == nil {
-		s.publish(r.Context(), "sessions", map[string]string{"id": in.ID})
+		s.publishSessionChange(ctx, in.ID, before)
 	}
 	reply(w, nil, err)
 }

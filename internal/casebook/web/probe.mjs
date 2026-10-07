@@ -22,6 +22,7 @@ import { applyScenarios, stopApplyServes } from './probe-apply.mjs';
 import { shellScenarios, stopShellServes } from './probe-shell.mjs';
 import { ownerScenarios, stopOwnerServes } from './probe-owner.mjs';
 import { decideScenarios, stopDecideServes } from './probe-decide.mjs';
+import { loadScenarios, stopLoadServes } from './probe-load.mjs';
 
 const { chromium } = pkg;
 
@@ -84,6 +85,7 @@ function cleanup() {
   stopShellServes();
   stopOwnerServes();
   stopDecideServes();
+  stopLoadServes();
 }
 
 process.on('SIGTERM', () => {
@@ -5034,7 +5036,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 848;
+const MIN_CHECKS = 855;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5054,6 +5056,7 @@ const PROBE_GROUPS = [
   'shell',
   'owner',
   'decide',
+  'load',
 ];
 const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
 const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
@@ -5180,6 +5183,12 @@ async function run() {
     // (probe-decide.mjs, its own serve).
     if (process.env.PROBE_ONLY === 'decide') {
       await decideScenarios(context, applyHelpers);
+      return;
+    }
+    // PROBE_ONLY=load runs only the page-under-load scenario
+    // (probe-load.mjs, its own serve).
+    if (process.env.PROBE_ONLY === 'load') {
+      await loadScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -9121,10 +9130,14 @@ async function run() {
               `.cb-dock-pick-sheet .cb-dock-pick-item[data-session="${sessId2}"]`,
             );
             await leftPage.waitForTimeout(1000);
-            // Verify via API: sessId has 0 queued, sessId2 has 2.
-            const afterResp = await fetch(`${serveHandle.base}/api/sessions`, {
-              headers: { 'X-Local-Token': serveHandle.token },
-            });
+            // Verify via API: sessId has 0 queued, sessId2 has 2. sessId
+            // has left: it is listed when named (as the page names its own).
+            const afterResp = await fetch(
+              `${serveHandle.base}/api/sessions?session=${encodeURIComponent(sessId)}`,
+              {
+                headers: { 'X-Local-Token': serveHandle.token },
+              },
+            );
             const afterData = await afterResp.json();
             const s1After = (afterData.sessions ?? []).find(
               (s) => s.id === sessId,
@@ -9469,6 +9482,9 @@ async function run() {
 
     // ---- the decide step: question, cards, Not now, move-on (its own serve)
     await decideScenarios(context, applyHelpers);
+
+    // ---- the page under load: no replay, no refetch per heartbeat (its own serve)
+    await loadScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');

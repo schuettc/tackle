@@ -238,9 +238,28 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 	if err := s.resumeInterruptedJobs(ctx); err != nil {
 		return nil, err
 	}
+	s.pruneEvents(ctx)
 	s.pruneSessions(ctx)
 	s.activity.Store(time.Now().UnixMilli())
 	return s, nil
+}
+
+// The event log keeps its newest EventsKeep events, or the last
+// EventsKeepAge of them, whichever is more (bus.Prune). serve prunes it when
+// it starts and every EventsPruneEvery while it runs. A page whose cursor
+// falls behind what is kept hears a gap and reloads its views.
+const (
+	EventsKeep       = 10000
+	EventsKeepAge    = 7 * 24 * time.Hour
+	EventsPruneEvery = time.Hour
+)
+
+// pruneEvents prunes the event log (and the progress log of sessions gone
+// that long); a failure is a diagnostic.
+func (s *Server) pruneEvents(ctx context.Context) {
+	if err := s.Bus.Trim(ctx, EventsKeep, EventsKeepAge); err != nil {
+		fmt.Fprintf(os.Stderr, "casebook serve: prune events: %v\n", err)
+	}
 }
 
 // laneCtx is the context casebook lanes run under: serve's lifetime, so lanes
@@ -523,13 +542,59 @@ func (s *Server) checkLeftCrossings(ctx context.Context, knownLeft map[string]bo
 	return changed
 }
 
+// checkStuckCrossings announces deliveries crossing into or out of stuck
+// (in flight, untouched for StuckAfter): one "delivery" event per crossing,
+// for its session, which makes the page's dock re-read the delivery (its
+// stuck buttons). Nothing else announces it: heartbeats publish nothing
+// unless the session changed. knownStuck is caller-owned (the delivery ids
+// stuck at the last tick), mutated in place. Called on each watch tick,
+// like checkLeftCrossings.
+func (s *Server) checkStuckCrossings(ctx context.Context, knownStuck map[int64]bool) {
+	stuck, err := s.Queue.Stuck(ctx)
+	if err != nil {
+		return
+	}
+	for id, session := range stuck {
+		if !knownStuck[id] {
+			s.publish(ctx, "delivery", map[string]any{"id": id, "session": session, "state": deliver.InFlight, "stuck": true})
+		}
+	}
+	for id := range knownStuck {
+		if _, still := stuck[id]; still {
+			continue
+		}
+		delete(knownStuck, id)
+		// Touched again (still in flight), or finished: its own events said
+		// the latter; the former has no other announcement.
+		if session, ok := s.inflightSession(ctx, id); ok {
+			s.publish(ctx, "delivery", map[string]any{"id": id, "session": session, "state": deliver.InFlight, "stuck": false})
+		}
+	}
+	for id := range stuck {
+		knownStuck[id] = true
+	}
+}
+
+// inflightSession is the session of delivery id while it is in flight.
+func (s *Server) inflightSession(ctx context.Context, id int64) (string, bool) {
+	d, err := s.Queue.Delivery(ctx, id)
+	if err != nil || d.State != deliver.InFlight {
+		return "", false
+	}
+	return d.SessionID, true
+}
+
 // watch rebuilds whenever the casebook repo's HEAD moves (a sync or a CLI
-// decision elsewhere), and trims the event log daily.
+// decision elsewhere), announces sessions crossing into or out of left and
+// deliveries crossing into or out of stuck,
+// prunes the event log hourly, and trims the rest daily.
 func (s *Server) watch(ctx context.Context) {
 	t := time.NewTicker(s.WatchEvery)
 	defer t.Stop()
 	lastTrim := time.Now()
+	lastPrune := time.Now()
 	knownLeft := map[string]bool{}
+	knownStuck := map[int64]bool{}
 	for {
 		select {
 		case <-ctx.Done():
@@ -541,8 +606,12 @@ func (s *Server) watch(ctx context.Context) {
 				}
 			}
 			s.checkLeftCrossings(ctx, knownLeft)
+			s.checkStuckCrossings(ctx, knownStuck)
+			if time.Since(lastPrune) > EventsPruneEvery {
+				s.pruneEvents(ctx)
+				lastPrune = time.Now()
+			}
 			if time.Since(lastTrim) > 24*time.Hour {
-				_ = s.Bus.Trim(ctx, 7*24*time.Hour)
 				if err := s.Props.TrimProgressLog(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "casebook serve: trim progress_log: %v\n", err)
 				}

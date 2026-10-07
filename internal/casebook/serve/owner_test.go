@@ -14,11 +14,12 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 )
 
-// session reads one session from GET /api/sessions, the list the page gets.
+// session reads one session from GET /api/sessions, the list the page gets
+// when it is attached to that session (?session=: shown whatever its state).
 func (r *rig) sessionView(t *testing.T, id string) (deliver.Session, bool) {
 	t.Helper()
 	var sv SessionsView
-	if c := r.do(t, "GET", "/api/sessions", nil, &sv); c != http.StatusOK {
+	if c := r.do(t, "GET", "/api/sessions?session="+url.QueryEscape(id), nil, &sv); c != http.StatusOK {
 		t.Fatalf("GET /api/sessions: %d", c)
 	}
 	for _, s := range sv.Sessions {

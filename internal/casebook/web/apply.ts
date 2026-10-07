@@ -101,6 +101,7 @@ import {
 } from './apply-text.ts';
 import { fmtAge } from './time-utils.ts';
 import { pickable, sessionMeta, sessionTitle } from './sessions.ts';
+import { coalesced } from './coalesce.ts';
 
 // Decided items are fetched 200 at a time (serve's cap, like Attention).
 const PAGE = 200;
@@ -619,6 +620,7 @@ export function makeApply(ctx: Ctx): Section {
       // The open job is drawn from its own, sequenced replies.
       if (open) patchJob(open);
       paintList();
+      askNamedSessions();
     } catch {
       // non-fatal: the list stays as it was
     }
@@ -646,6 +648,7 @@ export function makeApply(ctx: Ctx): Section {
     });
     if (drawn) setOpen(drawn);
     else paintList();
+    askNamedSessions();
   }
 
   async function loadItems(offset = 0): Promise<void> {
@@ -675,9 +678,38 @@ export function makeApply(ctx: Ctx): Section {
     }
   }
 
-  async function loadSessions(): Promise<void> {
+  // loadSessions asks for serve's eligible sessions (what a plan may go
+  // to) and, whatever their state, the ones this section names: its jobs'
+  // (the agent a job's steps went to), the dock's and Court's pick.
+  // Coalesced: one request in flight and one queued, whatever the burst.
+  const loadSessions = coalesced(fetchSessions);
+  // The sessions the last list was asked for by name.
+  let sessionsNamed = new Set<string>();
+  function namedSessions(): string[] {
+    const ids = [
+      ctx.dockSession(),
+      courtSession,
+      open?.job.session ?? '',
+      ...jobs.map((j) => j.session),
+    ];
+    return [...new Set(ids.filter(Boolean))].sort();
+  }
+  // A job naming a session the list hasn't got, nor was asked for, asks
+  // again (once: a session serve no longer knows stays unknown).
+  function askNamedSessions(): void {
+    const missing = namedSessions().some(
+      (id) => !sessionsNamed.has(id) && !sessions.some((s) => s.id === id),
+    );
+    if (missing) mark((d) => (d.sessions = true));
+  }
+  async function fetchSessions(): Promise<void> {
     try {
-      const v = await ctx.api.get<SessionsView>('/sessions');
+      const named = namedSessions();
+      sessionsNamed = new Set(named);
+      const v = await ctx.api.get<SessionsView>(
+        '/sessions',
+        named.length ? { session: named.join(',') } : undefined,
+      );
       sessions = v.sessions ?? [];
       paintList();
       if (open?.job.state === 'planned') drawOpen();
@@ -708,6 +740,7 @@ export function makeApply(ctx: Ctx): Section {
       const v = await ctx.api.get<JobView>('/job', { id: String(id) });
       if (!jobSeq.isLatest(mine) || openId !== id) return;
       setOpen(v);
+      askNamedSessions();
     } catch (err) {
       if (!jobSeq.isLatest(mine) || openId !== id) return;
       open = null;
@@ -1368,6 +1401,11 @@ export function makeApply(ctx: Ctx): Section {
         });
       } else if (type === 'sessions') {
         mark((d) => (d.sessions = true));
+      } else if (type === 'gap') {
+        // Events this page never heard were pruned: reload all it shows.
+        mark((d) => {
+          d.all = d.items = d.sessions = d.summary = true;
+        });
       } else if (type === 'sync') {
         onSync((data ?? {}) as SyncEvent);
       }

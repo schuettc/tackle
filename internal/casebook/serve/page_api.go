@@ -22,6 +22,13 @@ func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
 
 func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	// The head first: an event published while this answer is made is
+	// after it, so a page that starts its stream here hears it.
+	cursor, err := s.Bus.Head(ctx)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
 	pending, err := s.Props.Pending(ctx)
 	if err != nil {
 		reply(w, nil, err)
@@ -49,6 +56,7 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 		Syncing:        s.Syncing(),
 		Recommended:    recommended,
 		NotRecommended: notYet,
+		Cursor:         cursor,
 	}, nil)
 }
 
@@ -512,9 +520,38 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 	reply(w, RejectResult{Rejected: n}, nil)
 }
 
+// getSessions answers the sessions the page uses: the eligible ones (live,
+// not subagent workers: what the chooser, "move to…" and To apply offer),
+// plus each session named by ?session= (comma-separated, or repeated:
+// the page's attached session, shown even after it left, and To apply's
+// jobs' sessions), whatever their state. ?all=1 answers every known session
+// (the page never asks for that; Court's table held 288, 39 live).
 func (s *Server) getSessions(w http.ResponseWriter, r *http.Request) {
 	ss, err := s.Queue.Sessions(r.Context())
-	reply(w, SessionsView{Sessions: nonNil(ss)}, err)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	q := r.URL.Query()
+	if q.Get("all") == "1" {
+		reply(w, SessionsView{Sessions: nonNil(ss)}, nil)
+		return
+	}
+	named := map[string]bool{}
+	for _, v := range q["session"] {
+		for _, id := range strings.Split(v, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				named[id] = true
+			}
+		}
+	}
+	out := []deliver.Session{}
+	for _, sess := range ss {
+		if sess.Eligible || named[sess.ID] {
+			out = append(out, sess)
+		}
+	}
+	reply(w, SessionsView{Sessions: out}, nil)
 }
 
 // postMoveSession atomically moves all threads (and their queued messages) from
