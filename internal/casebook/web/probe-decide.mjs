@@ -12,7 +12,8 @@
 //   one click decides, with no sheet; a number key picks a card
 //   Not now: a condition picked from chips; "when a PR merges…" searches
 //     the tracked items (a title finds the PR) or takes a pasted URL (an
-//     untracked PR is offered as not tracked); junk offers and decides nothing
+//     untracked PR is offered as not tracked); junk offers and decides nothing;
+//     options shown for older text can't be chosen once the text changes
 //   a Not now naming a PR a sync couldn't find comes back, saying why
 //   the next undecided item opens; the last shows the view's summary
 //   u undoes the last decision; a decision changed since is refused (409),
@@ -650,6 +651,36 @@ async function decideScenario(context, t, s) {
       `and Enter decides nothing: issue #5 stays undecided and open (${col.key})`,
       (await decisionOf(ISSUE(5))) === null && col.key === ISSUE(5),
     );
+
+    // New text makes the options shown for older text stale at once: they
+    // can't be chosen while the search for the new text runs.
+    {
+      const old = await searchFor('retry');
+      const stale = await pg.evaluate(
+        ([sel, opts]) => {
+          const input = document.querySelector(sel);
+          input.value = 'retry the uploader zzqx';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          const shown = [...document.querySelectorAll(opts)];
+          shown[0]?.click();
+          return {
+            shown: shown.length,
+            disabled: shown.filter((b) => b.disabled).length,
+          };
+        },
+        [FIELD, `${READ} .cb-pick-opt`],
+      );
+      check(
+        `typing more disables the ${old.length} option(s) shown for "retry" at once (${stale.disabled} of ${stale.shown} disabled)`,
+        old.length === 1 && stale.shown === 1 && stale.disabled === 1,
+      );
+      await pg.waitForTimeout(400);
+      check(
+        'and clicking one decides nothing: issue #5 stays undecided and open',
+        (await decisionOf(ISSUE(5))) === null &&
+          (await readCol(pg)).key === ISSUE(5),
+      );
+    }
 
     // A title finds the tracked pull request; choosing it decides.
     const byTitle = await searchFor('retry');

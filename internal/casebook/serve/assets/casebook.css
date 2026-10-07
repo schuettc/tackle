@@ -377,9 +377,13 @@
 .cb-pick-opt:first-child {
   border-top: 0;
 }
-.cb-pick-opt:hover,
+.cb-pick-opt:hover:not(:disabled),
 .cb-pick-opt:focus-visible {
   box-shadow: inset 3px 0 0 var(--kit-signal);
+}
+.cb-pick-opt:disabled {
+  color: var(--kit-muted);
+  cursor: default;
 }
 .cb-pick-eg[hidden],
 .cb-pick-opts[hidden],

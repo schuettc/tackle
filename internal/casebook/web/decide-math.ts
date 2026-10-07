@@ -400,3 +400,44 @@ export function pastedKeys(text: string, asks: string): string[] | null {
   out = out.filter((k) => kinds.includes(kindFromKey(k)));
   return out.length ? out : null;
 }
+
+/** A LatestSearch runs a search per input, after a pause in typing. */
+export interface LatestSearch {
+  /** input is the field's text changing. */
+  input(text: string): void;
+  /** cancel drops any search under way or waiting. */
+  cancel(): void;
+}
+
+/**
+ * latestSearch searches with find delay ms after the last input and
+ * publishes what it found for that text. Every input makes what was shown
+ * stale at once (stale) and drops any answer still to come for older text,
+ * so only the answer for the newest text is ever published.
+ */
+export function latestSearch<T>(
+  find: (text: string) => Promise<T>,
+  publish: (text: string, found: T) => void,
+  delay: number,
+  stale: () => void,
+): LatestSearch {
+  let seq = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const run = async (my: number, text: string): Promise<void> => {
+    const found = await find(text);
+    if (my !== seq) return;
+    publish(text, found);
+  };
+  return {
+    input(text) {
+      const my = ++seq;
+      stale();
+      clearTimeout(timer);
+      timer = setTimeout(() => void run(my, text), delay);
+    },
+    cancel() {
+      seq++;
+      clearTimeout(timer);
+    },
+  };
+}

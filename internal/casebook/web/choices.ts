@@ -27,6 +27,7 @@ import {
   choicesForKeys,
   notNowUntil,
   pastedKeys,
+  latestSearch,
 } from './decide-math.ts';
 
 export interface ChoicesOpts {
@@ -174,22 +175,26 @@ export function renderChoices(
       options.hidden = found.length === 0;
     };
     // The newest search wins: a slower answer to an older one is dropped.
-    let seq = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const search = async (): Promise<void> => {
-      const my = ++seq;
-      const asks = form?.asks ?? '';
-      const text = input.value.trim();
-      const found = text ? await pick(asks, text) : [];
-      if (my !== seq) return;
-      show(found);
-      input.dataset.searched = text;
-    };
+    const search = latestSearch(
+      async (text: string) => (text ? pick(form?.asks ?? '', text) : []),
+      (text, found) => {
+        show(found);
+        input.dataset.searched = text;
+      },
+      150,
+      // What is shown is for older text: it can't be chosen until the
+      // answer for this text is in.
+      () => {
+        for (const b of options.querySelectorAll<HTMLButtonElement>(
+          '.cb-pick-opt',
+        ))
+          b.disabled = true;
+      },
+    );
     input.addEventListener('input', () => {
       if (!searching()) return;
       delete input.dataset.searched;
-      clearTimeout(timer);
-      timer = setTimeout(() => void search(), 150);
+      search.input(input.value.trim());
     });
     input.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
@@ -199,7 +204,9 @@ export function renderChoices(
         return;
       }
       // Enter takes the first option, once the search for this text is in.
-      const first = options.querySelector<HTMLElement>('.cb-pick-opt');
+      const first = options.querySelector<HTMLElement>(
+        '.cb-pick-opt:not(:disabled)',
+      );
       if (input.dataset.searched === input.value.trim() && first) first.click();
     });
     // A date input is complete when a date is picked.
@@ -237,7 +244,7 @@ export function renderChoices(
                 commit();
                 return;
               }
-              seq++;
+              search.cancel();
               show([]);
               delete input.dataset.searched;
               input.type = f.asks === 'date' ? 'date' : 'text';

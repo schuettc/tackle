@@ -686,6 +686,27 @@ function pastedKeys(text, asks) {
   out = out.filter((k) => kinds.includes(kindFromKey(k)));
   return out.length ? out : null;
 }
+function latestSearch(find, publish, delay, stale) {
+  let seq = 0;
+  let timer;
+  const run = async (my, text) => {
+    const found = await find(text);
+    if (my !== seq) return;
+    publish(text, found);
+  };
+  return {
+    input(text) {
+      const my = ++seq;
+      stale();
+      clearTimeout(timer);
+      timer = setTimeout(() => void run(my, text), delay);
+    },
+    cancel() {
+      seq++;
+      clearTimeout(timer);
+    }
+  };
+}
 
 // decide.ts
 import {
@@ -801,22 +822,26 @@ function renderChoices(ctx, kind, opts) {
       );
       options.hidden = found.length === 0;
     };
-    let seq = 0;
-    let timer;
-    const search = async () => {
-      const my = ++seq;
-      const asks = form?.asks ?? "";
-      const text = input.value.trim();
-      const found = text ? await pick(asks, text) : [];
-      if (my !== seq) return;
-      show(found);
-      input.dataset.searched = text;
-    };
+    const search = latestSearch(
+      async (text) => text ? pick(form?.asks ?? "", text) : [],
+      (text, found) => {
+        show(found);
+        input.dataset.searched = text;
+      },
+      150,
+      // What is shown is for older text: it can't be chosen until the
+      // answer for this text is in.
+      () => {
+        for (const b of options.querySelectorAll(
+          ".cb-pick-opt"
+        ))
+          b.disabled = true;
+      }
+    );
     input.addEventListener("input", () => {
       if (!searching()) return;
       delete input.dataset.searched;
-      clearTimeout(timer);
-      timer = setTimeout(() => void search(), 150);
+      search.input(input.value.trim());
     });
     input.addEventListener("keydown", (e) => {
       if (e.key !== "Enter") return;
@@ -825,7 +850,9 @@ function renderChoices(ctx, kind, opts) {
         commit();
         return;
       }
-      const first = options.querySelector(".cb-pick-opt");
+      const first = options.querySelector(
+        ".cb-pick-opt:not(:disabled)"
+      );
       if (input.dataset.searched === input.value.trim() && first) first.click();
     });
     input.addEventListener("change", () => {
@@ -862,7 +889,7 @@ function renderChoices(ctx, kind, opts) {
                 commit();
                 return;
               }
-              seq++;
+              search.cancel();
               show([]);
               delete input.dataset.searched;
               input.type = f.asks === "date" ? "date" : "text";

@@ -9,6 +9,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   nextInView,
+  latestSearch,
   MORE,
   notNowUntil,
   choicesForKeys,
@@ -422,5 +423,51 @@ describe('pastedKeys', () => {
       'branch:owner/repo@main',
     ])
       assert.equal(pastedKeys(s, 'pr'), null, s);
+  });
+});
+
+describe('latestSearch', () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test('an older answer landing after newer input publishes nothing', async () => {
+    const answers = new Map<string, (found: string[]) => void>();
+    const published: string[] = [];
+    let stale = 0;
+    const search = latestSearch(
+      (text) => new Promise<string[]>((r) => answers.set(text, r)),
+      (text) => published.push(text),
+      20,
+      () => stale++,
+    );
+    search.input('ret');
+    await wait(40);
+    assert.ok(answers.has('ret'), "the search for 'ret' is under way");
+    // Newer input; its own search waits for the pause in typing.
+    search.input('retry');
+    assert.equal(stale, 2, 'each input makes the shown options stale at once');
+    answers.get('ret')?.(['old']);
+    await wait(0);
+    assert.deepEqual(published, [], "the answer for 'ret' is dropped");
+    await wait(40);
+    answers.get('retry')?.(['new']);
+    await wait(0);
+    assert.deepEqual(published, ['retry']);
+  });
+
+  test('cancel drops a search under way', async () => {
+    const answers = new Map<string, (found: string[]) => void>();
+    const published: string[] = [];
+    const search = latestSearch(
+      (text) => new Promise<string[]>((r) => answers.set(text, r)),
+      (text) => published.push(text),
+      0,
+      () => {},
+    );
+    search.input('a');
+    await wait(10);
+    search.cancel();
+    answers.get('a')?.([]);
+    await wait(0);
+    assert.deepEqual(published, []);
   });
 });
