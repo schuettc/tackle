@@ -111,10 +111,10 @@ async function setTheme(pg, theme) {
 
 const BG = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
 
-// shoot takes /tmp/t10-<name>-<theme>.png for each theme, asserting the
-// theme (html[data-theme] and the body's ground) and that nothing is
-// focused (a focus ring would be the probe's, not the page's).
-async function shoot(t, pg, name, themes = ['light', 'dark']) {
+// inThemes shows the page in each theme, asserting the theme
+// (html[data-theme] and the body's ground) and that nothing is focused (a
+// focus ring would be the probe's, not the page's).
+async function inThemes(t, pg, name, themes = ['light', 'dark']) {
   for (const theme of themes) {
     await setTheme(pg, theme);
     await pg.evaluate(() => document.activeElement?.blur());
@@ -123,12 +123,10 @@ async function shoot(t, pg, name, themes = ['light', 'dark']) {
       bg: getComputedStyle(document.body).backgroundColor,
       blurred: document.activeElement === document.body,
     }));
-    const path = `/tmp/t10-${name}-${theme}.png`;
     t.check(
-      `${path} is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
+      `the ${name} view is ${theme} (theme ${got.theme}, body ${got.bg}), nothing focused`,
       got.theme === theme && got.bg === BG[theme] && got.blurred,
     );
-    await pg.screenshot({ path });
   }
 }
 
@@ -540,7 +538,7 @@ async function keyboardScenario(shared, t) {
           pg,
           () =>
             document.querySelectorAll(
-              '.kit-app > .kit-list:not([hidden]) .kit-row',
+              '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
             ).length === 2,
         );
         const curBefore = await curOf(pg);
@@ -556,7 +554,9 @@ async function keyboardScenario(shared, t) {
         );
         const typed = 'g r j x d ?';
         await pg.keyboard.type(typed);
-        await pg.waitForTimeout(1200);
+        // Kept: the check is that the keys typed act on nothing; a window
+        // for a hash change, a sheet or a selection to show.
+        await pg.waitForTimeout(400);
         const inField = await pg.evaluate(() => ({
           value: document.querySelector('[data-testid="composer-input"]').value,
           hash: location.hash,
@@ -633,16 +633,14 @@ async function keyboardScenario(shared, t) {
             shown: !!document.querySelector('.kit-keys'),
             tray: !document.querySelector('[data-testid="batch-tray"]')?.hidden,
           }));
-          const path = `/tmp/t10-overlay-${theme}.png`;
           check(
-            `${path} is ${theme} with the overlay open (theme ${got.theme}, body ${got.bg}), nothing focused, no batch tray (${got.tray})`,
+            `the overlay is ${theme} with the overlay open (theme ${got.theme}, body ${got.bg}), nothing focused, no batch tray (${got.tray})`,
             got.theme === theme &&
               got.bg === BG[theme] &&
               got.blurred &&
               got.shown &&
               !got.tray,
           );
-          await pg.screenshot({ path });
           await pg.keyboard.press('Escape');
           await until(pg, () => !document.querySelector('.kit-keys'));
         }
@@ -780,7 +778,7 @@ async function keyboardScenario(shared, t) {
           pg,
           () =>
             document.querySelectorAll(
-              '.kit-app > .kit-list:not([hidden]) .kit-row',
+              '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
             ).length === 2,
         );
         await press(pg, 'k');
@@ -833,7 +831,7 @@ async function keyboardScenario(shared, t) {
 // ---- the poll fallback ---------------------------------------------------------
 
 async function pollFallbackScenario(shared, t) {
-  const { check, until } = t;
+  const { check, until, eventually } = t;
   console.log(
     '\nscenario: the poll fallback keeps state when the stream drops',
   );
@@ -875,9 +873,15 @@ async function pollFallbackScenario(shared, t) {
           // later, so a poll asked before the stream came back can be
           // counted after it).
           let pollsAsked = 0;
+          let pollsDone = 0;
           pg.on('request', (r) => {
             if (r.url().includes('/api/state?since=')) pollsAsked++;
           });
+          const pollDone = (r) => {
+            if (r.url().includes('/api/state?since=')) pollsDone++;
+          };
+          pg.on('requestfinished', pollDone);
+          pg.on('requestfailed', pollDone);
           pg.on('response', async (r) => {
             if (!r.url().includes('/api/state?since=')) return;
             const body = await r.json().catch(() => null);
@@ -950,7 +954,7 @@ async function pollFallbackScenario(shared, t) {
           );
           // A poll already asked as the stream came back may still finish;
           // after it, no poll is asked again.
-          await pg.waitForTimeout(1000);
+          await eventually(async () => pollsDone === pollsAsked);
           const pollsAt = pollsAsked;
           await agent.api('POST', '/api/decide', {
             keys: [`pr:schuettc/${FB}#52`],
@@ -966,7 +970,8 @@ async function pollFallbackScenario(shared, t) {
                 ).length === 0,
             ),
           );
-          // Polling runs every 2 s: longer than that without one, it stopped.
+          // Kept: polling runs every 2 s: longer than that without one, it
+          // stopped.
           await pg.waitForTimeout(2500);
           check(
             `and polling has stopped (${pollsAsked - pollsAt} polls asked since)`,
@@ -1275,7 +1280,7 @@ async function downScenario(shared, t) {
           );
         }
         // The page down with its counts and status: light and dark.
-        await shoot(t, pg, 'down');
+        await inThemes(t, pg, 'down');
         // serve answers the poll, but the stream stays cut: serve is back,
         // the banner goes, and the pill says the page is polling.
         await pg.unroute(STATE);
@@ -1395,6 +1400,7 @@ async function staleScenario(shared, t) {
         await pg.click('.kit-chip[data-id="new"]');
         await press(pg, 'g', 'p');
         await pg.clock.runFor(60000);
+        // Kept: no call may fire; a real-time window for one to go out.
         await pg.waitForTimeout(500);
         const after = first401 < 0 ? reqs : reqs.slice(first401);
         check(
@@ -1421,10 +1427,9 @@ async function staleScenario(shared, t) {
           blurred: document.activeElement === document.body,
         }));
         check(
-          `/tmp/t10-stale-light.png is light (theme ${shot.theme}, body ${shot.bg}), nothing focused`,
+          `the stale page is light (theme ${shot.theme}, body ${shot.bg}), nothing focused`,
           shot.theme === 'light' && shot.bg === BG.light && shot.blurred,
         );
-        await pg.screenshot({ path: '/tmp/t10-stale-light.png' });
         check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
       } finally {
         await pg.close();
@@ -1627,6 +1632,7 @@ async function slowPushScenario(shared, t) {
               serveHandle.pushGate.started() &&
               !remoteLog().includes(`decide ${KEY}`),
           );
+          // Kept: the held push must not turn the status offline; a window.
           await pg.waitForTimeout(300);
           const during = await pg.$eval('.kit-status', (e) => e.textContent);
           check(
@@ -1813,9 +1819,6 @@ async function pushFailedScenario(shared, t) {
             `the strip gives Court no command to run ("${l1.text}")`,
             !/`|\brun\b|casebook (sync|decide|push)|git /.test(l1.text),
           );
-          await pg.evaluate(() => document.activeElement?.blur());
-          await pg.screenshot({ path: '/tmp/fr1-push-failed.png' });
-          console.log('  screenshot: /tmp/fr1-push-failed.png');
 
           // The remote moves back to the base both share: the next push
           // goes through, and the failure goes with it.
@@ -1927,6 +1930,7 @@ async function staleApiScenario(shared, t) {
         await pg.click('.kit-chip[data-id="waiting"]');
         await press(pg, 'g', 'r');
         await pg.clock.runFor(60000);
+        // Kept: no call may fire; a real-time window for one to go out.
         await pg.waitForTimeout(500);
         const after = reqs.slice(at);
         check(
@@ -2016,7 +2020,14 @@ async function pageCapScenario(shared, t) {
             SHOWN,
             15000,
           );
-          await pg.waitForTimeout(500);
+          // The page has drawn the list and its foot.
+          await until(
+            pg,
+            (sel) =>
+              document.querySelector(`${sel} .cb-foot-more`)?.textContent ===
+              'show 3 more',
+            SHOWN,
+          );
           const keys200 = await rowKeys();
           check(
             `the first page renders exactly 200 rows of ${N} (${keys200.length})`,
