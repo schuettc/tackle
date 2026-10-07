@@ -4,6 +4,28 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.3.1] - 2026-10-06
+
+### Fixed
+- A casebook serve restart no longer wakes every agent session on the
+  machine. A session hears about a restart only when that restart
+  interrupted messages in flight to it, and the notice says which ones
+  ("casebook serve restarted while 2 messages to you were in flight (7,
+  8)…"). Every other session hears nothing. The channel asks serve (the
+  new, session-scoped `GET /api/agent/interrupted`), and when serve can't
+  answer (an older serve, an error) it stays silent. The notice no longer
+  mentions the page reopening in a new tab: that is about the browser, not
+  the agent's work.
+
+### Upgrading
+- The fix is in the channel each agent session runs (`casebook channel`)
+  and in serve. Sessions still running the 0.3.0 channel keep the old
+  behaviour until they restart: every serve restart still wakes them. So a
+  serve restart while 0.3.0 channels are running (including the one that
+  picks up this release) wakes those sessions one last time; restart serve
+  when few old sessions are left. Until serve restarts, a new channel finds
+  an old serve that can't say what a restart interrupted, and stays silent.
+
 ## [casebook 0.3.0] - 2026-10-06
 
 ### Changed

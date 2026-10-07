@@ -92,6 +92,11 @@ type Server struct {
 	runPush     func(ctx context.Context) error        // test seam for App.Push
 	after       func(d time.Duration) <-chan time.Time // serve's clock for the pusher's retries (nil: time.After)
 	life        context.Context                        // Run's context; done while shutting down
+	// started is when this serve started (the advert's StartedAt), and
+	// interrupted what its start interrupted (deliver.Queue.Interrupt), by
+	// session. Both are set in New, before any request, and never change.
+	started     time.Time
+	interrupted map[string][]deliver.Interruption
 	stop        context.CancelFunc
 	// openPage opens the page in Court's browser for casebook_open: suffix
 	// is appended to the page URL (…/?t=<token>), an optional
@@ -173,6 +178,9 @@ func (s *Server) pageStream(w http.ResponseWriter, r *http.Request) {
 	s.Bus.ServeSSE(w, r)
 }
 
+// StartedAt is when this serve started: the advert's StartedAt.
+func (s *Server) StartedAt() time.Time { return s.started }
+
 // PageOpen reports whether a tab is connected now.
 func (s *Server) PageOpen() bool { return s.streams.Load() > 0 }
 
@@ -209,10 +217,17 @@ func New(ctx context.Context, a *app.App, d *db.DB) (*Server, error) {
 		Now:    s.Now,
 		Notify: s.publish,
 	}
-	if n, err := s.Queue.Interrupt(ctx); err != nil {
+	s.started = time.Now().UTC()
+	ins, err := s.Queue.Interrupt(ctx)
+	if err != nil {
 		return nil, err
-	} else if n > 0 {
-		s.publish(ctx, "interrupted", map[string]int{"deliveries": n})
+	}
+	s.interrupted = map[string][]deliver.Interruption{}
+	for _, in := range ins {
+		s.interrupted[in.Session] = append(s.interrupted[in.Session], in)
+	}
+	if len(ins) > 0 {
+		s.publish(ctx, "interrupted", map[string]int{"deliveries": len(ins)})
 	}
 	if err := s.rebuild(ctx); err != nil {
 		return nil, err
@@ -606,6 +621,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/agent/status", s.agentStatus)
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
+	m.HandleFunc("GET /api/agent/interrupted", s.agentInterrupted)
 	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
 	m.HandleFunc("POST /api/agent/job-step", s.agentJobStep)
 	m.HandleFunc("POST /api/agent/job-ask", s.agentJobAsk)
@@ -738,7 +754,7 @@ func Run(ctx context.Context, a *app.App, o Options) error {
 	}
 	// Reopened records that a tab was connected when the previous serve went
 	// away, whether or not a Ready callback is set to open the page again.
-	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: time.Now().UTC(),
+	adv := Advert{URL: srv.URL, Base: "http://" + srv.Addr(), Token: srv.Token, PID: os.Getpid(), Version: o.Version, StartedAt: s.StartedAt(),
 		Reopened: wasOpen}
 	if o.Open != nil {
 		// Guard the write: agentOpen reads openPage concurrently once the

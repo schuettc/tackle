@@ -28,7 +28,7 @@ type Advert struct {
 	StartedAt time.Time `json:"started_at"`
 	// Reopened: a tab was connected when the previous serve went away, so the
 	// page is opened again (Options.Ready) in a new tab; the old tab's token is
-	// dead. Channels read it to tell their agents.
+	// dead. It is about Court's browser: channels don't tell agents of it.
 	Reopened bool `json:"reopened,omitempty"`
 }
 

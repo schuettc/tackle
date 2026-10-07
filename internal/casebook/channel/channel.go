@@ -116,13 +116,50 @@ func (ch *Channel) presence(ctx context.Context, c *Client) error {
 	return err
 }
 
-// restarted is the channel event when serve came back as a new process.
-func restarted(adv serve.Advert) string {
-	s := "casebook serve restarted. Anything that was in flight to you is marked interrupted on the page; nothing was lost."
-	if adv.Reopened {
-		s += " The page was open, so it reopened in a new tab."
+// restarted is the channel event when serve came back as a new process and
+// its start interrupted messages in flight to this session; "" when it
+// interrupted none (then the restart is none of this session's business).
+// It speaks only of the session's own work: whether Court's page reopened
+// is about Court's browser, not the agent's.
+func restarted(v serve.InterruptedView) string {
+	n := len(v.Messages)
+	if n == 0 {
+		return ""
 	}
-	return s
+	ids := make([]string, n)
+	for i, id := range v.Messages {
+		ids[i] = strconv.FormatInt(id, 10)
+	}
+	what := "1 message"
+	if n > 1 {
+		what = strconv.Itoa(n) + " messages"
+	}
+	return fmt.Sprintf("casebook serve restarted while %s to you %s in flight (%s). %s marked interrupted on the page; nothing was lost. "+
+		"You can still settle %s with casebook_reply.",
+		what, plural(n, "was", "were"), strings.Join(ids, ", "), plural(n, "It is", "They are"), plural(n, "it", "them"))
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// interrupted asks serve whether its start interrupted a delivery of this
+// session, for the restart to the serve started at startedAt. Anything but a
+// clear answer about that serve (an older serve without the endpoint, an
+// error, an answer about another serve) is no answer: ok false, and the
+// channel says nothing.
+func (ch *Channel) interrupted(ctx context.Context, c *Client, startedAt time.Time) (serve.InterruptedView, bool) {
+	var v serve.InterruptedView
+	if _, err := c.Do(ctx, http.MethodGet, "/api/agent/interrupted?"+q("session", ch.ID.Session), nil, &v); err != nil {
+		return v, false
+	}
+	if !v.StartedAt.Equal(startedAt) {
+		return v, false
+	}
+	return v, true
 }
 
 // logLoopErrOnce writes err to w only when it is not ErrNoServe and its
@@ -143,8 +180,10 @@ func logLoopErrOnce(w io.Writer, last *string, err error) {
 // loop keeps presence fresh and long-polls for deliveries, emitting each as a
 // channel event. The next poll is armed as soon as an event is queued
 // (channelmcp.Notify only queues), so nothing sent meanwhile is missed. It
-// never starts serve (only tool calls do), and it tells the agent when serve
-// came back as a new process.
+// never starts serve (only tool calls do). When serve came back as a new
+// process it tells the agent only if that restart interrupted messages in
+// flight to this session (serve says so); otherwise, or when serve can't
+// say, it stays silent.
 func (ch *Channel) loop(ctx context.Context) {
 	c := ch.Client.passive()
 	lastPresence := time.Time{}
@@ -153,8 +192,12 @@ func (ch *Channel) loop(ctx context.Context) {
 	for ctx.Err() == nil {
 		if adv, err := c.Find(); err == nil && !adv.StartedAt.Equal(seen) {
 			if !seen.IsZero() {
-				if err := ch.Server.Notify(restarted(adv), map[string]string{"source": "casebook", "event": "restarted"}); err != nil {
-					_, _ = fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
+				if v, ok := ch.interrupted(ctx, c, adv.StartedAt); ok {
+					if text := restarted(v); text != "" {
+						if err := ch.Server.Notify(text, map[string]string{"source": "casebook", "event": "restarted"}); err != nil {
+							_, _ = fmt.Fprintf(ch.Log, "casebook channel: notify: %v\n", err)
+						}
+					}
 				}
 			}
 			seen, lastPresence = adv.StartedAt, time.Time{}

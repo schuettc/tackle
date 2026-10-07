@@ -414,8 +414,14 @@ func TestStuckReleaseMoveInterrupt(t *testing.T) {
 	if d3 == nil {
 		t.Fatal("no delivery")
 	}
-	if n, _ := q.Interrupt(ctx); n != 1 {
-		t.Fatalf("interrupted %d", n)
+	// Interrupt says whose delivery it was and which messages it caught, so
+	// serve tells that session and no other.
+	if got, err := q.Interrupt(ctx); err != nil || len(got) != 1 || got[0].Delivery != d3.ID || got[0].Session != "s2" ||
+		len(got[0].Messages) != 1 || got[0].Messages[0] != m2.ID {
+		t.Fatalf("interrupted %+v %v", got, err)
+	}
+	if got, _ := q.Interrupt(ctx); len(got) != 0 {
+		t.Fatalf("interrupted again %+v", got)
 	}
 	if got, _ := q.Message(ctx, m2.ID); got.State != Interrupted {
 		t.Fatalf("m2 %s", got.State)
