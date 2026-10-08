@@ -562,7 +562,11 @@ func goHints(root string, cr CheckResult) []Hint {
 		if f.Kind != speed.KindSetenv {
 			continue
 		}
-		rel, err := filepath.Rel(modDir, filepath.Join(root, filepath.FromSlash(path.Dir(f.File))))
+		pdir := f.Package
+		if pdir == "" {
+			pdir = path.Dir(f.File)
+		}
+		rel, err := filepath.Rel(modDir, filepath.Join(root, filepath.FromSlash(pdir)))
 		if err != nil {
 			continue
 		}
@@ -575,6 +579,7 @@ func goHints(root string, cr CheckResult) []Hint {
 			byPkg[pkg] = f
 		}
 	}
+	sort.SliceStable(slow, func(i, j int) bool { return slow[i].Seconds > slow[j].Seconds })
 	var out []Hint
 	for _, p := range slow {
 		f, ok := byPkg[p.Name]

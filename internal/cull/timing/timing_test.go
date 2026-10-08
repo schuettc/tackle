@@ -475,3 +475,39 @@ func TestNoExtraCheckWhenCIRunsGoTest(t *testing.T) {
 		}
 	}
 }
+
+func TestHintFollowsSetupHelperIntoOtherPackageLongestFirst(t *testing.T) {
+	root := slowModule(t, "package slow\n")
+	write(t, root, "helper/helper.go", `package helper
+
+import "testing"
+
+func New(t *testing.T) { t.Setenv("X", "1") }
+`)
+	var slow, small strings.Builder
+	slow.WriteString("package slow\n\nimport (\n\t\"testing\"\n\t\"time\"\n\n\t\"example.com/tm/helper\"\n)\n")
+	for _, n := range []string{"A", "B", "C", "D"} {
+		slow.WriteString("\nfunc Test" + n + "(t *testing.T) { helper.New(t); time.Sleep(500 * time.Millisecond) }\n")
+	}
+	write(t, root, "slow/slow_test.go", slow.String())
+	small.WriteString("package small\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc setup(t *testing.T) { t.Setenv(\"X\", \"1\"); time.Sleep(310 * time.Millisecond) }\n")
+	for _, n := range []string{"A", "B", "C"} {
+		small.WriteString("\nfunc Test" + n + "(t *testing.T) { setup(t) }\n")
+	}
+	write(t, root, "small/small_test.go", small.String())
+	gitInit(t, root)
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Hints) != 2 {
+		t.Fatalf("hints = %+v", rep.Hints)
+	}
+	h := rep.Hints[0].Message
+	if !strings.Contains(h, "example.com/tm/slow:") || !strings.Contains(h, "New calls t.Setenv") {
+		t.Errorf("first hint = %q", h)
+	}
+	if !strings.Contains(rep.Hints[1].Message, "example.com/tm/small:") {
+		t.Errorf("second hint = %q", rep.Hints[1].Message)
+	}
+}

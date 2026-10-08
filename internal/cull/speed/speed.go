@@ -43,6 +43,7 @@ type Finding struct {
 	Seconds *float64 `json:"seconds,omitempty"`    // fixed waits with a literal duration
 	Test    string   `json:"test,omitempty"`       // enclosing test id, test files only
 	Held    int      `json:"tests_held,omitempty"` // setup findings: tests that can't run in parallel
+	Package string   `json:"package,omitempty"`    // setup findings: dir (root-relative) of the package whose tests are held back
 	Detail  string   `json:"detail"`
 
 	offset int // byte offset in the file, for the enclosing test
