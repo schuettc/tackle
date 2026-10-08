@@ -2385,8 +2385,50 @@ async function openRecScenario(context, t, s) {
   }
 
   // ---- a proposal for another item leaves the open item as it was --------
+  // One click loads the item once: the row opens it, and the hash change
+  // that follows (#/item/\u2039key\u203a) doesn't load it again. The route's
+  // list reload (GET /api/items) comes after any load it would start, so
+  // once it is seen every load the click caused has been asked for.
+  const itemLoads = [];
+  const countLoads = (req) => {
+    const u = new URL(req.url());
+    if (
+      req.method() === 'GET' &&
+      u.pathname === '/api/item' &&
+      u.searchParams.get('key') === OISSUE(1)
+    )
+      itemLoads.push(u.href);
+  };
+  pg.on('request', countLoads);
+  const routeReload = pg.waitForRequest(
+    (req) => new URL(req.url()).pathname === '/api/items',
+    { timeout: 8000 },
+  );
   await row(pg, OISSUE(1)).click();
   check('issue #1 opens', await opened(t, pg, OISSUE(1)));
+  {
+    const hashed = await until(
+      pg,
+      (k) => decodeURIComponent(location.hash) === `#/item/${k}`,
+      OISSUE(1),
+      8000,
+    );
+    const reloaded = await routeReload.then(
+      () => true,
+      () => false,
+    );
+    pg.off('request', countLoads);
+    check(
+      `one row click loads the item once: ${itemLoads.length} GET /api/item for issue #1 (hash moved: ${hashed}, the route's list reload seen: ${reloaded})`,
+      hashed && reloaded && itemLoads.length === 1,
+    );
+    // A real change of key still loads: back opens PR #4 again, forward
+    // issue #1.
+    await pg.goBack();
+    check('back opens PR #4 again', await opened(t, pg, OPR(4)));
+    await pg.goForward();
+    check('forward opens issue #1 again', await opened(t, pg, OISSUE(1)));
+  }
   await until(
     pg,
     (r) => !!document.querySelector(`${r} .cb-question`)?.textContent,

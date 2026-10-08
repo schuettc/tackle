@@ -4430,6 +4430,7 @@ function makeAttention(ctx) {
     updateAgree();
   }
   function show(sub) {
+    const wasActive = active;
     active = true;
     feedAttached();
     if (sub === "board") {
@@ -4458,7 +4459,7 @@ function makeAttention(ctx) {
       void reload();
     } else if (sub) {
       handle.setChips("view", viewChips(filters.view));
-      void openDetail(sub);
+      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
   }

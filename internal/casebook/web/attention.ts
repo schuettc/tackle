@@ -1411,6 +1411,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   function show(sub: string): void {
     // Becoming active: the composer shows Attention's selection or open item.
+    const wasActive = active;
     active = true;
     feedAttached();
     if (sub === 'board') {
@@ -1452,7 +1453,11 @@ export function makeAttention(ctx: Ctx): Section {
       // makeBoard already set filters.view to the card's lane, so reload()
       // will use that view.  Update the chips to reflect it.
       handle.setChips('view', viewChips(filters.view));
-      void openDetail(sub);
+      // A row click opens its item itself, then moves the hash here: the
+      // item is already open (or loading), so it isn't loaded twice. A
+      // different key (back, forward, a pasted link), or coming back from
+      // another section, loads it.
+      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
   }

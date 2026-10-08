@@ -33,6 +33,12 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   into it" until the message settles; serve already marks every item a
   look-into message names.
 
+### Fixed
+- Clicking an item in the list loads it once. Before, the click loaded it
+  and the address change that follows loaded it again, so it was fetched
+  and drawn twice. Back, forward and a pasted item link still load the
+  item they name.
+
 ## [casebook 0.4.5] - 2026-10-07
 
 ### Fixed
