@@ -34,6 +34,19 @@ func TestAddTimingFlags(t *testing.T) {
 
 func gitInit(t *testing.T, root string) {
 	t.Helper()
+	// The repository must be the temp one: under a git hook GIT_DIR points at
+	// the real repository (TestMain clears it; this proves it).
+	if err := exec.Command("git", "-C", root, "init", "-q").Run(); err != nil {
+		t.Fatal(err)
+	}
+	gd, err := exec.Command("git", "-C", root, "rev-parse", "--absolute-git-dir").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(root, ".git"))
+	if got, _ := filepath.EvalSymlinks(strings.TrimSpace(string(gd))); got != want {
+		t.Fatalf("git would write to %s, not the test's repository %s", got, want)
+	}
 	for _, a := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=a@b", "-c", "user.name=n", "commit", "-qm", "x"}} {
 		cmd := exec.Command("git", a...)
 		cmd.Dir = root
