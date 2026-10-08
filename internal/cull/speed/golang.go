@@ -329,7 +329,7 @@ func (p *goProject) setenvFinding(dir string) (Finding, bool) {
 		if direct*setenvShareDeno < len(tests) || direct < minSetenvTests {
 			return Finding{}, false
 		}
-		return Finding{Kind: KindSetenv, File: firstDirect.file, Line: firstDirect.sites[0],
+		return Finding{Kind: KindSetenv, File: firstDirect.file, Line: firstDirect.sites[0], Held: direct,
 			Detail: fmt.Sprintf("t.Setenv in %d of %d tests in %s: they cannot run with t.Parallel()", direct, len(tests), dir)}, true
 	}
 	reachSet := map[*goFn]map[*goFn]bool{}
@@ -378,9 +378,13 @@ func (p *goProject) setenvFinding(dir string) (Finding, bool) {
 	}
 	detail := fmt.Sprintf("%s %s and is used by %d of %d tests in %s, so none of them can run in parallel", h.name, how, best, len(tests), dir)
 	if len(others) > 0 {
-		detail += fmt.Sprintf("; %d other helpers also call t.Setenv", len(others))
+		if len(others) == 1 {
+			detail += "; 1 other helper also calls t.Setenv"
+		} else {
+			detail += fmt.Sprintf("; %d other helpers also call t.Setenv", len(others))
+		}
 	}
-	return Finding{Kind: KindSetenv, File: h.file, Line: line, Detail: detail}, true
+	return Finding{Kind: KindSetenv, File: h.file, Line: line, Held: best, Detail: detail}, true
 }
 
 // setterBelow reports whether fn calls t.Setenv itself or through callees.

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -25,6 +26,7 @@ const (
 	KindFixedWait   = "fixed_wait"
 	keepMarker      = "cull: keep"
 	digestTop       = 20
+	digestShare     = 5 // the most one kind takes before every kind has its share
 	minSetenvTests  = 2
 	setenvShareDeno = 2 // a helper counts when at least 1/2 of a package's tests reach it
 )
@@ -38,8 +40,9 @@ type Finding struct {
 	Kind    string   `json:"kind"`
 	File    string   `json:"file"`
 	Line    int      `json:"line"`
-	Seconds *float64 `json:"seconds,omitempty"` // fixed waits with a literal duration
-	Test    string   `json:"test,omitempty"`    // enclosing test id, test files only
+	Seconds *float64 `json:"seconds,omitempty"`    // fixed waits with a literal duration
+	Test    string   `json:"test,omitempty"`       // enclosing test id, test files only
+	Held    int      `json:"tests_held,omitempty"` // setup findings: tests that can't run in parallel
 	Detail  string   `json:"detail"`
 
 	offset int // byte offset in the file, for the enclosing test
@@ -210,32 +213,55 @@ func Digest(fs []Finding) DigestOut {
 			d.FixedWaitSeconds += *f.Seconds
 		}
 	}
+	d.FixedWaitSeconds = math.Round(d.FixedWaitSeconds*1000) / 1000 // no float noise in JSON
 	rank := map[string]int{}
 	for i, k := range kindOrder {
 		rank[k] = i
 	}
-	top := append([]Finding(nil), fs...)
 	sec := func(f Finding) float64 {
 		if f.Seconds == nil {
 			return 0
 		}
 		return *f.Seconds
 	}
-	sort.SliceStable(top, func(i, j int) bool {
-		if rank[top[i].Kind] != rank[top[j].Kind] {
-			return rank[top[i].Kind] < rank[top[j].Kind]
+	sorted := append([]Finding(nil), fs...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		if rank[a.Kind] != rank[b.Kind] {
+			return rank[a.Kind] < rank[b.Kind]
 		}
-		if top[i].Kind == KindFixedWait && sec(top[i]) != sec(top[j]) {
-			return sec(top[i]) > sec(top[j])
+		if a.Held != b.Held {
+			return a.Held > b.Held // setup holding back the most tests first
 		}
-		if top[i].File != top[j].File {
-			return top[i].File < top[j].File
+		if sec(a) != sec(b) {
+			return sec(a) > sec(b) // the longest waits first
 		}
-		return top[i].Line < top[j].Line
+		if a.File != b.File {
+			return a.File < b.File
+		}
+		return a.Line < b.Line
 	})
-	if len(top) > digestTop {
-		top = top[:digestTop]
+	// Every kind present gets a share of the list (up to digestShare each),
+	// in kind order; whatever is left goes to the rest in the same order.
+	var top []Finding
+	taken := map[int]bool{}
+	per := map[string]int{}
+	for i, f := range sorted {
+		if len(top) < digestTop && per[f.Kind] < digestShare {
+			top = append(top, f)
+			taken[i] = true
+			per[f.Kind]++
+		}
 	}
+	for i, f := range sorted {
+		if len(top) >= digestTop {
+			break
+		}
+		if !taken[i] {
+			top = append(top, f)
+		}
+	}
+	sort.SliceStable(top, func(i, j int) bool { return rank[top[i].Kind] < rank[top[j].Kind] })
 	d.Top = append(d.Top, top...)
 	return d
 }
@@ -255,7 +281,7 @@ func WriteText(w io.Writer, d DigestOut) {
 		if n := d.Counts[k]; n > 0 {
 			extra := ""
 			if k == KindFixedWait && d.FixedWaitSeconds > 0 {
-				extra = fmt.Sprintf("  (%gs of literal waits)", d.FixedWaitSeconds)
+				extra = fmt.Sprintf("  (%.1fs of literal waits)", d.FixedWaitSeconds)
 			}
 			_, _ = fmt.Fprintf(w, "  %-24s %d%s\n", k, n, extra)
 		}

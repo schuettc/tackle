@@ -30,7 +30,7 @@ func TestF(t *testing.T) {}
 	}
 	d := fs[0].Detail
 	if !strings.Contains(d, "envA calls t.Setenv") || !strings.Contains(d, "used by 3 of 6 tests in p") ||
-		!strings.Contains(d, "so none of them can run in parallel") || !strings.Contains(d, "1 other helpers also call t.Setenv") {
+		!strings.Contains(d, "so none of them can run in parallel") || !strings.Contains(d, "1 other helper also calls t.Setenv") {
 		t.Errorf("detail = %q", d)
 	}
 }
@@ -218,5 +218,43 @@ func TestScanSkipsUnreadableFile(t *testing.T) {
 	fs, err := ScanTo(root, []string{"dir.mjs", "ok.mjs"}, nil, &warn)
 	if err != nil || len(fs) != 1 || !strings.Contains(warn.String(), "dir.mjs") {
 		t.Errorf("err=%v fs=%v warn=%q", err, brief(fs), warn.String())
+	}
+}
+
+// Each kind gets a share of the top list, and setup findings are ranked by
+// how many tests they hold back: on casebook's before-tree twenty setup
+// findings would otherwise fill the list, led by an 8-test package.
+func TestDigestSharesTheTopAcrossKinds(t *testing.T) {
+	var fs []Finding
+	for i := 0; i < 25; i++ {
+		fs = append(fs, Finding{Kind: KindSetenv, File: "pkg", Line: i + 1, Held: i + 2})
+	}
+	fs = append(fs, Finding{Kind: KindSetenv, File: "serve", Line: 1, Held: 174})
+	for i := 0; i < 30; i++ {
+		s := float64(i + 1)
+		fs = append(fs, Finding{Kind: KindFixedWait, File: "w", Line: i + 1, Seconds: &s})
+	}
+	for i := 0; i < 10; i++ {
+		fs = append(fs, Finding{Kind: KindSwallowed, File: "z", Line: i + 1}, Finding{Kind: KindScreenshot, File: "s", Line: i + 1})
+	}
+	fs = append(fs, Finding{Kind: KindMisplaced, File: "m", Line: 1})
+	d := Digest(fs)
+	if len(d.Top) != 20 {
+		t.Fatalf("top = %d", len(d.Top))
+	}
+	if d.Top[0].File != "serve" {
+		t.Errorf("first = %+v, want the setup finding holding back the most tests", d.Top[0])
+	}
+	per := map[string]int{}
+	for _, f := range d.Top {
+		per[f.Kind]++
+	}
+	for _, k := range []string{KindSetenv, KindMisplaced, KindSwallowed, KindFixedWait, KindScreenshot} {
+		if per[k] == 0 {
+			t.Errorf("no %s in the top list: %v", k, per)
+		}
+	}
+	if per[KindSetenv] > 5 || per[KindSwallowed] > 5 || per[KindScreenshot] > 5 {
+		t.Errorf("a kind took more than its share: %v", per)
 	}
 }
