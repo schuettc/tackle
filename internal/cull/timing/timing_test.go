@@ -406,3 +406,72 @@ func TestC(t *testing.T) { setup(t) }
 		t.Fatalf("hints = %+v checks=%+v", rep.Hints, rep.Checks)
 	}
 }
+
+const cullOrigin = "cull (no check in CI or hooks runs these tests)"
+
+func TestUncoveredGoTestsAreTimedWhenCIRunsOnlyNode(t *testing.T) {
+	needTool(t, "go")
+	needTool(t, "git")
+	root := t.TempDir()
+	write(t, root, ".github/workflows/ci.yml", "on: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: node --test\n")
+	write(t, root, "go.mod", "module example.com/unc\n\ngo 1.22\n")
+	write(t, root, "slow/slow_test.go", slowTest)
+	write(t, root, "web/a.test.mjs", "import test from 'node:test'\ntest('a', () => {})\n")
+	gitInit(t, root)
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var goChecks []CheckResult
+	for _, c := range rep.Checks {
+		if c.Kind == "go" {
+			goChecks = append(goChecks, c)
+		}
+	}
+	if len(goChecks) != 1 {
+		t.Fatalf("checks = %+v", rep.Checks)
+	}
+	c := goChecks[0]
+	if len(c.From) != 1 || c.From[0] != cullOrigin {
+		t.Errorf("from = %v", c.From)
+	}
+	if strings.Join(c.Argv, " ") != "go test -json -count=1 ./..." {
+		t.Errorf("argv = %v", c.Argv)
+	}
+	found := false
+	for _, p := range c.Packages {
+		if strings.HasSuffix(p.Name, "/slow") && p.Seconds >= 0.3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("slow package missing: %+v", c.Packages)
+	}
+	var buf strings.Builder
+	WriteText(&buf, rep)
+	if !strings.Contains(buf.String(), cullOrigin) {
+		t.Errorf("text lacks origin:\n%s", buf.String())
+	}
+}
+
+func TestNoExtraCheckWhenCIRunsGoTest(t *testing.T) {
+	needTool(t, "go")
+	needTool(t, "git")
+	root := t.TempDir()
+	write(t, root, ".github/workflows/ci.yml", "on: push\njobs:\n  t:\n    runs-on: x\n    steps:\n      - run: go test ./...\n")
+	write(t, root, "go.mod", "module example.com/cov\n\ngo 1.22\n")
+	write(t, root, "p/p_test.go", "package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {}\n")
+	gitInit(t, root)
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Checks) != 1 {
+		t.Fatalf("checks = %+v", rep.Checks)
+	}
+	for _, f := range rep.Checks[0].From {
+		if strings.HasPrefix(f, "cull") {
+			t.Errorf("extra cull check: %+v", rep.Checks[0])
+		}
+	}
+}

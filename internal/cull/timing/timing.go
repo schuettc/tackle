@@ -45,7 +45,7 @@ const (
 type Options struct {
 	Root        string
 	Timeout     time.Duration // per check; DefaultTimeout when zero
-	TestCommand string        // .cull.toml test_command, used only when the project lists no runnable check
+	TestCommand string        // .cull.toml test_command, used for test files no check covers
 }
 
 // CheckResult is one check's run.
@@ -167,13 +167,12 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 		}
 		plans = append(plans, plan{kind: c.Kind, dir: c.Dir, argv: c.Argv, from: c.From, env: c.Env})
 	}
-	if len(plans) == 0 {
-		fb, err := fallback(root, opt.TestCommand)
-		if err != nil {
-			return nil, err
-		}
-		plans = fb
+	extra, notes, err := uncovered(root, opt.TestCommand, found)
+	if err != nil {
+		return nil, err
 	}
+	plans = append(plans, extra...)
+	rep.NotRun = append(rep.NotRun, notes...)
 
 	env := verify.FilteredEnv()
 	start := time.Now()
@@ -261,41 +260,90 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 	return rep, nil
 }
 
-// fallback is the commands verify detects for the project's discovered tests.
-func fallback(root, testCommand string) ([]plan, error) {
+// CullOrigin marks checks cull adds because nothing in CI or hooks runs the tests.
+const CullOrigin = "cull (no check in CI or hooks runs these tests)"
+
+// uncovered adds verify.Plan's commands for the discovered test files no
+// runnable check covers: go by any go check, python by any pytest check,
+// typescript by a jest/vitest/node-test check whose dir contains the file.
+func uncovered(root, testCommand string, found []runs.Check) ([]plan, []string, error) {
 	files, err := discover.Suite(root, "", nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	hasGo, hasPy := false, false
+	var tsDirs []string
+	for _, c := range found {
+		switch c.Kind {
+		case "go":
+			hasGo = true
+		case "pytest":
+			hasPy = true
+		case "jest", "vitest", "node-test":
+			d := path.Clean(filepath.ToSlash(c.Dir))
+			tsDirs = append(tsDirs, d)
+		}
 	}
 	langs := map[string]string{}
 	for _, rel := range files {
-		if e := extract.ForFile(rel); e != nil {
-			langs[rel] = e.Lang()
+		e := extract.ForFile(rel)
+		if e == nil {
+			continue
 		}
+		switch e.Lang() {
+		case "go":
+			if hasGo {
+				continue
+			}
+		case "python":
+			if hasPy {
+				continue
+			}
+		case "typescript":
+			in := false
+			for _, d := range tsDirs {
+				if d == "." || rel == d || strings.HasPrefix(rel, d+"/") {
+					in = true
+					break
+				}
+			}
+			if in {
+				continue
+			}
+		}
+		langs[rel] = e.Lang()
 	}
-	if len(langs) == 0 && testCommand == "" {
-		return nil, nil
+	if len(langs) == 0 {
+		return nil, nil, nil
 	}
 	cmds, err := verify.Plan(root, testCommand, langs)
 	if err != nil {
-		return nil, err
+		return nil, []string{"not run: " + err.Error()}, nil //nolint:nilerr // reported, not fatal
 	}
 	var out []plan
+	seenGo := map[string]bool{}
 	for _, c := range cmds {
 		dir, err := filepath.Rel(root, c.Dir)
 		if err != nil {
 			dir = "."
 		}
+		dir = filepath.ToSlash(dir)
 		kind := "script"
+		argv := c.Argv
 		switch {
 		case len(c.Argv) >= 2 && c.Argv[0] == "go" && c.Argv[1] == "test":
 			kind = "go"
+			if seenGo[dir] {
+				continue
+			}
+			seenGo[dir] = true
+			argv = []string{"go", "test", "./..."}
 		case len(c.Argv) >= 3 && c.Argv[1] == "-m" && c.Argv[2] == "pytest":
 			kind = "pytest"
 		}
-		out = append(out, plan{kind: kind, dir: filepath.ToSlash(dir), argv: c.Argv, from: []string{"cull: detected test command"}, raw: true})
+		out = append(out, plan{kind: kind, dir: dir, argv: argv, from: []string{CullOrigin}, raw: true})
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 type procResult struct {
@@ -610,6 +658,11 @@ func WriteText(w io.Writer, r *Report) {
 			dir = "."
 		}
 		p("\n%s  %s  %s  %.1f s  %s\n", c.Kind, dir, strings.Join(c.Argv, " "), c.Seconds, state)
+		for _, f := range c.From {
+			if f == CullOrigin {
+				p("  from: %s\n", f)
+			}
+		}
 		if c.Summary != "" {
 			p("  %s\n", c.Summary)
 		}
