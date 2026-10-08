@@ -691,6 +691,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/proposals/accept", s.postAccept)
 	m.HandleFunc("POST /api/proposals/change", s.postChange)
 	m.HandleFunc("POST /api/proposals/reject", s.postReject)
+	m.HandleFunc("POST /api/proposals/withdraw", s.postWithdraw)
 	m.HandleFunc("GET /api/sessions", s.getSessions)
 	m.HandleFunc("POST /api/sessions/move", s.postMoveSession)
 	m.HandleFunc("GET /api/threads", s.getThreads)

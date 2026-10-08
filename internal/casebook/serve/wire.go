@@ -96,6 +96,11 @@ type ItemsView struct {
 	// view's count leave them out; LeftOpenTotal counts them.
 	LeftOpen      []ItemView `json:"left_open"`
 	LeftOpenTotal int        `json:"left_open_total"`
+	// AgentRecommended counts the items the view lists (every page, with
+	// its filters; not the left-open group) that have a pending agent
+	// recommendation, a rule's aside: what "clear N recommendations"
+	// withdraws.
+	AgentRecommended int `json:"agent_recommended"`
 }
 
 // ItemDetailView is the response body of GET /api/item.
@@ -165,6 +170,12 @@ type PushEvent struct {
 // RejectResult is the response body of POST /api/proposals/reject.
 type RejectResult struct {
 	Rejected int `json:"rejected"`
+}
+
+// WithdrawResult is the response body of POST /api/proposals/withdraw: how
+// many items' agent recommendations were withdrawn.
+type WithdrawResult struct {
+	Withdrawn int `json:"withdrawn"`
 }
 
 // SessionsView is the response body of GET /api/sessions.

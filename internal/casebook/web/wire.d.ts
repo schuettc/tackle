@@ -39,6 +39,7 @@ export interface ItemsView {
   items: ItemView[] | null;
   left_open: ItemView[] | null;
   left_open_total: number;
+  agent_recommended: number;
 }
 
 export interface ItemDetailView {
@@ -64,6 +65,10 @@ export interface AcceptResult {
 
 export interface RejectResult {
   rejected: number;
+}
+
+export interface WithdrawResult {
+  withdrawn: number;
 }
 
 export interface SessionsView {

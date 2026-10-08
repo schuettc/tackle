@@ -40,7 +40,7 @@ func TestGuideIsShortAndGeneric(t *testing.T) {
 	if strings.Contains(g, "\u2014") {
 		t.Error("the guide has an em dash")
 	}
-	for _, want := range []string{"evidence", "reason", "Not now", "To apply", "- In a Not now condition, name only a PR, issue or repo you have seen in this item's evidence or history, or found with gh. Never guess a number.", "- When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.", "- If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look."} {
+	for _, want := range []string{"evidence", "reason", "Not now", "To apply", "- In a Not now condition, name only a PR, issue or repo you have seen in this item's evidence or history, or found with gh. Never guess a number.", "- When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.", "- If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look.", "- A proposal marked withdrawn was cleared to be made again: recommend afresh, don't repeat it."} {
 		if !strings.Contains(g, want) {
 			t.Errorf("the guide doesn't mention %q", want)
 		}

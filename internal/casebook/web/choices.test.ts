@@ -18,6 +18,7 @@ import {
   agreeGroups,
   agreeText,
   recommendedLine,
+  clearRecs,
   pastedKeys,
   lookIntoCard,
   lookIntoAll,
@@ -348,6 +349,24 @@ describe('recommendedLine', () => {
   test('the counts', () => {
     assert.equal(recommendedLine(18, 13), '18 recommended \u00b7 13 not yet');
     assert.equal(recommendedLine(0, 0), '0 recommended \u00b7 0 not yet');
+  });
+});
+
+describe('clearRecs', () => {
+  test('the line, the foot group and the confirm', () => {
+    assert.deepEqual(clearRecs(474, 'waiting on you'), {
+      action: 'clear 474 recommendations',
+      these: 'clear these 474',
+      confirm:
+        'Clear 474 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+    });
+  });
+  test('one', () => {
+    assert.equal(clearRecs(1, 'new').action, 'clear 1 recommendation');
+    assert.match(
+      clearRecs(1, 'new').confirm,
+      /^Clear 1 recommendation in new\? /,
+    );
   });
 });
 

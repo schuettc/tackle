@@ -666,6 +666,14 @@ function lookIntoAll(words, session, keys) {
 function recommendedLine(recommended, notYet) {
   return `${recommended} recommended · ${notYet} not yet`;
 }
+function clearRecs(n, view) {
+  const recs = pluralize(n, "recommendation");
+  return {
+    action: `clear ${recs}`,
+    these: `clear these ${n}`,
+    confirm: `Clear ${recs} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`
+  };
+}
 var PICK_KINDS = {
   pr: ["pr"],
   "pr-or-issue": ["pr", "issue"],
@@ -2901,6 +2909,54 @@ function openRejectSheet(ctx, ids, onDone) {
     }
   });
 }
+function openClearSheet(ctx, n, view, body, onDone) {
+  let submitting = false;
+  let sh = null;
+  const errEl = h5("p", { class: "cb-sheet-err" });
+  errEl.hidden = true;
+  const words = clearRecs(n, view);
+  async function doClear() {
+    if (submitting) return;
+    submitting = true;
+    errEl.hidden = true;
+    try {
+      const r = await ctx.api.post("/proposals/withdraw", body);
+      sh?.close();
+      onDone(r.withdrawn);
+    } catch (err) {
+      errEl.textContent = err instanceof Error ? err.message : "clear failed — try again";
+      errEl.hidden = false;
+      submitting = false;
+    }
+  }
+  sh = sheet2({
+    title: "clear recommendations",
+    body: h5(
+      "div",
+      { class: "cb-sheet-body cb-clear-confirm" },
+      h5("p", { class: "cb-clear-says" }, words.confirm),
+      errEl
+    ),
+    actions: [
+      {
+        label: "clear",
+        fill: true,
+        run() {
+          void doClear();
+        }
+      },
+      {
+        label: "cancel",
+        run() {
+          sh?.close();
+        }
+      }
+    ],
+    onClose() {
+      sh = null;
+    }
+  });
+}
 function proposalCard(ctx, detail, onDone, opts = {}) {
   const proposal = detail.item.proposal;
   if (!proposal || proposal.state !== "pending") return null;
@@ -3020,7 +3076,7 @@ function bulkProposalActions(ctx, onDone) {
   }
   return { el, update };
 }
-function agreeWithAll(onAgree, onLook) {
+function agreeWithAll(onAgree, onLook, onClear) {
   const el = h5("div", { class: "cb-agree", hidden: true });
   function update(groups, look) {
     el.replaceChildren(
@@ -3061,6 +3117,17 @@ function agreeWithAll(onAgree, onLook) {
             w.action
           );
         }
+        const clearBtn = g.agent === "rule" ? null : h5(
+          "button",
+          {
+            class: "kit-btn cb-agree-clear",
+            type: "button",
+            onclick() {
+              onClear(g);
+            }
+          },
+          clearRecs(g.ids.length, "").these
+        );
         return h5(
           "div",
           {
@@ -3069,7 +3136,7 @@ function agreeWithAll(onAgree, onLook) {
             "data-ids": g.ids.join(" ")
           },
           h5("span", { class: "cb-agree-says" }, t.says),
-          h5("span", { class: "cb-agree-acts" }, btn, lookBtn)
+          h5("span", { class: "cb-agree-acts" }, btn, lookBtn, clearBtn)
         );
       })
     );
@@ -3866,6 +3933,14 @@ function makeAttention(ctx) {
     }
   }
   const recCountsEl = h8("span", { class: "cb-rec-counts" });
+  const clearBtn = h8("button", {
+    class: "kit-btn cb-rec-clear",
+    type: "button",
+    hidden: true,
+    onclick() {
+      clearView();
+    }
+  });
   const askBtn = h8("button", {
     class: "kit-btn cb-rec-ask",
     type: "button",
@@ -3879,6 +3954,7 @@ function makeAttention(ctx) {
     "div",
     { class: "cb-rec-line", hidden: true },
     recCountsEl,
+    clearBtn,
     askBtn,
     askNote
   );
@@ -3891,6 +3967,8 @@ function makeAttention(ctx) {
     }
     recLine.hidden = false;
     recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
+    clearBtn.hidden = viewRecs === 0 || !!boardHandle;
+    clearBtn.textContent = clearRecs(viewRecs, viewLabel()).action;
     if (recCounts.notYet === 0) asked = "";
     const t = ctx.dockTarget();
     const offer = recCounts.notYet > 0 && !!t;
@@ -3912,6 +3990,35 @@ function makeAttention(ctx) {
     }
     if (asked) renderRecLine();
   }
+  let viewRecs = 0;
+  let viewRecsSeq = 0;
+  function refreshViewRecs() {
+    const mine = ++viewRecsSeq;
+    void ctx.api.get("/items", { ...buildQuery(0), limit: "1" }).then((d) => {
+      if (mine !== viewRecsSeq) return;
+      viewRecs = d.agent_recommended ?? 0;
+      renderRecLine();
+    }).catch(() => {
+    });
+  }
+  function viewFilters() {
+    const p = buildQuery(0);
+    delete p["offset"];
+    delete p["limit"];
+    return p;
+  }
+  function cleared() {
+    asked = "";
+    refreshSummary();
+    void reload();
+  }
+  function clearView() {
+    if (viewRecs === 0) return;
+    openClearSheet(ctx, viewRecs, viewLabel(), viewFilters(), cleared);
+  }
+  function clearGroup(g) {
+    openClearSheet(ctx, g.ids.length, viewLabel(), { ids: g.ids }, cleared);
+  }
   function refreshSummary() {
     void ctx.api.get("/summary").then((sv) => {
       applyCounts(sv.counts);
@@ -3923,9 +4030,10 @@ function makeAttention(ctx) {
     }).catch(() => {
     });
   }
-  const agree = agreeWithAll(agreeAll, lookAll);
+  const agree = agreeWithAll(agreeAll, lookAll, clearGroup);
   handle.el.querySelector(".kit-foot")?.before(agree.el);
   function updateAgree() {
+    refreshViewRecs();
     const t = ctx.dockTarget();
     const looking = new Set(
       loadedItems.filter((it) => !!it.looking).map((it) => it.key)
@@ -4413,6 +4521,7 @@ function makeAttention(ctx) {
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
     agree.update([]);
+    clearBtn.hidden = true;
     boardHandle = makeBoard(
       ctx,
       selection,
