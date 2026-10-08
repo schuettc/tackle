@@ -23,6 +23,7 @@ func Fixed(kinds []KindChoices) string {
 const fixed = `Recommend one choice for this item, with a one-line reason the user can check.
 
 - Read the evidence and history first. Recommend from what they show, not from the title alone.
+- A proposal marked withdrawn was cleared to be made again: recommend afresh, don't repeat it.
 - When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.
 - Leave it (keep) when it still needs a person: a human reviewer is waiting, the work is active, or you can't tell.
 - If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look.

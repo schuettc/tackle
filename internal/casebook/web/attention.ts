@@ -40,6 +40,7 @@ import {
   MORE,
   recommendLine,
   recommendedLine,
+  clearRecs,
   agreeGroups,
   leftOpenMeta,
   leftOpenLabel,
@@ -54,6 +55,7 @@ import {
   agreeWithAll,
   bulkProposalActions,
   openRejectSheet,
+  openClearSheet,
   type BulkProposalActions,
 } from './proposals.ts';
 
@@ -651,9 +653,18 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- recommendations: the line at the top, agree with all at the foot ---
 
-  // The line at the top of the list: "n recommended · m not yet", and while
+  // The line at the top of the list: "n recommended · m not yet", "clear
+  // N recommendations" while the view has agent recommendations, and while
   // some aren't and the dock has a session here, the offer to ask it.
   const recCountsEl = h('span', { class: 'cb-rec-counts' });
+  const clearBtn = h('button', {
+    class: 'kit-btn cb-rec-clear',
+    type: 'button',
+    hidden: true,
+    onclick() {
+      clearView();
+    },
+  }) as HTMLButtonElement;
   const askBtn = h('button', {
     class: 'kit-btn cb-rec-ask',
     type: 'button',
@@ -667,6 +678,7 @@ export function makeAttention(ctx: Ctx): Section {
     'div',
     { class: 'cb-rec-line', hidden: true },
     recCountsEl,
+    clearBtn,
     askBtn,
     askNote,
   );
@@ -682,6 +694,8 @@ export function makeAttention(ctx: Ctx): Section {
     }
     recLine.hidden = false;
     recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
+    clearBtn.hidden = viewRecs === 0 || !!boardHandle;
+    clearBtn.textContent = clearRecs(viewRecs, viewLabel()).action;
     // Everything recommended: a later item that needs one is offered anew.
     if (recCounts.notYet === 0) asked = '';
     const t = ctx.dockTarget();
@@ -706,6 +720,54 @@ export function makeAttention(ctx: Ctx): Section {
     if (asked) renderRecLine();
   }
 
+  // viewRecs is the view's agent recommendations (serve's count, every
+  // page, the filters applied): what "clear N recommendations" withdraws.
+  // refreshViewRecs reads it after the list loads; only the newest answer
+  // counts.
+  let viewRecs = 0;
+  let viewRecsSeq = 0;
+  function refreshViewRecs(): void {
+    const mine = ++viewRecsSeq;
+    void ctx.api
+      .get<ItemsView>('/items', { ...buildQuery(0), limit: '1' })
+      .then((d) => {
+        if (mine !== viewRecsSeq) return;
+        viewRecs = d.agent_recommended ?? 0;
+        renderRecLine();
+      })
+      .catch(() => {});
+  }
+
+  // viewFilters is the view and its filters as /proposals/withdraw takes
+  // them (the list's query without its page).
+  function viewFilters(): Record<string, string> {
+    const p = buildQuery(0);
+    delete p['offset'];
+    delete p['limit'];
+    return p;
+  }
+
+  // cleared follows a clear: the line and the list are read again, and the
+  // offer to ask the session to recommend the rest is made anew.
+  function cleared(): void {
+    asked = '';
+    refreshSummary();
+    void reload();
+  }
+
+  // clearView confirms, then withdraws every agent recommendation in the
+  // view and its filters (every page, not only the loaded rows).
+  function clearView(): void {
+    if (viewRecs === 0) return;
+    openClearSheet(ctx, viewRecs, viewLabel(), viewFilters(), cleared);
+  }
+
+  // clearGroup confirms, then withdraws exactly a foot group's
+  // recommendations.
+  function clearGroup(g: AgreeGroup): void {
+    openClearSheet(ctx, g.ids.length, viewLabel(), { ids: g.ids }, cleared);
+  }
+
   // refreshSummary reads serve's summary: the view chips' counts and the
   // recommended line.
   function refreshSummary(): void {
@@ -723,12 +785,13 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // The foot's agree-with-all band sits above the selection foot.
-  const agree = agreeWithAll(agreeAll, lookAll);
+  const agree = agreeWithAll(agreeAll, lookAll, clearGroup);
   handle.el.querySelector('.kit-foot')?.before(agree.el);
 
   // updateAgree renders the foot's groups; with a session attached each
   // offers "ask ‹session› to look into all N" too.
   function updateAgree(): void {
+    refreshViewRecs();
     const t = ctx.dockTarget();
     const looking = new Set(
       loadedItems.filter((it) => !!it.looking).map((it) => it.key),
@@ -1400,6 +1463,7 @@ export function makeAttention(ctx: Ctx): Section {
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
     agree.update([]);
+    clearBtn.hidden = true;
     boardHandle = makeBoard(
       ctx,
       selection,

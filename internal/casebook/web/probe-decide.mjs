@@ -90,6 +90,18 @@
 //     reload; its reply clears the marker
 //   "ask ‹session› to look into all 3" sends one message naming the
 //     group's 3 keys, all attached, and all three rows show the marker
+//
+// And clearing recommendations (casebook 0.4.8), on a serve and repo of
+// their own, every item recommended:
+//
+//   the line offers "clear 5 recommendations" (the view's count, serve's)
+//     and no "ask … to recommend the rest" (nothing is left)
+//   clicking it opens a confirm, "Clear 5 recommendations in waiting on
+//     you? …", with clear and cancel; cancel changes nothing
+//   clear: the rows lose their "recommends" lines, the line reads "0
+//     recommended", the ask offer appears, and casebook_next hands the
+//     items out again; nothing is decided
+//   "clear these 2" on a foot group clears exactly that group's
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -268,6 +280,7 @@ export async function decideScenarios(shared, t) {
     ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
     ['a new recommendation on the open item', openRecScenario, openRecSeed()],
     ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
+    ['clear recommendations', clearRecScenario, clearRecSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -1010,6 +1023,326 @@ async function decideScenario(context, t, s) {
 }
 
 // ---- recommendations in the list ---------------------------------------------
+
+// ---- clear recommendations ---------------------------------------------------
+
+const CLR = 'rd-clear';
+const XISSUE = (n) => `issue:schuettc/${CLR}#${n}`;
+const XPR = (n) => `pr:schuettc/${CLR}#${n}`;
+
+function clearRecSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${CLR}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${CLR}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [
+          [9, 'Bump the uploader dependency', 'renovate'],
+          [10, 'Bump the parser dependency', 'renovate'],
+        ].map(item),
+        issues: [
+          [1, 'How do I set the region?', 'alice'],
+          [2, 'Works on my machine', 'carol'],
+          [3, 'Tags question', 'frank'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function clearRecScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: clear recommendations');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const LIST = '.kit-app > .kit-list:not([hidden])';
+  const ISSUES = [1, 2, 3].map(XISSUE);
+  const PRS = [9, 10].map(XPR);
+  const ALL = [...ISSUES, ...PRS];
+
+  // Only this repo's issues and PRs need a decision: every other
+  // undecided item (waiting, due, new; the repo itself too) stops being
+  // tracked, so the line's counts are theirs.
+  for (const v of ['waiting', 'due', 'new']) {
+    const l = await api('GET', `/api/items?view=${v}&limit=500`);
+    const others = (l.items ?? [])
+      .map((it) => it.key)
+      .filter((k) => !ALL.includes(k));
+    if (others.length)
+      await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  }
+  const A = 'probe-clear-a';
+  const B = 'probe-clear-b';
+  await agent.presence(A, 'pi \u00b7 clear-a', '/home/court/clear-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 clear-b', '/home/court/clear-b', 'pi');
+  const recommendAll = async () => {
+    await agent.propose(A, ISSUES, 'keep', 'active');
+    await agent.propose(A, PRS, 'close', 'superseded');
+  };
+  await recommendAll();
+  {
+    const sv = await api('GET', '/api/summary');
+    check(
+      `every item needing a decision is recommended (${sv.recommended} recommended, ${sv.not_recommended} not yet)`,
+      sv.recommended === 5 && sv.not_recommended === 0,
+    );
+  }
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+
+  // subs is each row's "recommends" line ('' for none), by key.
+  const subs = () =>
+    pg.evaluate(
+      ({ list, keys }) => {
+        const out = {};
+        for (const r of document.querySelectorAll(`${list} .kit-row`)) {
+          const k = r.querySelector('.kit-kicker')?.textContent ?? '';
+          const key = keys.find((x) => x.replace(':', ' \u00b7 ') === k);
+          if (key) out[key] = r.querySelector('.kit-sub')?.textContent ?? '';
+        }
+        return out;
+      },
+      { list: LIST, keys: ALL },
+    );
+  const line = () =>
+    pg.evaluate((list) => {
+      const l = document.querySelector(`${list} .cb-rec-line`);
+      const shownText = (sel) => {
+        const b = l?.querySelector(sel);
+        return b && !b.hidden ? (b.textContent ?? '') : '';
+      };
+      return {
+        counts: l?.querySelector('.cb-rec-counts')?.textContent ?? '',
+        clear: shownText('.cb-rec-clear'),
+        ask: shownText('.cb-rec-ask'),
+      };
+    }, LIST);
+  const pendingKeys = async () =>
+    ((await api('GET', '/api/items?view=proposed&limit=500')).items ?? [])
+      .map((it) => it.key)
+      .sort();
+  const sheetText = () =>
+    pg.evaluate(() => {
+      const sh = document.querySelector('.kit-sheet');
+      return sh
+        ? {
+            says: sh.querySelector('.cb-clear-says')?.textContent ?? '',
+            btns: [...sh.querySelectorAll('.kit-btn')].map(
+              (b) => b.textContent ?? '',
+            ),
+          }
+        : null;
+    });
+
+  // ---- the line offers "clear 5 recommendations"; no ask offer -----------
+  {
+    const ok = await until(
+      pg,
+      (list) =>
+        document.querySelector(`${list} .cb-rec-clear`)?.checkVisibility() ===
+        true,
+      LIST,
+      8000,
+    );
+    const got = await line();
+    check(
+      `the line reads "${got.counts}" and offers "${got.clear}", with no ask offer`,
+      ok &&
+        got.counts === '5 recommended \u00b7 0 not yet' &&
+        got.clear === 'clear 5 recommendations' &&
+        got.ask === '',
+    );
+  }
+
+  // ---- cancel changes nothing ---------------------------------------------
+  const CONFIRM5 =
+    'Clear 5 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
+  await pg.click(`${LIST} .cb-rec-clear`);
+  await until(pg, () => !!document.querySelector('.kit-sheet'));
+  {
+    const sh = await sheetText();
+    check(
+      `clicking it opens a confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
+      sh?.says === CONFIRM5 &&
+        JSON.stringify(sh.btns) === JSON.stringify(['clear', 'cancel']),
+    );
+  }
+  await pg.locator('.kit-sheet .kit-btn', { hasText: /^cancel$/ }).click();
+  check(
+    'cancel closes the confirm',
+    await until(pg, () => !document.querySelector('.kit-sheet')),
+  );
+  await pg.waitForTimeout(300); // kept: nothing may change; a window for it
+  {
+    const keys = await pendingKeys();
+    const rs = await subs();
+    const got = await line();
+    check(
+      `and changes nothing: ${keys.length} still recommended, every row says so, the line reads "${got.counts}"`,
+      keys.length === 5 &&
+        ALL.every((k) => (rs[k] ?? '').startsWith('pi recommends')) &&
+        got.counts === '5 recommended \u00b7 0 not yet' &&
+        got.clear === 'clear 5 recommendations',
+    );
+  }
+
+  // ---- clear: the confirm, then every recommendation in the view goes ----
+  await pg.click(`${LIST} .cb-rec-clear`);
+  await until(pg, () => !!document.querySelector('.kit-sheet'));
+  // PROBE_SHOTS=/tmp/clear-rec writes /tmp/clear-rec-confirm.png.
+  if (SHOTS) await pg.screenshot({ path: `${SHOTS}-confirm.png` });
+  await pg.locator('.kit-sheet .kit-btn', { hasText: /^clear$/ }).click();
+  check(
+    'clear withdraws every recommendation in the view',
+    await eventually(async () => (await pendingKeys()).length === 0),
+  );
+  check(
+    'the rows lose their "recommends" lines',
+    await until(
+      pg,
+      ({ list, n }) => {
+        const rows = document.querySelectorAll(`${list} .kit-row`);
+        return (
+          rows.length === n &&
+          [...rows].every(
+            (r) =>
+              !(r.querySelector('.kit-sub')?.textContent ?? '').includes(
+                'recommends',
+              ),
+          )
+        );
+      },
+      { list: LIST, n: ALL.length },
+      8000,
+    ),
+  );
+  {
+    const ok = await until(
+      pg,
+      ({ list, w }) =>
+        document.querySelector(`${list} .cb-rec-counts`)?.textContent === w &&
+        document.querySelector(`${list} .cb-rec-ask`)?.checkVisibility() ===
+          true,
+      { list: LIST, w: '0 recommended \u00b7 5 not yet' },
+      8000,
+    );
+    const got = await line();
+    check(
+      `the line reads "${got.counts}", the clear offer goes ("${got.clear}") and "${got.ask}" appears`,
+      ok &&
+        got.clear === '' &&
+        got.ask === `ask ${aName} to recommend the rest`,
+    );
+  }
+  {
+    const ds = await Promise.all(
+      ALL.map(
+        async (k) =>
+          (await api('GET', `/api/item?key=${encodeURIComponent(k)}`)).item
+            .decision ?? null,
+      ),
+    );
+    const props = await api(
+      'GET',
+      `/api/item?key=${encodeURIComponent(ISSUES[0])}`,
+    );
+    checkList(
+      'nothing is decided, and the recommendation reads withdrawn, not rejected',
+      [
+        ...ds.map((d) => (d ? d.disposition : 'undecided')),
+        props.proposals?.[0]?.state ?? '',
+      ],
+      [...ALL.map(() => 'undecided'), 'withdrawn'],
+    );
+  }
+  {
+    const nx = await api('GET', `/api/agent/next?session=${A}`);
+    check(
+      `casebook_next hands the items out again (${nx.left} left, first ${nx.item?.item?.key})`,
+      !nx.done && nx.left === 5 && ALL.includes(nx.item?.item?.key),
+    );
+  }
+
+  // ---- clear these 2: exactly that foot group -----------------------------
+  await recommendAll();
+  const CLOSE_CLEAR = `${LIST} .cb-agree-line[data-d="close"] .cb-agree-clear`;
+  {
+    const ok = await until(
+      pg,
+      (sel) => document.querySelector(sel)?.checkVisibility() === true,
+      CLOSE_CLEAR,
+      8000,
+    );
+    const txt = ok ? await pg.textContent(CLOSE_CLEAR) : '';
+    check(
+      `each foot group offers "clear these N" ("${txt}")`,
+      txt === 'clear these 2' &&
+        (await pg.textContent(
+          `${LIST} .cb-agree-line[data-d="keep"] .cb-agree-clear`,
+        )) === 'clear these 3',
+    );
+  }
+  await pg.click(CLOSE_CLEAR);
+  await until(pg, () => !!document.querySelector('.kit-sheet'));
+  {
+    const sh = await sheetText();
+    check(
+      `it confirms too: "${sh?.says}"`,
+      sh?.says ===
+        'Clear 2 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+    );
+  }
+  await pg.locator('.kit-sheet .kit-btn', { hasText: /^clear$/ }).click();
+  check(
+    'clear these 2 withdraws only that group: the issues stay recommended',
+    await eventually(
+      async () =>
+        JSON.stringify(await pendingKeys()) === JSON.stringify([...ISSUES]),
+    ),
+  );
+  {
+    const ok = await until(
+      pg,
+      ({ list, w }) =>
+        document.querySelector(`${list} .cb-rec-counts`)?.textContent === w,
+      { list: LIST, w: '3 recommended \u00b7 2 not yet' },
+      8000,
+    );
+    const rs = await subs();
+    const got = await line();
+    check(
+      `the PR rows lose their line, the issues keep theirs; the line reads "${got.counts}" and offers "${got.clear}"`,
+      ok &&
+        PRS.every((k) => rs[k] === '') &&
+        ISSUES.every((k) => rs[k] === 'pi recommends Leave it open') &&
+        got.clear === 'clear 3 recommendations',
+    );
+  }
+  await pg.close();
+}
 
 const REC = 'rd-rec';
 const RISSUE = (n) => `issue:schuettc/${REC}#${n}`;
@@ -3171,12 +3504,12 @@ async function lookIntoScenario(context, t, s) {
         line: Math.round(Number.isFinite(lh) ? lh : 19),
         inside:
           !!lr &&
-          btns.length === 2 &&
+          btns.length === 3 &&
           btns.every((b) => b.left >= lr.left && b.right <= lr.right),
       };
     }, LOOK_ALL);
     check(
-      `the foot's line reads: its says ${geo.saysH}px high (line ${geo.line}px), both buttons inside the list column (${geo.inside})`,
+      `the foot's line reads: its says ${geo.saysH}px high (line ${geo.line}px), all three buttons (agree, look into all, clear these) inside the list column (${geo.inside})`,
       geo.saysH > 0 && geo.saysH <= geo.line * 2.2 && geo.inside,
     );
     if (SHOTS) {

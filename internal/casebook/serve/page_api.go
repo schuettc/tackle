@@ -60,30 +60,36 @@ func (s *Server) getSummary(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 }
 
-func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	ctx := r.Context()
-	pending, err := s.Props.Pending(ctx)
-	if err != nil {
-		reply(w, nil, err)
-		return
-	}
-	view := q.Get("view")
+// itemsFilter is a view and its filters, as GET /api/items reads them from
+// its query and POST /api/proposals/withdraw from its body.
+type itemsFilter struct {
+	View     string `json:"view"`
+	Kind     string `json:"kind"`
+	Repo     string `json:"repo"`
+	Text     string `json:"q"`
+	Relation string `json:"relation"`
+	Bot      string `json:"bot"`
+	Age      string `json:"age"`
+	Rule     string `json:"rule"`
+}
+
+// query is f's Query (every page: no offset or limit), with a rule
+// filter's matches worked out.
+func (s *Server) query(f itemsFilter) Query {
+	view := f.View
 	if view == "" {
 		view = ViewAll
 	}
 	query := Query{
 		View:     view,
-		Kind:     q.Get("kind"),
-		Repo:     q.Get("repo"),
-		Text:     q.Get("q"),
-		Relation: q.Get("relation"),
-		Bot:      q.Get("bot"),
-		Age:      q.Get("age"),
-		Rule:     q.Get("rule"),
+		Kind:     f.Kind,
+		Repo:     f.Repo,
+		Text:     f.Text,
+		Relation: f.Relation,
+		Bot:      f.Bot,
+		Age:      f.Age,
+		Rule:     f.Rule,
 		Now:      s.Now(),
-		Offset:   atoi(q.Get("offset")),
-		Limit:    atoi(q.Get("limit")),
 	}
 	// Precompute rule match set if requested.
 	if query.Rule != "" {
@@ -100,17 +106,48 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 			query.MatchSet = map[string]bool{}
 		}
 	}
+	return query
+}
+
+func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	ctx := r.Context()
+	pending, err := s.Props.Pending(ctx)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	agent, err := s.Props.AgentPendingKeys(ctx)
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	group := s.query(itemsFilter{View: q.Get("view"), Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"),
+		Relation: q.Get("relation"), Bot: q.Get("bot"), Age: q.Get("age"), Rule: q.Get("rule")})
+	group.Limit = atoi(q.Get("limit"))
+	query := group
+	query.Offset = atoi(q.Get("offset"))
 	items, total := s.Index.List(query, pending)
 	if items == nil {
 		items = []ItemView{}
 	}
-	group := query
-	group.Offset = 0
 	left, leftTotal := s.Index.LeftOpen(group, pending)
 	looking := s.lookingInto(ctx)
 	withLooking(items, looking)
 	withLooking(left, looking)
-	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal}, nil)
+	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal,
+		AgentRecommended: len(agentKeys(s.Index.Keys(group, pending), agent))}, nil)
+}
+
+// agentKeys is the keys among keys with a pending agent recommendation.
+func agentKeys(keys []string, agent map[string]bool) []string {
+	var out []string
+	for _, k := range keys {
+		if agent[k] {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 func (s *Server) getItem(w http.ResponseWriter, r *http.Request) {
@@ -534,6 +571,60 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 	}
 	s.publish(ctx, "proposals", map[string]any{"ids": in.IDs, "keys": nonNil(keys), "state": propose.Rejected})
 	reply(w, RejectResult{Rejected: n}, nil)
+}
+
+// postWithdraw is POST /api/proposals/withdraw: Court clears the agent's
+// recommendations so the agent makes them again (casebook_next hands their
+// items out once more). No judgement: a withdrawn recommendation is no
+// rejection. Either {ids} (those proposals) or a view and its filters, as
+// GET /api/items takes them: every pending agent recommendation for an item
+// that view lists, every page of it. A rule's recommendation is never
+// withdrawn. It answers how many items lost one.
+func (s *Server) postWithdraw(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		IDs []int64 `json:"ids"`
+		itemsFilter
+	}
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if (len(in.IDs) == 0) == (in.View == "") {
+		reply(w, nil, bad("withdraw takes ids or a view, one of them"))
+		return
+	}
+	ctx := r.Context()
+	var done []propose.Proposal
+	var err error
+	if len(in.IDs) > 0 {
+		done, err = s.Props.Withdraw(ctx, in.IDs)
+	} else {
+		var pending map[string]propose.Proposal
+		var agent map[string]bool
+		if pending, err = s.Props.Pending(ctx); err == nil {
+			if agent, err = s.Props.AgentPendingKeys(ctx); err == nil {
+				done, err = s.Props.WithdrawKeys(ctx, agentKeys(s.Index.Keys(s.query(in.itemsFilter), pending), agent))
+			}
+		}
+	}
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
+	ids := make([]int64, 0, len(done))
+	keys := []string{}
+	seen := map[string]bool{}
+	for _, p := range done {
+		ids = append(ids, p.ID)
+		if !seen[p.Key] {
+			seen[p.Key] = true
+			keys = append(keys, p.Key)
+		}
+	}
+	if len(done) > 0 {
+		s.publish(ctx, "proposals", map[string]any{"ids": ids, "keys": keys, "state": propose.Withdrawn})
+	}
+	reply(w, WithdrawResult{Withdrawn: len(keys)}, nil)
 }
 
 // getSessions answers the sessions the page uses: the eligible ones (live,

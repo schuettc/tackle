@@ -385,6 +385,24 @@ export function recommendedLine(recommended: number, notYet: number): string {
   return `${recommended} recommended \u00b7 ${notYet} not yet`;
 }
 
+/**
+ * clearRecs is "clear recommendations" in words: the recommended line's
+ * action for the view's n agent recommendations, a foot group's ("clear
+ * these n"), and the confirm both open. Clearing withdraws them: no
+ * judgement, the items go back to the agent.
+ */
+export function clearRecs(
+  n: number,
+  view: string,
+): { action: string; these: string; confirm: string } {
+  const recs = pluralize(n, 'recommendation');
+  return {
+    action: `clear ${recs}`,
+    these: `clear these ${n}`,
+    confirm: `Clear ${recs} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`,
+  };
+}
+
 // The kinds each Not now form that names something searches and accepts.
 export const PICK_KINDS: Record<string, string[]> = {
   pr: ['pr'],

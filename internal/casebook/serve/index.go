@@ -236,6 +236,25 @@ func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, 
 	return pageOf(out, q)
 }
 
+// Keys is every key q's view lists (every page; q's Offset and Limit don't
+// apply), the left-open group aside.
+func (x *Index) Keys(q Query, pending map[string]propose.Proposal) []string {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	src := x.res.Attention()
+	if q.View == ViewToApply || q.View == ViewTracked {
+		src = x.res.Items
+	}
+	var out []string
+	for _, it := range src {
+		if inView(q.View, it, pending) && matches(q, it) {
+			out = append(out, it.ID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // LeftOpen returns the page of an Attention view's left-open group (q's
 // filters apply; its Offset and Limit page the group) and the group's
 // total: the kept items still open that the view would list, in key order.

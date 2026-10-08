@@ -22,6 +22,10 @@ const (
 	Changed    = "changed"    // accepted, but Court decided differently
 	Rejected   = "rejected"   // Court said no
 	Superseded = "superseded" // replaced by a newer proposal, or Court decided directly
+	// Withdrawn: Court cleared it so the agent recommends the item again,
+	// with no judgement. It is no rejection: no track record counts it
+	// (Tally, Overruled and RejectedFor read the other states).
+	Withdrawn = "withdrawn"
 )
 
 // ErrNotFound means no such proposal.
@@ -210,6 +214,86 @@ func (s *Store) SupersedeKey(ctx context.Context, key string, except int64) erro
 	_, err := s.DB.ExecContext(ctx, "UPDATE proposals SET state = 'superseded', settled_at = ? WHERE key = ? AND state = 'pending' AND id != ?",
 		ms(s.Now()), key, except)
 	return err
+}
+
+// agentSource is the SQL condition for an agent's proposal ("pi:…",
+// "claude:…"), not a rule's ("rule:…"): only an agent's are withdrawn.
+const agentSource = "source NOT LIKE 'rule:%'"
+
+// Withdraw marks the pending agent proposals among ids withdrawn and
+// returns them, in ids' order. A rule's proposal, or one no longer pending,
+// is left as it is.
+func (s *Store) Withdraw(ctx context.Context, ids []int64) ([]Proposal, error) {
+	return withdraw(ctx, s, withdrawID, ids)
+}
+
+// WithdrawKeys marks every pending agent proposal for keys withdrawn (an
+// item may have one from each session) and returns them, in keys' order.
+// A rule's proposal is left pending.
+func (s *Store) WithdrawKeys(ctx context.Context, keys []string) ([]Proposal, error) {
+	return withdraw(ctx, s, withdrawKey, keys)
+}
+
+// withdrawn's UPDATEs: one proposal by id, or every one for a key.
+const (
+	withdrawSet = "UPDATE proposals SET state = 'withdrawn', settled_at = ? WHERE state = 'pending' AND " + agentSource
+	withdrawID  = withdrawSet + " AND id = ? RETURNING " + cols
+	withdrawKey = withdrawSet + " AND key = ? RETURNING " + cols
+)
+
+// withdraw runs query (withdrawID or withdrawKey) for each of args in one
+// transaction and returns the proposals it withdrew.
+func withdraw[T any](ctx context.Context, s *Store, query string, args []T) ([]Proposal, error) {
+	var out []Proposal
+	now := ms(s.Now())
+	err := s.DB.Tx(ctx, func(tx *sql.Tx) error {
+		out = nil
+		for _, a := range args {
+			ps, err := withdrawOne(ctx, tx, query, now, a)
+			if err != nil {
+				return err
+			}
+			out = append(out, ps...)
+		}
+		return nil
+	})
+	return out, err
+}
+
+func withdrawOne(ctx context.Context, tx *sql.Tx, query string, now int64, arg any) ([]Proposal, error) {
+	rows, err := tx.QueryContext(ctx, query, now, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []Proposal
+	for rows.Next() {
+		p, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// AgentPendingKeys is the set of keys with a pending agent proposal
+// (whatever a rule proposes for them too).
+func (s *Store) AgentPendingKeys(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.DB.QueryContext(ctx, "SELECT DISTINCT key FROM proposals WHERE state = 'pending' AND "+agentSource)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]bool{}
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		out[k] = true
+	}
+	return out, rows.Err()
 }
 
 // Tally counts how source's proposals were settled since t.

@@ -4,6 +4,32 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.8] - 2026-10-08
+
+### Added
+- "clear N recommendations" on the "N recommended · M not yet" line, when
+  the view has any recommendations from an agent (N is the view's count,
+  with its filters, every page of it). It opens a confirm: "Clear N
+  recommendations in ‹view›? Their items go back to the agent to
+  recommend again. Nothing is decided or rejected.", with clear and
+  cancel. Each group in the list foot ("pi recommends Leave it open for
+  474") offers "clear these N" too, for exactly that group, with the same
+  confirm. After a clear the line and counts follow, and "ask ‹session›
+  to recommend the rest" is offered again. A rule's recommendations are
+  never cleared.
+- `POST /api/proposals/withdraw`, with `{ids}` or a view and its filters
+  (as `GET /api/items` takes them): it withdraws the pending agent
+  recommendations (`pi:…`, `claude:…`; never `rule:…`) and answers
+  `{withdrawn: n}`, the items that lost one. It publishes a `proposals`
+  event with state `withdrawn` and the keys. `GET /api/items` says the
+  view's count as `agent_recommended`.
+- A proposal state, `withdrawn`: cleared to be made again, with no
+  judgement. It isn't a rejection: neither a rule's track record nor the
+  agent's since-summary counts it, and a withdrawn recommendation no
+  longer shows on the page. `casebook_next` hands its item out again.
+- The agent's guide says a proposal marked withdrawn was cleared to be
+  made again, so the agent recommends afresh rather than repeating it.
+
 ## [casebook 0.4.7] - 2026-10-08
 
 ### Fixed

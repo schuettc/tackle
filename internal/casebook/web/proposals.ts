@@ -5,7 +5,8 @@
 //   proposalCard(ctx, detail, onDone)   — the recommendation card in the decide step
 //   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
 //   bulkProposalActions(ctx, onDone)    — accept N / reject N… foot; call .update()
-//   agreeWithAll(onAgree)               — the list foot's "agree with all N" lines
+//   agreeWithAll(onAgree, onLook, onClear) — the list foot's "agree with all N" lines
+//   openClearSheet(ctx, n, view, body, onDone) — confirm + POST /proposals/withdraw
 
 import { card, sheet, noteField, h, type Button } from '/_kit/kit.js';
 import type {
@@ -14,12 +15,14 @@ import type {
   ItemDetailView,
   LookIntoVocab,
   RejectResult,
+  WithdrawResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { openDecideSheet } from './decide.ts';
 import {
   agentFromSource,
   agreeText,
+  clearRecs,
   lookIntoAll,
   pluralize,
   type AgreeGroup,
@@ -92,6 +95,73 @@ export function openRejectSheet(
         fill: true,
         run() {
           void doReject();
+        },
+      },
+    ],
+    onClose() {
+      sh = null;
+    },
+  });
+}
+
+// ---- clear recommendations --------------------------------------------------
+
+/**
+ * openClearSheet confirms clearing n agent recommendations in view (the
+ * kit's sheet: "Clear n recommendations in ‹view›? …", clear and cancel);
+ * clear POSTs body ({ids} or the view and its filters) to
+ * /proposals/withdraw and calls onDone with how many were withdrawn. It
+ * decides and rejects nothing: the items go back to the agent.
+ */
+export function openClearSheet(
+  ctx: Ctx,
+  n: number,
+  view: string,
+  body: Record<string, unknown>,
+  onDone: (withdrawn: number) => void,
+): void {
+  let submitting = false;
+  let sh: ReturnType<typeof sheet> | null = null;
+  const errEl = h('p', { class: 'cb-sheet-err' });
+  errEl.hidden = true;
+  const words = clearRecs(n, view);
+
+  async function doClear(): Promise<void> {
+    if (submitting) return;
+    submitting = true;
+    errEl.hidden = true;
+    try {
+      const r = await ctx.api.post<WithdrawResult>('/proposals/withdraw', body);
+      sh?.close();
+      onDone(r.withdrawn);
+    } catch (err) {
+      errEl.textContent =
+        err instanceof Error ? err.message : 'clear failed — try again';
+      errEl.hidden = false;
+      submitting = false;
+    }
+  }
+
+  sh = sheet({
+    title: 'clear recommendations',
+    body: h(
+      'div',
+      { class: 'cb-sheet-body cb-clear-confirm' },
+      h('p', { class: 'cb-clear-says' }, words.confirm),
+      errEl,
+    ),
+    actions: [
+      {
+        label: 'clear',
+        fill: true,
+        run() {
+          void doClear();
+        },
+      },
+      {
+        label: 'cancel',
+        run() {
+          sh?.close();
         },
       },
     ],
@@ -323,10 +393,14 @@ export interface LookAll {
  * to look into all n": onLook sends that session one message naming the
  * group's keys (serve's message_many). It is disabled while it runs, and
  * while every row of the group is being looked into already.
+ *
+ * An agent's group (not a rule's) offers "clear these n" too: onClear
+ * confirms and withdraws exactly the group's recommendations.
  */
 export function agreeWithAll(
   onAgree: (g: AgreeGroup) => Promise<void>,
   onLook: (g: AgreeGroup, message: string) => Promise<void>,
+  onClear: (g: AgreeGroup) => void,
 ): AgreeWithAll {
   const el = h('div', { class: 'cb-agree', hidden: true });
 
@@ -369,6 +443,20 @@ export function agreeWithAll(
             w.action,
           ) as HTMLButtonElement;
         }
+        const clearBtn =
+          g.agent === 'rule'
+            ? null
+            : h(
+                'button',
+                {
+                  class: 'kit-btn cb-agree-clear',
+                  type: 'button',
+                  onclick() {
+                    onClear(g);
+                  },
+                },
+                clearRecs(g.ids.length, '').these,
+              );
         return h(
           'div',
           {
@@ -377,7 +465,7 @@ export function agreeWithAll(
             'data-ids': g.ids.join(' '),
           },
           h('span', { class: 'cb-agree-says' }, t.says),
-          h('span', { class: 'cb-agree-acts' }, btn, lookBtn),
+          h('span', { class: 'cb-agree-acts' }, btn, lookBtn, clearBtn),
         );
       }),
     );
