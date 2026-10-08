@@ -209,37 +209,6 @@ async function listShows(pg, view, q = '', timeout = 6000) {
   }, timeout).then((ok) => settled(ok, `the ${view} list`));
 }
 
-// boardShows waits until the board's four lanes hold serve's items for them,
-// each item in the first lane that lists it (as board.ts deals them).
-async function boardShows(pg, q = '', timeout = 6000) {
-  const { base, token } = _serveHandle;
-  const lanes = ['waiting', 'proposed', 'due', 'new'];
-  return eventually(async () => {
-    const seen = new Set();
-    const want = [];
-    for (const lane of lanes) {
-      const qs = q ? `&q=${encodeURIComponent(q)}` : '';
-      const r = await fetch(`${base}/api/items?view=${lane}&limit=200${qs}`, {
-        headers: { 'X-Local-Token': token },
-      }).catch(() => null);
-      if (!r?.ok) return false;
-      for (const { key } of (await r.json()).items ?? []) {
-        if (seen.has(key)) continue;
-        seen.add(key);
-        want.push(`${lane} ${key}`);
-      }
-    }
-    const got = await pg
-      .$$eval('.cb-lane .kit-card', (els) =>
-        els.map((e) => `${e.closest('.cb-lane').dataset.lane} ${e.dataset.id}`),
-      )
-      .catch(() => []);
-    want.sort();
-    got.sort();
-    return want.length === got.length && want.every((k, i) => k === got[i]);
-  }, timeout).then((ok) => settled(ok, 'the board'));
-}
-
 // chipShows waits until view's chip counts what serve counts for it.
 async function chipShows(pg, view, timeout = 6000) {
   const { base, token } = _serveHandle;
@@ -5157,7 +5126,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 953;
+const MIN_CHECKS = 923;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5865,10 +5834,9 @@ async function run() {
     console.log('\nscenario: decide in bulk');
 
     {
-      // Navigate to the 'new' view (shows all undecided items).
-      // We use 'new' instead of 'waiting' so that waiting items (incoming PRs
-      // and issues with incoming-no-reply hits) are preserved for the board
-      // scenario that runs later and requires items in the waiting lane.
+      // Navigate to the 'new' view (shows all undecided items), so the
+      // waiting items (incoming PRs and issues with incoming-no-reply hits)
+      // are kept for the scenarios after this one.
       await page.evaluate(() => {
         location.hash = '#/attention/new';
       });
@@ -6068,430 +6036,62 @@ async function run() {
         await detailPage.close();
       }
     }
-    // ---- scenario: the board view ------------------------------------------
-    console.log(
-      "\nscenario: the board shows four lanes with the fixture's items in the right lanes",
-    );
+    // ---- scenario: no board ------------------------------------------------
+    // The board is gone: no board chip among the views, no .cb-board, and an
+    // old link to it (#/attention/board) lands on waiting on you's list.
+    console.log('\nscenario: no board');
 
     {
       await page.evaluate(() => {
-        location.hash = '#/attention/board';
+        location.hash = '#/attention/new';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/board');
-      await page.waitForSelector('.cb-lane', { timeout: 6000 }).catch(() => {});
-      await boardShows(page);
-
-      const laneCount = await page.$$eval('.cb-lane', (lanes) => lanes.length);
-      check('board shows four lanes', laneCount === 4);
-
-      const laneIds = await page.$$eval('.cb-lane', (lanes) =>
-        lanes.map((l) => l.dataset.lane),
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      const onNew = await listShows(page, 'new');
+      const views = await page.$$eval(
+        '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"] .kit-chip',
+        (els) => els.map((e) => e.getAttribute('data-id') ?? ''),
       );
+      const boards = await page.$$eval('.cb-board', (els) => els.length);
       check(
-        'lanes are waiting, proposed, due, new in order',
-        laneIds[0] === 'waiting' &&
-          laneIds[1] === 'proposed' &&
-          laneIds[2] === 'due' &&
-          laneIds[3] === 'new',
+        `no board: no board chip and no .cb-board (views: ${views.join(', ')}; .cb-board: ${boards})`,
+        onNew && views.join(',') === 'waiting,new,due,proposed' && boards === 0,
       );
 
-      const waitingCards = await page.$$eval(
-        '[data-lane="waiting"] .kit-card',
-        (cards) => cards.length,
-      );
-      check('waiting lane has cards from the fixture', waitingCards > 0);
-
-      // Navigate back to list view.
-      await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
-    }
-
-    // ---- scenario: selection made on the board shows on the list ------------
-    console.log(
-      '\nscenario: a selection made on the board shows on the list and vice versa',
-    );
-
-    {
-      // Navigate to board.
       await page.evaluate(() => {
         location.hash = '#/attention/board';
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
-      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await boardShows(page);
-
-      // Click the card's checkbox (.kit-box) for selection; clicking the
-      // title navigates to the item instead (brief fix-round item 2).
-      const firstCardBox = await page.$(
-        '[data-lane="waiting"] .kit-card .kit-box',
+      const landed = await listShows(page, 'waiting');
+      const waitingOn = await until(
+        page,
+        () =>
+          !!document.querySelector(
+            '.kit-chips[data-group="view"] .kit-chip.on[data-id="waiting"]',
+          ),
       );
-      const firstCard = await page.$('[data-lane="waiting"] .kit-card');
-      if (firstCardBox && firstCard) {
-        await firstCardBox.click();
-        await until(
-          page,
-          () => !!document.querySelector('[data-lane="waiting"] .kit-card.on'),
-        );
-
-        const isSelected = await firstCard
-          .evaluate((el) => el.classList.contains('on'))
-          .catch(() => false);
-        check('clicking a board card selects it', isSelected);
-
-        // Navigate to list view; primary should reflect the selection.
-        await page.evaluate(() => {
-          location.hash = '#/attention/waiting';
-        });
-        await page.waitForFunction(
-          () => location.hash === '#/attention/waiting',
-        );
-        await listShows(page, 'waiting');
-        await until(page, () =>
-          (document.querySelector('.kit-primary')?.textContent ?? '')
-            .trim()
-            .startsWith('Decide '),
-        );
-
-        const primaryText = await page
-          .$eval('.kit-primary', (el) => el.textContent ?? '')
-          .catch(() => '');
-        check(
-          'selection from board is visible on the list (primary shows Decide N)',
-          primaryText.trim().startsWith('Decide '),
-        );
-
-        // Go back to board and deselect to clean up.
-        await page.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await page.waitForFunction(() => location.hash === '#/attention/board');
-        await page
-          .waitForSelector('.cb-lane', { timeout: 5000 })
-          .catch(() => {});
-        await boardShows(page);
-        const selCardBox = await page.$(
-          '[data-lane="waiting"] .kit-card.on .kit-box',
-        );
-        if (selCardBox) {
-          await selCardBox.click();
-          await until(
-            page,
-            () => !document.querySelector('.cb-lane .kit-card.on'),
-          );
-        }
-      } else {
-        check('clicking a board card selects it', false);
-        check(
-          'selection from board is visible on the list (primary shows Decide N)',
-          false,
-        );
-      }
-
-      // Back to list.
-      await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
+      // The list is shown and wide, its rows visible (not a blank panel).
+      const geo = await page.evaluate(() => {
+        const l = document.querySelector('.kit-app > .kit-list');
+        const r = l?.getBoundingClientRect();
+        const row = document.querySelector('.kit-app > .kit-list .kit-row');
+        const rr = row?.getBoundingClientRect();
+        return {
+          listW: r?.width ?? 0,
+          rowH: rr?.height ?? 0,
+          rowShown: !!row && getComputedStyle(row).visibility === 'visible',
+          board: !!document.querySelector('.cb-board'),
+        };
       });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
-    }
-
-    // ---- scenario: list selection shows on the board (reverse direction) ---
-    console.log('\nscenario: a selection made on the list shows on the board');
-
-    {
-      // Ensure we're on the waiting list view with rows loaded.
-      await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
-      await listShows(page, 'waiting');
-
-      const firstRowBox = await page.$('.kit-row .kit-box');
-      if (firstRowBox) {
-        // Select the first row by clicking its checkbox.
-        await firstRowBox.click();
-        await selShows(page, 1);
-
-        // Verify selection took effect (primary shows "Decide 1" or similar).
-        const primaryAfterSelect = await page
-          .$eval('.kit-primary', (el) => el.textContent ?? '')
-          .catch(() => '');
-        const hasSelection = primaryAfterSelect.trim().startsWith('Decide ');
-
-        // Navigate to the board.
-        await page.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await page.waitForFunction(() => location.hash === '#/attention/board');
-        await page
-          .waitForSelector('.cb-lane', { timeout: 5000 })
-          .catch(() => {});
-        await boardShows(page);
-
-        // At least one card in any lane must have .on class (the selected item).
-        // We don't use data-id from the list row (kit doesn't expose it as DOM
-        // attribute); instead we verify any card is selected on the board.
-        const anyCardOn = await page
-          .$$eval('.cb-lane .kit-card.on', (cards) => cards.length)
-          .catch(() => 0);
-        check(
-          'selection from list is visible on the board (card has .on class)',
-          hasSelection && anyCardOn > 0,
-        );
-
-        // Deselect all selected cards on the board so subsequent scenarios
-        // start with a clean selection.
-        const selBoxes = await page.$$('.cb-lane .kit-card.on .kit-box');
-        for (const b of selBoxes) {
-          await b.click();
-        }
-      } else {
-        check(
-          'selection from list is visible on the board (card has .on class)',
-          false,
-        );
-      }
-
-      // Back to waiting.
-      await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
-    }
-
-    // ---- scenario: shift-click ranges within a lane -----------------------
-    // Fixture has 3 waiting items (pr #3, issue #4, issue #5), so we can
-    // click the first, shift-click the third, and assert the middle is selected.
-    console.log('\nscenario: shift-click ranges within a lane');
-
-    {
-      await page.evaluate(() => {
-        location.hash = '#/attention/board';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/board');
-      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await boardShows(page);
-
-      // Use .kit-box (the checkbox) for clicks so the card's title (which
-      // navigates to the item, brief fix-round item 2) is not triggered.
-      const waitingBoxes = await page.$$(
-        '[data-lane="waiting"] .kit-card .kit-box',
-      );
-      if (waitingBoxes.length >= 3) {
-        // Click first card, shift-click third card — middle card must be selected.
-        await waitingBoxes[0].click();
-        await waitingBoxes[2].click({ modifiers: ['Shift'] });
-        await until(
-          page,
-          () =>
-            document.querySelectorAll('[data-lane="waiting"] .kit-card.on')
-              .length >= 3,
-        );
-
-        const waitingCardsAll = await page.$$(
-          '[data-lane="waiting"] .kit-card',
-        );
-        // The middle card (index 1) must have .on class.
-        const middleSelected = await waitingCardsAll[1]
-          ?.evaluate((el) => el.classList.contains('on'))
-          .catch(() => false);
-        check(
-          'shift-click selects the middle card in the range',
-          middleSelected === true,
-        );
-
-        const selectedCount = await page.$$eval(
-          '[data-lane="waiting"] .kit-card.on',
-          (cards) => cards.length,
-        );
-        check(
-          'shift-click selects a range within the lane (≥3 cards)',
-          selectedCount >= 3,
-        );
-
-        // Deselect by clicking each selected card's checkbox.
-        const selBoxes = await page.$$(
-          '[data-lane="waiting"] .kit-card.on .kit-box',
-        );
-        for (const b of selBoxes) {
-          await b.click();
-        }
-      } else if (waitingBoxes.length >= 2) {
-        // Fallback: fixture has only 2 waiting cards.
-        await waitingBoxes[0].click();
-        await waitingBoxes[1].click({ modifiers: ['Shift'] });
-        check('shift-click selects a range within the lane (≥3 cards)', false);
-        check('shift-click selects the middle card in the range', false);
-        const selBoxes = await page.$$(
-          '[data-lane="waiting"] .kit-card.on .kit-box',
-        );
-        for (const b of selBoxes) {
-          await b.click();
-        }
-      } else {
-        check('shift-click selects a range within the lane (≥3 cards)', false);
-        check('shift-click selects the middle card in the range', false);
-      }
-
-      // Back to list.
-      await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
-    }
-
-    // ---- scenario: deciding from the board removes the card -----------------
-    console.log(
-      '\nscenario: deciding from the board removes the card and deselects it',
-    );
-
-    {
-      const boardDecideCtx = await browser.newContext();
-      const boardDecidePage = await boardDecideCtx.newPage();
-      try {
-        await boardDecidePage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await boardDecidePage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await boardDecidePage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await boardDecidePage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await boardDecidePage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(boardDecidePage);
-
-        const firstCard = await boardDecidePage.$(
-          '[data-lane="waiting"] .kit-card',
-        );
-        // Click the checkbox (.kit-box) for selection; clicking the title
-        // navigates instead of selecting (brief fix-round item 2).
-        const firstCardBox = await boardDecidePage.$(
-          '[data-lane="waiting"] .kit-card .kit-box',
-        );
-        if (firstCard && firstCardBox) {
-          const cardId = await firstCard
-            .evaluate((el) => el.dataset.id ?? '')
-            .catch(() => '');
-          await firstCardBox.click();
-          await until(
-            boardDecidePage,
-            () =>
-              document.querySelector('.kit-primary')?.textContent ===
-              'Decide 1',
-          );
-
-          // Click Decide N.
-          await boardDecidePage.click('.kit-primary');
-          await boardDecidePage
-            .waitForSelector('.kit-sheet', { timeout: 4000 })
-            .catch(() => {});
-
-          // Pick the first disposition.
-          const firstDisp = await boardDecidePage.$('.kit-sheet .cb-choice');
-          if (firstDisp) {
-            await firstDisp.click();
-          }
-
-          // Click the sheet's fill ("<choice> · N items").
-          await boardDecidePage.click('.kit-sheet .kit-btn.fill');
-          await until(
-            boardDecidePage,
-            (id) =>
-              !document.querySelector(
-                `[data-lane="waiting"] .kit-card[data-id="${CSS.escape(id)}"]`,
-              ) ||
-              (document.querySelector('.kit-primary')?.hidden ?? true),
-            cardId,
-          );
-
-          // The decided card must be gone or selection cleared.
-          const cardStillThere = cardId
-            ? await boardDecidePage
-                .$eval(
-                  `[data-lane="waiting"] .kit-card[data-id="${cardId}"]`,
-                  () => true,
-                )
-                .catch(() => false)
-            : true;
-          const primaryHidden = await boardDecidePage
-            .$eval('.kit-primary', (el) => el.hidden)
-            .catch(() => true);
-          check(
-            'deciding from the board removes the card and deselects it',
-            !cardStillThere || primaryHidden,
-          );
-        } else {
-          check(
-            'deciding from the board removes the card and deselects it',
-            false,
-          );
-        }
-      } finally {
-        await boardDecideCtx.close();
-      }
-    }
-
-    // ---- scenario: a filter narrows every lane ------------------------------
-    // Check all four lanes; unfiltered total must exceed filtered total.
-    // ?q=nudge matches only pr #3 "fix nudge" in the waiting lane; all other
-    // items (issue #4, issue #5, repo, branch) do not contain "nudge".
-    console.log('\nscenario: a filter narrows every lane');
-
-    {
-      // Count total cards across all lanes without any filter.
-      await page.evaluate(() => {
-        location.hash = '#/attention/board';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/board');
-      await page.waitForSelector('.cb-lane', { timeout: 5000 }).catch(() => {});
-      await boardShows(page);
-
-      const unfilteredTotal = await page.$$eval(
-        '.cb-lane .kit-card',
-        (cards) => cards.length,
+      check(
+        `no board: #/attention/board lands on waiting on you's list (list ${Math.round(geo.listW)}px, row ${Math.round(geo.rowH)}px)`,
+        landed &&
+          waitingOn &&
+          geo.listW >= 280 &&
+          geo.rowH > 0 &&
+          geo.rowShown &&
+          !geo.board,
       );
 
-      // Open a fresh page with ?q=nudge to apply a filter.
-      const filterPage = await context.newPage();
-      try {
-        const baseUrl = serveHandle.base.replace(/\/$/, '');
-        await filterPage.goto(baseUrl + '/?q=nudge#/attention/board', {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await filterPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await filterPage
-          .waitForSelector('.cb-lane', { timeout: 8000 })
-          .catch(() => {});
-        await boardShows(filterPage, 'nudge');
-
-        const filteredTotal = await filterPage.$$eval(
-          '.cb-lane .kit-card',
-          (cards) => cards.length,
-        );
-        // ?q=nudge matches only the "fix nudge" PR; the filter must reduce the
-        // total count across all lanes. No weakening || condition here.
-        check(
-          'a filter narrows every lane (total filtered < total unfiltered)',
-          filteredTotal < unfilteredTotal,
-        );
-      } finally {
-        await filterPage.close();
-      }
-
-      // Navigate back to waiting list view.
       await page.evaluate(() => {
         location.hash = '#/attention/waiting';
       });
@@ -6499,210 +6099,6 @@ async function run() {
       await listShows(page, 'waiting');
     }
 
-    // ---- scenario: board layout at 1600×900 ---------------------------------
-    console.log(
-      '\nscenario: board layout at 1600\xd7900 \u2014 all four lanes visible and \u2265220\u202fpx wide',
-    );
-
-    {
-      const wideCtx = await browser.newContext({
-        viewport: { width: 1600, height: 900 },
-      });
-      const widePage = await wideCtx.newPage();
-      try {
-        await widePage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await widePage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await widePage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await widePage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await widePage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(widePage);
-
-        // The \'board\' chip must be the active view chip.
-        const boardChipActive = await widePage
-          .$eval('[data-id="board"]', (el) => el.classList.contains('on'))
-          .catch(() => false);
-        check(
-          'board chip is the active view chip at 1600\xd7900',
-          boardChipActive,
-        );
-
-        const lanes = await widePage.$$('.cb-lane');
-        check('board shows four lanes at 1600\xd7900', lanes.length === 4);
-
-        let allInViewport = true;
-        let allWideEnough = true;
-        for (const lane of lanes) {
-          const box = await lane.boundingBox();
-          if (!box) {
-            allInViewport = false;
-            allWideEnough = false;
-            break;
-          }
-          if (box.x < 0 || box.x + box.width > 1600 + 1) allInViewport = false;
-          if (box.width < 220) allWideEnough = false;
-        }
-        check(
-          'all four lane bounding boxes are inside the 1600\xd7900 viewport',
-          allInViewport,
-        );
-        check(
-          'all four lanes are at least 220\u202fpx wide at 1600\xd7900',
-          allWideEnough,
-        );
-      } finally {
-        await wideCtx.close();
-      }
-    }
-
-    // ---- scenario: board layout at 1100×800 (horizontal scroll) -----------
-    console.log(
-      '\nscenario: board layout at 1100\xd7800 \u2014 board scrolls, document does not',
-    );
-
-    {
-      const narrowCtx = await browser.newContext({
-        viewport: { width: 1100, height: 800 },
-      });
-      const narrowPage = await narrowCtx.newPage();
-      try {
-        await narrowPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await narrowPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await narrowPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await narrowPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await narrowPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(narrowPage);
-
-        // The document (html element) must not scroll horizontally.
-        const noDocScroll = await narrowPage.evaluate(
-          () => document.documentElement.scrollWidth <= window.innerWidth,
-        );
-        check(
-          'document does not scroll horizontally at 1100\xd7800',
-          noDocScroll,
-        );
-
-        // The board container must be reachable: it is either wide enough to
-        // show all lanes without scrolling, or it provides its own scrollbar.
-        const boardReachable = await narrowPage
-          .$eval(
-            '.cb-board',
-            (el) =>
-              // All lanes fit without scrolling.
-              el.scrollWidth <= el.clientWidth ||
-              // Or the board itself is scrollable.
-              el.scrollWidth > el.clientWidth,
-          )
-          .catch(() => true); // .cb-board not found is handled above
-        check(
-          'board lanes are reachable (board scrolls, not document) at 1100\xd7800',
-          noDocScroll && boardReachable,
-        );
-      } finally {
-        await narrowCtx.close();
-      }
-    }
-
-    // ---- scenario: opening a card from the board ----------------------------
-    console.log(
-      '\nscenario: opening a card from the board shows item in reading column',
-    );
-
-    {
-      const cardCtx = await browser.newContext();
-      const cardPage = await cardCtx.newPage();
-      try {
-        await cardPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await cardPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await cardPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await cardPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await cardPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(cardPage);
-
-        // Click the title element of the first waiting card.
-        const titleEl = await cardPage.$(
-          '[data-lane="waiting"] .kit-card .cb-card-title',
-        );
-        const cardTitle = titleEl
-          ? ((await titleEl.textContent()) ?? '').trim()
-          : '';
-
-        if (titleEl && cardTitle) {
-          await titleEl.click();
-          // Wait for the item detail to load in the reading column.
-          await until(
-            cardPage,
-            (t) =>
-              (document.querySelector('.kit-read')?.textContent ?? '').includes(
-                t,
-              ),
-            cardTitle,
-          );
-
-          const readText = await cardPage
-            .$eval('.kit-read', (el) => el.textContent ?? '')
-            .catch(() => '');
-          check(
-            'opening a board card title shows the item in the reading column',
-            readText.includes(cardTitle),
-          );
-
-          // The hash must now be #/item/<key> (not #/attention/board).
-          const afterHash = await cardPage.evaluate(() => location.hash);
-          check(
-            'opening a board card navigates to #/item/<key>',
-            afterHash.startsWith('#/item/'),
-          );
-
-          // Pressing Back must return to #/attention/board.
-          await cardPage.goBack();
-          await until(cardPage, () => location.hash === '#/attention/board');
-          const backHash = await cardPage.evaluate(() => location.hash);
-          check(
-            'Back from the item view returns to #/attention/board',
-            backHash === '#/attention/board',
-          );
-        } else {
-          check(
-            'opening a board card title shows the item in the reading column',
-            false,
-          );
-          check('opening a board card navigates to #/item/<key>', false);
-          check('Back from the item view returns to #/attention/board', false);
-        }
-      } finally {
-        await cardCtx.close();
-      }
-    }
     // ---- fix-round-2: encoded item URL opens correctly ------------------
     console.log(
       '\nscenario: encoded item URL (casebook_open-style) opens item detail',
@@ -6743,69 +6139,6 @@ async function run() {
         );
       } finally {
         await encPage.close();
-      }
-    }
-
-    // ---- fix-round-2: board lane "show N more" reflects de-duplicated count
-    console.log(
-      '\nscenario: board lane show-more reflects de-duplicated items',
-    );
-
-    {
-      const showMorePage = await context.newPage();
-      try {
-        await showMorePage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await showMorePage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await showMorePage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await showMorePage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await showMorePage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(showMorePage);
-
-        // For each lane: if the "show more" button is visible, it must show a
-        // positive number > 0.  More importantly, if a lane's total unique items
-        // equals the number of cards visible, the button must be hidden.
-        let allLanesCorrect = true;
-        for (const laneId of ['waiting', 'proposed', 'due', 'new']) {
-          const moreHidden = await showMorePage
-            .$eval(`[data-lane="${laneId}"] .cb-lane-more`, (el) => el.hidden)
-            .catch(() => true);
-          const moreText = await showMorePage
-            .$eval(
-              `[data-lane="${laneId}"] .cb-lane-more`,
-              (el) => el.textContent ?? '',
-            )
-            .catch(() => '');
-          // If visible, the number in "show N more" must be > 0.
-          if (!moreHidden) {
-            const n = parseInt((moreText.match(/\d+/) ?? ['0'])[0], 10);
-            if (n <= 0) {
-              allLanesCorrect = false;
-              console.error(
-                `    lane "${laneId}": "show more" visible with non-positive count (${moreText})`,
-              );
-            }
-          }
-          // If all cards for this lane are shown and no more pages would have
-          // unique items, the button should be hidden.
-          // (We can't know server-side totals here, so just check the logic
-          // is consistent: visible button → positive count.)
-        }
-        check(
-          'board lane show-more is hidden when all unique items are shown',
-          allLanesCorrect,
-        );
-      } finally {
-        await showMorePage.close();
       }
     }
 
@@ -6871,167 +6204,6 @@ async function run() {
         check('empty state shows a prompt line', promptText.length > 0);
       } finally {
         await emptyReadPage.close();
-      }
-    }
-
-    // ---- scenario: title fallback uses keyWithoutKind (no kind repetition) --
-    console.log(
-      '\nscenario: title fallback uses keyWithoutKind (no kind in board card title)',
-    );
-
-    {
-      const titleFallbackPage = await context.newPage();
-      try {
-        await titleFallbackPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await titleFallbackPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await titleFallbackPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await titleFallbackPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await titleFallbackPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(titleFallbackPage);
-
-        // Check all board card titles: none should start with a kind prefix
-        // followed by a colon, e.g. "branch:schuettc/hail@feat/client".
-        // (Titleless items fall back to keyWithoutKind, e.g.
-        //  "schuettc/hail@feat/client" rather than "branch:schuettc/hail@feat/client".)
-        const badTitles = await titleFallbackPage.$$eval(
-          '.cb-lane .kit-card .cb-card-title',
-          (els) =>
-            els
-              .map((el) => el.textContent ?? '')
-              .filter((t) => /^(branch|repo|issue|pr|worktree):/.test(t)),
-        );
-        check(
-          'no board card title starts with a kind prefix (fallback is keyWithoutKind)',
-          badTitles.length === 0,
-        );
-      } finally {
-        await titleFallbackPage.close();
-      }
-    }
-
-    // ---- scenario: live decided event deselects the decided keys ------------
-    console.log(
-      '\nscenario: live decided event deselects the decided item on the page',
-    );
-
-    {
-      const liveDeselPage = await context.newPage();
-      try {
-        await liveDeselPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await liveDeselPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        // Navigate to board.
-        await liveDeselPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await liveDeselPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await liveDeselPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        await boardShows(liveDeselPage);
-
-        // Select the first waiting card via checkbox.
-        const firstBox = await liveDeselPage.$(
-          '[data-lane="waiting"] .kit-card .kit-box',
-        );
-        const firstCard = await liveDeselPage.$(
-          '[data-lane="waiting"] .kit-card',
-        );
-        const cardId = firstCard
-          ? await firstCard
-              .evaluate((el) => el.dataset.id ?? '')
-              .catch(() => '')
-          : '';
-
-        if (firstBox && cardId) {
-          await firstBox.click();
-          await until(
-            liveDeselPage,
-            (k) =>
-              !!document.querySelector(
-                `.cb-lane .kit-card.on[data-id="${CSS.escape(k)}"]`,
-              ),
-            cardId,
-          );
-
-          const isSelected = await firstCard
-            .evaluate((el) => el.classList.contains('on'))
-            .catch(() => false);
-
-          if (isSelected) {
-            // Post a decide directly to the API (not via the page's UI) to
-            // simulate a live decided event from another client/CLI.
-            const resp = await liveDeselPage.evaluate(
-              async ({ url, key }) => {
-                const r = await fetch(url + '/api/decide', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    keys: [key],
-                    disposition: 'keep',
-                    note: 'live deselect probe',
-                  }),
-                });
-                return r.status;
-              },
-              { url: serveHandle.base.replace(/\/$/, ''), key: cardId },
-            );
-
-            if (resp === 200) {
-              // Wait for the live decided event to arrive and be processed.
-              await boardShows(liveDeselPage);
-
-              // The card must now be deselected (not in the selection store).
-              // Check: primary button must not show "Decide 1" or count the decided item.
-              await liveDeselPage.evaluate(() => {
-                location.hash = '#/attention/waiting';
-              });
-              await liveDeselPage.waitForFunction(
-                () => location.hash === '#/attention/waiting',
-              );
-              await listShows(liveDeselPage, 'waiting');
-              await until(
-                liveDeselPage,
-                () =>
-                  !(document.querySelector('.kit-primary')?.textContent ?? '')
-                    .trim()
-                    .startsWith('Decide '),
-              );
-
-              const primaryText = await liveDeselPage
-                .$eval('.kit-primary', (el) => el.textContent ?? '')
-                .catch(() => '');
-              // If the live decided event deselected the key, the primary
-              // either shows 'Decide 0' (which should be hidden) or is absent.
-              check(
-                'live decided event deselects the decided key',
-                !primaryText.trim().startsWith('Decide '),
-              );
-            } else {
-              check('live decided event deselects the decided key', false);
-            }
-          } else {
-            check('live decided event deselects the decided key', false);
-          }
-        } else {
-          check('live decided event deselects the decided key', false);
-        }
-      } finally {
-        await liveDeselPage.close();
       }
     }
 
@@ -8158,41 +7330,6 @@ async function run() {
         check('t5 dark theme is dark', darkTheme === 'dark');
       } finally {
         await t5Page.close();
-      }
-    }
-
-    // ---- scenario: board at 1600x900 ----------------------------
-    console.log('\nscenario: board at 1600×900');
-
-    {
-      const boardShotCtx = await browser.newContext({
-        viewport: { width: 1600, height: 900 },
-      });
-      const boardShotPage = await boardShotCtx.newPage();
-      try {
-        await boardShotPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await boardShotPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        await boardShotPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await boardShotPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await boardShotPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        // Basic sanity: all 4 lanes are visible.
-        const laneCount = await boardShotPage.$$eval(
-          '.cb-lane',
-          (lanes) => lanes.length,
-        );
-        check('board at 1600×900: four lanes visible', laneCount === 4);
-      } finally {
-        await boardShotPage.close();
-        await boardShotCtx.close();
       }
     }
 

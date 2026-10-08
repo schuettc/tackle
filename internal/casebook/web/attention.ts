@@ -4,8 +4,8 @@
 // fetches items from GET /api/items, and opens items in the reading column via
 // renderItem() from item.ts.
 //
-// The shared Selection store (used by the board view in Task 4) is exported so
-// Task 4 can bind to it without creating a second store.
+// The Selection store is exported so the page's other parts bind to it
+// without creating a second store.
 
 import {
   list,
@@ -47,7 +47,6 @@ import {
   lookIntoCard,
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
-import { makeBoard } from './board.ts';
 import { lookingLine, sessionName } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
 import { openRejectSheet, openDiscardSheet } from './proposals.ts';
@@ -62,7 +61,7 @@ export const RECOMMEND_THE_REST =
 // rendered rows; we paginate at 200 to stay safe.
 const PAGE_SIZE = 200;
 
-// Shared selection store — the board view (Task 4) imports this.
+// Shared selection store.
 export const selection: Selection = createSelection();
 
 // View chip ids map to API view= param values.
@@ -71,7 +70,6 @@ const VIEWS: Chip[] = [
   { id: 'new', label: 'new' },
   { id: 'due', label: 'due' },
   { id: 'proposed', label: 'proposed' },
-  { id: 'board', label: '▦ board' },
 ];
 
 // Filter chip ids are used as query param names.  The text filter is handled
@@ -197,7 +195,6 @@ export function makeAttention(ctx: Ctx): Section {
     prev: Decision | null;
     expect: Committed;
   } | null = null;
-  let boardHandle: ReturnType<typeof makeBoard> | null = null;
   // serve's decision vocabulary (the groups' buttons, the summary, the
   // recommendation line); null until it loads.
   let vocab: DecisionVocabView | null = null;
@@ -323,9 +320,7 @@ export function makeAttention(ctx: Ctx): Section {
           searchDebounceTimer = null;
           filters.q = text;
           setUrlQ(text);
-          // The board searches its lanes as the list searches its rows.
-          if (boardHandle) void boardHandle.refresh();
-          else void reload();
+          void reload();
         }, 200);
       },
     },
@@ -359,11 +354,6 @@ export function makeAttention(ctx: Ctx): Section {
     },
     onChip(group, id) {
       if (group === 'view') {
-        if (id === 'board') {
-          // Board view is Task 4; navigate there.
-          ctx.route.go('attention', 'board');
-          return;
-        }
         filters.view = id;
         ctx.route.go('attention', id);
         void reload();
@@ -583,7 +573,7 @@ export function makeAttention(ctx: Ctx): Section {
   ): void {
     const body = handle.el.querySelector<HTMLElement>('.kit-rows');
     heads = [];
-    if (!body || boardHandle) return;
+    if (!body) return;
     const loaded = new Set(loadedItems.map((it) => it.group));
     let last: Element | null = null;
     for (const g of groups) {
@@ -923,13 +913,13 @@ export function makeAttention(ctx: Ctx): Section {
   // recommended them (serve's summary words; the session in the agent's
   // colour), and "discard all N" while it has agent recommendations.
   function renderSummary(): void {
-    discardAllBtn.hidden = viewRecs === 0 || !vocab || !!boardHandle;
+    discardAllBtn.hidden = viewRecs === 0 || !vocab;
     if (vocab)
       discardAllBtn.textContent = vocab.discard_all.replaceAll(
         '{n}',
         String(viewRecs),
       );
-    if (!vocab || boardHandle) {
+    if (!vocab) {
       summaryEl.replaceChildren();
       return;
     }
@@ -967,7 +957,7 @@ export function makeAttention(ctx: Ctx): Section {
   // on its row). Nothing when the row already is the open one, so a reload
   // leaves the cursor where it was.
   function markOpenRow(): void {
-    if (!currentOpenKey || boardHandle) return;
+    if (!currentOpenKey) return;
     const i = shown.findIndex((it) => it.key === currentOpenKey);
     if (i < 0) return;
     const rowEl = handle.el.querySelectorAll('.kit-rows > .kit-row')[i];
@@ -1164,7 +1154,6 @@ export function makeAttention(ctx: Ctx): Section {
   // failed; a turn ended): the open item's marker and the rows' follow.
   function lookingMayHaveChanged(): void {
     if (currentOpenKey) void refreshLooking(currentOpenKey);
-    if (boardHandle) return;
     void reload();
   }
 
@@ -1465,10 +1454,8 @@ export function makeAttention(ctx: Ctx): Section {
   // payloads, so Object.assign alone would leave stale counts in place.
   function applyCounts(counts: Record<string, number> | null): void {
     if (!counts) return;
-    // Zero all API-backed views before merging ("board" is UI-only — no count).
-    for (const v of VIEWS) {
-      if (v.id !== 'board') viewCounts[v.id] = 0;
-    }
+    // Zero every view before merging.
+    for (const v of VIEWS) viewCounts[v.id] = 0;
     Object.assign(viewCounts, counts);
     handle.setChips('view', viewChips(filters.view));
   }
@@ -1576,17 +1563,6 @@ export function makeAttention(ctx: Ctx): Section {
     undoKey,
     ...choiceKeys,
   ];
-  // The board is not a list (no j/k/o/x), but it has the list's search
-  // field: / focuses it there too.
-  const searchKey: KeyBinding = {
-    keys: '/',
-    label: 'search',
-    group: 'family',
-    run() {
-      handle.focusSearch?.();
-    },
-  };
-  const boardKeys: KeyBinding[] = [decideKey, searchKey];
 
   // Load summary for the view chips' counts.
   refreshSummary();
@@ -1600,70 +1576,6 @@ export function makeAttention(ctx: Ctx): Section {
     })
     .catch(() => {});
 
-  // ---- board helpers -------------------------------------------------------
-
-  // getBoardFilters returns the active filters (excluding `view`) for the board.
-  // The board overrides `view` per lane; all other filters still apply.
-  function getBoardFilters(): Record<string, string> {
-    const p: Record<string, string> = {};
-    if (filters.kind) p['kind'] = filters.kind;
-    if (filters.repo) p['repo'] = filters.repo;
-    if (filters.relation) p['relation'] = filters.relation;
-    if (filters.bot) p['bot'] = filters.bot;
-    if (filters.age) p['age'] = filters.age;
-    if (filters.rule) p['rule'] = filters.rule;
-    if (filters.q) p['q'] = filters.q;
-    return p;
-  }
-
-  // mountBoard hides the kit's rows/foot and inserts the board into the list
-  // panel.  The kit's `.kit-rows` and `.kit-foot` are internal class names
-  // stable in kit v0.11.0 (see localweb/page/assets/kit.css).
-  //
-  // It also adds `.cb-board` to the `.kit-app` grid element so the CSS can
-  // collapse the reading column and let the list panel span the full width.
-  function mountBoard(): void {
-    if (boardHandle) return;
-    // Span the list+reading columns by adding a class to the app grid element.
-    // Note: use 'cb-board-active', NOT 'cb-board' — the latter is the board
-    // container element's own class, and matching it on .kit-app would cause
-    // '.cb-board { display: flex }' to convert the grid to flexbox.
-    handle.el.closest('.kit-app')?.classList.add('cb-board-active');
-    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
-    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
-    if (kitRows) kitRows.hidden = true;
-    if (kitFoot) kitFoot.hidden = true;
-    boardHandle = makeBoard(
-      ctx,
-      selection,
-      getBoardFilters,
-      (key, laneId) => {
-        // Record the card's lane as the active view so that when the item is
-        // opened the list reloads with that view (brief §4, item 2).
-        filters.view = laneId;
-      },
-      () => {},
-    );
-    handle.el.append(boardHandle.el);
-  }
-
-  // unmountBoard removes the board, restores the kit's rows/foot, and removes
-  // the app-level `.cb-board` class so the grid returns to normal layout.
-  function unmountBoard(): void {
-    if (!boardHandle) return;
-    // Restore normal list+reading grid layout.
-    handle.el.closest('.kit-app')?.classList.remove('cb-board-active');
-    boardHandle.destroy();
-    boardHandle.el.remove();
-    boardHandle = null;
-    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
-    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
-    if (kitRows) kitRows.hidden = false;
-    if (kitFoot) kitFoot.hidden = false;
-    setRows();
-    updateFoot();
-  }
-
   // ---- show(sub) -- router hook --------------------------------------------
 
   function show(sub: string): void {
@@ -1671,24 +1583,6 @@ export function makeAttention(ctx: Ctx): Section {
     const wasActive = active;
     active = true;
     feedAttached();
-    if (sub === 'board') {
-      // Restore search text from URL so getBoardFilters() picks it up.
-      const urlQ = getUrlQ();
-      if (urlQ !== filters.q) {
-        filters.q = urlQ;
-        handle.setSearch(urlQ);
-      }
-      // Activate the board view chip so it is highlighted, not the last list
-      // view chip (brief fix-round item 3).
-      filters.view = 'board';
-      handle.setChips('view', viewChips('board'));
-      mountBoard();
-      return;
-    }
-
-    // Leaving board view: unmount board and restore the kit list.
-    unmountBoard();
-
     // Restore search text from URL (?q=...) on every navigation into this section.
     const urlQ = getUrlQ();
     if (urlQ !== filters.q) {
@@ -1696,17 +1590,15 @@ export function makeAttention(ctx: Ctx): Section {
       handle.setSearch(urlQ);
     }
     const view = sub || 'waiting';
-    if (VIEWS.some((v) => v.id === view) && view !== 'board') {
+    if (VIEWS.some((v) => v.id === view)) {
       // Known view chip: switch to it.
       filters.view = view;
       handle.setChips('view', viewChips(filters.view));
       showReadEmpty();
       void reload();
     } else if (sub) {
-      // Not a view id: treat as an item key from a direct #/item/<key> link
-      // (e.g. opened from a board card's title).  The onOpen callback in
-      // makeBoard already set filters.view to the card's lane, so reload()
-      // will use that view.  Update the chips to reflect it.
+      // Not a view id: an item key from a #/item/<key> link. The list
+      // keeps the view it shows.
       handle.setChips('view', viewChips(filters.view));
       // A row click opens its item itself, then moves the hash here: the
       // item is already open (or loading), so it isn't loaded twice. A
@@ -1726,37 +1618,26 @@ export function makeAttention(ctx: Ctx): Section {
       active = false;
     },
     // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
-    // to this list while it shows. The board is not a list: it has no
-    // cursor, and its cards hide the reading column, so there only "d"
-    // (the shared selection) and "/" (the search, which filters the lanes)
-    // work.
-    listKeys: () => (boardHandle ? null : { nav: handle, selects: true }),
-    keys: () => (boardHandle ? boardKeys : listKeys),
+    // to this list while it shows.
+    listKeys: () => ({ nav: handle, selects: true }),
+    keys: () => listKeys,
     onLive(type: string, data: unknown) {
       if (type === 'gap') {
         // Events this page never heard were pruned: reload all it shows
-        // (the counts, the list or board, and the open item).
+        // (the counts, the list, and the open item).
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
         if (currentOpenKey && currentOpenKey !== deciding) {
           void openDetail(currentOpenKey);
         }
       } else if (type === 'index') {
         // One reload per index event: apply counts from the event payload and
-        // refresh the list (or the board when it is active).
+        // refresh the list.
         const s = data as { counts?: Record<string, number> };
         applyCounts(s?.counts ?? null);
         // The recommended line's counts change with the index too.
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'decided') {
         // A live decided event can originate from the CLI or another client.
         // Deselect the decided keys so the bar's "Decide N" doesn't include
@@ -1778,11 +1659,7 @@ export function makeAttention(ctx: Ctx): Section {
         }
         // Re-fetch summary so view-chip counts stay correct.
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'proposals') {
         // proposals event: an agent's or a rule's new pending proposals, or
         // proposals accepted, rejected or changed. Payload shape:
@@ -1813,11 +1690,7 @@ export function makeAttention(ctx: Ctx): Section {
 
         // Re-fetch summary to update view-chip counts (particularly 'proposed').
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'evidence') {
         // New evidence for the open item: shown as a recommendation is.
         const key = (data as { key?: string })?.key ?? '';

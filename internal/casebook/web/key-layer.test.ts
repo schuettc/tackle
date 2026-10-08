@@ -168,20 +168,20 @@ describe('makeKeyLayer', () => {
     assert.deepEqual(r.log, ['rules search']);
   });
 
-  test('no list shown: no list keys (Attention’s board)', () => {
+  test('no list shown: no list keys', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
     const a = nav('attention', true);
-    let board = false;
+    let none = false;
     const decide = [key('d', 'decide')];
     const attention = {
       id: 'attention',
-      listKeys: () => (board ? null : { nav: a, selects: true }),
+      listKeys: () => (none ? null : { nav: a, selects: true }),
       keys: () => decide,
     };
     layer.bind(attention);
     assert.ok(keysOf(layer).includes('j'));
-    board = true;
+    none = true;
     layer.bind(attention);
     assert.deepEqual(keysOf(layer), ['?', 'Esc', 'd']);
   });
