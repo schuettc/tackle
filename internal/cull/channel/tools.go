@@ -16,6 +16,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/schuettc/tackle/internal/cull/timing"
 	"github.com/schuettc/tools-common/channelmcp"
 )
 
@@ -33,6 +34,8 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"description":"remove exactly these test ids instead of every cut"},` + pathProp + `}}`)},
 		{Name: "cull_check_group", Description: "Verify your rewrite of a near-duplicate group (an id from cull_check's merge list) as one table test: the originals are gone, one new test keeps every row, Jev does not flag it, and the tests pass. Returns the four checks and their results.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"the group id"},` + pathProp + `},"required":["id"]}`)},
+		{Name: "cull_time", Description: "Run the checks the project runs (CI, hooks, recipes) one at a time with timing and return where the time goes: wall time per check, the slowest Go packages and Python files with their share, the 20 slowest tests, and hints (Go packages whose tests are slow and blocked from running in parallel by a t.Setenv helper; Python files that spend half their time in setup). Takes minutes on a large suite. Run it before and after fixing what it and cull_check's speed findings point at.",
+			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
 		{Name: "cull_review", Description: "Open cull's review page for this project (or the repository at path) in Court's browser and make this session the one his answers are sent to. Returns the page URL and how many items are open. Says so, and opens nothing, when there is nothing to review. Use once; never repeatedly.",
 			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
 		{Name: "cull_status", Description: "What is open, answered and sent for this project (or the repository at path), who owns the review, and any sends not yet delivered.",
@@ -91,6 +94,8 @@ func (ch *Channel) call(ctx context.Context, name string, args json.RawMessage) 
 			return "", errors.New("id is required")
 		}
 		return ch.checkGroup(ctx, a.Path, a.ID)
+	case "cull_time":
+		return ch.timeRun(ctx, a.Path)
 	case "cull_review":
 		return ch.review(ctx, a.Path)
 	case "cull_status":
@@ -314,4 +319,24 @@ func (ch *Channel) review(ctx context.Context, path string) (string, error) {
 		res["open_error"] = oneLine(err.Error())
 	}
 	return pretty(res), nil
+}
+
+func (ch *Channel) timeRun(ctx context.Context, path string) (string, error) {
+	p, err := ch.where(path)
+	if err != nil {
+		return "", err
+	}
+	root, err := discover.Root(p)
+	if err != nil {
+		return "", err
+	}
+	cfg, _, err := check.LoadConfig(root)
+	if err != nil {
+		return "", err
+	}
+	rep, err := timing.Run(ctx, timing.Options{Root: root, TestCommand: cfg.TestCommand})
+	if err != nil {
+		return "", err
+	}
+	return pretty(rep), nil
 }

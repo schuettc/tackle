@@ -1,0 +1,20 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.1, pytest-8.1.1, pluggy-1.4.0
+collected 5 items
+
+tests/test_shop.py::test_cart_total PASSED                               [ 20%]
+tests/test_shop.py::test_discount[10 percent] PASSED                     [ 40%]
+tests/test_shop.py::test_discount[bulk order] PASSED                     [ 60%]
+tests/test_shop.py::test_skipped SKIPPED (not today)                     [ 80%]
+tests/test_ship.py::test_label PASSED                                    [100%]
+
+============================= slowest durations ================================
+2.50s setup    tests/test_ship.py::test_label
+1.20s call     tests/test_shop.py::test_discount[bulk order]
+0.80s call     tests/test_ship.py::test_label
+0.30s call     tests/test_shop.py::test_discount[10 percent]
+0.10s setup    tests/test_shop.py::test_cart_total
+0.01s teardown tests/test_ship.py::test_label
+
+(3 durations < 0.005s hidden.  Use -vv to show these durations.)
+==================== 4 passed, 1 skipped in 5.02s ====================

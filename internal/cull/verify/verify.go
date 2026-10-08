@@ -409,3 +409,7 @@ func filteredEnv() []string {
 	}
 	return env
 }
+
+// FilteredEnv is the environment a test command runs with: the current one
+// minus TYPESAFE_API_KEY.
+func FilteredEnv() []string { return filteredEnv() }
