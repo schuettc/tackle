@@ -12,6 +12,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 	github.com/schuettc/tools-common v0.11.0
 	github.com/schuettc/tools-common/sqlitedb v0.1.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
