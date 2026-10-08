@@ -426,6 +426,12 @@ type DecisionVocabView struct {
 	DiscardAll string       `json:"discard_all"`
 	Summary    SummaryVocab `json:"summary"`
 	CountWords CountWords   `json:"count_words"`
+	// ToApplyHint goes under an outward group's label; Ticked ({n}: how
+	// many) and Untick lead and end a group's buttons while some of it is
+	// ticked.
+	ToApplyHint string `json:"to_apply_hint"`
+	Ticked      string `json:"ticked"`
+	Untick      string `json:"untick"`
 }
 
 // SummaryVocab is the pinned summary line: OneSession when every item the

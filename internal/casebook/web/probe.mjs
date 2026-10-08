@@ -1731,7 +1731,8 @@ async function composerScenariosOn(context, serveHandle) {
       );
       for (const i of ticked) await boxes.nth(i).click();
       const openKey = items[pick[0]].key;
-      await pg.click(`.kit-row:nth-child(${pick[0] + 1}) .kit-title`);
+      // The rows' nth, not the list's: group headers sit between them.
+      await pg.locator('.kit-row').nth(pick[0]).locator('.kit-title').click();
       const wantOpen = openKey.slice(openKey.indexOf(':') + 1);
       check(
         `opening an item shows it without its kind ("${wantOpen}")`,
@@ -3671,21 +3672,26 @@ async function rulesScenariosOn(context, serveHandle) {
                 ),
               ].filter((e) => e.textContent.includes('r8-agent')).length === 2,
           );
+          // Each row with its group: the header before it.
           return pg.$$eval('.kit-list:not(.cb-rules-list) .kit-row', (els) =>
             els
               .filter((e) =>
                 e.querySelector('.kit-kicker').textContent.includes('r8-agent'),
               )
-              .map(
-                (e) =>
-                  `${e.querySelector('.kit-kicker').textContent} | ${e.querySelector('.kit-sub')?.textContent}`,
-              )
+              .map((e) => {
+                let g = e.previousElementSibling;
+                while (g && !g.classList.contains('cb-group'))
+                  g = g.previousElementSibling;
+                const by = (g?.getAttribute('data-group') ?? '').split(':')[0];
+                const label = g?.querySelector('.cb-group-label')?.textContent;
+                return `${e.querySelector('.kit-kicker').textContent} | ${by} | ${label}`;
+              })
               .sort(),
           );
         })(),
         [
-          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule recommends Delete it',
-          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule recommends Delete it',
+          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule | Delete it',
+          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule | Delete it',
         ],
       );
 
@@ -5151,7 +5157,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 960;
+const MIN_CHECKS = 953;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5677,7 +5683,7 @@ async function run() {
       // Navigate to the 'new' view. The fixture has only a handful of items
       // (well under PAGE_SIZE=200) so there is no 'show more' needed.
       // The foot element must NOT be hidden: the selection count and the
-      // select-all button must be visible even when the show-more button hides.
+      // summary must be visible even when the show-more button hides.
       await page.evaluate(() => {
         location.hash = '#/attention/new';
       });
@@ -5690,29 +5696,6 @@ async function run() {
         .$eval('.cb-foot', (el) => !el.hidden)
         .catch(() => false);
       check('cb-foot is not hidden when view fits one page', footNotHidden);
-
-      // cb-sel-all must be in the rendered flow (offsetParent !== null means it
-      // is not hidden by itself or any ancestor).
-      const selAllVisible = await page
-        .$eval('.cb-sel-all', (el) => el.offsetParent !== null)
-        .catch(() => false);
-      check('select-all is visible when view fits one page', selAllVisible);
-    }
-
-    // ---- scenario: select-all button shows total count ----------------------
-    console.log('\nscenario: select-all button shows total count');
-
-    {
-      // Still on the 'new' view from the previous scenario.
-      // The select-all button text must include the total item count, e.g.
-      // "select all 4 in view" not just "select all in view".
-      const selAllText = await page
-        .$eval('.cb-sel-all', (el) => el.textContent ?? '')
-        .catch(() => '');
-      check(
-        'select-all text includes the item count',
-        /select all \d+ in view/.test(selAllText),
-      );
     }
 
     // ---- scenario: dispositions for a mixed-kind selection are the intersection
@@ -6763,81 +6746,6 @@ async function run() {
       }
     }
 
-    // ---- fix-round-2: board "select all N in view" counts all lanes --------
-    console.log(
-      '\nscenario: board select-all reflects de-duplicated total across all lanes',
-    );
-
-    {
-      const selAllPage = await context.newPage();
-      try {
-        await selAllPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await selAllPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        await selAllPage.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await selAllPage.waitForFunction(
-          () => location.hash === '#/attention/board',
-        );
-        await selAllPage
-          .waitForSelector('.cb-lane', { timeout: 6000 })
-          .catch(() => {});
-        // Give the board time to fetch all four lanes.
-        await boardShows(selAllPage);
-        await until(selAllPage, () => {
-          const m = (
-            document.querySelector('.cb-sel-all')?.textContent ?? ''
-          ).match(/select all (\d+) in view/);
-          return (
-            !!m &&
-            Number(m[1]) ===
-              document.querySelectorAll('.cb-lane .kit-card').length
-          );
-        });
-
-        // Count total cards across all lanes (scoped to .cb-lane so other
-        // kit-cards — e.g. in the decide sheet — are not counted).
-        const totalCards = await selAllPage.$$eval(
-          '.cb-lane .kit-card',
-          (cards) => cards.length,
-        );
-
-        const selAllText = await selAllPage
-          .$eval('.cb-sel-all', (el) => el.textContent ?? '')
-          .catch(() => '');
-        const match = selAllText.match(/select all (\.?\d+) in view/);
-        const selAllCount = match ? parseInt(match[1], 10) : -1;
-
-        check(
-          'board select-all shows total unique items (matches card count)',
-          selAllCount > 0 && selAllCount === totalCards,
-        );
-
-        // Click select-all and verify the selection count equals totalCards.
-        await selAllPage.click('.cb-sel-all');
-        await until(
-          selAllPage,
-          (n) =>
-            document.querySelectorAll('.cb-lane .kit-card.on').length === n,
-          totalCards,
-        );
-        const selectedCards = await selAllPage.$$eval(
-          '.cb-lane .kit-card.on',
-          (cards) => cards.length,
-        );
-        check(
-          'board select-all selects exactly the total unique items',
-          selectedCards === totalCards && totalCards > 0,
-        );
-      } finally {
-        await selAllPage.close();
-      }
-    }
-
     // ---- fix-round-2: board lane "show N more" reflects de-duplicated count
     console.log(
       '\nscenario: board lane show-more reflects de-duplicated items',
@@ -7373,7 +7281,7 @@ async function run() {
           check('proposal card is inside the .kit-doc reading document', false);
         }
 
-        // List row in proposed view must show "<agent> recommends <label>".
+        // The proposed view's rows sit under their recommendation's header.
         await propGeoPage.evaluate(() => {
           location.hash = '#/attention/proposed';
         });
@@ -7385,17 +7293,26 @@ async function run() {
           .catch(() => {});
         await listShows(propGeoPage, 'proposed');
 
-        const subTexts = await propGeoPage
-          .$$eval('.kit-row .kit-sub', (els) =>
-            els.map((e) => e.textContent ?? ''),
+        await until(
+          propGeoPage,
+          () =>
+            !!document.querySelector(
+              '.kit-app > .kit-list:not([hidden]) .cb-group',
+            ),
+        );
+        const heads = await propGeoPage
+          .$$eval('.kit-app > .kit-list:not([hidden]) .cb-group', (els) =>
+            els.map((e) => ({
+              id: e.getAttribute('data-group') ?? '',
+              label: e.querySelector('.cb-group-label')?.textContent ?? '',
+              shown: e.checkVisibility(),
+            })),
           )
           .catch(() => []);
-        const hasProposesText = subTexts.some((t) =>
-          / recommends [A-Z]/.test(t),
-        );
         check(
-          `list row in proposed view shows "<agent> recommends <label>" (${subTexts.join(', ')})`,
-          hasProposesText,
+          `the proposed view's rows sit under their recommendation's header (${heads.map((g) => g.label).join(', ')})`,
+          heads.length > 0 &&
+            heads.every((g) => g.id !== 'none' && g.label !== '' && g.shown),
         );
       } finally {
         await propGeoPage.close();
@@ -7824,13 +7741,17 @@ async function run() {
           // (Not listShows: a view change while the page is reloading the
           // list is dropped (attention.ts reload), and the list can stay the
           // waiting view's, whose first row here has the proposal too.)
-          await until(keyPage, () =>
-            (
-              document
-                .querySelector('.kit-app > .kit-list:not([hidden]) .kit-row')
-                ?.querySelector('.kit-sub')?.textContent ?? ''
-            ).includes(' recommends '),
-          );
+          await until(keyPage, () => {
+            const rows = document.querySelector(
+              '.kit-app > .kit-list:not([hidden]) .kit-rows',
+            );
+            const head = rows?.querySelector(':scope > .cb-group');
+            return (
+              !!rows?.querySelector('.kit-row') &&
+              !!head &&
+              head.getAttribute('data-group') !== 'none'
+            );
+          });
 
           // Click the first row to open the item.
           const firstRow = await keyPage.$('.kit-row');
@@ -7930,13 +7851,17 @@ async function run() {
           // (Not listShows: a view change while the page is reloading the
           // list is dropped (attention.ts reload), and the list can stay the
           // waiting view's, whose first row here has the proposal too.)
-          await until(keyPage, () =>
-            (
-              document
-                .querySelector('.kit-app > .kit-list:not([hidden]) .kit-row')
-                ?.querySelector('.kit-sub')?.textContent ?? ''
-            ).includes(' recommends '),
-          );
+          await until(keyPage, () => {
+            const rows = document.querySelector(
+              '.kit-app > .kit-list:not([hidden]) .kit-rows',
+            );
+            const head = rows?.querySelector(':scope > .cb-group');
+            return (
+              !!rows?.querySelector('.kit-row') &&
+              !!head &&
+              head.getAttribute('data-group') !== 'none'
+            );
+          });
 
           // Open the first row.
           const rowForR = await keyPage.$('.kit-row');
@@ -7998,74 +7923,6 @@ async function run() {
       }
     }
 
-    // ---- F: bulk accept/reject in proposed view foot -----------------------
-    {
-      const bulkPage = await context.newPage();
-      try {
-        await bulkPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await bulkPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        // Navigate to the proposed view.
-        await bulkPage.evaluate(() => {
-          location.hash = '#/attention/proposed';
-        });
-        await bulkPage.waitForFunction(
-          () => location.hash === '#/attention/proposed',
-        );
-        await bulkPage
-          .waitForSelector('.kit-chip[data-id="proposed"]', { timeout: 5000 })
-          .catch(() => {});
-        await listShows(bulkPage, 'proposed');
-
-        // Count how many proposed rows are available.
-        const rows = await bulkPage.$$('.kit-row');
-        if (rows.length > 0) {
-          // Select all rows by clicking their checkboxes.
-          for (const row of rows) {
-            const box = await row.$('.kit-box');
-            if (box) {
-              await box.click();
-            }
-          }
-          await selShows(bulkPage, rows.length);
-
-          // The bulk accept button must be visible in the foot.
-          const acceptBtnVisible = await bulkPage
-            .$eval('.cb-prop-accept', (el) => !el.hidden)
-            .catch(() => false);
-          check(
-            'bulk accept button appears in proposed view foot when items with proposals are selected',
-            acceptBtnVisible,
-          );
-
-          const acceptBtnText = await bulkPage
-            .$eval('.cb-prop-accept', (el) => el.textContent ?? '')
-            .catch(() => '');
-          check(
-            'bulk accept button shows count of items with proposals',
-            acceptBtnText.match(/accept \d+/) !== null,
-          );
-
-          const rejectBtnVisible = await bulkPage
-            .$eval('.cb-prop-reject', (el) => !el.hidden)
-            .catch(() => false);
-          check(
-            'bulk reject button appears in proposed view foot when items are selected',
-            rejectBtnVisible,
-          );
-        } else {
-          // No proposed items in the view — this is a real failure: branch:schuettc/hail@feat/client
-          // should still have a pending proposal from the 'r' key scenario.
-          check('proposed view has rows for bulk accept/reject test', false);
-        }
-      } finally {
-        await bulkPage.close();
-      }
-    }
-
     // ---- fix-round-2: foot layout — single line, no wrap, no overlap --------
     console.log(
       '\nscenario: foot layout — single line, no wrap at 400\u202fpx list width',
@@ -8082,11 +7939,7 @@ async function run() {
 
         // Helper: check that every foot control is single-line (no wrapping)
         // and that no two controls overlap horizontally.
-        async function checkFootLayout(
-          view,
-          label,
-          { assertSelAllHidden = false } = {},
-        ) {
+        async function checkFootLayout(view, label) {
           await footPage.evaluate((v) => {
             location.hash = `#/attention/${v}`;
           }, view);
@@ -8099,34 +7952,11 @@ async function run() {
             .catch(() => {});
           await listShows(footPage, view);
 
-          // Select all visible rows to trigger the bulk/sel-count display.
+          // Select all visible rows to trigger the sel-count display.
           const boxes = footPage.locator('.kit-row .kit-box');
           const nBoxes = await boxes.count();
           for (let i = 0; i < nBoxes; i++) {
             await boxes.nth(i).click();
-          }
-
-          // After selecting all rows, the "Select all" button must be hidden.
-          // Only assert for views where this behaviour is expected (opt-in via
-          // assertSelAllHidden): the proposed view hides the button once every
-          // listed item is checked.
-          if (assertSelAllHidden && nBoxes > 0) {
-            const selAllHidden = await footPage.evaluate(() => {
-              const el = document.querySelector('.cb-sel-all');
-              if (!el) return true; // absent → hidden for this view
-              const cs = getComputedStyle(el);
-              return (
-                el.hidden ||
-                cs.display === 'none' ||
-                cs.visibility === 'hidden' ||
-                cs.opacity === '0' ||
-                el.offsetParent === null
-              );
-            });
-            check(
-              `${label}: .cb-sel-all is hidden when all rows are selected`,
-              selAllHidden,
-            );
           }
 
           // Collect bounding rects of all visible foot controls.
@@ -8136,9 +7966,7 @@ async function run() {
             // Gather all interactive foot controls (visible ones only).
             const selectors = [
               '.cb-sel-count',
-              '.cb-sel-all',
-              '.cb-prop-accept',
-              '.cb-prop-reject',
+              '.cb-discard-all',
               '.cb-foot-more',
             ];
             const rects = [];
@@ -8202,14 +8030,8 @@ async function run() {
           check(`${label}: no foot controls overlap`, noOverlap);
         }
 
-        // Test with a selection in the proposed view; also verify that the
-        // "Select all" button hides once every listed item is checked.
-        await checkFootLayout('proposed', 'proposed view with selection', {
-          assertSelAllHidden: true,
-        });
-
-        // Test with a selection in the new view (no bulk buttons).
-        // The sel-all button doesn't have the same hide logic here.
+        // Test with a selection in the proposed view and in the new view.
+        await checkFootLayout('proposed', 'proposed view with selection');
         await checkFootLayout('new', 'new view with selection');
       } finally {
         await footPage.close();
@@ -8252,23 +8074,20 @@ async function run() {
         if (proposedClaude > 0) {
           // Wait for the proposals live event and list reload.
           await until(claudePage, () =>
-            [...document.querySelectorAll('.kit-row .kit-sub')].some((e) =>
-              (e.textContent ?? '').toLowerCase().includes('claude'),
+            [...document.querySelectorAll('.kit-row .kit-sub')].some(
+              (e) => e.textContent === 'claude probe note',
             ),
           );
 
-          // The row sub-text must contain 'claude' (not 'pi').
+          // The row's sub line gives the claude proposal's reason.
           const subTexts = await claudePage
             .$$eval('.kit-row .kit-sub', (els) =>
               els.map((e) => e.textContent ?? ''),
             )
             .catch(() => []);
-          const hasClaudeText = subTexts.some((t) =>
-            t.toLowerCase().includes('claude'),
-          );
           check(
-            'a proposal from claude shows "claude" in the list row sub-line',
-            hasClaudeText,
+            'a proposal from claude shows live on its row: its reason in the sub line',
+            subTexts.includes('claude probe note'),
           );
         } else {
           // proposal was not created — real failure in a fresh probe run

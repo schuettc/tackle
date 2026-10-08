@@ -146,6 +146,13 @@ function rowsOf(pg, sel = SHOWN) {
       cur: e.classList.contains('cur'),
       sel: e.classList.contains('sel'),
       id: e.dataset.key ?? '',
+      // The group the row is in: its header's (none before it: '').
+      group: (() => {
+        let p = e.previousElementSibling;
+        while (p && !p.classList.contains('cb-group'))
+          p = p.previousElementSibling;
+        return p?.getAttribute('data-group') ?? '';
+      })(),
     })),
   );
 }
@@ -350,7 +357,7 @@ async function keyboardScenario(shared, t) {
         // x selects the cursor's row; ⇧x selects the range to it; d decides
         // the selection, and it is decided on serve.
         rows = await rowsOf(pg);
-        const hasProposal = (r) => r.sub.includes(' recommends ');
+        const hasProposal = (r) => r.group !== '' && r.group !== 'none';
         let from = -1;
         for (let i = 0; i + 2 < rows.length; i++) {
           if (![0, 1, 2].some((d) => hasProposal(rows[i + d]))) {
@@ -2313,9 +2320,9 @@ async function heldLoadScenario(shared, t) {
             want.join('|'),
             8000,
           );
-        const selAll = (pg) =>
+        const summary = (pg) =>
           pg
-            .$eval(`${SHOWN} .cb-sel-all`, (e) => e.textContent ?? '')
+            .$eval(`${SHOWN} .cb-summary`, (e) => e.textContent ?? '')
             .catch(() => '');
         const painted = (pg) => pg.evaluate(() => window.__painted);
 
@@ -2339,10 +2346,10 @@ async function heldLoadScenario(shared, t) {
               await rowKeys(pg),
               fresh.keys,
             );
-            const count = await selAll(pg);
+            const count = await summary(pg);
             check(
               `and its count ("${count}")`,
-              shown && count === `select all ${fresh.total} in view`,
+              shown && count.startsWith(`${fresh.total} items, `),
             );
             const seen = await painted(pg);
             check(
@@ -2383,10 +2390,10 @@ async function heldLoadScenario(shared, t) {
               await rowKeys(pg),
               ledger.keys,
             );
-            const count = await selAll(pg);
+            const count = await summary(pg);
             check(
               `and its count ("${count}")`,
-              shown && count === `select all ${ledger.total} in view`,
+              shown && count.startsWith(`${ledger.total} items, `),
             );
             const seen = await painted(pg);
             check(

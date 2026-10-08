@@ -615,39 +615,20 @@ function choiceLabel(vocab2, key, disposition) {
 function recommendLine(vocab2, key, source, disposition) {
   return `${agentFromSource(source)} recommends ${choiceLabel(vocab2, key, disposition)}`;
 }
-function agreeGroups(vocab2, items) {
-  const groups = /* @__PURE__ */ new Map();
-  for (const it of items) {
-    const p = it.proposal;
-    if (!p || p.state !== "pending") continue;
-    const agent = agentFromSource(p.source);
-    const d = p.disposition === "watch" ? "wait" : p.disposition;
-    const id = `${agent}\0${d}`;
-    const g = groups.get(id) ?? { agent, d, rows: [] };
-    g.rows.push(it);
-    groups.set(id, g);
-  }
-  const out = [];
-  for (const g of groups.values()) {
-    if (g.rows.length < 2) continue;
-    const keys = g.rows.map((r) => r.key);
-    const c = choicesForKeys(vocab2, keys).find((x) => x.disposition === g.d);
-    out.push({
-      agent: g.agent,
-      disposition: g.d,
-      label: c?.label ?? g.d,
-      outward: c?.outward ?? false,
-      ids: g.rows.map((r) => r.proposal.id),
-      keys
-    });
-  }
-  return out;
+function countWord(total, ticked, words) {
+  if (ticked > 0 && ticked < total)
+    return words.some.replaceAll("{n}", String(ticked));
+  if (total === 1) return words.one;
+  if (total === 2) return words.two;
+  return words.all.replaceAll("{n}", String(total));
 }
-function agreeText(g) {
-  const n = g.ids.length;
+function groupButtons(g, ticked, vocab2) {
+  const n = countWord(g.total, ticked, vocab2.count_words);
+  const fill = (s) => s.replaceAll("{n}", n);
   return {
-    says: `${g.agent} recommends ${g.label} for ${n}`,
-    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`
+    act: fill(g.many || g.label),
+    look: fill(vocab2.look_many),
+    discard: fill(vocab2.discard_many)
   };
 }
 function lookIntoCard(words, session, key) {
@@ -657,22 +638,8 @@ function lookIntoCard(words, session, key) {
     message: words.message.replaceAll("{key}", key)
   };
 }
-function lookIntoAll(words, session, keys) {
-  return {
-    action: `ask ${session} to look into all ${keys.length}`,
-    message: words.message_many.replaceAll("{keys}", keys.join(", "))
-  };
-}
-function recommendedLine(recommended, notYet) {
-  return `${recommended} recommended · ${notYet} not yet`;
-}
-function clearRecs(n, view) {
-  const recs = pluralize(n, "recommendation");
-  return {
-    action: `clear ${recs}`,
-    these: `clear these ${n}`,
-    confirm: `Clear ${recs} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`
-  };
+function discardConfirm(n, view) {
+  return `Discard ${pluralize(n, "recommendation")} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`;
 }
 var PICK_KINDS = {
   pr: ["pr"],
@@ -1480,6 +1447,11 @@ function folderOf(s) {
 }
 function sessionTitle(s) {
   return s.name || folderOf(s) || s.harness || s.id;
+}
+function sessionName(s, source) {
+  if (s) return sessionTitle(s);
+  const i = source.indexOf(":");
+  return i === -1 ? source : source.slice(0, i);
 }
 function sessionMeta(s) {
   const folder = folderOf(s);
@@ -2909,13 +2881,12 @@ function openRejectSheet(ctx, ids, onDone) {
     }
   });
 }
-function openClearSheet(ctx, n, view, body, onDone) {
+function openDiscardSheet(ctx, n, view, body, onDone) {
   let submitting = false;
   let sh = null;
   const errEl = h5("p", { class: "cb-sheet-err" });
   errEl.hidden = true;
-  const words = clearRecs(n, view);
-  async function doClear() {
+  async function doDiscard() {
     if (submitting) return;
     submitting = true;
     errEl.hidden = true;
@@ -2924,25 +2895,25 @@ function openClearSheet(ctx, n, view, body, onDone) {
       sh?.close();
       onDone(r.withdrawn);
     } catch (err) {
-      errEl.textContent = err instanceof Error ? err.message : "clear failed — try again";
+      errEl.textContent = err instanceof Error ? err.message : "discard failed, try again";
       errEl.hidden = false;
       submitting = false;
     }
   }
   sh = sheet2({
-    title: "clear recommendations",
+    title: "discard recommendations",
     body: h5(
       "div",
-      { class: "cb-sheet-body cb-clear-confirm" },
-      h5("p", { class: "cb-clear-says" }, words.confirm),
+      { class: "cb-sheet-body cb-discard-confirm" },
+      h5("p", { class: "cb-discard-says" }, discardConfirm(n, view)),
       errEl
     ),
     actions: [
       {
-        label: "clear",
+        label: "discard",
         fill: true,
         run() {
-          void doClear();
+          void doDiscard();
         }
       },
       {
@@ -3029,120 +3000,6 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   const el = card2({ edge: "agent", head, body: bodyEl, actions });
   el.classList.add("cb-proposal-card");
   return el;
-}
-function bulkProposalActions(ctx, onDone) {
-  let _ids = [];
-  let _keys = [];
-  const acceptBtn = h5("button", {
-    class: "kit-btn fill cb-prop-accept",
-    hidden: true,
-    onclick() {
-      if (_ids.length === 0) return;
-      const ids = [..._ids];
-      const keys = [..._keys];
-      void ctx.api.post("/proposals/accept", { ids }).then(() => {
-        onDone(keys);
-      }).catch(() => {
-      });
-    }
-  });
-  acceptBtn.textContent = "accept 0";
-  const rejectBtn = h5("button", {
-    class: "kit-btn cb-prop-reject",
-    hidden: true,
-    onclick() {
-      if (_ids.length === 0) return;
-      const keys = [..._keys];
-      openRejectSheet(ctx, [..._ids], () => {
-        onDone(keys);
-      });
-    }
-  });
-  rejectBtn.textContent = "reject 0…";
-  const el = h5("div", { class: "cb-prop-bulk" }, acceptBtn, rejectBtn);
-  function update(proposalIds, itemKeys) {
-    _ids = proposalIds;
-    _keys = itemKeys;
-    const n = proposalIds.length;
-    if (n === 0) {
-      acceptBtn.hidden = true;
-      rejectBtn.hidden = true;
-    } else {
-      acceptBtn.textContent = `accept ${n}`;
-      rejectBtn.textContent = `reject ${n}…`;
-      acceptBtn.hidden = false;
-      rejectBtn.hidden = false;
-    }
-  }
-  return { el, update };
-}
-function agreeWithAll(onAgree, onLook, onClear) {
-  const el = h5("div", { class: "cb-agree", hidden: true });
-  function update(groups, look) {
-    el.replaceChildren(
-      ...groups.map((g) => {
-        const t = agreeText(g);
-        const btn = h5(
-          "button",
-          {
-            class: "kit-btn cb-agree-btn",
-            type: "button",
-            onclick() {
-              btn.disabled = true;
-              void onAgree(g).finally(() => {
-                btn.disabled = false;
-              });
-            }
-          },
-          t.action
-        );
-        let lookBtn = null;
-        if (look) {
-          const w = lookIntoAll(look.words, look.session, g.keys);
-          const all = g.keys.every((k) => look.looking(k));
-          lookBtn = h5(
-            "button",
-            {
-              class: "kit-btn cb-agree-look",
-              type: "button",
-              disabled: all,
-              onclick() {
-                if (lookBtn.disabled) return;
-                lookBtn.disabled = true;
-                void onLook(g, w.message).finally(() => {
-                  lookBtn.disabled = false;
-                });
-              }
-            },
-            w.action
-          );
-        }
-        const clearBtn = g.agent === "rule" ? null : h5(
-          "button",
-          {
-            class: "kit-btn cb-agree-clear",
-            type: "button",
-            onclick() {
-              onClear(g);
-            }
-          },
-          clearRecs(g.ids.length, "").these
-        );
-        return h5(
-          "div",
-          {
-            class: "cb-agree-line",
-            "data-d": g.disposition,
-            "data-ids": g.ids.join(" ")
-          },
-          h5("span", { class: "cb-agree-says" }, t.says),
-          h5("span", { class: "cb-agree-acts" }, btn, lookBtn, clearBtn)
-        );
-      })
-    );
-    el.hidden = groups.length === 0;
-  }
-  return { el, update };
 }
 
 // item.ts
@@ -3580,9 +3437,13 @@ function makeAttention(ctx) {
   let loadingMore = false;
   let loads = 0;
   let footEl = null;
-  let propFoot = null;
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
+  let groups = [];
+  const collapsed = /* @__PURE__ */ new Set();
+  const groupOfKey = /* @__PURE__ */ new Map();
+  const proposalOfKey = /* @__PURE__ */ new Map();
+  const busyGroups = /* @__PURE__ */ new Set();
   let leftOpen = [];
   let leftOpenTotal = 0;
   let shown = [];
@@ -3594,7 +3455,6 @@ function makeAttention(ctx) {
   let lastUndo = null;
   let boardHandle = null;
   let vocab2 = null;
-  let recCounts = null;
   let syncingOpen = false;
   function renderReadEmpty() {
     const nameEl = h8(
@@ -3635,30 +3495,25 @@ function makeAttention(ctx) {
     feedAttached();
   }
   showReadEmpty();
+  const summaryEl = h8("span", { class: "cb-summary" });
+  const discardAllBtn = h8("button", {
+    class: "kit-btn cb-discard-all",
+    type: "button",
+    hidden: true,
+    onclick() {
+      discardView();
+    }
+  });
   function buildFoot() {
     const selCount = h8(
       "span",
       { class: "cb-sel-count", hidden: true },
       "0 selected"
     );
-    const selAllBtn = h8(
-      "button",
-      {
-        class: "cb-sel-all",
-        onclick() {
-          void selectAllInView();
-        }
-      },
-      "select all 0 in view"
-    );
-    propFoot = bulkProposalActions(ctx, (keys) => {
-      selection.deselect(keys);
-      void reload();
-    });
     const footRight = h8(
       "div",
       { class: "cb-foot-right" },
-      propFoot.el,
+      discardAllBtn,
       h8(
         "button",
         {
@@ -3672,40 +3527,8 @@ function makeAttention(ctx) {
         `show ${PAGE_SIZE2} more`
       )
     );
-    footEl = h8("div", { class: "cb-foot" }, selCount, selAllBtn, footRight);
+    footEl = h8("div", { class: "cb-foot" }, selCount, summaryEl, footRight);
     return footEl;
-  }
-  function updateProposalBulk(selectedIds) {
-    if (!propFoot) return;
-    if (filters.view !== "proposed") {
-      propFoot.update([], []);
-      return;
-    }
-    const withProps = loadedItems.filter(
-      (it) => it.proposal && it.proposal.state === "pending" && selectedIds.includes(it.key)
-    );
-    propFoot.update(
-      withProps.map((it) => it.proposal.id),
-      withProps.map((it) => it.key)
-    );
-  }
-  async function selectAllInView() {
-    if (boardHandle) {
-      handle.selectAll(boardHandle.allKeys());
-      return;
-    }
-    let allIds = loadedItems.map((it) => it.key);
-    if (totalItemsForView > loadedItems.length) {
-      try {
-        const data = await ctx.api.get("/items", {
-          ...buildQuery(0),
-          limit: String(totalItemsForView)
-        });
-        allIds = (data.items ?? []).map((it) => it.key);
-      } catch {
-      }
-    }
-    handle.selectAll(allIds);
   }
   const handle = list2({
     label: "attention",
@@ -3731,12 +3554,7 @@ function makeAttention(ctx) {
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const left = isLeftOpen(it);
       const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf2(it);
-      const proposal = !left && it.proposal && it.proposal.state === "pending" ? recommendLine(
-        vocab2,
-        it.key,
-        it.proposal.source,
-        it.proposal.disposition
-      ) : void 0;
+      const reason = !left && it.group && it.proposal?.state === "pending" ? it.proposal.note || void 0 : void 0;
       return {
         id: it.key,
         key: kindKey,
@@ -3745,8 +3563,8 @@ function makeAttention(ctx) {
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         // An item new activity brought back says so ("new activity since
-        // you left it open"), before any recommendation.
-        sub: [it.new_activity ? it.due_reason : void 0, proposal].filter(Boolean).join(" · ") || void 0,
+        // you left it open"), before any recommendation's reason.
+        sub: [it.new_activity ? it.due_reason : void 0, reason].filter(Boolean).join(" · ") || void 0,
         selectable: true
       };
     },
@@ -3831,14 +3649,15 @@ function makeAttention(ctx) {
       loadedItems = data.items ?? [];
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
+      groups = data.groups ?? [];
+      viewRecs = data.agent_recommended ?? 0;
+      know(loadedItems);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       setRows();
       markOpenRow();
-      updateAgree();
       updateFoot();
       updateReadEmptyCount();
-      updateProposalBulk(selection.ids());
     } catch {
     } finally {
       reloading = false;
@@ -3855,15 +3674,16 @@ function makeAttention(ctx) {
       loadedItems = [...loadedItems, ...next];
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
+      groups = data.groups ?? [];
+      viewRecs = data.agent_recommended ?? 0;
+      know(next);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
       setRows();
       markOpenRow();
-      updateAgree();
       updateFoot();
-      updateProposalBulk(selection.ids());
     } catch {
     } finally {
       loadingMore = false;
@@ -3872,12 +3692,13 @@ function makeAttention(ctx) {
   function setRows() {
     const all = offset >= totalItems;
     const group = all ? leftOpen : [];
-    shown = [...loadedItems, ...group];
+    const open = loadedItems.filter((it) => !collapsed.has(it.group));
+    shown = [...open, ...group];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll(
       ".kit-rows > .kit-row"
     );
-    loadedItems.forEach((it, i) => {
+    open.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
     });
     shown.forEach((it, i) => {
@@ -3887,11 +3708,12 @@ function makeAttention(ctx) {
       const says = lookingLine(it.looking);
       if (says) col.append(h8("div", { class: "cb-row-looking" }, says));
     });
+    placeGroupHeads(open, rowEls);
     if (!group.length) return;
-    for (let i = loadedItems.length; i < shown.length; i++) {
+    for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add("cb-left-open");
     }
-    rowEls[loadedItems.length]?.before(
+    rowEls[open.length]?.before(
       h8(
         "div",
         { class: "cb-left-open-head", role: "presentation" },
@@ -3899,14 +3721,272 @@ function makeAttention(ctx) {
       )
     );
   }
+  function know(items) {
+    for (const it of items) {
+      if (!it.group) continue;
+      groupOfKey.set(it.key, it.group);
+      if (it.proposal?.state === "pending")
+        proposalOfKey.set(it.key, it.proposal.id);
+      else proposalOfKey.delete(it.key);
+    }
+  }
+  function tickedIn(g) {
+    return selection.ids().filter((k) => groupOfKey.get(k) === g.id);
+  }
+  let heads = [];
+  function placeGroupHeads(open, rowEls) {
+    const body = handle.el.querySelector(".kit-rows");
+    heads = [];
+    if (!body || boardHandle) return;
+    const loaded = new Set(loadedItems.map((it) => it.group));
+    let last = null;
+    for (const g of groups) {
+      if (!loaded.has(g.id)) continue;
+      const head = groupHead(g);
+      heads.push(head);
+      const first = open.findIndex((it) => it.group === g.id);
+      if (first >= 0) {
+        rowEls[first]?.before(head.el);
+        let end = first;
+        while (end + 1 < open.length && open[end + 1].group === g.id) end++;
+        last = rowEls[end] ?? head.el;
+      } else {
+        if (last) last.after(head.el);
+        else body.prepend(head.el);
+        last = head.el;
+      }
+    }
+  }
+  function groupHead(g) {
+    const isOpen = !collapsed.has(g.id);
+    const toggleOpen = () => {
+      if (collapsed.has(g.id)) collapsed.delete(g.id);
+      else collapsed.add(g.id);
+      setRows();
+      markOpenRow();
+    };
+    const box = h8("span", {
+      class: "cb-group-box",
+      role: "checkbox",
+      "aria-checked": "false",
+      "aria-label": g.label,
+      onclick() {
+        void tickGroup(g);
+      }
+    });
+    const hint = g.outward && vocab2?.to_apply_hint ? h8("span", { class: "cb-group-where" }, vocab2.to_apply_hint) : null;
+    const top = h8(
+      "div",
+      { class: "cb-group-top" },
+      h8(
+        "button",
+        {
+          type: "button",
+          class: "cb-group-caret",
+          "aria-expanded": String(isOpen),
+          "aria-label": g.label,
+          onclick: toggleOpen
+        },
+        isOpen ? "▼" : "▶"
+      ),
+      box,
+      h8(
+        "span",
+        { class: "cb-group-name", onclick: toggleOpen },
+        h8("span", { class: "cb-group-label" }, g.label),
+        hint
+      ),
+      h8("span", { class: "cb-group-n" }, String(g.total))
+    );
+    const acts = h8("div", { class: "cb-group-acts" });
+    const el = h8(
+      "div",
+      {
+        class: "cb-group" + (isOpen ? "" : " collapsed"),
+        role: "presentation",
+        dataset: { group: g.id, d: g.disposition }
+      },
+      top,
+      acts
+    );
+    function button(cls, label, run, off = false) {
+      return h8(
+        "button",
+        {
+          type: "button",
+          class: "kit-btn " + cls,
+          disabled: off || busyGroups.has(g.id),
+          onclick() {
+            if (busyGroups.has(g.id)) return;
+            busyGroups.add(g.id);
+            paintAll();
+            void Promise.resolve(run()).finally(() => {
+              busyGroups.delete(g.id);
+              paintAll();
+            });
+          }
+        },
+        label
+      );
+    }
+    function paint() {
+      const ticked = tickedIn(g);
+      const n = ticked.length;
+      box.setAttribute(
+        "aria-checked",
+        n === 0 ? "false" : n >= g.total ? "true" : "mixed"
+      );
+      const t = ctx.dockTarget();
+      if (!vocab2) {
+        acts.replaceChildren();
+        return;
+      }
+      if (g.id === "none") {
+        const ask = t && asked !== t.id ? button(
+          "fill cb-group-ask",
+          vocab2.recommend_these.replaceAll("{session}", t.name).replaceAll("{n}", countWord(g.total, 0, vocab2.count_words)),
+          askTheRest
+        ) : null;
+        const note = t && asked === t.id ? h8("span", { class: "cb-group-note" }, `asked ${t.name}`) : null;
+        acts.replaceChildren(...[ask, note].filter((x) => x !== null));
+        return;
+      }
+      const w = groupButtons(g, n, vocab2);
+      const scoped = n > 0 && n < g.total;
+      const rows = loadedItems.filter((it) => it.group === g.id);
+      const looked = scoped ? ticked.every((k) => rows.some((it) => it.key === k && it.looking)) : rows.length >= g.total && rows.every((it) => !!it.looking);
+      acts.replaceChildren(
+        ...[
+          scoped ? h8(
+            "span",
+            { class: "cb-group-ticked" },
+            vocab2.ticked.replaceAll("{n}", String(n))
+          ) : null,
+          button("fill cb-group-act", w.act, () => actGroup(g)),
+          t ? button("cb-group-look", w.look, () => lookGroup(g), looked) : null,
+          g.source.startsWith("rule:") ? null : button("cb-group-discard", w.discard, () => discardGroup(g)),
+          n > 0 ? h8(
+            "button",
+            {
+              type: "button",
+              class: "cb-group-untick",
+              onclick() {
+                selection.deselect(tickedIn(g));
+              }
+            },
+            vocab2.untick
+          ) : null
+        ].filter((x) => x !== null)
+      );
+    }
+    paint();
+    return { el, paint };
+  }
+  function paintAll() {
+    for (const head of heads) head.paint();
+  }
+  function groupFilters(g) {
+    return { ...viewFilters(), group: g.id };
+  }
+  async function fetchGroup(g) {
+    const out = [];
+    for (let total = Infinity; out.length < total; ) {
+      const data = await ctx.api.get("/items", {
+        ...groupFilters(g),
+        offset: String(out.length),
+        limit: String(PAGE_SIZE2)
+      });
+      const got = data.items ?? [];
+      out.push(...got);
+      total = data.total;
+      if (!got.length) break;
+    }
+    know(out);
+    return out;
+  }
+  async function tickGroup(g) {
+    const ticked = tickedIn(g);
+    if (ticked.length >= g.total) {
+      selection.deselect(ticked);
+      return;
+    }
+    try {
+      const items = await fetchGroup(g);
+      selection.all(items.map((it) => it.key));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function target(g) {
+    let keys = tickedIn(g);
+    if (!keys.length) keys = (await fetchGroup(g)).map((it) => it.key);
+    const ids = [];
+    for (const k of keys) {
+      const id = proposalOfKey.get(k);
+      if (id !== void 0) ids.push(id);
+    }
+    return { keys, ids };
+  }
+  async function actGroup(g) {
+    if (deciding) return;
+    const open = currentOpenKey;
+    deciding = open ?? "\0group";
+    try {
+      const { keys, ids } = await target(g);
+      if (!ids.length) return;
+      const order = await orderFor(open);
+      const r = await ctx.api.post("/proposals/accept", {
+        ids
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join("; ") || "nothing was accepted");
+        return;
+      }
+      selection.deselect(keys);
+      lastUndo = null;
+      if (!open || keys.includes(open)) {
+        await moveOn(open ?? "", order);
+      } else {
+        void reload();
+      }
+      const errs = r.errors ?? [];
+      if (errs.length) showReadError(errs.join("; "));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+  async function lookGroup(g) {
+    if (!ctx.dockTarget() || !vocab2) return;
+    try {
+      const { keys } = await target(g);
+      if (!keys.length) return;
+      const message3 = vocab2.look_into.message_many.replaceAll(
+        "{keys}",
+        keys.join(", ")
+      );
+      const why = await ctx.askSession(message3, { keys }, "look-into");
+      if (why) {
+        showReadError(why);
+        return;
+      }
+      await reload();
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  function discardGroup(g) {
+    const ticked = tickedIn(g);
+    if (ticked.length && ticked.length < g.total) {
+      const ids = ticked.map((k) => proposalOfKey.get(k)).filter((id) => id !== void 0);
+      openDiscardSheet(ctx, ids.length, viewLabel(), { ids }, discarded);
+      return;
+    }
+    openDiscardSheet(ctx, g.total, viewLabel(), groupFilters(g), discarded);
+  }
   function updateFoot() {
     if (!footEl) return;
-    const selAll = footEl.querySelector(".cb-sel-all");
-    if (selAll instanceof HTMLElement) {
-      selAll.textContent = `select all ${totalItemsForView} in view`;
-      const allSelected = totalItemsForView > 0 && selection.ids().length >= totalItemsForView;
-      selAll.hidden = allSelected;
-    }
     const btn = footEl.querySelector(".cb-foot-more");
     if (btn) {
       const remaining = totalItems - offset;
@@ -3917,7 +3997,41 @@ function makeAttention(ctx) {
         btn.hidden = true;
       }
     }
+    renderSummary();
     footEl.hidden = false;
+  }
+  function renderSummary() {
+    discardAllBtn.hidden = viewRecs === 0 || !vocab2 || !!boardHandle;
+    if (vocab2)
+      discardAllBtn.textContent = vocab2.discard_all.replaceAll(
+        "{n}",
+        String(viewRecs)
+      );
+    if (!vocab2 || boardHandle) {
+      summaryEl.replaceChildren();
+      return;
+    }
+    const n = String(totalItemsForView);
+    const recs = groups.filter((g) => g.id !== "none");
+    const r = recs.reduce((sum, g) => sum + g.total, 0);
+    const makers = new Set(recs.map((g) => g.by?.id ?? g.source));
+    const one = r > 0 && r === totalItemsForView && makers.size === 1 && !recs[0].source.startsWith("rule:");
+    if (!one) {
+      summaryEl.replaceChildren(
+        vocab2.summary.mixed.replaceAll("{n}", n).replaceAll("{r}", String(r))
+      );
+      return;
+    }
+    const [before, after = ""] = vocab2.summary.one_session.replaceAll("{n}", n).split("{session}");
+    summaryEl.replaceChildren(
+      before,
+      h8(
+        "span",
+        { class: "cb-summary-who" },
+        sessionName(recs[0].by, recs[0].source)
+      ),
+      after
+    );
   }
   function markOpenRow() {
     if (!currentOpenKey || boardHandle) return;
@@ -3932,158 +4046,36 @@ function makeAttention(ctx) {
       syncingOpen = false;
     }
   }
-  const recCountsEl = h8("span", { class: "cb-rec-counts" });
-  const clearBtn = h8("button", {
-    class: "kit-btn cb-rec-clear",
-    type: "button",
-    hidden: true,
-    onclick() {
-      clearView();
-    }
-  });
-  const askBtn = h8("button", {
-    class: "kit-btn cb-rec-ask",
-    type: "button",
-    hidden: true,
-    onclick() {
-      void askTheRest();
-    }
-  });
-  const askNote = h8("span", { class: "cb-rec-note" });
-  const recLine = h8(
-    "div",
-    { class: "cb-rec-line", hidden: true },
-    recCountsEl,
-    clearBtn,
-    askBtn,
-    askNote
-  );
-  handle.el.querySelector(".kit-lh")?.append(recLine);
   let asked = "";
-  function renderRecLine() {
-    if (!recCounts) {
-      recLine.hidden = true;
-      return;
-    }
-    recLine.hidden = false;
-    recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
-    clearBtn.hidden = viewRecs === 0 || !!boardHandle;
-    clearBtn.textContent = clearRecs(viewRecs, viewLabel()).action;
-    if (recCounts.notYet === 0) asked = "";
-    const t = ctx.dockTarget();
-    const offer = recCounts.notYet > 0 && !!t;
-    askBtn.hidden = !offer || asked === t?.id;
-    if (t) askBtn.textContent = `ask ${t.name} to recommend the rest`;
-    askNote.textContent = offer && asked === t?.id ? `asked ${t.name}` : "";
-  }
-  ctx.onDockTarget(() => renderRecLine());
+  ctx.onDockTarget(() => paintAll());
   async function askTheRest() {
     const t = ctx.dockTarget();
-    if (!t || askBtn.disabled) return;
-    askBtn.disabled = true;
-    try {
-      const why = await ctx.askSession(RECOMMEND_THE_REST);
-      if (why) askNote.textContent = why;
-      else asked = t.id;
-    } finally {
-      askBtn.disabled = false;
-    }
-    if (asked) renderRecLine();
+    if (!t) return;
+    const why = await ctx.askSession(RECOMMEND_THE_REST);
+    if (why) showReadError(why);
+    else asked = t.id;
   }
   let viewRecs = 0;
-  let viewRecsSeq = 0;
-  function refreshViewRecs() {
-    const mine = ++viewRecsSeq;
-    void ctx.api.get("/items", { ...buildQuery(0), limit: "1" }).then((d) => {
-      if (mine !== viewRecsSeq) return;
-      viewRecs = d.agent_recommended ?? 0;
-      renderRecLine();
-    }).catch(() => {
-    });
-  }
   function viewFilters() {
     const p = buildQuery(0);
     delete p["offset"];
     delete p["limit"];
     return p;
   }
-  function cleared() {
+  function discarded() {
     asked = "";
     refreshSummary();
     void reload();
   }
-  function clearView() {
+  function discardView() {
     if (viewRecs === 0) return;
-    openClearSheet(ctx, viewRecs, viewLabel(), viewFilters(), cleared);
-  }
-  function clearGroup(g) {
-    openClearSheet(ctx, g.ids.length, viewLabel(), { ids: g.ids }, cleared);
+    openDiscardSheet(ctx, viewRecs, viewLabel(), viewFilters(), discarded);
   }
   function refreshSummary() {
     void ctx.api.get("/summary").then((sv) => {
       applyCounts(sv.counts);
-      recCounts = {
-        rec: sv.recommended ?? 0,
-        notYet: sv.not_recommended ?? 0
-      };
-      renderRecLine();
     }).catch(() => {
     });
-  }
-  const agree = agreeWithAll(agreeAll, lookAll, clearGroup);
-  handle.el.querySelector(".kit-foot")?.before(agree.el);
-  function updateAgree() {
-    refreshViewRecs();
-    const t = ctx.dockTarget();
-    const looking = new Set(
-      loadedItems.filter((it) => !!it.looking).map((it) => it.key)
-    );
-    agree.update(
-      vocab2 && !boardHandle ? agreeGroups(vocab2, loadedItems) : [],
-      vocab2 && t ? {
-        session: t.name,
-        words: vocab2.look_into,
-        looking: (k) => looking.has(k)
-      } : null
-    );
-  }
-  ctx.onDockTarget(() => updateAgree());
-  async function lookAll(g, message3) {
-    if (!ctx.dockTarget()) return;
-    const why = await ctx.askSession(message3, { keys: g.keys }, "look-into");
-    if (why) {
-      showReadError(why);
-      return;
-    }
-    await reload();
-  }
-  async function agreeAll(g) {
-    if (deciding) return;
-    const open = currentOpenKey;
-    deciding = open ?? "\0agree";
-    const order = await orderFor(open);
-    try {
-      const r = await ctx.api.post("/proposals/accept", {
-        ids: g.ids
-      });
-      if (!r.accepted) {
-        showReadError((r.errors ?? []).join("; ") || "nothing was accepted");
-        return;
-      }
-      selection.deselect(g.keys);
-      lastUndo = null;
-      if (!open || g.keys.includes(open)) {
-        await moveOn(open ?? "", order);
-      } else {
-        void reload();
-      }
-      const errs = r.errors ?? [];
-      if (errs.length) showReadError(errs.join("; "));
-    } catch (err) {
-      showReadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      deciding = null;
-    }
   }
   async function openDetail(key) {
     currentOpenKey = key;
@@ -4417,15 +4409,8 @@ function makeAttention(ctx) {
     },
     handle
   );
-  selection.onChange((ids) => {
-    updateProposalBulk(ids);
-    if (footEl) {
-      const selAll = footEl.querySelector(".cb-sel-all");
-      if (selAll) {
-        const allSelected = totalItemsForView > 0 && ids.length >= totalItemsForView;
-        selAll.hidden = allSelected;
-      }
-    }
+  selection.onChange(() => {
+    paintAll();
     feedAttached();
   });
   function shownProposal() {
@@ -4498,7 +4483,7 @@ function makeAttention(ctx) {
   void getVocab(ctx).then((v) => {
     vocab2 = v;
     setRows();
-    updateAgree();
+    updateFoot();
     renderAsk();
   }).catch(() => {
   });
@@ -4520,8 +4505,6 @@ function makeAttention(ctx) {
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = true;
     if (kitFoot) kitFoot.hidden = true;
-    agree.update([]);
-    clearBtn.hidden = true;
     boardHandle = makeBoard(
       ctx,
       selection,
@@ -4529,12 +4512,7 @@ function makeAttention(ctx) {
       (key, laneId) => {
         filters.view = laneId;
       },
-      (total) => {
-        if (!footEl) return;
-        const selAll = footEl.querySelector(".cb-sel-all");
-        if (selAll instanceof HTMLElement) {
-          selAll.textContent = `select all ${total} in view`;
-        }
+      () => {
       }
     );
     handle.el.append(boardHandle.el);
@@ -4549,7 +4527,8 @@ function makeAttention(ctx) {
     const kitFoot = handle.el.querySelector(".kit-foot");
     if (kitRows) kitRows.hidden = false;
     if (kitFoot) kitFoot.hidden = false;
-    updateAgree();
+    setRows();
+    updateFoot();
   }
   function show(sub) {
     const wasActive = active;
@@ -4576,7 +4555,6 @@ function makeAttention(ctx) {
     if (VIEWS2.some((v) => v.id === view) && view !== "board") {
       filters.view = view;
       handle.setChips("view", viewChips(filters.view));
-      updateProposalBulk(selection.ids());
       showReadEmpty();
       void reload();
     } else if (sub) {

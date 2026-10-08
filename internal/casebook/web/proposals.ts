@@ -4,29 +4,19 @@
 //   agentFromSource(source)            — "pi:session-id" → "pi"
 //   proposalCard(ctx, detail, onDone)   — the recommendation card in the decide step
 //   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
-//   bulkProposalActions(ctx, onDone)    — accept N / reject N… foot; call .update()
-//   agreeWithAll(onAgree, onLook, onClear) — the list foot's "agree with all N" lines
-//   openClearSheet(ctx, n, view, body, onDone) — confirm + POST /proposals/withdraw
+//   openDiscardSheet(ctx, n, view, body, onDone) — confirm + POST /proposals/withdraw
 
 import { card, sheet, noteField, h, type Button } from '/_kit/kit.js';
 import type {
   AcceptResult,
   DecideResult,
   ItemDetailView,
-  LookIntoVocab,
   RejectResult,
   WithdrawResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import { openDecideSheet } from './decide.ts';
-import {
-  agentFromSource,
-  agreeText,
-  clearRecs,
-  lookIntoAll,
-  pluralize,
-  type AgreeGroup,
-} from './decide-math.ts';
+import { agentFromSource, discardConfirm, pluralize } from './decide-math.ts';
 
 // agentFromSource ("pi:session-id" → "pi") lives with the pure helpers.
 export { agentFromSource };
@@ -104,16 +94,17 @@ export function openRejectSheet(
   });
 }
 
-// ---- clear recommendations --------------------------------------------------
+// ---- discard recommendations ------------------------------------------------
 
 /**
- * openClearSheet confirms clearing n agent recommendations in view (the
- * kit's sheet: "Clear n recommendations in ‹view›? …", clear and cancel);
- * clear POSTs body ({ids} or the view and its filters) to
- * /proposals/withdraw and calls onDone with how many were withdrawn. It
- * decides and rejects nothing: the items go back to the agent.
+ * openDiscardSheet confirms discarding n agent recommendations in view (the
+ * kit's sheet: "Discard n recommendations in ‹view›? …", discard and
+ * cancel); discard POSTs body ({ids}, or the view and its filters, with a
+ * group or without) to /proposals/withdraw and calls onDone with how many
+ * were withdrawn. It decides and rejects nothing: the items go back to the
+ * agent.
  */
-export function openClearSheet(
+export function openDiscardSheet(
   ctx: Ctx,
   n: number,
   view: string,
@@ -124,9 +115,7 @@ export function openClearSheet(
   let sh: ReturnType<typeof sheet> | null = null;
   const errEl = h('p', { class: 'cb-sheet-err' });
   errEl.hidden = true;
-  const words = clearRecs(n, view);
-
-  async function doClear(): Promise<void> {
+  async function doDiscard(): Promise<void> {
     if (submitting) return;
     submitting = true;
     errEl.hidden = true;
@@ -136,26 +125,26 @@ export function openClearSheet(
       onDone(r.withdrawn);
     } catch (err) {
       errEl.textContent =
-        err instanceof Error ? err.message : 'clear failed — try again';
+        err instanceof Error ? err.message : 'discard failed, try again';
       errEl.hidden = false;
       submitting = false;
     }
   }
 
   sh = sheet({
-    title: 'clear recommendations',
+    title: 'discard recommendations',
     body: h(
       'div',
-      { class: 'cb-sheet-body cb-clear-confirm' },
-      h('p', { class: 'cb-clear-says' }, words.confirm),
+      { class: 'cb-sheet-body cb-discard-confirm' },
+      h('p', { class: 'cb-discard-says' }, discardConfirm(n, view)),
       errEl,
     ),
     actions: [
       {
-        label: 'clear',
+        label: 'discard',
         fill: true,
         run() {
-          void doClear();
+          void doDiscard();
         },
       },
       {
@@ -285,192 +274,4 @@ export function proposalCard(
   const el = card({ edge: 'agent', head, body: bodyEl, actions });
   el.classList.add('cb-proposal-card');
   return el;
-}
-
-// ---- bulk proposal foot -----------------------------------------------------
-
-/** Handle returned by bulkProposalActions; call update() when selection changes. */
-export interface BulkProposalActions {
-  el: HTMLElement;
-  /**
-   * update recalculates which selected items have pending proposals and updates
-   * the button labels/visibility.  Pass the loaded items and the current
-   * selection ids so the foot can find the intersection.
-   */
-  update(proposalIds: number[], itemKeys: string[]): void;
-}
-
-/**
- * bulkProposalActions creates the accept N / reject N… foot buttons for the
- * proposed view.  Returns { el, update } — the caller must call update()
- * whenever the selection changes or items are reloaded.
- *
- * onDone(keys) is called after a successful accept/reject with the item keys
- * to deselect.
- */
-export function bulkProposalActions(
-  ctx: Ctx,
-  onDone: (keys: string[]) => void,
-): BulkProposalActions {
-  let _ids: number[] = [];
-  let _keys: string[] = [];
-
-  const acceptBtn = h('button', {
-    class: 'kit-btn fill cb-prop-accept',
-    hidden: true,
-    onclick() {
-      if (_ids.length === 0) return;
-      const ids = [..._ids];
-      const keys = [..._keys];
-      void ctx.api
-        .post<AcceptResult>('/proposals/accept', { ids })
-        .then(() => {
-          onDone(keys);
-        })
-        .catch(() => {});
-    },
-  }) as HTMLButtonElement;
-  acceptBtn.textContent = 'accept 0';
-
-  const rejectBtn = h('button', {
-    class: 'kit-btn cb-prop-reject',
-    hidden: true,
-    onclick() {
-      if (_ids.length === 0) return;
-      const keys = [..._keys];
-      openRejectSheet(ctx, [..._ids], () => {
-        onDone(keys);
-      });
-    },
-  }) as HTMLButtonElement;
-  rejectBtn.textContent = 'reject 0\u2026';
-
-  const el = h('div', { class: 'cb-prop-bulk' }, acceptBtn, rejectBtn);
-
-  function update(proposalIds: number[], itemKeys: string[]): void {
-    _ids = proposalIds;
-    _keys = itemKeys;
-    const n = proposalIds.length;
-    if (n === 0) {
-      acceptBtn.hidden = true;
-      rejectBtn.hidden = true;
-    } else {
-      acceptBtn.textContent = `accept ${n}`;
-      rejectBtn.textContent = `reject ${n}\u2026`;
-      acceptBtn.hidden = false;
-      rejectBtn.hidden = false;
-    }
-  }
-
-  return { el, update };
-}
-
-// ---- agree with all ----------------------------------------------------------
-
-/** Handle returned by agreeWithAll; call update() when the rows change. */
-export interface AgreeWithAll {
-  el: HTMLElement;
-  update(groups: AgreeGroup[], look?: LookAll | null): void;
-}
-
-/** What "look into all N" needs: the attached session's name, serve's
- * words, and the keys a session is looking into already. */
-export interface LookAll {
-  session: string;
-  words: LookIntoVocab;
-  looking: (key: string) => boolean;
-}
-
-/**
- * agreeWithAll is the list foot's band of groups: for each group of two or
- * more rows whose recommendations agree, "‹agent› recommends ‹label› for
- * ‹n›" and a button that accepts exactly that group's proposals ("agree
- * with all n"; an outward choice reads "send all n to To apply", since
- * accepting it only puts it in To apply). onAgree does the accepting; the
- * button is disabled while it runs.
- *
- * With a session attached (look), each group also offers "ask ‹session›
- * to look into all n": onLook sends that session one message naming the
- * group's keys (serve's message_many). It is disabled while it runs, and
- * while every row of the group is being looked into already.
- *
- * An agent's group (not a rule's) offers "clear these n" too: onClear
- * confirms and withdraws exactly the group's recommendations.
- */
-export function agreeWithAll(
-  onAgree: (g: AgreeGroup) => Promise<void>,
-  onLook: (g: AgreeGroup, message: string) => Promise<void>,
-  onClear: (g: AgreeGroup) => void,
-): AgreeWithAll {
-  const el = h('div', { class: 'cb-agree', hidden: true });
-
-  function update(groups: AgreeGroup[], look?: LookAll | null): void {
-    el.replaceChildren(
-      ...groups.map((g) => {
-        const t = agreeText(g);
-        const btn = h(
-          'button',
-          {
-            class: 'kit-btn cb-agree-btn',
-            type: 'button',
-            onclick() {
-              btn.disabled = true;
-              void onAgree(g).finally(() => {
-                btn.disabled = false;
-              });
-            },
-          },
-          t.action,
-        ) as HTMLButtonElement;
-        let lookBtn: HTMLButtonElement | null = null;
-        if (look) {
-          const w = lookIntoAll(look.words, look.session, g.keys);
-          const all = g.keys.every((k) => look.looking(k));
-          lookBtn = h(
-            'button',
-            {
-              class: 'kit-btn cb-agree-look',
-              type: 'button',
-              disabled: all,
-              onclick() {
-                if (lookBtn!.disabled) return;
-                lookBtn!.disabled = true;
-                void onLook(g, w.message).finally(() => {
-                  lookBtn!.disabled = false;
-                });
-              },
-            },
-            w.action,
-          ) as HTMLButtonElement;
-        }
-        const clearBtn =
-          g.agent === 'rule'
-            ? null
-            : h(
-                'button',
-                {
-                  class: 'kit-btn cb-agree-clear',
-                  type: 'button',
-                  onclick() {
-                    onClear(g);
-                  },
-                },
-                clearRecs(g.ids.length, '').these,
-              );
-        return h(
-          'div',
-          {
-            class: 'cb-agree-line',
-            'data-d': g.disposition,
-            'data-ids': g.ids.join(' '),
-          },
-          h('span', { class: 'cb-agree-says' }, t.says),
-          h('span', { class: 'cb-agree-acts' }, btn, lookBtn, clearBtn),
-        );
-      }),
-    );
-    el.hidden = groups.length === 0;
-  }
-
-  return { el, update };
 }

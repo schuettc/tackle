@@ -8,7 +8,9 @@
 
 import type {
   ChoiceVocab,
+  CountWords,
   DecisionVocabView,
+  GroupView,
   LookIntoVocab,
   NotNowForm,
 } from './wire.d.ts';
@@ -271,79 +273,43 @@ export function recommendLine(
   return `${agentFromSource(source)} recommends ${choiceLabel(vocab, key, disposition)}`;
 }
 
-/** What agreeGroups reads from a list row. */
-export interface Recommendable {
-  key: string;
-  proposal?: {
-    id: number;
-    disposition: string;
-    source: string;
-    state: string;
-  } | null;
-}
+// ---- the groups of an Attention view ----------------------------------------
 
-/** A group of rows whose pending proposals share an agent and a choice. */
-export interface AgreeGroup {
-  agent: string;
-  disposition: string;
-  /** serve's label, joined when the kinds word it differently. */
-  label: string;
-  /** The choice goes to To apply (close, merge, archive, delete). */
-  outward: boolean;
-  ids: number[];
-  keys: string[];
+/**
+ * countWord is the word for a group button's {n} (serve's count_words, the
+ * rule serve's CountWord states): the ticked items when some of the group's
+ * total are ticked ("3"), otherwise the whole group ("it", "both", "all
+ * 27"). Ticking every item counts as the whole group.
+ */
+export function countWord(
+  total: number,
+  ticked: number,
+  words: CountWords,
+): string {
+  if (ticked > 0 && ticked < total)
+    return words.some.replaceAll('{n}', String(ticked));
+  if (total === 1) return words.one;
+  if (total === 2) return words.two;
+  return words.all.replaceAll('{n}', String(total));
 }
 
 /**
- * agreeGroups groups the rows shown whose pending proposals come from the
- * same agent and recommend the same choice, two or more to a group, in the
- * order each group first appears. "agree with all" accepts exactly a
- * group's ids.
+ * groupButtons is a group's three buttons in serve's words, for the whole
+ * group (ticked 0) or the ticked items of it: its choice for several items
+ * ("Close all 27", "Close 3"), look into them, and discard their
+ * recommendations.
  */
-export function agreeGroups(
-  vocab: DecisionVocabView,
-  items: Recommendable[],
-): AgreeGroup[] {
-  const groups = new Map<
-    string,
-    { agent: string; d: string; rows: Recommendable[] }
-  >();
-  for (const it of items) {
-    const p = it.proposal;
-    if (!p || p.state !== 'pending') continue;
-    const agent = agentFromSource(p.source);
-    const d = p.disposition === 'watch' ? 'wait' : p.disposition;
-    const id = `${agent}\u0000${d}`;
-    const g = groups.get(id) ?? { agent, d, rows: [] };
-    g.rows.push(it);
-    groups.set(id, g);
-  }
-  const out: AgreeGroup[] = [];
-  for (const g of groups.values()) {
-    if (g.rows.length < 2) continue;
-    const keys = g.rows.map((r) => r.key);
-    const c = choicesForKeys(vocab, keys).find((x) => x.disposition === g.d);
-    out.push({
-      agent: g.agent,
-      disposition: g.d,
-      label: c?.label ?? g.d,
-      outward: c?.outward ?? false,
-      ids: g.rows.map((r) => r.proposal!.id),
-      keys,
-    });
-  }
-  return out;
-}
-
-/**
- * agreeText is a group's line in the list foot: what is recommended, and the
- * action ("agree with all 3"; an outward choice "send all 2 to To apply").
- */
-export function agreeText(g: AgreeGroup): { says: string; action: string } {
-  const n = g.ids.length;
+export function groupButtons(
+  g: GroupView,
+  ticked: number,
+  vocab: Pick<DecisionVocabView, 'look_many' | 'discard_many' | 'count_words'>,
+): { act: string; look: string; discard: string } {
+  const n = countWord(g.total, ticked, vocab.count_words);
+  const fill = (s: string): string => s.replaceAll('{n}', n);
   return {
-    says: `${g.agent} recommends ${g.label} for ${n}`,
-    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`,
+    act: fill(g.many || g.label),
+    look: fill(vocab.look_many),
+    discard: fill(vocab.discard_many),
   };
 }
 
@@ -365,42 +331,12 @@ export function lookIntoCard(
 }
 
 /**
- * lookIntoAll is the list foot's "ask ‹session› to look into all N" for a
- * group's keys: the action, and the one message (serve's message_many)
- * naming them all, joined with ", " as serve joins them.
+ * discardConfirm is the confirm Discard opens for n recommendations in
+ * view: discarding withdraws them, with no judgement; the items go back to
+ * the agent.
  */
-export function lookIntoAll(
-  words: LookIntoVocab,
-  session: string,
-  keys: string[],
-): { action: string; message: string } {
-  return {
-    action: `ask ${session} to look into all ${keys.length}`,
-    message: words.message_many.replaceAll('{keys}', keys.join(', ')),
-  };
-}
-
-/** recommendedLine is the line at the top of Attention. */
-export function recommendedLine(recommended: number, notYet: number): string {
-  return `${recommended} recommended \u00b7 ${notYet} not yet`;
-}
-
-/**
- * clearRecs is "clear recommendations" in words: the recommended line's
- * action for the view's n agent recommendations, a foot group's ("clear
- * these n"), and the confirm both open. Clearing withdraws them: no
- * judgement, the items go back to the agent.
- */
-export function clearRecs(
-  n: number,
-  view: string,
-): { action: string; these: string; confirm: string } {
-  const recs = pluralize(n, 'recommendation');
-  return {
-    action: `clear ${recs}`,
-    these: `clear these ${n}`,
-    confirm: `Clear ${recs} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`,
-  };
+export function discardConfirm(n: number, view: string): string {
+  return `Discard ${pluralize(n, 'recommendation')} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`;
 }
 
 // The kinds each Not now form that names something searches and accepts.

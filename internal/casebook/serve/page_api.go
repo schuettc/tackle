@@ -330,6 +330,9 @@ func decisionVocab() DecisionVocabView {
 		DiscardAll:     "discard all {n}",
 		Summary:        SummaryVocab{OneSession: "{n} items, all recommended by {session}", Mixed: "{n} items, {r} recommended"},
 		CountWords:     countWords,
+		ToApplyHint:    "goes to To apply first",
+		Ticked:         "{n} ticked",
+		Untick:         "untick",
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)

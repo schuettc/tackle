@@ -221,6 +221,9 @@ export interface DecisionVocabView {
   discard_all: string;
   summary: SummaryVocab;
   count_words: CountWords;
+  to_apply_hint: string;
+  ticked: string;
+  untick: string;
 }
 
 export interface ClearResult {
