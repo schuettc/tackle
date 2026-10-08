@@ -255,11 +255,43 @@ test code to Jev, and adds `.cull/` to the project's ignore file.
 - `cull apply` removes the tests judged cut, tidies imports, verifies, and rolls back if that fails.
 - `cull serve` opens the review page (starting the local server if needed).
 - `cull wait` waits until you send your answers, then prints what to do.
-- `cull doctor` checks the key, whether the project allows sending test source to TypeSafe, python3 and node (when the project needs them), the test command, the review page server and the agent setup.
+- `cull time` runs the project's checks the way CI does, with timing, and reports where the time goes (see "Speed" below).
+- `cull doctor` checks the key, whether the project allows sending test source to TypeSafe, python3 and node (when the project needs them), the test command, the review page server and the agent setup. It also lists the checks cull found the project runs.
 - `cull judge` is plumbing: JSONL in, JSONL out.
 
-**The agent loop.** An agent in your project has five channel tools:
-`cull_check`, `cull_check_group`, `cull_review`, `cull_apply` and `cull_status`.
+**What cull reads.** To know what your project runs, cull reads the project's
+own files: the CI workflows, the `justfile` recipes they call, the project's own
+git hooks, and `package.json` scripts. It never reads your global git hooks.
+From these it learns which test commands run, with which options and in which
+folder (for example, jest in `infra/cdk`), and which scripts run as checks, such
+as browser probes. A command it can't make sense of is listed as not understood,
+never guessed. A project with none of these is read by test-file name, as
+before. `cull doctor` lists the checks it found.
+
+**Speed.** Every `cull check` also scans for things that make checks slow. It
+runs no tests and adds only seconds. Each finding has a file and line:
+
+- fixed waits (sleeps, `waitForTimeout`, timer promises), with their length when it is written in the code;
+- Go setup that stops tests running in parallel: a helper that calls `t.Setenv` and that most tests in a package use;
+- browser-probe waits that fail silently (the failure is swallowed), or that pass their timeout in the wrong place so the 30 s default applies;
+- screenshot-only code in probes, which checks nothing.
+
+A wait that is there on purpose, such as a window in which nothing should
+happen, is kept by putting a `cull: keep` comment on its line.
+
+**Timing.** `cull time` (the agent's tool is `cull_time`) runs the project's
+checks the way CI does, with their own options, and times them. It takes as long
+as the suite, so it runs only when asked. It reports the slowest packages, files
+and tests, and setup that most tests in a package repeat. Tests that no check
+covers are timed too, and marked as such. The results are printed and not
+stored.
+
+The agent fixes what cull reports. None of the speed findings goes to your
+review page.
+
+**The agent loop.** An agent in your project has six channel tools:
+`cull_check`, `cull_check_group`, `cull_review`, `cull_apply` and `cull_status`,
+plus `cull_time` for the timing run.
 On its own it checks the tests it wrote and applies the cuts Jev is sure of. It
 sends the unsure ones to the page with `cull_review` and carries on with other
 work until your answers arrive.
