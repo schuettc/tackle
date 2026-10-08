@@ -23,6 +23,9 @@ type Check struct {
 	// ".github/workflows/ci.yml:111 run > justfile verify-slow > justfile cull-probe".
 	From []string `json:"from"`
 	Note string   `json:"note,omitempty"` // why it is unknown
+	// Env is the VAR=value pairs the command runs with: its own prefixes
+	// (KIT_BROWSER=required go test ...) and plain-string workflow env values.
+	Env []string `json:"env,omitempty"`
 }
 
 // Find reads root's entry points and returns the checks they run, merged: the
@@ -56,6 +59,7 @@ type engine struct {
 type ctx struct {
 	dir    string            // current root-relative directory (may hold "{{" when not known)
 	chain  []string          // hops so far, outermost first
+	env    []string          // VAR=value pairs in force (workflow env:, command prefixes)
 	vars   map[string]string // just parameters bound by the caller
 	active map[string]bool   // recipes and scripts being followed (loop guard)
 }
@@ -73,7 +77,7 @@ func (e *engine) exists(rel string) bool {
 
 func (e *engine) emit(c ctx, kind string, argv []string, files []string, note string) {
 	dir := c.dir
-	if strings.Contains(dir, "{{") || hasExpr(argv) {
+	if strings.Contains(dir, "{{") || hasExpr(argv) || hasExpr(c.env) {
 		if kind != "unknown" {
 			note = "the directory or arguments hold a variable or expression that is not known statically"
 		}
@@ -98,7 +102,7 @@ func (e *engine) emit(c ctx, kind string, argv []string, files []string, note st
 		return
 	}
 	e.index[key] = len(e.checks)
-	e.checks = append(e.checks, Check{Kind: kind, Dir: dir, Argv: argv, Files: files, From: []string{from}, Note: note})
+	e.checks = append(e.checks, Check{Kind: kind, Dir: dir, Argv: argv, Files: files, From: []string{from}, Note: note, Env: append([]string(nil), c.env...)})
 }
 
 func hasExpr(argv []string) bool {

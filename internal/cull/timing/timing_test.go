@@ -263,3 +263,146 @@ func TestPythonSetupHint(t *testing.T) {
 		t.Errorf("hints = %+v", hints)
 	}
 }
+
+func TestAddTimingFlagsPytestBeforeDashDashAndDropsQuiet(t *testing.T) {
+	cases := []struct{ in, want []string }{
+		{[]string{"pytest", "-q", "tests"}, []string{"pytest", "tests", "--durations=0", "-vv", "-p", "no:cacheprovider"}},
+		{[]string{"pytest", "-qq", "-x"}, []string{"pytest", "-x", "--durations=0", "-vv", "-p", "no:cacheprovider"}},
+		{[]string{"pytest", "-n", "2", "--", "a.py", "-q"}, []string{"pytest", "-n", "2", "--durations=0", "-vv", "-p", "no:cacheprovider", "--", "a.py", "-q"}},
+	}
+	for _, c := range cases {
+		if got := addTimingFlags("pytest", c.in); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%v: got %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func wfRoot(t *testing.T, steps string, files map[string]string) string {
+	t.Helper()
+	needTool(t, "node")
+	needTool(t, "git")
+	root := t.TempDir()
+	write(t, root, ".github/workflows/ci.yml", "name: ci\non: push\njobs:\n  t:\n    runs-on: x\n    steps:\n"+steps)
+	for k, v := range files {
+		write(t, root, k, v)
+	}
+	gitInit(t, root)
+	return root
+}
+
+func TestRunAppliesCheckEnvButNeverTheKey(t *testing.T) {
+	root := wfRoot(t, "      - run: MY_VAR=hello TYPESAFE_API_KEY=zzz node env.mjs\n",
+		map[string]string{"env.mjs": "if (process.env.MY_VAR !== 'hello' || process.env.TYPESAFE_API_KEY) process.exit(3)\n"})
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK || len(rep.Checks) != 1 {
+		t.Errorf("rep = %+v", rep)
+	}
+}
+
+func TestRunExpandsShellWords(t *testing.T) {
+	root := wfRoot(t, "      - run: |\n          WORD=ok node args.mjs $WORD *.txt 'a b'\n",
+		map[string]string{"args.mjs": "const a = process.argv.slice(2).join('|'); if (a !== 'ok|x.txt|a b') { console.log(a); process.exit(3) }\n", "x.txt": ""})
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK || len(rep.Checks) != 1 {
+		t.Errorf("rep = %+v", rep)
+	}
+}
+
+func TestRunNotRunWhenExpansionDependsOnElsewhere(t *testing.T) {
+	root := wfRoot(t, "      - run: |\n          pkgs=./...\n          node args.mjs $pkgs\n",
+		map[string]string{"args.mjs": "process.exit(3)\n"})
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Checks) != 0 || len(rep.NotRun) != 1 || !strings.Contains(rep.NotRun[0], "depends on $pkgs set elsewhere in the step") {
+		t.Errorf("rep = %+v", rep)
+	}
+}
+
+func TestRunCancelledBeforeStart(t *testing.T) {
+	root := wfRoot(t, "      - run: node a.mjs\n      - run: node b.mjs\n",
+		map[string]string{"a.mjs": "", "b.mjs": ""})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rep, err := Run(ctx, Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, s := range rep.NotRun {
+		if strings.Contains(s, "not run: cancelled") {
+			n++
+		}
+	}
+	if len(rep.Checks) != 0 || n != 2 || rep.OK {
+		t.Errorf("rep = %+v", rep)
+	}
+}
+
+func TestRunCancelledDuringCheckSkipsTheRest(t *testing.T) {
+	root := wfRoot(t, "      - run: node a.mjs\n      - run: node b.mjs\n",
+		map[string]string{"a.mjs": "setTimeout(() => {}, 30000)\n", "b.mjs": ""})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(400 * time.Millisecond); cancel() }()
+	rep, err := Run(ctx, Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Checks) != 1 || rep.Checks[0].TimedOut || rep.OK {
+		t.Errorf("checks = %+v", rep.Checks)
+	}
+	if len(rep.NotRun) != 1 || !strings.Contains(rep.NotRun[0], "not run: cancelled") {
+		t.Errorf("not run = %v", rep.NotRun)
+	}
+}
+
+func TestTimeoutKillsTheProcessGroup(t *testing.T) {
+	root := wfRoot(t, "      - run: node nap.mjs\n", map[string]string{"nap.mjs": `import { spawn } from 'node:child_process'
+spawn('sh', ['-c', 'sleep 3; echo late > late.txt'], { stdio: 'ignore' })
+setTimeout(() => {}, 30000)
+`})
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Checks) != 1 || !rep.Checks[0].TimedOut {
+		t.Fatalf("rep = %+v", rep)
+	}
+	time.Sleep(4 * time.Second)
+	if _, err := os.Stat(filepath.Join(root, "late.txt")); err == nil {
+		t.Error("the grandchild survived the timeout")
+	}
+}
+
+func TestHintsWhenCheckDirIsBelowModuleRoot(t *testing.T) {
+	needTool(t, "go")
+	body := `package slow
+
+import (
+	"testing"
+	"time"
+)
+
+func setup(t *testing.T) { t.Setenv("X", "1"); time.Sleep(350 * time.Millisecond) }
+
+func TestA(t *testing.T) { setup(t) }
+func TestB(t *testing.T) { setup(t) }
+func TestC(t *testing.T) { setup(t) }
+`
+	root := wfRoot(t, "      - working-directory: mod/inner\n        run: go test ./...\n", map[string]string{
+		"mod/go.mod": "module example.com/m\n\ngo 1.22\n", "mod/inner/slow/slow_test.go": body})
+	rep, err := Run(context.Background(), Options{Root: root, Timeout: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Hints) != 1 || !strings.Contains(rep.Hints[0].Message, "example.com/m/inner/slow") {
+		t.Fatalf("hints = %+v checks=%+v", rep.Hints, rep.Checks)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -106,7 +107,24 @@ func addTimingFlags(kind string, argv []string) []string {
 		}
 		return append(out, argv[2:]...)
 	case "pytest":
-		return append(append([]string(nil), argv...), "--durations=0", "-vv", "-p", "no:cacheprovider")
+		// Timing flags go before the first "--"; -q/-qq are dropped, since -vv
+		// and the summary line are what timing reads.
+		cut := len(argv)
+		for i, a := range argv {
+			if a == "--" {
+				cut = i
+				break
+			}
+		}
+		out := []string{}
+		for _, a := range argv[:cut] {
+			if a == "-q" || a == "-qq" || a == "-qqq" || a == "--quiet" {
+				continue
+			}
+			out = append(out, a)
+		}
+		out = append(out, "--durations=0", "-vv", "-p", "no:cacheprovider")
+		return append(out, argv[cut:]...)
 	}
 	return argv
 }
@@ -116,6 +134,8 @@ type plan struct {
 	dir  string // root-relative
 	argv []string
 	from []string
+	env  []string // VAR=value prefixes and workflow env of the check
+	raw  bool     // argv is run as given (verify's own commands)
 }
 
 var runnable = map[string]bool{"go": true, "pytest": true, "jest": true, "vitest": true, "node-test": true, "script": true}
@@ -145,7 +165,7 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 			rep.NotRun = append(rep.NotRun, "not run: "+note)
 			continue
 		}
-		plans = append(plans, plan{kind: c.Kind, dir: c.Dir, argv: c.Argv, from: c.From})
+		plans = append(plans, plan{kind: c.Kind, dir: c.Dir, argv: c.Argv, from: c.From, env: c.Env})
 	}
 	if len(plans) == 0 {
 		fb, err := fallback(root, opt.TestCommand)
@@ -160,11 +180,30 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 	var tests []TestTime
 	var goChecks []int
 	pyByCheck := map[int]PyResult{}
-	for _, p := range plans {
+	for pi, p := range plans {
+		if ctx.Err() != nil {
+			rep.OK = false
+			for _, q := range plans[pi:] {
+				rep.NotRun = append(rep.NotRun, "not run: cancelled ("+describe(q)+")")
+			}
+			break
+		}
 		argv := addTimingFlags(p.kind, p.argv)
-		res, out := runOne(ctx, filepath.Join(root, filepath.FromSlash(p.dir)), argv, timeout, env)
+		cenv := checkEnv(env, p.env)
+		execArgv, note := argv, ""
+		if !p.raw {
+			execArgv, note = shellForm(argv, cenv, p.env)
+		}
+		if note != "" {
+			rep.NotRun = append(rep.NotRun, "not run: "+note+" ("+describe(p)+")")
+			continue
+		}
+		res, out := runOne(ctx, filepath.Join(root, filepath.FromSlash(p.dir)), execArgv, timeout, cenv)
 		cr := CheckResult{Kind: p.kind, Dir: p.dir, Argv: argv, From: p.from, Seconds: res.seconds,
-			Exit: res.exit, OK: res.exit == 0 && !res.timedOut, TimedOut: res.timedOut}
+			Exit: res.exit, OK: res.exit == 0 && !res.timedOut && !res.cancelled, TimedOut: res.timedOut}
+		if res.cancelled {
+			cr.Tail = "cancelled"
+		}
 		switch p.kind {
 		case "go":
 			gr := ParseGo(bytes.NewReader(out))
@@ -254,15 +293,107 @@ func fallback(root, testCommand string) ([]plan, error) {
 		case len(c.Argv) >= 3 && c.Argv[1] == "-m" && c.Argv[2] == "pytest":
 			kind = "pytest"
 		}
-		out = append(out, plan{kind: kind, dir: filepath.ToSlash(dir), argv: c.Argv, from: []string{"cull: detected test command"}})
+		out = append(out, plan{kind: kind, dir: filepath.ToSlash(dir), argv: c.Argv, from: []string{"cull: detected test command"}, raw: true})
 	}
 	return out, nil
 }
 
 type procResult struct {
-	seconds  float64
-	exit     int
-	timedOut bool
+	seconds   float64
+	exit      int
+	timedOut  bool
+	cancelled bool
+}
+
+func describe(p plan) string {
+	dir := p.dir
+	if dir == "" {
+		dir = "."
+	}
+	return strings.Join(p.argv, " ") + " in " + dir
+}
+
+// checkEnv is the filtered environment with the check's own variables on top.
+// The API key never gets through, even when a prefix sets it.
+func checkEnv(base, extra []string) []string {
+	out := make([]string, 0, len(base)+len(extra))
+	out = append(out, base...)
+	out = append(out, extra...)
+	kept := out[:0]
+	for _, kv := range out {
+		if strings.HasPrefix(kv, "TYPESAFE_API_KEY=") {
+			continue
+		}
+		kept = append(kept, kv)
+	}
+	return kept
+}
+
+var (
+	varRef    = regexp.MustCompile(`\$\{?([A-Za-z_][A-Za-z0-9_]*|[0-9@#?*!$-])`)
+	expansion = regexp.MustCompile("\\$[A-Za-z_{(0-9@#?*!$-]|`")
+)
+
+// expands: the word holds something sh would expand.
+func expands(w string) bool {
+	return expansion.MatchString(w) || strings.ContainsAny(w, "*?[")
+}
+
+func shQuote(w string) string { return "'" + strings.ReplaceAll(w, "'", `'\''`) + "'" }
+
+// shellForm is how to run argv. Plain commands run directly. When a word needs
+// shell expansion ($var, `cmd`, globs) the command runs through sh -c with the
+// other words quoted, so the expansion happens at run time as in the project's
+// own script. A note (non-empty) means the check cannot be run faithfully.
+func shellForm(argv, env, own []string) ([]string, string) {
+	for _, kv := range own {
+		_, v, _ := strings.Cut(kv, "=")
+		if expansion.MatchString(v) {
+			return nil, "an environment value holds a shell expansion"
+		}
+	}
+	needSh := false
+	for _, w := range argv {
+		if strings.Contains(w, "${{") || strings.Contains(w, "{{") {
+			return nil, "depends on a workflow or recipe expression"
+		}
+		if expands(w) {
+			needSh = true
+		}
+	}
+	if !needSh {
+		return argv, ""
+	}
+	set := map[string]bool{}
+	for _, kv := range env {
+		n, _, _ := strings.Cut(kv, "=")
+		set[n] = true
+	}
+	var missing []string
+	seen := map[string]bool{}
+	for _, w := range argv {
+		if !expansion.MatchString(w) {
+			continue
+		}
+		for _, m := range varRef.FindAllStringSubmatch(w, -1) {
+			if !set[m[1]] && !seen[m[1]] {
+				seen[m[1]] = true
+				missing = append(missing, "$"+m[1])
+			}
+		}
+	}
+	if len(missing) > 0 {
+		return nil, "depends on " + strings.Join(missing, ", ") + " set elsewhere in the step"
+	}
+	parts := make([]string, len(argv))
+	for i, w := range argv {
+		if expands(w) {
+			parts[i] = w
+		} else {
+			parts[i] = shQuote(w)
+		}
+	}
+	return []string{"sh", "-c", strings.Join(parts, " ")}, ""
 }
 
 type syncBuffer struct {
@@ -301,6 +432,7 @@ func runOne(ctx context.Context, dir string, argv []string, timeout time.Duratio
 	go func() { done <- cmd.Wait() }()
 	select {
 	case <-cctx.Done():
+		cancelled := ctx.Err() != nil
 		if pgid, err := syscall.Getpgid(cmd.Process.Pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
@@ -310,7 +442,7 @@ func runOne(ctx context.Context, dir string, argv []string, timeout time.Duratio
 		case <-done:
 		case <-time.After(killGraceDelay):
 		}
-		return procResult{seconds: time.Since(began).Seconds(), exit: -1, timedOut: true}, buf.Bytes()
+		return procResult{seconds: time.Since(began).Seconds(), exit: -1, timedOut: !cancelled, cancelled: cancelled}, buf.Bytes()
 	case err := <-done:
 		code := 0
 		if err != nil {
@@ -350,7 +482,7 @@ func goHints(root string, cr CheckResult) []Hint {
 		return nil
 	}
 	dir := filepath.Join(root, filepath.FromSlash(cr.Dir))
-	mod := modulePath(dir)
+	modDir, mod := findModule(root, dir)
 	if mod == "" {
 		return nil
 	}
@@ -382,13 +514,11 @@ func goHints(root string, cr CheckResult) []Hint {
 		if f.Kind != speed.KindSetenv {
 			continue
 		}
-		rel := path.Dir(f.File)
-		if cr.Dir != "." {
-			rel = strings.TrimPrefix(strings.TrimPrefix(rel, cr.Dir), "/")
-			if rel == "" {
-				rel = "."
-			}
+		rel, err := filepath.Rel(modDir, filepath.Join(root, filepath.FromSlash(path.Dir(f.File))))
+		if err != nil {
+			continue
 		}
+		rel = filepath.ToSlash(rel)
 		pkg := mod
 		if rel != "." {
 			pkg = mod + "/" + rel
@@ -420,6 +550,21 @@ func setenvCause(detail string) string {
 		return detail[:i] + " calls t.Setenv"
 	}
 	return "the tests call t.Setenv"
+}
+
+// findModule walks up from dir (not above root) to the directory holding go.mod.
+func findModule(root, dir string) (string, string) {
+	for d := dir; ; d = filepath.Dir(d) {
+		if m := modulePath(d); m != "" {
+			return d, m
+		}
+		if d == root || filepath.Dir(d) == d {
+			return "", ""
+		}
+		if rel, err := filepath.Rel(root, d); err != nil || strings.HasPrefix(rel, "..") {
+			return "", ""
+		}
+	}
 }
 
 func modulePath(dir string) string {

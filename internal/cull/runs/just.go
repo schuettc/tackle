@@ -149,7 +149,7 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 	label := "justfile " + r.Name
 	dep := func(d justDep) {
 		if dr, ok := j.Recipes[d.Recipe]; ok {
-			nc := ctx{dir: ".", chain: c.chain, active: c.active}.with(label)
+			nc := ctx{dir: ".", chain: c.chain, env: c.env, active: c.active}.with(label)
 			e.runRecipe(j, dr, nil, &nc)
 		}
 	}
@@ -163,7 +163,7 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 		lines = append(lines, e.render(j, l, vars))
 	}
 	hop := func(int) string { return label }
-	base := ctx{dir: ".", chain: c.chain, vars: vars, active: c.active}
+	base := ctx{dir: ".", chain: c.chain, env: c.env, vars: vars, active: c.active}
 	if r.Shebang {
 		if len(lines) > 0 {
 			lines = lines[1:] // the #! line

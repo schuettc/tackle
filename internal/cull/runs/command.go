@@ -281,7 +281,9 @@ func (e *engine) command(words []string, c *ctx) {
 	for len(words) > 0 && shellKeywords[words[0]] {
 		words = words[1:]
 	}
+	var prefix []string
 	for len(words) > 0 && envWord.MatchString(words[0]) {
+		prefix = append(prefix, words[0])
 		words = words[1:]
 	}
 	if len(words) == 0 {
@@ -298,7 +300,30 @@ func (e *engine) command(words []string, c *ctx) {
 		}
 		return
 	}
-	e.classify(words, words, c)
+	lc := *c
+	lc.env = mergeEnv(c.env, prefix)
+	e.classify(words, words, &lc)
+}
+
+// mergeEnv returns base with extra applied on top (a later VAR replaces an earlier one).
+func mergeEnv(base, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	out := append([]string(nil), base...)
+	for _, kv := range extra {
+		name, _, _ := strings.Cut(kv, "=")
+		replaced := false
+		for i, o := range out {
+			if n, _, _ := strings.Cut(o, "="); n == name {
+				out[i], replaced = kv, true
+			}
+		}
+		if !replaced {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 var wrapperSkipFlag = regexp.MustCompile(`^-`)
@@ -503,7 +528,7 @@ func (e *engine) shell(argv, words []string, c *ctx) {
 	for i := 1; i < len(words); i++ {
 		w := words[i]
 		if shellDashC.MatchString(w) && i+1 < len(words) {
-			e.runText(words[i+1], 1, func(int) string { return last(c.chain) }, ctx{dir: c.dir, chain: c.chain[:len(c.chain)-1], vars: c.vars, active: c.active}, false)
+			e.runText(words[i+1], 1, func(int) string { return last(c.chain) }, ctx{dir: c.dir, chain: c.chain[:len(c.chain)-1], env: c.env, vars: c.vars, active: c.active}, false)
 			return
 		}
 		if w == "-o" || w == "+o" {
@@ -557,7 +582,7 @@ func (e *engine) node(argv, words []string, c *ctx) {
 		}
 		entry := join(c.dir, w)
 		if strings.HasPrefix(w, "/") || entry == outsideDir {
-			e.emit(ctx{dir: outsideDir, chain: c.chain}, "unknown", argv, nil, "")
+			e.emit(ctx{dir: outsideDir, chain: c.chain, env: c.env}, "unknown", argv, nil, "")
 			return
 		}
 		if strings.Contains(entry, "{{") {

@@ -60,6 +60,7 @@ func defaultDir(n *yaml.Node) string {
 
 func (e *engine) workflow(rel string, root *yaml.Node) {
 	wfDir := defaultDir(root)
+	wfEnv := plainEnv(get(root, "env"))
 	jobs := get(root, "jobs")
 	if jobs == nil || jobs.Kind != yaml.MappingNode {
 		return
@@ -67,6 +68,7 @@ func (e *engine) workflow(rel string, root *yaml.Node) {
 	for i := 0; i+1 < len(jobs.Content); i += 2 {
 		job := jobs.Content[i+1]
 		jobDir := wfDir
+		jobEnv := mergeEnv(wfEnv, plainEnv(get(job, "env")))
 		if d := defaultDir(job); d != "" {
 			jobDir = d
 		}
@@ -96,7 +98,7 @@ func (e *engine) workflow(rel string, root *yaml.Node) {
 				e.emit(c, "unknown", []string{"shell", sh}, nil, "shell "+sh+" not read")
 				continue
 			}
-			e.runScalar(run, rel, "run", dir)
+			e.runScalar(run, rel, "run", dir, mergeEnv(jobEnv, plainEnv(get(st, "env"))))
 		}
 	}
 }
@@ -113,12 +115,12 @@ func workDir(d string) string {
 
 // runScalar walks a `run:` style scalar; a block scalar's lines are numbered
 // from the line after its indicator.
-func (e *engine) runScalar(n *yaml.Node, file, what, dir string) {
+func (e *engine) runScalar(n *yaml.Node, file, what, dir string, env []string) {
 	first, text := n.Line, n.Value
 	if n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
 		first++
 	}
-	c := ctx{dir: dir, active: map[string]bool{}}
+	c := ctx{dir: dir, env: env, active: map[string]bool{}}
 	e.runText(text, first, func(l int) string { return file + ":" + itoa(l) + " " + what }, c, true)
 }
 
@@ -143,4 +145,21 @@ func (e *engine) uses(file string, n *yaml.Node, dir string) {
 	}
 	c := ctx{dir: dir, chain: []string{file + ":" + itoa(n.Line) + " uses"}}
 	e.emit(c, "unknown", []string{"uses", n.Value}, nil, "an action whose steps are not read; it may run tests")
+}
+
+// plainEnv lists the NAME=value pairs of an env: mapping whose values are
+// plain strings; values holding an expression (${{ ... }}) are left out.
+func plainEnv(n *yaml.Node) []string {
+	if n == nil || n.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		v := n.Content[i+1]
+		if v.Kind != yaml.ScalarNode || strings.Contains(v.Value, "${{") {
+			continue
+		}
+		out = append(out, n.Content[i].Value+"="+v.Value)
+	}
+	return out
 }
