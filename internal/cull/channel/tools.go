@@ -27,7 +27,7 @@ const pathProp = `"path":{"type":"string","description":"a path inside the proje
 // those are Court's, on the page.
 func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
-		{Name: "cull_check", Description: "Judge the project's automated tests with Jev and record what Court must review. base: the merge base of your branch to judge only the tests you changed (omit for the whole suite). Returns the summary, the ids of the tests to cut, the ids of the groups to merge, and to_review (how many items wait for Court on the review page).",
+		{Name: "cull_check", Description: "Judge the project's automated tests with Jev and record what Court must review. base: the merge base of your branch to judge only the tests you changed (omit for the whole suite). Returns the summary, the ids of the tests to cut, the ids of the groups to merge, to_review (how many items wait for Court on the review page), and speed (a digest of what makes the suite slow or weak: fixed waits, setup that blocks parallel tests, swallowed waits, screenshots).",
 			InputSchema: schema(`{"type":"object","properties":{"base":{"type":"string","description":"git ref; judge only tests changed since it"},` + pathProp + `}}`)},
 		{Name: "cull_apply", Description: "Remove tests from the last cull_check. Without ids it removes every cut (Jev's and Court's), tidies the imports that leaves unused, runs the project's tests before and after, and restores everything if they fail. Never commits. Returns what was applied, what needs you, the tidy report, the verify outcome and the exit (applied, rolled back, rollback failed or refused) with the reason.",
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"description":"remove exactly these test ids instead of every cut"},` + pathProp + `}}`)},
@@ -174,6 +174,9 @@ func (ch *Channel) check(ctx context.Context, path, base string) (string, error)
 		"cut": cut, "merge": merge,
 		// Items on the review page that Court has not answered.
 		"to_review": rep.Summary["review"] + rep.Summary["group_review"],
+		// What makes the suite slow or weak: counts per kind, the literal wait
+		// total in seconds, and the 20 costliest findings. Fix these.
+		"speed": rep.SpeedDigest(),
 	}), nil
 }
 

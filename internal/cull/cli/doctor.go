@@ -11,7 +11,9 @@ import (
 
 	"github.com/schuettc/tackle/internal/cull/check"
 	"github.com/schuettc/tackle/internal/cull/discover"
+	ts "github.com/schuettc/tackle/internal/cull/extract/ts"
 	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/schuettc/tackle/internal/cull/runs"
 	"github.com/schuettc/tackle/internal/cull/serve"
 	"github.com/schuettc/tackle/internal/cull/verify"
 	tools "github.com/schuettc/tools-common"
@@ -99,9 +101,17 @@ func runDoctor(args []string, out, errw io.Writer) error {
 		} else {
 			line("node", true, "", "")
 		}
-		if _, err := os.Stat(filepath.Join(root, "node_modules", "typescript")); err != nil {
+		// A TypeScript test is extracted with the nearest node_modules/typescript
+		// above it (infra/cdk's own, for a jest project there).
+		without := 0
+		for f, l := range langs {
+			if l == "typescript" && !ts.HasTypescript(root, f) {
+				without++
+			}
+		}
+		if without > 0 {
 			// cull check skips these files and says so; not a reason to fail.
-			line("typescript", false, "TypeScript tests will be skipped: no node_modules/typescript at the project root", "")
+			line("typescript", false, fmt.Sprintf("%d TypeScript tests will be skipped: no node_modules/typescript at or above them", without), "")
 		} else {
 			line("typescript", true, "", "")
 		}
@@ -154,10 +164,38 @@ func runDoctor(args []string, out, errw io.Writer) error {
 		line("channels.json", false, "cull is not in ~/.pi/agent/channels.json: install cull with kempt", "")
 	}
 
+	writeChecks(out, root)
+
 	if missing > 0 {
 		return tools.Exitf(1, "%d required item(s) missing", missing)
 	}
 	return nil
+}
+
+// writeChecks lists what the project runs to test itself, one line per check
+// as "kind  dir  argv", and each one cull does not understand with its note.
+// It never changes the exit code.
+func writeChecks(out io.Writer, root string) {
+	checks, err := runs.Find(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(out, "%-14s note: could not read what the project runs: %v\n", "checks", err)
+		return
+	}
+	if len(checks) == 0 {
+		_, _ = fmt.Fprintf(out, "%-14s none found in CI, hooks, recipes or scripts\n", "checks")
+		return
+	}
+	_, _ = fmt.Fprintf(out, "checks\n")
+	for _, c := range checks {
+		argv := strings.Join(c.Argv, " ")
+		if len(argv) > 80 {
+			argv = argv[:80]
+		}
+		_, _ = fmt.Fprintf(out, "  %s  %s  %s\n", c.Kind, c.Dir, argv)
+		if c.Kind == "unknown" && c.Note != "" {
+			_, _ = fmt.Fprintf(out, "    %s\n", c.Note)
+		}
+	}
 }
 
 // registered reports whether the JSON file has a "cull" entry under section

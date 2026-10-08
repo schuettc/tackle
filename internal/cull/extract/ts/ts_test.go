@@ -528,3 +528,49 @@ func TestPinsSetting(t *testing.T) {
 		}
 	}
 }
+
+// A TS test in a subdirectory that has its own node_modules/typescript (a
+// jest project in infra/cdk) is extracted with it, though the project root has
+// none; one beside it with none above is still skipped.
+func TestSubdirectoryTypescriptIsUsed(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("node not found in PATH, skipping")
+	}
+	src, err := filepath.Abs("../../web/node_modules/typescript")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(src); err != nil || !st.IsDir() {
+		t.Skip("no typescript package to link, skipping")
+	}
+	t.Setenv("CULL_TS", "")
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "infra", "node_modules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, filepath.Join(root, "infra", "node_modules", "typescript")); err != nil {
+		t.Fatal(err)
+	}
+	body := "import test from 'node:test';\ntest('adds', () => { 1 + 1; });\n"
+	for _, rel := range []string{"infra/a.test.ts", "loose/b.test.ts"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !HasTypescript(root, "infra/a.test.ts") || HasTypescript(root, "loose/b.test.ts") {
+		t.Fatal("HasTypescript should be true under infra and false under loose")
+	}
+	res, err := New().Extract(root, []string{"infra/a.test.ts", "loose/b.test.ts"}, 24000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cases) != 1 || res.Cases[0].File != "infra/a.test.ts" {
+		t.Errorf("cases = %+v", res.Cases)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].File != "loose/b.test.ts" {
+		t.Errorf("skipped = %+v", res.Skipped)
+	}
+}

@@ -801,3 +801,25 @@ func TestWorkspaceSessionReviewsARepositoryInside(t *testing.T) {
 		t.Fatalf("event %q meta %v", ev.Content, ev.Meta)
 	}
 }
+
+func TestCheckResultCarriesTheSpeedDigest(t *testing.T) {
+	e := newEnv(t, false)
+	root := project(t)
+	writeFile(t, root, "sleepy_test.go", "package fixture\n\nimport (\n\t\"testing\"\n\t\"time\"\n)\n\nfunc TestSleepy(t *testing.T) {\n\ttime.Sleep(3 * time.Second)\n}\n")
+	c := e.connect(ident{"s-1", "claude · one", root})
+	var ck struct {
+		Speed struct {
+			Counts           map[string]int `json:"counts"`
+			FixedWaitSeconds float64        `json:"fixed_wait_seconds"`
+			Top              []struct {
+				File string `json:"file"`
+				Line int    `json:"line"`
+				Kind string `json:"kind"`
+			} `json:"top"`
+		} `json:"speed"`
+	}
+	c.toolJSON("cull_check", map[string]any{}, &ck)
+	if ck.Speed.Counts["fixed_wait"] != 1 || ck.Speed.FixedWaitSeconds != 3 || len(ck.Speed.Top) != 1 || ck.Speed.Top[0].Line != 9 {
+		t.Fatalf("speed = %+v", ck.Speed)
+	}
+}

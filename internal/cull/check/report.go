@@ -10,6 +10,8 @@ import (
 
 	"github.com/schuettc/tackle/internal/cull/cases"
 	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/schuettc/tackle/internal/cull/runs"
+	"github.com/schuettc/tackle/internal/cull/speed"
 	tools "github.com/schuettc/tools-common"
 )
 
@@ -91,7 +93,15 @@ type Report struct {
 	Files   map[string]FileInfo `json:"files"`
 	Skipped []extract.Skipped   `json:"skipped,omitempty"`
 	Summary map[string]int      `json:"summary"`
+	// Checks is what the project runs to test itself (CI, hooks, recipes,
+	// scripts); Speed is what the scan found in the test files and script
+	// checks. Neither changes a verdict or the exit code.
+	Checks []runs.Check    `json:"checks"`
+	Speed  []speed.Finding `json:"speed"`
 }
+
+// SpeedDigest is the digest of the report's speed findings.
+func (r Report) SpeedDigest() speed.DigestOut { return speed.Digest(r.Speed) }
 
 // HasActions reports whether the report has any test to cut or group to
 // consolidate: the process should exit 1.
