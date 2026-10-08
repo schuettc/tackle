@@ -60,6 +60,7 @@ type CheckResult struct {
 	TimedOut bool        `json:"timed_out,omitempty"`
 	Tail     string      `json:"tail,omitempty"` // last lines, when it failed or timed out
 	Summary  string      `json:"summary,omitempty"`
+	Note     string      `json:"note,omitempty"` // why the check likely failed, when the output says
 	Packages []GoPackage `json:"packages,omitempty"`
 	Files    []PyFile    `json:"files,omitempty"`
 	// Setup is the commands run before the check, in order; SetupSeconds is
@@ -252,6 +253,7 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 			tests = append(tests, pr.Tests...)
 			pyByCheck[len(rep.Checks)] = pr
 			cr.Summary = fmt.Sprintf("%d passed, %d failed, %d skipped", pr.Passed, pr.Failed, pr.Skipped)
+			cr.Note = pytestNote(argv, string(out))
 		}
 		if !cr.OK && cr.Tail == "" {
 			cr.Tail = tailOf(string(out), failTailLines)
@@ -762,6 +764,9 @@ func WriteText(w io.Writer, r *Report) {
 		}
 		if c.Summary != "" {
 			p("  %s\n", c.Summary)
+		}
+		if c.Note != "" {
+			p("  note: %s\n", c.Note)
 		}
 		if !c.OK && c.Tail != "" {
 			p("  last lines:\n")
