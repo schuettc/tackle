@@ -41,6 +41,7 @@ var updateWire = flag.Bool("update", false, "rewrite internal/casebook/web/wire.
 var wireRoots = []any{
 	SummaryView{},
 	ItemsView{},
+	GroupView{},
 	ItemDetailView{},
 	DecideResult{},
 	AcceptResult{},

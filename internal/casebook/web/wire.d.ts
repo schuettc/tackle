@@ -40,6 +40,18 @@ export interface ItemsView {
   left_open: ItemView[] | null;
   left_open_total: number;
   agent_recommended: number;
+  groups: GroupView[] | null;
+}
+
+export interface GroupView {
+  id: string;
+  source: string;
+  by?: Session;
+  disposition: string;
+  label: string;
+  outward: boolean;
+  many: string;
+  total: number;
 }
 
 export interface ItemDetailView {
@@ -203,6 +215,12 @@ export interface DecisionVocabView {
   until_forms: UntilForm[] | null;
   not_now: NotNowForm[] | null;
   look_into: LookIntoVocab;
+  look_many: string;
+  discard_many: string;
+  recommend_these: string;
+  discard_all: string;
+  summary: SummaryVocab;
+  count_words: CountWords;
 }
 
 export interface ClearResult {
@@ -301,6 +319,25 @@ export interface ItemView {
   landed_tips?: Record<string, string>;
   proposal?: Proposal;
   looking?: Looking;
+  group: string;
+  recommended_by?: Session;
+}
+
+export interface Session {
+  id: string;
+  harness: string;
+  label: string;
+  cwd: string;
+  pid: number;
+  first_seen: string;
+  last_seen: string;
+  looked_at?: string;
+  busy: boolean;
+  queued: number;
+  left?: boolean;
+  name: string;
+  worker: boolean;
+  eligible: boolean;
 }
 
 export interface Proposal {
@@ -354,23 +391,6 @@ export interface Committed {
   until: string;
   note: string;
   decided_at: string;
-}
-
-export interface Session {
-  id: string;
-  harness: string;
-  label: string;
-  cwd: string;
-  pid: number;
-  first_seen: string;
-  last_seen: string;
-  looked_at?: string;
-  busy: boolean;
-  queued: number;
-  left?: boolean;
-  name: string;
-  worker: boolean;
-  eligible: boolean;
 }
 
 export interface Delivery {
@@ -439,6 +459,7 @@ export interface ChoiceVocab {
   says: string;
   outward: boolean;
   needs_until: boolean;
+  many: string;
 }
 
 export interface NotNowForm {
@@ -498,6 +519,18 @@ export interface LookIntoVocab {
   says: string;
   message: string;
   message_many: string;
+}
+
+export interface SummaryVocab {
+  one_session: string;
+  mixed: string;
+}
+
+export interface CountWords {
+  one: string;
+  two: string;
+  all: string;
+  some: string;
 }
 
 export interface NeedsYou {

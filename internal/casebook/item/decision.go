@@ -38,13 +38,16 @@ func Allowed(k Kind) []Disposition { return slices.Clone(allowed[k]) }
 // Choice is one answer the decide step offers for a kind: its disposition,
 // the words the page shows (Label) and what choosing it does (Says).
 // Outward choices change something outside casebook, so they only go to
-// To apply. NeedsUntil choices need an until condition (Not now).
+// To apply. NeedsUntil choices need an until condition (Not now). Many is
+// the choice for several items, its {n} the count word the page fills in
+// ("it", "both", "all 27", "3").
 type Choice struct {
 	Disposition Disposition
 	Label       string
 	Says        string
 	Outward     bool
 	NeedsUntil  bool
+	Many        string
 }
 
 // The decide wording. This table is the one source: serve copies it into
@@ -59,10 +62,10 @@ var questions = map[Kind]string{
 }
 
 var (
-	leaveOpen = Choice{Disposition: Keep, Label: "Leave it open", Says: "It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes."}
-	keepIt    = Choice{Disposition: Keep, Label: "Keep it", Says: "It stays as it is and stays in your list, at the bottom."}
-	notNow    = Choice{Disposition: Wait, Label: "Not now", Says: "Hidden until a date or an event you pick, or until someone replies or it changes. Then it asks again.", NeedsUntil: true}
-	stopTrack = Choice{Disposition: Ignore, Label: "Stop tracking it", Says: "casebook never asks about it again. Nothing is done on GitHub."}
+	leaveOpen = Choice{Disposition: Keep, Label: "Leave it open", Many: "Leave {n} open", Says: "It stays open and stays in your list, at the bottom. It moves back up when someone replies or it changes."}
+	keepIt    = Choice{Disposition: Keep, Label: "Keep it", Many: "Keep {n}", Says: "It stays as it is and stays in your list, at the bottom."}
+	notNow    = Choice{Disposition: Wait, Label: "Not now", Many: "Not now for {n}", Says: "Hidden until a date or an event you pick, or until someone replies or it changes. Then it asks again.", NeedsUntil: true}
+	stopTrack = Choice{Disposition: Ignore, Label: "Stop tracking it", Many: "Stop tracking {n}", Says: "casebook never asks about it again. Nothing is done on GitHub."}
 	closeSays = "Goes to To apply with your closing comment. Nothing changes until you approve the plan, and you see the comment again before it's posted."
 )
 
@@ -71,29 +74,29 @@ var (
 var choices = map[Kind][]Choice{
 	KindPR: {
 		leaveOpen,
-		{Disposition: Merge, Label: "Merge it", Says: "Goes to To apply. Nothing changes until you approve the plan, which shows the exact command.", Outward: true},
-		{Disposition: Close, Label: "Close it without merging", Says: closeSays, Outward: true},
+		{Disposition: Merge, Label: "Merge it", Many: "Merge {n}", Says: "Goes to To apply. Nothing changes until you approve the plan, which shows the exact command.", Outward: true},
+		{Disposition: Close, Label: "Close it without merging", Many: "Close {n}", Says: closeSays, Outward: true},
 		notNow, stopTrack,
 	},
 	KindIssue: {
 		leaveOpen,
-		{Disposition: Close, Label: "Close it", Says: closeSays, Outward: true},
+		{Disposition: Close, Label: "Close it", Many: "Close {n}", Says: closeSays, Outward: true},
 		notNow, stopTrack,
 	},
 	KindBranch: {
 		keepIt,
-		{Disposition: Delete, Label: "Delete it", Says: "Goes to To apply. Nothing is deleted until you approve the plan, and a restore record is kept.", Outward: true},
+		{Disposition: Delete, Label: "Delete it", Many: "Delete {n}", Says: "Goes to To apply. Nothing is deleted until you approve the plan, and a restore record is kept.", Outward: true},
 		notNow, stopTrack,
 	},
 	KindWorktree: {
 		keepIt,
-		{Disposition: Delete, Label: "Remove it", Says: "Goes to To apply. Nothing is removed until you approve the plan, and a restore record is kept.", Outward: true},
+		{Disposition: Delete, Label: "Remove it", Many: "Remove {n}", Says: "Goes to To apply. Nothing is removed until you approve the plan, and a restore record is kept.", Outward: true},
 		notNow, stopTrack,
 	},
 	KindRepo: {
 		keepIt,
-		{Disposition: Archive, Label: "Archive it on GitHub", Says: "Goes to To apply. Nothing changes until you approve the plan.", Outward: true},
-		{Disposition: Delete, Label: "Delete it", Says: "Goes to To apply. Nothing is deleted until you approve the plan.", Outward: true},
+		{Disposition: Archive, Label: "Archive it on GitHub", Many: "Archive {n}", Says: "Goes to To apply. Nothing changes until you approve the plan.", Outward: true},
+		{Disposition: Delete, Label: "Delete it", Many: "Delete {n}", Says: "Goes to To apply. Nothing is deleted until you approve the plan.", Outward: true},
 		notNow, stopTrack,
 	},
 }

@@ -1,11 +1,15 @@
 package serve
 
 import (
+	"fmt"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/schuettc/tackle/internal/casebook/propose"
 )
 
 // TestListFiltersByRelationBotAndAge verifies that Query.Relation, Query.Bot
@@ -147,4 +151,94 @@ func ids(items []ItemView) []string {
 		out[i] = it.ID
 	}
 	return out
+}
+
+// waitingPR is a pull request in the waiting view (the policy flags it).
+func waitingPR(n int, newActivity bool) engine.Item {
+	return engine.Item{
+		ID:          fmt.Sprintf("pr:schuettc/hail#%d", n),
+		Kind:        item.KindPR,
+		Repo:        "schuettc/hail",
+		Status:      item.StatusNew,
+		NewActivity: newActivity,
+		Hits:        []item.Hit{{Rule: "incoming-no-reply"}},
+		Observed:    item.Observed{Known: true, Exists: true, State: "OPEN"},
+	}
+}
+
+// TestListOrdersByGroup: an Attention view lists its items group by group
+// (the biggest group first, the not recommended last), new activity first
+// within a group, and returns the groups with their counts.
+func TestListOrdersByGroup(t *testing.T) {
+	idx := &Index{}
+	var its []engine.Item
+	for n := 1; n <= 6; n++ {
+		its = append(its, waitingPR(n, n == 6))
+	}
+	idx.set(engine.Result{Items: its}, "abc", time.Now())
+	pending := map[string]propose.Proposal{
+		"pr:schuettc/hail#3": {Key: "pr:schuettc/hail#3", Source: "pi:s1", Disposition: "merge"},
+		"pr:schuettc/hail#4": {Key: "pr:schuettc/hail#4", Source: "pi:s1", Disposition: "close"},
+		"pr:schuettc/hail#5": {Key: "pr:schuettc/hail#5", Source: "pi:s1", Disposition: "close"},
+		"pr:schuettc/hail#6": {Key: "pr:schuettc/hail#6", Source: "pi:s1", Disposition: "close"},
+	}
+	q := Query{View: ViewWaiting}
+	items, total := idx.List(q, pending)
+	want := []string{"pr:schuettc/hail#6", "pr:schuettc/hail#4", "pr:schuettc/hail#5", "pr:schuettc/hail#3", "pr:schuettc/hail#1", "pr:schuettc/hail#2"}
+	if got := ids(items); total != 6 || !slices.Equal(got, want) {
+		t.Fatalf("list %v (total %d), want %v", got, total, want)
+	}
+	closeID, mergeID := "pi:s1|close|Close it without merging", "pi:s1|merge|Merge it"
+	for i, g := range []string{closeID, closeID, closeID, mergeID, "none", "none"} {
+		if items[i].Group != g {
+			t.Errorf("%s is in group %q, want %q", items[i].ID, items[i].Group, g)
+		}
+	}
+	wantGroups := []GroupView{
+		{ID: closeID, Source: "pi:s1", Disposition: "close", Label: "Close it without merging", Outward: true, Many: "Close {n}", Total: 3},
+		{ID: mergeID, Source: "pi:s1", Disposition: "merge", Label: "Merge it", Outward: true, Many: "Merge {n}", Total: 1},
+		{ID: "none", Label: "Not recommended yet", Total: 2},
+	}
+	if got := idx.Groups(q, pending); !reflect.DeepEqual(got, wantGroups) {
+		t.Fatalf("groups\n %+v\nwant\n %+v", got, wantGroups)
+	}
+	// A group filter lists only that group.
+	q.Group = mergeID
+	if items, total := idx.List(q, pending); total != 1 || items[0].ID != "pr:schuettc/hail#3" {
+		t.Fatalf("group %s lists %v (total %d)", mergeID, ids(items), total)
+	}
+	// To apply and tracked keep key order and have no groups.
+	if g := idx.Groups(Query{View: ViewTracked}, pending); len(g) != 0 {
+		t.Fatalf("tracked has groups %+v", g)
+	}
+	if items, _ := idx.List(Query{View: ViewTracked}, pending); !slices.IsSorted(ids(items)) {
+		t.Fatalf("tracked not in key order: %v", ids(items))
+	}
+}
+
+// TestGroupSplitsByKindLabel: a PR close and an issue close from one source
+// are two groups, each with its kind's label; watch reads as wait.
+func TestGroupSplitsByKindLabel(t *testing.T) {
+	idx := &Index{}
+	issue := waitingPR(2, false)
+	issue.ID, issue.Kind = "issue:schuettc/hail#2", item.KindIssue
+	idx.set(engine.Result{Items: []engine.Item{waitingPR(1, false), issue, waitingPR(3, false)}}, "abc", time.Now())
+	pending := map[string]propose.Proposal{
+		"pr:schuettc/hail#1":    {Key: "pr:schuettc/hail#1", Source: "pi:s1", Disposition: "close"},
+		"issue:schuettc/hail#2": {Key: "issue:schuettc/hail#2", Source: "pi:s1", Disposition: "close"},
+		"pr:schuettc/hail#3":    {Key: "pr:schuettc/hail#3", Source: "pi:s1", Disposition: "watch", Until: "inactive(90d)"},
+	}
+	var labels []string
+	for _, g := range idx.Groups(Query{View: ViewWaiting}, pending) {
+		labels = append(labels, g.Label)
+	}
+	// Equal totals: the order of the disposition in the kind's choices
+	// (an issue's close is its second choice, a PR's its third).
+	if want := []string{"Close it", "Close it without merging", "Not now"}; !slices.Equal(labels, want) {
+		t.Fatalf("labels %v, want %v", labels, want)
+	}
+	items, _ := idx.List(Query{View: ViewWaiting}, pending)
+	if items[2].Group != "pi:s1|wait|Not now" {
+		t.Fatalf("watch's group %q", items[2].Group)
+	}
 }

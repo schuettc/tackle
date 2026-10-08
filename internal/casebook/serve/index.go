@@ -92,6 +92,7 @@ type Query struct {
 	Age      string          // casebook duration (<n>h, <n>d, <n>w); matches items older than the duration
 	Rule     string          // rule id whose matched keys are in MatchSet
 	MatchSet map[string]bool // precomputed by getItems when Rule != ""
+	Group    string          // a group's ID (GroupView.ID): only its items
 	Now      time.Time       // clock for the age filter; zero falls back to time.Now()
 	Offset   int
 	Limit    int
@@ -143,7 +144,49 @@ func leftOpenInView(view string, it engine.Item, pending map[string]propose.Prop
 	return false
 }
 
-func matches(q Query, it engine.Item) bool {
+// grouped reports whether view's items are grouped: the Attention views.
+func grouped(view string) bool { return view != ViewToApply && view != ViewTracked }
+
+// groupOf is it's group in view, given the pending proposals: the zero
+// GroupView (no group) in To apply and tracked. The group's Total is left
+// to the caller.
+func groupOf(view string, it engine.Item, pending map[string]propose.Proposal) GroupView {
+	if !grouped(view) {
+		return GroupView{}
+	}
+	p, ok := pending[it.ID]
+	if !ok {
+		return GroupView{ID: GroupNone, Label: GroupNoneLabel}
+	}
+	d := item.Disposition(p.Disposition)
+	if d == item.Watch {
+		d = item.Wait
+	}
+	g := GroupView{Source: p.Source, Disposition: string(d), Label: string(d)}
+	if c, i := choiceOf(it.Kind, d); i >= 0 {
+		g.Label, g.Outward, g.Many = c.Label, c.Outward, c.Many
+	}
+	g.ID = g.Source + "|" + g.Disposition + "|" + g.Label
+	return g
+}
+
+// choiceOf is d's choice for kind k and its place among k's choices; -1
+// when k offers no such choice.
+func choiceOf(k item.Kind, d item.Disposition) (item.Choice, int) {
+	for i, c := range item.Choices(k) {
+		if c.Disposition == d {
+			return c, i
+		}
+	}
+	return item.Choice{}, -1
+}
+
+// matches reports whether it, in the group named group (its GroupView.ID,
+// "" for none), passes q's filters.
+func matches(q Query, it engine.Item, group string) bool {
+	if q.Group != "" && group != q.Group {
+		return false
+	}
 	if q.Kind != "" && string(it.Kind) != q.Kind {
 		return false
 	}
@@ -206,34 +249,100 @@ func matches(q Query, it engine.Item) bool {
 	return true
 }
 
-// List returns the page of items in a view and the view's total.
-func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
-	x.mu.RLock()
-	defer x.mu.RUnlock()
+// listed is every item q's view lists (every page), each with its group,
+// in key order, and the view's groups in the order it lists them: the
+// biggest first, ties by the disposition's place among the kind's choices
+// (the earliest a kind offers it), then by label; the not recommended
+// last. The caller holds x.mu.
+func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView, []GroupView) {
 	src := x.res.Attention()
-	if q.View == ViewToApply || q.View == ViewTracked {
+	if !grouped(q.View) {
 		src = x.res.Items
 	}
 	var out []ItemView
+	groups := map[string]*GroupView{}
+	place := map[string]int{}
 	for _, it := range src {
-		if !inView(q.View, it, pending) || !matches(q, it) {
+		if !inView(q.View, it, pending) {
+			continue
+		}
+		g := groupOf(q.View, it, pending)
+		if !matches(q, it, g.ID) {
 			continue
 		}
 		var prop *propose.Proposal
 		if p, ok := pending[it.ID]; ok {
 			prop = &p
 		}
-		out = append(out, newItemView(it, prop))
+		v := newItemView(it, prop)
+		v.Group = g.ID
+		out = append(out, v)
+		if g.ID == "" {
+			continue
+		}
+		if groups[g.ID] == nil {
+			groups[g.ID] = &g
+			place[g.ID] = len(item.Choices(it.Kind))
+		}
+		groups[g.ID].Total++
+		if _, i := choiceOf(it.Kind, item.Disposition(g.Disposition)); i >= 0 && i < place[g.ID] {
+			place[g.ID] = i
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	// In an Attention view the items new activity brought back come first,
-	// then the recommended items (a pending proposal), each group in key
-	// order. To apply and tracked keep key order.
-	if q.View != ViewToApply && q.View != ViewTracked {
-		sort.SliceStable(out, func(i, j int) bool { return out[i].Proposal != nil && out[j].Proposal == nil })
-		sort.SliceStable(out, func(i, j int) bool { return out[i].NewActivity && !out[j].NewActivity })
+	gs := make([]GroupView, 0, len(groups))
+	for _, g := range groups {
+		gs = append(gs, *g)
+	}
+	sort.Slice(gs, func(i, j int) bool {
+		a, b := gs[i], gs[j]
+		switch {
+		case (a.ID == GroupNone) != (b.ID == GroupNone):
+			return b.ID == GroupNone
+		case a.Total != b.Total:
+			return a.Total > b.Total
+		case place[a.ID] != place[b.ID]:
+			return place[a.ID] < place[b.ID]
+		case a.Label != b.Label:
+			return a.Label < b.Label
+		}
+		return a.ID < b.ID
+	})
+	return out, gs
+}
+
+// List returns the page of items in a view and the view's total. An
+// Attention view lists its items group by group (Groups' order), the items
+// new activity brought back first in each group, then key order. To apply
+// and tracked keep key order.
+func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	out, gs := x.listed(q, pending)
+	if grouped(q.View) {
+		order := make(map[string]int, len(gs))
+		for i, g := range gs {
+			order[g.ID] = i
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			if a, b := order[out[i].Group], order[out[j].Group]; a != b {
+				return a < b
+			}
+			return out[i].NewActivity && !out[j].NewActivity
+		})
 	}
 	return pageOf(out, q)
+}
+
+// Groups is an Attention view's groups with their counts over every page
+// (q's filters apply, a group filter aside; not its Offset and Limit), in
+// the order List lists them. To apply and tracked have none.
+func (x *Index) Groups(q Query, pending map[string]propose.Proposal) []GroupView {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	q.Group = ""
+	_, gs := x.listed(q, pending)
+	return gs
 }
 
 // Keys is every key q's view lists (every page; q's Offset and Limit don't
@@ -247,7 +356,7 @@ func (x *Index) Keys(q Query, pending map[string]propose.Proposal) []string {
 	}
 	var out []string
 	for _, it := range src {
-		if inView(q.View, it, pending) && matches(q, it) {
+		if inView(q.View, it, pending) && matches(q, it, groupOf(q.View, it, pending).ID) {
 			out = append(out, it.ID)
 		}
 	}
@@ -267,7 +376,8 @@ func (x *Index) LeftOpen(q Query, pending map[string]propose.Proposal) ([]ItemVi
 	defer x.mu.RUnlock()
 	var out []ItemView
 	for _, it := range x.res.LeftOpen() {
-		if !leftOpenInView(q.View, it, pending) || !matches(q, it) {
+		// The left-open group is no group: a group filter leaves it empty.
+		if !leftOpenInView(q.View, it, pending) || !matches(q, it, "") {
 			continue
 		}
 		var prop *propose.Proposal

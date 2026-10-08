@@ -71,6 +71,7 @@ type itemsFilter struct {
 	Bot      string `json:"bot"`
 	Age      string `json:"age"`
 	Rule     string `json:"rule"`
+	Group    string `json:"group"`
 }
 
 // query is f's Query (every page: no offset or limit), with a rule
@@ -89,6 +90,7 @@ func (s *Server) query(f itemsFilter) Query {
 		Bot:      f.Bot,
 		Age:      f.Age,
 		Rule:     f.Rule,
+		Group:    f.Group,
 		Now:      s.Now(),
 	}
 	// Precompute rule match set if requested.
@@ -123,7 +125,7 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	group := s.query(itemsFilter{View: q.Get("view"), Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"),
-		Relation: q.Get("relation"), Bot: q.Get("bot"), Age: q.Get("age"), Rule: q.Get("rule")})
+		Relation: q.Get("relation"), Bot: q.Get("bot"), Age: q.Get("age"), Rule: q.Get("rule"), Group: q.Get("group")})
 	group.Limit = atoi(q.Get("limit"))
 	query := group
 	query.Offset = atoi(q.Get("offset"))
@@ -135,8 +137,50 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	looking := s.lookingInto(ctx)
 	withLooking(items, looking)
 	withLooking(left, looking)
+	by := s.recommenders(ctx)
+	withRecommendedBy(items, by)
+	withRecommendedBy(left, by)
+	groups := s.Index.Groups(group, pending)
+	for i := range groups {
+		groups[i].By = by(groups[i].Source)
+	}
 	reply(w, ItemsView{Total: total, Items: items, LeftOpen: nonNil(left), LeftOpenTotal: leftTotal,
-		AgentRecommended: len(agentKeys(s.Index.Keys(group, pending), agent))}, nil)
+		AgentRecommended: len(agentKeys(s.Index.Keys(group, pending), agent)), Groups: nonNil(groups)}, nil)
+}
+
+// recommenders resolves a proposal's source to the session that made it,
+// looking each session up once (as lookingInto does): nil for a rule's or
+// a source that names no session, the id alone for a session serve
+// doesn't know.
+func (s *Server) recommenders(ctx context.Context) func(source string) *deliver.Session {
+	seen := map[string]*deliver.Session{}
+	return func(source string) *deliver.Session {
+		if strings.HasPrefix(source, "rule:") {
+			return nil
+		}
+		_, id, ok := strings.Cut(source, ":")
+		if !ok || id == "" {
+			return nil
+		}
+		if sess, ok := seen[id]; ok {
+			return sess
+		}
+		sess, err := s.Queue.Session(ctx, id)
+		if err != nil {
+			sess = deliver.Session{ID: id}
+		}
+		seen[id] = &sess
+		return &sess
+	}
+}
+
+// withRecommendedBy sets each item's RecommendedBy from its proposal.
+func withRecommendedBy(items []ItemView, by func(source string) *deliver.Session) {
+	for i := range items {
+		if items[i].Proposal != nil {
+			items[i].RecommendedBy = by(items[i].Proposal.Source)
+		}
+	}
 }
 
 // agentKeys is the keys among keys with a pending agent recommendation.
@@ -277,9 +321,15 @@ func (s *Server) decideAll(ctx context.Context, keys []string, disposition strin
 func decisionVocab() DecisionVocabView {
 	kinds := []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.KindBranch, item.KindWorktree}
 	vocab := DecisionVocabView{
-		Kinds:      make([]KindVocab, len(kinds)),
-		UntilForms: nil,
-		LookInto:   LookIntoVocab{Label: lookIntoLabel, Says: lookIntoSays, Message: lookIntoMessage, MessageMany: lookIntoMessageMany},
+		Kinds:          make([]KindVocab, len(kinds)),
+		UntilForms:     nil,
+		LookInto:       LookIntoVocab{Label: lookIntoLabel, Says: lookIntoSays, Message: lookIntoMessage, MessageMany: lookIntoMessageMany},
+		LookMany:       "Look into {n}",
+		DiscardMany:    "Discard {n}",
+		RecommendThese: "Ask {session} to recommend {n}",
+		DiscardAll:     "discard all {n}",
+		Summary:        SummaryVocab{OneSession: "{n} items, all recommended by {session}", Mixed: "{n} items, {r} recommended"},
+		CountWords:     countWords,
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)
@@ -296,7 +346,7 @@ func decisionVocab() DecisionVocabView {
 		}
 		var choices []ChoiceVocab
 		for _, c := range item.Choices(k) {
-			choices = append(choices, ChoiceVocab{Disposition: string(c.Disposition), Label: c.Label, Says: c.Says, Outward: c.Outward, NeedsUntil: c.NeedsUntil})
+			choices = append(choices, ChoiceVocab{Disposition: string(c.Disposition), Label: c.Label, Says: c.Says, Outward: c.Outward, NeedsUntil: c.NeedsUntil, Many: c.Many})
 		}
 		vocab.Kinds[i] = KindVocab{Kind: string(k), Allowed: strs, NeedsUntil: needsUntil, Question: item.Question(k), Choices: nonNil(choices)}
 	}
@@ -307,6 +357,25 @@ func decisionVocab() DecisionVocabView {
 		vocab.NotNow = append(vocab.NotNow, NotNowForm{ID: f.ID, Label: f.Label, Template: f.Template, Asks: f.Asks, Days: f.Days})
 	}
 	return vocab
+}
+
+// countWords fill a group button's {n}: see CountWord.
+var countWords = CountWords{One: "it", Two: "both", All: "all {n}", Some: "{n}"}
+
+// CountWord is the word for a group button's {n}: the ticked items when
+// some of the group's total are ticked, otherwise the whole group ("it",
+// "both", "all N"). The page applies the same rule to count_words.
+func CountWord(ticked, total int) string {
+	if ticked > 0 && ticked < total {
+		return strings.ReplaceAll(countWords.Some, "{n}", strconv.Itoa(ticked))
+	}
+	switch total {
+	case 1:
+		return countWords.One
+	case 2:
+		return countWords.Two
+	}
+	return strings.ReplaceAll(countWords.All, "{n}", strconv.Itoa(total))
 }
 
 func (s *Server) getDecisionsVocabulary(w http.ResponseWriter, r *http.Request) {
@@ -578,8 +647,9 @@ func (s *Server) postReject(w http.ResponseWriter, r *http.Request) {
 // items out once more). No judgement: a withdrawn recommendation is no
 // rejection. Either {ids} (those proposals) or a view and its filters, as
 // GET /api/items takes them: every pending agent recommendation for an item
-// that view lists, every page of it. A rule's recommendation is never
-// withdrawn. It answers how many items lost one.
+// that view lists, every page of it (with group, only that group's). A
+// rule's recommendation is never withdrawn. It answers how many items lost
+// one.
 func (s *Server) postWithdraw(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		IDs []int64 `json:"ids"`

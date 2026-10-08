@@ -40,7 +40,7 @@ func TestGuideIsShortAndGeneric(t *testing.T) {
 	if strings.Contains(g, "\u2014") {
 		t.Error("the guide has an em dash")
 	}
-	for _, want := range []string{"evidence", "reason", "Not now", "To apply", "- In a Not now condition, name only a PR, issue or repo you have seen in this item's evidence or history, or found with gh. Never guess a number.", "- When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.", "- If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look.", "- A proposal marked withdrawn was cleared to be made again: recommend afresh, don't repeat it."} {
+	for _, want := range []string{"evidence", "reason", "Not now", "To apply", "- In a Not now condition, name only a PR, issue or repo you have seen in this item's evidence or history, or found with gh. Never guess a number.", "- When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.", "- If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look.", "- A proposal marked withdrawn was discarded so it can be made again: recommend afresh, don't repeat it."} {
 		if !strings.Contains(g, want) {
 			t.Errorf("the guide doesn't mention %q", want)
 		}
@@ -86,5 +86,17 @@ func TestGuideReadsItsLabelsFromTheVocabulary(t *testing.T) {
 	}
 	if !strings.Contains(how, "For wait (Later)") {
 		t.Errorf("ProposeHow doesn't name the label: %s", how)
+	}
+}
+
+// TestGuideSaysDiscard: the page's Discard is what withdraws a
+// recommendation; the guide says discarded, not cleared.
+func TestGuideSaysDiscard(t *testing.T) {
+	g := Guide(vocab())
+	if strings.Contains(g, "cleared") {
+		t.Error("the guide still says cleared")
+	}
+	if !strings.Contains(g, "discarded") {
+		t.Error("the guide doesn't say discarded")
 	}
 }
