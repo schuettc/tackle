@@ -3509,7 +3509,9 @@ function makeAttention(ctx) {
   let totalItems = 0;
   let loadedItems = [];
   const filters = emptyFilters();
-  let loading = false;
+  let reloading = false;
+  let loadingMore = false;
+  let loads = 0;
   let footEl = null;
   let propFoot = null;
   let searchDebounceTimer = null;
@@ -3740,14 +3742,23 @@ function makeAttention(ctx) {
     if (filters.q) p["q"] = filters.q;
     return p;
   }
-  async function reload() {
-    if (loading) return;
-    loading = true;
+  const reload = coalesced(reloadNow);
+  function queryKey() {
+    return JSON.stringify(buildQuery(0));
+  }
+  async function reloadNow() {
+    reloading = true;
+    loads++;
+    const asked2 = queryKey();
     try {
       offset = 0;
       loadedItems = [];
       updateFilterChips();
       const data = await ctx.api.get("/items", buildQuery(0));
+      if (queryKey() !== asked2) {
+        void reload();
+        return;
+      }
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
@@ -3763,14 +3774,16 @@ function makeAttention(ctx) {
       updateProposalBulk(selection.ids());
     } catch {
     } finally {
-      loading = false;
+      reloading = false;
     }
   }
   async function loadMore() {
-    if (loading || offset >= totalItems) return;
-    loading = true;
+    if (reloading || loadingMore || offset >= totalItems) return;
+    loadingMore = true;
+    const mine = loads;
     try {
       const data = await ctx.api.get("/items", buildQuery(offset));
+      if (mine !== loads) return;
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
       leftOpen = data.left_open ?? [];
@@ -3786,7 +3799,7 @@ function makeAttention(ctx) {
       updateProposalBulk(selection.ids());
     } catch {
     } finally {
-      loading = false;
+      loadingMore = false;
     }
   }
   function setRows() {

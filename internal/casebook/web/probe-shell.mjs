@@ -14,6 +14,8 @@
 //   decisions queued offline …     spec §2.4 "offline": offline · N queued
 //   a slow push …                  the decide sheet closes on serve's answer,
 //                                  not on the push after it
+//   a list load on its way …       a view or search change while the list
+//                                  loads is queued, not dropped (0.4.7)
 
 import { probeGit, startServe } from './serve.mjs';
 import { createAgent } from './agent.mjs';
@@ -199,6 +201,7 @@ export async function shellScenarios(shared, t) {
     ['the stale pill from an API call', staleApiScenario],
     ['200 rows and "show more"', pageCapScenario],
     ["the board's search", boardSearchScenario],
+    ['a list load on its way', heldLoadScenario],
   ]) {
     try {
       await run(shared, t);
@@ -2203,6 +2206,200 @@ async function boardSearchScenario(shared, t) {
           check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
         } finally {
           await pg.close();
+        }
+      }),
+  );
+}
+
+// ---- a view or search change while a list load is on its way ----------------
+
+// casebook 0.4.7: reload() began `if (loading) return;`, so a view chip, a
+// filter or the search changed while a list load was on its way was
+// dropped, and the list kept showing the old view. Here every /api/items
+// request is held at the route while `holding`; the change is made while
+// the page's first load is held, then the load is let go.
+async function heldLoadScenario(shared, t) {
+  const { check, checkList, until, eventually } = t;
+  console.log(
+    '\nscenario: a view or search change while a list load is on its way',
+  );
+  const HL = 'hl-probe';
+  await withServe(
+    {
+      seedRepos: [
+        seedRepo(HL, [
+          [91, 'ledger rounding is off by a cent', 'kai'],
+          [92, 'bump the chart library', 'noa'],
+        ]),
+        dormant(`${HL}-dormant`),
+      ],
+    },
+    (serveHandle) =>
+      withContext(shared, async (context) => {
+        const agent = createAgent(serveHandle.base, serveHandle.token);
+        // What serve lists for a view (and a search): its rows' titles (an
+        // item with no title shows its key without the kind) and total.
+        const serveHas = async (view, q = '') => {
+          const r = await agent.api(
+            'GET',
+            `/api/items?view=${view}&offset=0&limit=500${q ? `&q=${encodeURIComponent(q)}` : ''}`,
+          );
+          return {
+            keys: (r.items ?? [])
+              .map((it) => it.title || it.key.replace(/^[a-z]+:/, ''))
+              .sort(),
+            total: r.total,
+          };
+        };
+        const waiting = await serveHas('waiting');
+        const fresh = await serveHas('new');
+        const ledger = await serveHas('waiting', 'ledger');
+
+        // openHeld opens the list with its /api/items requests held, and
+        // records every set of rows the list paints from then on.
+        const openHeld = async () => {
+          const pg = await context.newPage();
+          const errors = [];
+          pg.on('pageerror', (e) => errors.push(String(e)));
+          const held = [];
+          let holding = true;
+          await pg.route(/\/api\/items\?/, async (r) => {
+            if (holding) await new Promise((res) => held.push(res));
+            return r.continue().catch(() => {});
+          });
+          const release = () => {
+            holding = false;
+            for (const res of held.splice(0)) res();
+          };
+          await pg.addInitScript(() => {
+            window.__painted = [];
+            new MutationObserver(() => {
+              const rows = document.querySelector(
+                '.kit-app > .kit-list:not([hidden]) .kit-rows',
+              );
+              if (!rows) return;
+              const keys = [...rows.querySelectorAll('.kit-row .kit-title')]
+                .map((e) => e.textContent ?? '')
+                .sort()
+                .join('|');
+              const last = window.__painted[window.__painted.length - 1];
+              if (keys && keys !== last) window.__painted.push(keys);
+            }).observe(document, { childList: true, subtree: true });
+          });
+          await pg.setViewportSize({ width: 1600, height: 900 });
+          await pg.goto(serveHandle.url + '#/attention/waiting', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000,
+          });
+          const isHeld = await eventually(() => held.length > 0, 8000);
+          return { pg, errors, release, isHeld };
+        };
+        const rowKeys = (pg) =>
+          pg.$$eval(`${SHOWN} .kit-row .kit-title`, (els) =>
+            els.map((e) => e.textContent ?? '').sort(),
+          );
+        const listIs = (pg, want) =>
+          until(
+            pg,
+            (w) =>
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row .kit-title',
+                ),
+              ]
+                .map((e) => e.textContent ?? '')
+                .sort()
+                .join('|') === w,
+            want.join('|'),
+            8000,
+          );
+        const selAll = (pg) =>
+          pg
+            .$eval(`${SHOWN} .cb-sel-all`, (e) => e.textContent ?? '')
+            .catch(() => '');
+        const painted = (pg) => pg.evaluate(() => window.__painted);
+
+        // A view switched to while the list's load is held.
+        {
+          const { pg, errors, release, isHeld } = await openHeld();
+          try {
+            check(
+              `the waiting list's first load is held on its way (${waiting.total} waiting, ${fresh.total} new)`,
+              isHeld &&
+                waiting.total > 0 &&
+                fresh.total > waiting.total &&
+                (await rowKeys(pg)).length === 0,
+            );
+            await pg.click('.kit-chip[data-id="new"]');
+            await until(pg, () => location.hash === '#/attention/new');
+            release();
+            const shown = await listIs(pg, fresh.keys);
+            checkList(
+              'switched to "new" while the load was held, the list shows the new view\'s items',
+              await rowKeys(pg),
+              fresh.keys,
+            );
+            const count = await selAll(pg);
+            check(
+              `and its count ("${count}")`,
+              shown && count === `select all ${fresh.total} in view`,
+            );
+            const seen = await painted(pg);
+            check(
+              `the held waiting load never painted over it (painted ${seen.length} row sets)`,
+              shown && !seen.includes(waiting.keys.join('|')),
+            );
+            check(
+              `no page errors (${errors.join(' | ')})`,
+              errors.length === 0,
+            );
+          } finally {
+            await pg.close();
+          }
+        }
+
+        // A search typed while the list's load is held.
+        {
+          const { pg, errors, release, isHeld } = await openHeld();
+          try {
+            check(
+              `the waiting list's first load is held on its way (serve finds ${ledger.total} of ${waiting.total} for "ledger")`,
+              isHeld &&
+                ledger.total > 0 &&
+                ledger.total < waiting.total &&
+                (await rowKeys(pg)).length === 0,
+            );
+            await press(pg, '/');
+            await pg.keyboard.type('ledger');
+            // The search asks once its debounce has run (it puts ?q= in the URL).
+            await until(
+              pg,
+              () => new URL(location.href).searchParams.get('q') === 'ledger',
+            );
+            release();
+            const shown = await listIs(pg, ledger.keys);
+            checkList(
+              'typed "ledger" while the load was held, the list shows what serve finds for it',
+              await rowKeys(pg),
+              ledger.keys,
+            );
+            const count = await selAll(pg);
+            check(
+              `and its count ("${count}")`,
+              shown && count === `select all ${ledger.total} in view`,
+            );
+            const seen = await painted(pg);
+            check(
+              `the held unsearched load never painted over it (painted ${seen.length} row sets)`,
+              shown && !seen.includes(waiting.keys.join('|')),
+            );
+            check(
+              `no page errors (${errors.join(' | ')})`,
+              errors.length === 0,
+            );
+          } finally {
+            await pg.close();
+          }
         }
       }),
   );

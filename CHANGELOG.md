@@ -4,6 +4,21 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.7] - 2026-10-08
+
+### Fixed
+- A view, filter or search change made while the Attention list was
+  loading is no longer dropped. The list used to skip a reload asked for
+  while one was on its way, so it kept showing the old view (live events
+  reload it often, so this happened in real use). Now one load is in flight
+  and at most one is queued (the coalescing the dock and To apply use for
+  sessions); the queued one asks with the view, filters and search as they
+  are when it runs. A load whose query changed while it was on its way
+  paints nothing, so an older view never shows over a newer one. A "show
+  more" page that comes back after the list started loading again is not
+  added to the new rows. The probe holds a list load and switches the view,
+  and types a search, while it is held.
+
 ## [casebook 0.4.6] - 2026-10-07
 
 ### Changed

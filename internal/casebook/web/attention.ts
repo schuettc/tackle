@@ -49,6 +49,7 @@ import {
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { makeBoard } from './board.ts';
 import { lookingLine } from './sessions.ts';
+import { coalesced } from './coalesce.ts';
 import {
   agreeWithAll,
   bulkProposalActions,
@@ -152,7 +153,12 @@ export function makeAttention(ctx: Ctx): Section {
   let totalItems = 0;
   let loadedItems: ItemView[] = [];
   const filters = emptyFilters();
-  let loading = false;
+  // reloading: a first-page load is on its way; loadingMore: a next page
+  // is. loads counts the first-page loads started, so a next page asked
+  // for before one started is not added to the rows it replaced.
+  let reloading = false;
+  let loadingMore = false;
+  let loads = 0;
   let footEl: HTMLElement | null = null;
   let propFoot: BulkProposalActions | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -480,14 +486,34 @@ export function makeAttention(ctx: Ctx): Section {
     return p;
   }
 
-  async function reload(): Promise<void> {
-    if (loading) return;
-    loading = true;
+  // reload loads the list's first page for the view, filters and search
+  // as they are when it runs. Coalesced (coalesce.ts): one load in flight
+  // and at most one queued, so a view, filter or search change made while a
+  // load is on its way runs once that load ends, never dropped (casebook
+  // 0.4.7: it was, and the list kept the old view). A load whose query
+  // changed while it was on its way paints nothing: the newer query's load
+  // paints.
+  const reload = coalesced(reloadNow);
+
+  // queryKey is a load's query, comparable (the page offset aside).
+  function queryKey(): string {
+    return JSON.stringify(buildQuery(0));
+  }
+
+  async function reloadNow(): Promise<void> {
+    reloading = true;
+    loads++;
+    const asked = queryKey();
     try {
       offset = 0;
       loadedItems = [];
       updateFilterChips();
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
+      if (queryKey() !== asked) {
+        // Every change to the query asks for a reload; this one makes sure.
+        void reload();
+        return;
+      }
       totalItems = data.total;
       totalItemsForView = data.total;
       loadedItems = data.items ?? [];
@@ -504,15 +530,20 @@ export function makeAttention(ctx: Ctx): Section {
     } catch {
       // non-fatal; leave the list as-is
     } finally {
-      loading = false;
+      reloading = false;
     }
   }
 
+  // loadMore adds the next page ("show more"). Not while the first page is
+  // loading (it starts the rows again); a page that comes back after a
+  // first-page load started is not added (the rows it followed are gone).
   async function loadMore(): Promise<void> {
-    if (loading || offset >= totalItems) return;
-    loading = true;
+    if (reloading || loadingMore || offset >= totalItems) return;
+    loadingMore = true;
+    const mine = loads;
     try {
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(offset));
+      if (mine !== loads) return;
       const next = data.items ?? [];
       loadedItems = [...loadedItems, ...next];
       leftOpen = data.left_open ?? [];
@@ -529,7 +560,7 @@ export function makeAttention(ctx: Ctx): Section {
     } catch {
       // non-fatal
     } finally {
-      loading = false;
+      loadingMore = false;
     }
   }
 
