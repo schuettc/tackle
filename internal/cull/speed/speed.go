@@ -29,7 +29,9 @@ const (
 	setenvShareDeno = 2 // a helper counts when at least 1/2 of a package's tests reach it
 )
 
-var kindOrder = []string{KindSetenv, KindMisplaced, KindSwallowed, KindScreenshot, KindFixedWait}
+// kindOrder is the digest's order: the findings that need a decision first,
+// then the waits (by seconds), then screenshots.
+var kindOrder = []string{KindSetenv, KindMisplaced, KindSwallowed, KindFixedWait, KindScreenshot}
 
 // Finding is one thing the scan found.
 type Finding struct {
@@ -55,6 +57,11 @@ type Span struct {
 // blocks parallel tests is found by reading the whole project's Go sources;
 // only findings in the listed files are returned.
 func Scan(root string, files []string, spans map[string][]Span) ([]Finding, error) {
+	return ScanTo(root, files, spans, io.Discard)
+}
+
+// ScanTo is Scan, saying on warn which unreadable files it skipped.
+func ScanTo(root string, files []string, spans map[string][]Span, warn io.Writer) ([]Finding, error) {
 	sorted := append([]string(nil), files...)
 	sort.Strings(sorted)
 	listed := map[string]bool{}
@@ -72,30 +79,21 @@ func Scan(root string, files []string, spans map[string][]Span) ([]Finding, erro
 			if strings.HasSuffix(rel, "_test.go") {
 				hasGoTest = true
 			}
-			b, err := os.ReadFile(abs)
-			if errors.Is(err, os.ErrNotExist) {
+			b, ok := readFile(abs, rel, warn)
+			if !ok {
 				continue
-			}
-			if err != nil {
-				return nil, err
 			}
 			fs = scanGoWaits(rel, b)
 		case ext == ".py":
-			b, err := os.ReadFile(abs)
-			if errors.Is(err, os.ErrNotExist) {
+			b, ok := readFile(abs, rel, warn)
+			if !ok {
 				continue
-			}
-			if err != nil {
-				return nil, err
 			}
 			fs = scanPython(rel, b)
 		case isJS(ext):
-			b, err := os.ReadFile(abs)
-			if errors.Is(err, os.ErrNotExist) {
+			b, ok := readFile(abs, rel, warn)
+			if !ok {
 				continue
-			}
-			if err != nil {
-				return nil, err
 			}
 			fs = scanJS(rel, b)
 		}
@@ -121,6 +119,19 @@ func Scan(root string, files []string, spans map[string][]Span) ([]Finding, erro
 		return out[i].Line < out[j].Line
 	})
 	return out, nil
+}
+
+// readFile reads a file; one that is missing is skipped quietly and one that
+// cannot be read is skipped with a warning.
+func readFile(abs, rel string, warn io.Writer) ([]byte, bool) {
+	b, err := os.ReadFile(abs)
+	if err == nil {
+		return b, true
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		_, _ = fmt.Fprintf(warn, "cull: speed scan skipped %s: %v\n", rel, err)
+	}
+	return nil, false
 }
 
 func spanLen(sps []Span, id string) int {
@@ -188,8 +199,9 @@ type DigestOut struct {
 	Top              []Finding      `json:"top"`
 }
 
-// Digest summarises findings: counts, literal wait seconds, and the top 20 by
-// seconds descending, then kind order.
+// Digest summarises findings: counts, literal wait seconds, and the top 20: setenv,
+// misplaced and swallowed findings first, then fixed waits by seconds
+// descending, then screenshots.
 func Digest(fs []Finding) DigestOut {
 	d := DigestOut{Counts: map[string]int{}, Top: []Finding{}}
 	for _, f := range fs {
@@ -210,11 +222,11 @@ func Digest(fs []Finding) DigestOut {
 		return *f.Seconds
 	}
 	sort.SliceStable(top, func(i, j int) bool {
-		if sec(top[i]) != sec(top[j]) {
-			return sec(top[i]) > sec(top[j])
-		}
 		if rank[top[i].Kind] != rank[top[j].Kind] {
 			return rank[top[i].Kind] < rank[top[j].Kind]
+		}
+		if top[i].Kind == KindFixedWait && sec(top[i]) != sec(top[j]) {
+			return sec(top[i]) > sec(top[j])
 		}
 		if top[i].File != top[j].File {
 			return top[i].File < top[j].File

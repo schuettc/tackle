@@ -133,10 +133,7 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	}
 	skipped = append(skipped, changedSkipped...)
 
-	checks, speedFindings, err := scanSpeed(root, sub, cfg.Exclude, mode, changes, files, allCases, stderr)
-	if err != nil {
-		return Report{}, err
-	}
+	checks, speedFindings := scanSpeed(root, sub, cfg.Exclude, mode, changes, files, allCases, stderr)
 
 	keptCases := allCases
 	groups := similar.Groups(allCases)
@@ -450,7 +447,7 @@ func withSpeed(s map[string]int, fs []speed.Finding) map[string]int {
 // scanSpeed lists what the project runs and scans the test files plus the
 // script checks' files for speed findings. Diff mode scans only touched files.
 // Reading the entry points never fails the run: a problem is said on stderr.
-func scanSpeed(root, sub string, exclude []string, mode string, changes discover.Changes, files []string, allCases []cases.TestCase, stderr io.Writer) ([]runs.Check, []speed.Finding, error) {
+func scanSpeed(root, sub string, exclude []string, mode string, changes discover.Changes, files []string, allCases []cases.TestCase, stderr io.Writer) ([]runs.Check, []speed.Finding) {
 	checks, err := runs.Find(root)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "cull: could not read what the project runs: %v\n", err)
@@ -476,12 +473,13 @@ func scanSpeed(root, sub string, exclude []string, mode string, changes discover
 	for _, tc := range allCases {
 		spans[tc.File] = append(spans[tc.File], speed.Span{ID: tc.ID, Start: tc.Span.Start, End: tc.Span.End})
 	}
-	found, err := speed.Scan(root, scanFiles, spans)
-	if err != nil {
-		return nil, nil, err
+	found, err := speed.ScanTo(root, scanFiles, spans, stderr)
+	if err != nil { // the scan itself never fails a check
+		_, _ = fmt.Fprintf(stderr, "cull: speed scan failed: %v\n", err)
+		found = nil
 	}
 	if found == nil {
 		found = []speed.Finding{}
 	}
-	return checks, found, nil
+	return checks, found
 }

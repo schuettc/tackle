@@ -145,6 +145,7 @@ type goFn struct {
 	name   string
 	isTest bool
 	isMeth bool
+	decl   int   // line of the func keyword
 	sites  []int // lines of direct t.Setenv calls
 	calls  []goCall
 	keep   map[int]bool
@@ -161,6 +162,7 @@ type goProject struct {
 	methods map[string][]*goFn // method name
 	pkgDirs map[string][]string
 	testsOf map[string][]*goFn // dir -> test functions
+	below   map[*goFn]bool     // memo: reaches a t.Setenv
 }
 
 func scanGoSetenv(root string, listed map[string]bool) []Finding {
@@ -209,9 +211,10 @@ func scanGoSetenv(root string, listed map[string]bool) []Finding {
 			if !ok || fd.Body == nil {
 				continue
 			}
-			fn := &goFn{dir: dir, file: rel, name: fd.Name.Name, isMeth: fd.Recv != nil, keep: map[int]bool{}}
+			fn := &goFn{dir: dir, file: rel, name: fd.Name.Name, isMeth: fd.Recv != nil, keep: map[int]bool{}, decl: fset.Position(fd.Pos()).Line}
 			fn.isTest = isTestFile && !fn.isMeth && strings.HasPrefix(fn.name, "Test") && hasTestingParam(fd)
 			shadow := paramNames(fd)
+			tparams := testingParams(fd)
 			ast.Inspect(fd.Body, func(n ast.Node) bool {
 				call, ok := n.(*ast.CallExpr)
 				if !ok {
@@ -222,7 +225,7 @@ func scanGoSetenv(root string, listed map[string]bool) []Finding {
 					fn.calls = append(fn.calls, goCall{name: fun.Name})
 				case *ast.SelectorExpr:
 					id, isID := fun.X.(*ast.Ident)
-					if fun.Sel.Name == "Setenv" && isID && id.Name != "os" && id.Name != "syscall" {
+					if fun.Sel.Name == "Setenv" && isID && tparams[id.Name] {
 						pos := fset.Position(call.Pos())
 						if !k.keeps(pos.Line) {
 							fn.sites = append(fn.sites, pos.Line)
@@ -249,18 +252,6 @@ func scanGoSetenv(root string, listed map[string]bool) []Finding {
 		}
 	}
 
-	type siteKey struct {
-		file string
-		line int
-	}
-	type siteHit struct {
-		fn      *goFn
-		reached int
-		total   int
-		dir     string
-		line    int
-	}
-	best := map[siteKey]*siteHit{}
 	dirs := make([]string, 0, len(p.testsOf))
 	for d := range p.testsOf {
 		dirs = append(dirs, d)
@@ -272,69 +263,14 @@ func scanGoSetenv(root string, listed map[string]bool) []Finding {
 			listedDirs[path.Dir(f)] = true
 		}
 	}
+	var out []Finding
 	for _, dir := range dirs {
 		if !listedDirs[dir] {
 			continue // only packages whose test files were asked for
 		}
-		tests := p.testsOf[dir]
-		reachCount := map[*goFn]int{} // setter function -> tests reaching it
-		reaching := 0
-		for _, t := range tests {
-			seen := map[*goFn]bool{}
-			p.walk(t, seen)
-			any := false
-			for fn := range seen {
-				if len(fn.sites) > 0 {
-					reachCount[fn]++
-					any = true
-				}
-			}
-			if any {
-				reaching++
-			}
+		if f, ok := p.setenvFinding(dir); ok {
+			out = append(out, f)
 		}
-		if reaching < minSetenvTests || reaching*setenvShareDeno < len(tests) {
-			continue
-		}
-		fns := make([]*goFn, 0, len(reachCount))
-		for fn := range reachCount {
-			fns = append(fns, fn)
-		}
-		sort.Slice(fns, func(i, j int) bool {
-			if fns[i].file != fns[j].file {
-				return fns[i].file < fns[j].file
-			}
-			return fns[i].sites[0] < fns[j].sites[0]
-		})
-		directReported := false
-		for _, fn := range fns {
-			if fn.isTest {
-				if directReported {
-					continue
-				}
-				directReported = true
-			}
-			// One finding per helper, at its first t.Setenv.
-			line := fn.sites[0]
-			key := siteKey{fn.file, line}
-			if fn.isTest {
-				key = siteKey{dir + "\x00direct", 0}
-			}
-			h := &siteHit{fn: fn, reached: reaching, total: len(tests), dir: dir, line: line}
-			if cur, ok := best[key]; !ok || h.reached > cur.reached {
-				best[key] = h
-			}
-		}
-	}
-	var out []Finding
-	for _, h := range best {
-		var detail string
-		if h.fn.isTest {
-			detail = fmt.Sprintf("t.Setenv in %d of %d tests in %s: they cannot run with t.Parallel()", h.reached, h.total, h.dir)
-		} else {
-			detail = fmt.Sprintf("t.Setenv in %s, reached by %d of %d tests in %s: they cannot run with t.Parallel()", h.fn.name, h.reached, h.total, h.dir)
-		}
-		out = append(out, Finding{Kind: KindSetenv, File: h.fn.file, Line: h.line, Detail: detail})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -343,6 +279,179 @@ func scanGoSetenv(root string, listed map[string]bool) []Finding {
 		return out[i].Line < out[j].Line
 	})
 	return out
+}
+
+// setenvFinding returns the one finding for a package: the helper reached by
+// the most of its tests (ties: the outermost in the call chain, then the
+// earliest file:line), or, when only tests call t.Setenv, the first such test
+// if at least half of them do.
+func (p *goProject) setenvFinding(dir string) (Finding, bool) {
+	tests := p.testsOf[dir]
+	reach := map[*goFn]int{} // non-test function reaching a t.Setenv -> tests using it
+	reaching, direct := 0, 0
+	var firstDirect *goFn
+	for _, t := range tests {
+		seen := map[*goFn]bool{}
+		p.walk(t, seen)
+		any := false
+		for fn := range seen {
+			if len(fn.sites) > 0 {
+				any = true
+			}
+			if fn != t && p.setterBelow(fn) {
+				reach[fn]++
+			}
+		}
+		if len(t.sites) > 0 {
+			direct++
+			if firstDirect == nil {
+				firstDirect = t
+			}
+		}
+		if any {
+			reaching++
+		}
+	}
+	if reaching < minSetenvTests || reaching*setenvShareDeno < len(tests) {
+		return Finding{}, false
+	}
+	best := 0
+	var tied []*goFn
+	for fn, n := range reach {
+		if n > best {
+			best, tied = n, nil
+		}
+		if n == best {
+			tied = append(tied, fn)
+		}
+	}
+	if best == 0 || direct > best {
+		if direct*setenvShareDeno < len(tests) || direct < minSetenvTests {
+			return Finding{}, false
+		}
+		return Finding{Kind: KindSetenv, File: firstDirect.file, Line: firstDirect.sites[0],
+			Detail: fmt.Sprintf("t.Setenv in %d of %d tests in %s: they cannot run with t.Parallel()", direct, len(tests), dir)}, true
+	}
+	reachSet := map[*goFn]map[*goFn]bool{}
+	outer := func(fn *goFn) int {
+		if reachSet[fn] == nil {
+			reachSet[fn] = map[*goFn]bool{}
+			p.walk(fn, reachSet[fn])
+		}
+		n := 0
+		for _, o := range tied {
+			if o != fn && reachSet[fn][o] {
+				n++
+			}
+		}
+		return n
+	}
+	sort.Slice(tied, func(i, j int) bool {
+		if oi, oj := outer(tied[i]), outer(tied[j]); oi != oj {
+			return oi > oj
+		}
+		if tied[i].file != tied[j].file {
+			return tied[i].file < tied[j].file
+		}
+		return tied[i].decl < tied[j].decl
+	})
+	h := tied[0]
+	line, how := h.decl, "calls t.Setenv"
+	if len(h.sites) > 0 {
+		line, how = h.sites[0], "calls t.Setenv"
+	} else if inner := p.firstSetterCallee(h); inner != nil {
+		how = "calls t.Setenv (through " + inner.name + ")"
+	}
+	if len(h.sites) > 0 {
+		how = "calls t.Setenv"
+	}
+	own := reachSet[h]
+	if own == nil {
+		own = map[*goFn]bool{}
+		p.walk(h, own)
+	}
+	others := map[*goFn]bool{}
+	for fn := range reach {
+		if len(fn.sites) > 0 && fn != h && !own[fn] {
+			others[fn] = true
+		}
+	}
+	detail := fmt.Sprintf("%s %s and is used by %d of %d tests in %s, so none of them can run in parallel", h.name, how, best, len(tests), dir)
+	if len(others) > 0 {
+		detail += fmt.Sprintf("; %d other helpers also call t.Setenv", len(others))
+	}
+	return Finding{Kind: KindSetenv, File: h.file, Line: line, Detail: detail}, true
+}
+
+// setterBelow reports whether fn calls t.Setenv itself or through callees.
+func (p *goProject) setterBelow(fn *goFn) bool {
+	if v, ok := p.below[fn]; ok {
+		return v
+	}
+	if p.below == nil {
+		p.below = map[*goFn]bool{}
+	}
+	seen := map[*goFn]bool{}
+	p.walk(fn, seen)
+	v := false
+	for f := range seen {
+		if len(f.sites) > 0 {
+			v = true
+			break
+		}
+	}
+	p.below[fn] = v
+	return v
+}
+
+// firstSetterCallee is the first function fn calls that leads to a t.Setenv.
+func (p *goProject) firstSetterCallee(fn *goFn) *goFn {
+	for _, c := range fn.calls {
+		for _, callee := range p.resolve(fn, c) {
+			if callee != fn && p.setterBelow(callee) {
+				return callee
+			}
+		}
+	}
+	return nil
+}
+
+// testingParams names the parameters of fd, and of function literals inside
+// it, whose type is testing.T, B, TB or F (or a pointer to one).
+func testingParams(fd *ast.FuncDecl) map[string]bool {
+	m := map[string]bool{}
+	add := func(ft *ast.FuncType) {
+		if ft.Params == nil {
+			return
+		}
+		for _, f := range ft.Params.List {
+			t := f.Type
+			if star, ok := t.(*ast.StarExpr); ok {
+				t = star.X
+			}
+			sel, ok := t.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "testing" {
+				continue
+			}
+			switch sel.Sel.Name {
+			case "T", "B", "TB", "F":
+				for _, n := range f.Names {
+					m[n.Name] = true
+				}
+			}
+		}
+	}
+	add(fd.Type)
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if lit, ok := n.(*ast.FuncLit); ok {
+			add(lit.Type)
+		}
+		return true
+	})
+	return m
 }
 
 func hasTestingParam(fd *ast.FuncDecl) bool {

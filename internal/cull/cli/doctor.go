@@ -188,8 +188,8 @@ func writeChecks(out io.Writer, root string) {
 	_, _ = fmt.Fprintf(out, "checks\n")
 	for _, c := range checks {
 		argv := strings.Join(c.Argv, " ")
-		if len(argv) > 80 {
-			argv = argv[:80]
+		if r := []rune(argv); len(r) > 80 {
+			argv = string(r[:80])
 		}
 		_, _ = fmt.Fprintf(out, "  %s  %s  %s\n", c.Kind, c.Dir, argv)
 		if c.Kind == "unknown" && c.Note != "" {

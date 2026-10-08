@@ -254,8 +254,9 @@ func matchOpenBack(m string, closeIdx int) int {
 	return -1
 }
 
-// inNewPromise reports whether pos sits inside a `new Promise(...)` call.
-func inNewPromise(m string, pos int) bool {
+// enclosingPromise returns the offset of the '(' of the innermost
+// `new Promise(...)` call containing pos, or -1.
+func enclosingPromise(m string, pos int) int {
 	depth := 0
 	for i := pos - 1; i >= 0; i-- {
 		switch m[i] {
@@ -267,11 +268,49 @@ func inNewPromise(m string, pos int) bool {
 				continue
 			}
 			if strings.HasSuffix(strings.TrimRight(m[:i], " \t\r\n"), "new Promise") {
-				return true
+				return i
 			}
 		}
 	}
-	return false
+	return -1
+}
+
+var (
+	reExecParam   = regexp.MustCompile(`^\s*(?:async\s+)?(?:function\s*[\w$]*\s*)?(?:\(\s*([\w$]+)|([\w$]+)\s*=>)`)
+	reHelperArrow = regexp.MustCompile(`(?:const|let|var)\s+([\w$]+)\s*=\s*(?:async\s*)?\(?\s*([\w$]+)\s*\)?\s*=>\s*(?:\{\s*return\s+)?new\s+Promise\s*\(\s*\(?\s*([\w$]+)\s*(?:,\s*[\w$]+\s*)?\)?\s*=>\s*setTimeout\s*\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)`)
+	reHelperFunc  = regexp.MustCompile(`function\s+([\w$]+)\s*\(\s*([\w$]+)\s*\)\s*\{\s*return\s+new\s+Promise\s*\(\s*\(?\s*([\w$]+)\s*(?:,\s*[\w$]+\s*)?\)?\s*=>\s*setTimeout\s*\(\s*([\w$]+)\s*,\s*([\w$]+)\s*\)`)
+	reResolveOnly = regexp.MustCompile(`^\(\s*\)\s*=>\s*(?:\{\s*)?(\w+)\s*\([^()]*\)\s*;?\s*(?:\})?$`)
+)
+
+// sleepHelper is a function whose whole job is to wait: (ms) => new Promise(r => setTimeout(r, ms)).
+type sleepHelper struct {
+	name       string
+	start, end int
+}
+
+func findSleepHelpers(m string) []sleepHelper {
+	var hs []sleepHelper
+	for _, re := range []*regexp.Regexp{reHelperArrow, reHelperFunc} {
+		for _, g := range re.FindAllStringSubmatchIndex(m, -1) {
+			sub := func(i int) string { return m[g[2*i]:g[2*i+1]] }
+			// the timer's callback is the promise's resolve, its delay the helper's parameter
+			if sub(3) != sub(4) || sub(2) != sub(5) {
+				continue
+			}
+			hs = append(hs, sleepHelper{name: sub(1), start: g[0], end: g[1]})
+		}
+	}
+	return hs
+}
+
+// isWaitCallback reports whether a setTimeout callback only resolves the
+// promise: the resolve parameter itself, or an arrow that just calls it.
+func isWaitCallback(cb, resolve string) bool {
+	if cb == resolve {
+		return true
+	}
+	g := reResolveOnly.FindStringSubmatch(cb)
+	return g != nil && g[1] == resolve
 }
 
 func isIdent(c byte) bool {
@@ -303,17 +342,21 @@ func scanJS(rel string, src []byte) []Finding {
 
 	var out []Finding
 	seen := map[string]bool{}
-	add := func(kind string, off int, secs *float64, detail string) {
+	addAlt := func(kind string, off, alt int, secs *float64, detail string) {
 		key := kind + ":" + strconv.Itoa(off)
 		if seen[key] {
 			return
 		}
 		seen[key] = true
 		line := lineOf(starts, off)
-		if k.keeps(line) {
+		if k.keeps(line) || k.keeps(lineOf(starts, alt)) {
 			return
 		}
 		out = append(out, Finding{Kind: kind, File: rel, Line: line, Seconds: secs, Detail: detail, offset: off})
+	}
+
+	add := func(kind string, off int, secs *float64, detail string) {
+		addAlt(kind, off, off, secs, detail)
 	}
 
 	for _, loc := range reWaitForTimeout.FindAllStringIndex(m, -1) {
@@ -328,20 +371,60 @@ func scanJS(rel string, src []byte) []Finding {
 		}
 		add(KindFixedWait, loc[0], s, detail)
 	}
+	helpers := findSleepHelpers(m)
+	inHelper := func(off int) bool {
+		for _, h := range helpers {
+			if off >= h.start && off < h.end {
+				return true
+			}
+		}
+		return false
+	}
 	for _, loc := range reSetTimeout.FindAllStringIndex(m, -1) {
-		if !inNewPromise(m, loc[0]) {
+		if inHelper(loc[0]) {
 			continue
 		}
+		open := enclosingPromise(m, loc[0])
+		if open < 0 {
+			continue
+		}
+		g := reExecParam.FindStringSubmatch(m[open+1:])
+		if g == nil {
+			continue
+		}
+		resolve := g[1] + g[2]
 		args := callArgs(m, loc[1]-1)
+		if len(args) < 2 || !isWaitCallback(args[0], resolve) {
+			continue
+		}
 		var s *float64
 		detail := "setTimeout in a Promise is a fixed wait"
-		if len(args) >= 2 && reNumber.MatchString(args[1]) {
+		if reNumber.MatchString(args[1]) {
 			if v, err := strconv.ParseFloat(strings.ReplaceAll(args[1], "_", ""), 64); err == nil {
 				s = secs(v / 1000)
 				detail = fmt.Sprintf("setTimeout(…, %s) in a Promise is a fixed wait of %gs", args[1], v/1000)
 			}
 		}
 		add(KindFixedWait, loc[0], s, detail)
+	}
+	for _, h := range helpers {
+		re := regexp.MustCompile(`(^|[^\w$.])` + regexp.QuoteMeta(h.name) + `\s*\(`)
+		for _, g := range re.FindAllStringSubmatchIndex(m, -1) {
+			off := g[2] + len(m[g[2]:g[3]])
+			if inHelper(off) || strings.HasSuffix(strings.TrimRight(m[:off], " \t"), "function") {
+				continue
+			}
+			args := callArgs(m, g[1]-1)
+			var s *float64
+			detail := h.name + "() is a fixed wait"
+			if len(args) == 1 && reNumber.MatchString(args[0]) {
+				if v, err := strconv.ParseFloat(strings.ReplaceAll(args[0], "_", ""), 64); err == nil {
+					s = secs(v / 1000)
+					detail = fmt.Sprintf("%s(%s) is a fixed wait of %gs", h.name, args[0], v/1000)
+				}
+			}
+			add(KindFixedWait, off, s, detail)
+		}
 	}
 	for _, loc := range reWaitForFn.FindAllStringIndex(m, -1) {
 		args := callArgs(m, loc[1]-1)
@@ -378,7 +461,7 @@ func scanJS(rel string, src []byte) []Finding {
 		}
 		name := m[s:e]
 		if name != "" && waitLike(m, name, s) {
-			add(KindSwallowed, s, nil, name+"(...) failure is swallowed by .catch(() => {}): the probe carries on when the wait times out")
+			addAlt(KindSwallowed, loc[0], s, nil, name+"(...) failure is swallowed by .catch(() => {}): the probe carries on when the wait times out")
 		}
 	}
 

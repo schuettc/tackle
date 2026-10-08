@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func doctorEnv(t *testing.T) string {
@@ -190,5 +191,21 @@ func TestDoctorTestCommandCountsFiles(t *testing.T) {
 	}
 	if !strings.Contains(tc, "(3 test files)") || strings.Contains(tc, "test_a.py") {
 		t.Fatalf("test command line = %q", tc)
+	}
+}
+
+func TestTruncatedArgvStaysValidUTF8(t *testing.T) {
+	root := doctorEnv(t)
+	if err := os.MkdirAll(root+"/.github/workflows", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := "go test ./... -run '" + strings.Repeat("é", 120) + "'"
+	wf := "on: push\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: " + cmd + "\n"
+	if err := os.WriteFile(root+"/.github/workflows/ci.yml", []byte(wf), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out, _ := run(t, "", "doctor", root)
+	if !utf8.ValidString(out) {
+		t.Errorf("doctor output is not valid UTF-8:\n%q", out)
 	}
 }

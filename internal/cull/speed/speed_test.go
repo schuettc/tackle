@@ -125,7 +125,7 @@ func TestD(t *testing.T) {}
 func TestE(t *testing.T) {}
 `)
 	fs := scan(t, root, "svc/svc_test.go", "other/other_test.go")
-	expect(t, fs, "helper/helper.go:14 setenv_blocks_parallel -")
+	expect(t, fs, "helper/helper.go:5 setenv_blocks_parallel -")
 	if !strings.Contains(fs[0].Detail, "3 of 4") || !strings.Contains(fs[0].Detail, "svc") {
 		t.Errorf("detail = %q", fs[0].Detail)
 	}
@@ -258,7 +258,7 @@ func TestDigest(t *testing.T) {
 	for _, f := range d.Top {
 		order = append(order, brief([]Finding{f})[0])
 	}
-	want := "a:3 fixed_wait 2|a:2 fixed_wait 1|b:1 setenv_blocks_parallel -|a:1 screenshot -"
+	want := "b:1 setenv_blocks_parallel -|a:3 fixed_wait 2|a:2 fixed_wait 1|a:1 screenshot -"
 	if strings.Join(order, "|") != want {
 		t.Errorf("top = %s\nwant %s", strings.Join(order, "|"), want)
 	}
