@@ -43,6 +43,7 @@ import {
   agreeGroups,
   leftOpenMeta,
   leftOpenLabel,
+  lookIntoCard,
   type AgreeGroup,
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
@@ -691,11 +692,40 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // The foot's agree-with-all band sits above the selection foot.
-  const agree = agreeWithAll(agreeAll);
+  const agree = agreeWithAll(agreeAll, lookAll);
   handle.el.querySelector('.kit-foot')?.before(agree.el);
 
+  // updateAgree renders the foot's groups; with a session attached each
+  // offers "ask ‹session› to look into all N" too.
   function updateAgree(): void {
-    agree.update(vocab && !boardHandle ? agreeGroups(vocab, loadedItems) : []);
+    const t = ctx.dockTarget();
+    const looking = new Set(
+      loadedItems.filter((it) => !!it.looking).map((it) => it.key),
+    );
+    agree.update(
+      vocab && !boardHandle ? agreeGroups(vocab, loadedItems) : [],
+      vocab && t
+        ? {
+            session: t.name,
+            words: vocab.look_into,
+            looking: (k) => looking.has(k),
+          }
+        : null,
+    );
+  }
+  ctx.onDockTarget(() => updateAgree());
+
+  // lookAll sends the attached session one message naming a group's keys,
+  // all of them attached, with the look-into purpose (serve marks each
+  // while it is underway, and the rows say so). It decides nothing.
+  async function lookAll(g: AgreeGroup, message: string): Promise<void> {
+    if (!ctx.dockTarget()) return;
+    const why = await ctx.askSession(message, { keys: g.keys }, 'look-into');
+    if (why) {
+      showReadError(why);
+      return;
+    }
+    await reload();
   }
 
   // agreeAll accepts exactly a group's proposals. An outward choice only
@@ -752,6 +782,7 @@ export function makeAttention(ctx: Ctx): Section {
       onRefresh: () => void openDetail(key),
       decide: (d, until, note) => void decideOpen(key, d, until, note),
       accept: () => void acceptOpen(),
+      cardsReady: () => renderAsk(),
     });
     readEl.replaceChildren(el);
     renderAsk();
@@ -759,41 +790,66 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- ask the session to look into it ------------------------------------
 
-  // renderAsk puts "ask ‹session› to look into it" under the open item's
-  // cards: only with a session attached, and not while one is looking
-  // into it already (the item says so under its question). Its words are
-  // serve's (the vocabulary's look_into: {session} and {key} filled in).
+  // renderAsk puts "Look into it" in the open item's card grid, the last
+  // card, numbered after the decisions (its number key picks it): only
+  // with a session attached. It decides nothing: it sends the session
+  // serve's message about the item (the vocabulary's look_into), with the
+  // look-into purpose. While a session is looking into the item the card
+  // says so in place of its sentence and can't be clicked.
+  let askingKey = '';
   function renderAsk(): void {
-    readEl.querySelector('.cb-look')?.remove();
+    const grid = readEl.querySelector<HTMLElement>('.cb-decide .cb-choices');
+    const old = grid?.querySelector('.cb-look-card');
     const key = currentOpenKey;
     const t = ctx.dockTarget();
-    const cards = readEl.querySelector('.cb-decide .cb-choices-wrap');
-    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
-    if (shownDetail.item.looking) return;
     const words = vocab?.look_into;
-    if (!words) return; // the vocabulary's load renders it
-    const note = h('span', { class: 'cb-look-note' });
-    const btn = h(
+    if (
+      !grid ||
+      !grid.dataset.cards ||
+      !key ||
+      !t ||
+      !words ||
+      shownDetail?.item.key !== key
+    ) {
+      old?.remove();
+      return;
+    }
+    const w = lookIntoCard(words, t.name, key);
+    const looking = lookingLine(shownDetail.item.looking);
+    const n = Number(grid.dataset.cards) + 1;
+    const card = h(
       'button',
       {
         type: 'button',
-        class: 'kit-btn cb-look-ask',
+        class:
+          'kit-card edge-agent cb-choice cb-look-card' +
+          (looking ? ' looking' : ''),
+        dataset: { n: String(n) },
+        disabled: !!looking || askingKey === key,
         async onclick() {
-          if (btn.disabled) return;
-          btn.disabled = true;
+          if (card.disabled) return;
+          const wrap = grid.closest<HTMLElement>('.cb-choices-wrap');
+          if (wrap) showChoiceError(wrap, '');
+          askingKey = key;
+          card.disabled = true;
           const why = await ctx.askSession(
-            words.message.replaceAll('{key}', key),
+            w.message,
             { keys: [key] },
             'look-into',
           );
-          btn.disabled = false;
-          if (why) note.textContent = why;
-          else void refreshLooking(key);
+          askingKey = '';
+          if (why) {
+            card.disabled = false;
+            if (wrap) showChoiceError(wrap, why);
+          } else void refreshLooking(key);
         },
       },
-      words.label.replaceAll('{session}', t.name),
+      h('span', { class: 'cb-choice-k' }, String(n)),
+      h('span', { class: 'cb-choice-label' }, w.label),
+      h('span', { class: 'cb-choice-says' }, looking || w.says),
     ) as HTMLButtonElement;
-    cards.after(h('div', { class: 'cb-look' }, btn, note));
+    if (old) old.replaceWith(card);
+    else grid.append(card);
   }
   ctx.onDockTarget(() => renderAsk());
 
@@ -1355,6 +1411,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   function show(sub: string): void {
     // Becoming active: the composer shows Attention's selection or open item.
+    const wasActive = active;
     active = true;
     feedAttached();
     if (sub === 'board') {
@@ -1396,7 +1453,11 @@ export function makeAttention(ctx: Ctx): Section {
       // makeBoard already set filters.view to the card's lane, so reload()
       // will use that view.  Update the chips to reflect it.
       handle.setChips('view', viewChips(filters.view));
-      void openDetail(sub);
+      // A row click opens its item itself, then moves the hash here: the
+      // item is already open (or loading), so it isn't loaded twice. A
+      // different key (back, forward, a pasted link), or coming back from
+      // another section, loads it.
+      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
   }

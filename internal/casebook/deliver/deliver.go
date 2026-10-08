@@ -147,7 +147,7 @@ type Message struct {
 	DeliveryID int64    `json:"delivery_id,omitempty"`
 	ReplyTo    int64    `json:"reply_to,omitempty"`
 	// Purpose is what the page posted the message for: '' for a message
-	// Court wrote, "look-into" for "ask ‹session› to look into it".
+	// Court wrote, "look-into" for "Look into it" (one item or a group).
 	Purpose   string    `json:"purpose,omitempty"`
 	State     string    `json:"state"`
 	CreatedAt time.Time `json:"created_at"`

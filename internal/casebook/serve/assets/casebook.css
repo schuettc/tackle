@@ -247,18 +247,23 @@
 }
 .cb-agree-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
 }
 .cb-agree-says {
   color: var(--kit-agent);
-  flex: 1;
+  flex: 1 1 14em;
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.cb-agree-btn {
+.cb-agree-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   flex-shrink: 0;
+  max-width: 100%;
 }
 .cb-prop-bulk {
   display: flex;
@@ -293,16 +298,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-.cb-look {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 0 0;
-}
-.cb-look-note {
-  font: 12.5px var(--kit-mono);
-  color: var(--kit-muted);
 }
 .cb-rec-fresh {
   margin: -4px 0 12px;
@@ -353,6 +348,27 @@
   font-size: 14px;
   line-height: 1.5;
   color: var(--kit-muted);
+}
+.cb-choice.kit-card.cb-look-card {
+  padding-left: 12px;
+}
+.cb-choice.kit-card.cb-look-card:hover {
+  border-color: var(--kit-line);
+  border-left-color: var(--kit-agent);
+}
+.cb-choice.kit-card.cb-look-card:not(:disabled):hover {
+  background: var(--kit-agent-soft);
+}
+.cb-look-card .cb-choice-k {
+  color: var(--kit-agent);
+}
+.cb-choice.kit-card.cb-look-card:disabled {
+  cursor: default;
+}
+.cb-look-card.looking .cb-choice-says {
+  font: 12.5px var(--kit-mono);
+  line-height: 1.5;
+  color: var(--kit-agent);
 }
 .cb-notnow {
   margin: 10px 0 0;

@@ -121,10 +121,55 @@ func TestLookIntoTextIsInTheVocabulary(t *testing.T) {
 	if c := r.do(t, "GET", "/api/decisions/vocabulary", nil, &v); c != 200 {
 		t.Fatalf("vocabulary %d", c)
 	}
-	if v.LookInto.Label != "ask {session} to look into it" {
+	// The card: its label, and its sentence with the session's name hole.
+	if v.LookInto.Label != "Look into it" {
 		t.Fatalf("label %q", v.LookInto.Label)
+	}
+	says := "{session} checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet."
+	if v.LookInto.Says != says {
+		t.Fatalf("says %q", v.LookInto.Says)
 	}
 	if got := strings.ReplaceAll(v.LookInto.Message, "{key}", "pr:o/r#1"); got != want {
 		t.Fatalf("message %q", v.LookInto.Message)
+	}
+	// The foot's "look into all N": one message, the keys in its hole.
+	keys := "pr:o/r#1, pr:o/r#2"
+	many := "Look into these items: pr:o/r#1, pr:o/r#2. For each, check its CI, recent activity and anything blocking it; if a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose)."
+	if got := strings.ReplaceAll(v.LookInto.MessageMany, "{keys}", keys); got != many {
+		t.Fatalf("message_many %q", v.LookInto.MessageMany)
+	}
+	if got := LookIntoManyText([]string{"pr:o/r#1", "pr:o/r#2"}); got != many {
+		t.Fatalf("LookIntoManyText = %q", got)
+	}
+}
+
+// "look into all N" sends one message with every key attached and the
+// look-into purpose: each of them is looking while it is underway, and an
+// item not attached is not. The same words typed by hand mark none.
+func TestOneLookIntoMarksEveryAttachedKey(t *testing.T) {
+	r := newRig(t)
+	th := r.attach(t, "s1")
+	keys := []string{"issue:schuettc/hail#4", "issue:schuettc/hail#5", "pr:schuettc/hail#3"}
+	var hand message
+	if c := r.do(t, "POST", "/api/messages", map[string]any{"thread": th, "body": LookIntoManyText(keys), "attached": map[string]any{"keys": keys}}, &hand); c != 200 {
+		t.Fatalf("post %d", c)
+	}
+	for _, k := range keys {
+		if d, row := r.lookingOf(t, k); d != nil || row != nil {
+			t.Fatalf("a hand-typed message marked %s: %+v %+v", k, d, row)
+		}
+	}
+	var m message
+	if c := r.do(t, "POST", "/api/messages", map[string]any{"thread": th, "body": LookIntoManyText(keys), "attached": map[string]any{"keys": keys}, "purpose": PurposeLookInto}, &m); c != 200 {
+		t.Fatalf("post %d", c)
+	}
+	for _, k := range keys {
+		d, row := r.lookingOf(t, k)
+		if d == nil || row == nil || d.Message != m.ID || d.Session.ID != "s1" || row.Message != m.ID {
+			t.Fatalf("%s: detail %+v row %+v, want s1 looking (message %d)", k, d, row, m.ID)
+		}
+	}
+	if d, row := r.lookingOf(t, "issue:schuettc/hail#6"); d != nil || row != nil {
+		t.Fatalf("an item not attached is marked: %+v %+v", d, row)
 	}
 }
