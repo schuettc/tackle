@@ -120,7 +120,7 @@ func (e *engine) runScalar(n *yaml.Node, file, what, dir string, env []string) {
 	if n.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
 		first++
 	}
-	c := ctx{dir: dir, env: env, active: map[string]bool{}}
+	c := ctx{dir: dir, env: env, active: map[string]bool{}, setup: &setupAcc{}}
 	e.runText(text, first, func(l int) string { return file + ":" + itoa(l) + " " + what }, c, true)
 }
 

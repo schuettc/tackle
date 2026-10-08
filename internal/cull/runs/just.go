@@ -135,11 +135,13 @@ func (e *engine) callJust(args []string, c *ctx) {
 				vars[p.Name] = s
 			}
 		}
-		e.runRecipe(j, r, vars, c)
+		e.runRecipe(j, r, vars, c, c.setup.fork())
 	}
 }
 
-func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c *ctx) {
+// runRecipe walks a recipe. acc is its setup scope: the commands before it,
+// shared with its dependency recipes, whose commands run first.
+func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c *ctx, acc *setupAcc) {
 	key := "just\x00" + r.Name
 	if c.active[key] {
 		return
@@ -149,8 +151,15 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 	label := "justfile " + r.Name
 	dep := func(d justDep) {
 		if dr, ok := j.Recipes[d.Recipe]; ok {
-			nc := ctx{dir: ".", chain: c.chain, env: c.env, active: c.active}.with(label)
-			e.runRecipe(j, dr, nil, &nc)
+			// A dependency that is itself a check (it emitted one) does not
+			// set up what comes after it; one that only prepares does.
+			sub := acc.fork()
+			nc := ctx{dir: ".", chain: c.chain, env: c.env, active: c.active, setup: sub}.with(label)
+			before := e.emitted
+			e.runRecipe(j, dr, nil, &nc, sub)
+			if e.emitted == before {
+				acc.steps = sub.steps
+			}
 		}
 	}
 	for i, d := range r.Deps {
@@ -163,7 +172,7 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 		lines = append(lines, e.render(j, l, vars))
 	}
 	hop := func(int) string { return label }
-	base := ctx{dir: ".", chain: c.chain, env: c.env, vars: vars, active: c.active}
+	base := ctx{dir: ".", chain: c.chain, env: c.env, vars: vars, active: c.active, setup: acc}
 	if r.Shebang {
 		if len(lines) > 0 {
 			lines = lines[1:] // the #! line

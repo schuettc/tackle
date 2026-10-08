@@ -62,6 +62,18 @@ type CheckResult struct {
 	Summary  string      `json:"summary,omitempty"`
 	Packages []GoPackage `json:"packages,omitempty"`
 	Files    []PyFile    `json:"files,omitempty"`
+	// Setup is the commands run before the check, in order; SetupSeconds is
+	// their total, reported apart from Seconds.
+	Setup        []SetupResult `json:"setup,omitempty"`
+	SetupSeconds float64       `json:"setup_seconds,omitempty"`
+}
+
+// SetupResult is one setup command's run.
+type SetupResult struct {
+	Dir     string   `json:"dir"`
+	Argv    []string `json:"argv"`
+	Seconds float64  `json:"seconds"`
+	Exit    int      `json:"exit"`
 }
 
 // Hint is something the numbers point at.
@@ -130,12 +142,13 @@ func addTimingFlags(kind string, argv []string) []string {
 }
 
 type plan struct {
-	kind string
-	dir  string // root-relative
-	argv []string
-	from []string
-	env  []string // VAR=value prefixes and workflow env of the check
-	raw  bool     // argv is run as given (verify's own commands)
+	kind  string
+	dir   string // root-relative
+	argv  []string
+	from  []string
+	env   []string // VAR=value prefixes and workflow env of the check
+	setup []runs.Step
+	raw   bool // argv is run as given (verify's own commands)
 }
 
 var runnable = map[string]bool{"go": true, "pytest": true, "jest": true, "vitest": true, "node-test": true, "script": true}
@@ -165,7 +178,7 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 			rep.NotRun = append(rep.NotRun, "not run: "+note)
 			continue
 		}
-		plans = append(plans, plan{kind: c.Kind, dir: c.Dir, argv: c.Argv, from: c.From, env: c.Env})
+		plans = append(plans, plan{kind: c.Kind, dir: c.Dir, argv: c.Argv, from: c.From, env: c.Env, setup: c.Setup})
 	}
 	extra, notes, err := uncovered(root, opt.TestCommand, found)
 	if err != nil {
@@ -187,19 +200,30 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 			}
 			break
 		}
-		argv := addTimingFlags(p.kind, p.argv)
-		cenv := checkEnv(env, p.env)
+		absDir := filepath.Join(root, filepath.FromSlash(p.dir))
+		own := resolvePWD(p.env, absDir)
+		argv := addTimingFlags(p.kind, resolvePWD(p.argv, absDir))
+		cenv := checkEnv(env, own)
 		execArgv, note := argv, ""
 		if !p.raw {
-			execArgv, note = shellForm(argv, cenv, p.env)
+			execArgv, note = shellForm(argv, cenv, own)
 		}
 		if note != "" {
 			rep.NotRun = append(rep.NotRun, "not run: "+note+" ("+describe(p)+")")
 			continue
 		}
-		res, out := runOne(ctx, filepath.Join(root, filepath.FromSlash(p.dir)), execArgv, timeout, cenv)
-		cr := CheckResult{Kind: p.kind, Dir: p.dir, Argv: argv, From: p.from, Seconds: res.seconds,
-			Exit: res.exit, OK: res.exit == 0 && !res.timedOut && !res.cancelled, TimedOut: res.timedOut}
+		steps, note := prepareSetup(root, env, p.setup)
+		if note != "" {
+			rep.NotRun = append(rep.NotRun, "not run: "+note+" ("+describe(p)+")")
+			continue
+		}
+		cr := CheckResult{Kind: p.kind, Dir: p.dir, Argv: argv, From: p.from}
+		if failed := runSetup(ctx, steps, timeout, &cr, &rep.OK); failed {
+			rep.Checks = append(rep.Checks, cr)
+			continue
+		}
+		res, out := runOne(ctx, absDir, execArgv, timeout, cenv)
+		cr.Seconds, cr.Exit, cr.OK, cr.TimedOut = res.seconds, res.exit, res.exit == 0 && !res.timedOut && !res.cancelled, res.timedOut
 		if res.cancelled {
 			cr.Tail = "cancelled"
 		}
@@ -258,6 +282,71 @@ func Run(ctx context.Context, opt Options) (*Report, error) {
 		rep.Hints = append(rep.Hints, pythonHints(pyByCheck[i])...)
 	}
 	return rep, nil
+}
+
+var pwdRef = regexp.MustCompile(`\$\{PWD\}|\$PWD\b`)
+
+// resolvePWD replaces $PWD and ${PWD} with dir, the directory the command runs in.
+func resolvePWD(words []string, dir string) []string {
+	out := make([]string, len(words))
+	for i, w := range words {
+		out[i] = pwdRef.ReplaceAllLiteralString(w, dir)
+	}
+	return out
+}
+
+type setupStep struct {
+	rel   string // root-relative dir
+	abs   string
+	shown []string // the command as the project wrote it, $PWD resolved
+	argv  []string // as run
+	env   []string
+}
+
+// prepareSetup makes every setup step ready to run, or says why one cannot
+// (before any of them runs).
+func prepareSetup(root string, base []string, steps []runs.Step) ([]setupStep, string) {
+	var out []setupStep
+	for _, s := range steps {
+		label := strings.Join(s.Argv, " ") + " in " + s.Dir
+		if strings.Contains(s.Dir, "{{") {
+			return nil, "a setup command runs in a directory that is not known statically (setup " + label + ")"
+		}
+		abs := filepath.Join(root, filepath.FromSlash(s.Dir))
+		own := resolvePWD(s.Env, abs)
+		cenv := checkEnv(base, own)
+		shown := resolvePWD(s.Argv, abs)
+		argv, note := shellForm(shown, cenv, own)
+		if note != "" {
+			return nil, "setup command: " + note + " (setup " + label + ")"
+		}
+		out = append(out, setupStep{rel: s.Dir, abs: abs, shown: shown, argv: argv, env: cenv})
+	}
+	return out, ""
+}
+
+// runSetup runs the steps in order, each with its own timeout. It reports
+// true when a step failed (the check is then failed, with that step's tail,
+// and not run).
+func runSetup(ctx context.Context, steps []setupStep, timeout time.Duration, cr *CheckResult, ok *bool) bool {
+	for _, s := range steps {
+		if ctx.Err() != nil {
+			cr.Tail, cr.Exit, *ok = "cancelled", -1, false
+			return true
+		}
+		res, out := runOne(ctx, s.abs, s.argv, timeout, s.env)
+		cr.Setup = append(cr.Setup, SetupResult{Dir: s.rel, Argv: s.shown, Seconds: res.seconds, Exit: res.exit})
+		cr.SetupSeconds += res.seconds
+		if res.exit != 0 || res.timedOut || res.cancelled {
+			cr.Exit, cr.TimedOut, *ok = res.exit, res.timedOut, false
+			cr.Tail = "setup " + strings.Join(s.shown, " ") + " failed:\n" + tailOf(string(out), failTailLines)
+			if res.cancelled {
+				cr.Tail = "cancelled"
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // CullOrigin marks checks cull adds because nothing in CI or hooks runs the tests.
@@ -667,6 +756,9 @@ func WriteText(w io.Writer, r *Report) {
 			if f == CullOrigin {
 				p("  from: %s\n", f)
 			}
+		}
+		if len(c.Setup) > 0 {
+			p("  setup %.1f s (%d commands)\n", c.SetupSeconds, len(c.Setup))
 		}
 		if c.Summary != "" {
 			p("  %s\n", c.Summary)

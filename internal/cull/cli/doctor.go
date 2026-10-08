@@ -192,6 +192,9 @@ func writeChecks(out io.Writer, root string) {
 			argv = string(r[:80])
 		}
 		_, _ = fmt.Fprintf(out, "  %s  %s  %s\n", c.Kind, c.Dir, argv)
+		for _, s := range c.Setup {
+			_, _ = fmt.Fprintf(out, "    setup: %s\n", strings.Join(s.Argv, " "))
+		}
 		if c.Kind == "unknown" && c.Note != "" {
 			_, _ = fmt.Fprintf(out, "    %s\n", c.Note)
 		}

@@ -228,9 +228,12 @@ func (e *engine) runText(text string, first int, hop func(line int) string, c ct
 func (e *engine) runLine(line string, c *ctx) {
 	var words []string
 	var stack []string
-	flush := func() {
+	prev := ""
+	flush := func(next string) {
 		if len(words) > 0 {
+			c.noSetup = prev == "||" || prev == "|" || next == "|" || next == "&" || next == "||"
 			e.command(words, c)
+			c.noSetup = false
 			words = nil
 		}
 	}
@@ -238,20 +241,22 @@ func (e *engine) runLine(line string, c *ctx) {
 		switch t.op {
 		case "":
 			words = append(words, t.word)
+			continue
 		case "(":
-			flush()
+			flush(t.op)
 			stack = append(stack, c.dir)
 		case ")":
-			flush()
+			flush(t.op)
 			if n := len(stack); n > 0 {
 				c.dir = stack[n-1]
 				stack = stack[:n-1]
 			}
 		default:
-			flush()
+			flush(t.op)
 		}
+		prev = t.op
 	}
-	flush()
+	flush("")
 }
 
 var shellKeywords = map[string]bool{
@@ -302,7 +307,19 @@ func (e *engine) command(words []string, c *ctx) {
 	}
 	lc := *c
 	lc.env = mergeEnv(c.env, prefix)
+	before := e.emitted
 	e.classify(words, words, &lc)
+	if e.emitted == before && c.setup != nil && !c.noSetup && !nonSetup[path.Base(words[0])] {
+		c.setup.steps = append(c.setup.steps, Step{Dir: c.dir, Argv: append([]string(nil), words...), Env: append([]string(nil), lc.env...), From: strings.Join(c.chain, " > ")})
+	}
+}
+
+// nonSetup are shell builtins and tests that are never a setup step.
+var nonSetup = map[string]bool{
+	"[": true, "[[": true, "]": true, "]]": true, "}": true, "test": true, ":": true, "true": true, "false": true,
+	"echo": true, "printf": true, "set": true, "export": true, "unset": true, "trap": true, "source": true, ".": true,
+	"exit": true, "return": true, "read": true, "wait": true, "eval": true, "alias": true, "shopt": true,
+	"declare": true, "local": true, "readonly": true, "umask": true, "ulimit": true, "pwd": true,
 }
 
 // mergeEnv returns base with extra applied on top (a later VAR replaces an earlier one).
@@ -528,7 +545,7 @@ func (e *engine) shell(argv, words []string, c *ctx) {
 	for i := 1; i < len(words); i++ {
 		w := words[i]
 		if shellDashC.MatchString(w) && i+1 < len(words) {
-			e.runText(words[i+1], 1, func(int) string { return last(c.chain) }, ctx{dir: c.dir, chain: c.chain[:len(c.chain)-1], env: c.env, vars: c.vars, active: c.active}, false)
+			e.runText(words[i+1], 1, func(int) string { return last(c.chain) }, ctx{dir: c.dir, chain: c.chain[:len(c.chain)-1], env: c.env, vars: c.vars, active: c.active, setup: c.setup.fork()}, false)
 			return
 		}
 		if w == "-o" || w == "+o" {

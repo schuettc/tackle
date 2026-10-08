@@ -172,7 +172,7 @@ func (e *engine) runScript(argv []string, name string, c *ctx) {
 		c.active[key] = true
 		label := path.Join(p.dir, "package.json")
 		hop := label + " " + n
-		sc := ctx{dir: p.dir, chain: c.chain, env: c.env, vars: nil, active: c.active}
+		sc := ctx{dir: p.dir, chain: c.chain, env: c.env, vars: nil, active: c.active, setup: c.setup.fork()}
 		e.runText(body, 1, func(int) string { return hop }, sc, false)
 		delete(c.active, key)
 	}

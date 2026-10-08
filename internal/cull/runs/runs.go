@@ -26,6 +26,27 @@ type Check struct {
 	// Env is the VAR=value pairs the command runs with: its own prefixes
 	// (KIT_BROWSER=required go test ...) and plain-string workflow env values.
 	Env []string `json:"env,omitempty"`
+	// Setup is the commands that come before the check in the same recipe
+	// body (after its dependency recipes), run step or hook command, in order.
+	Setup []Step `json:"setup,omitempty"`
+}
+
+// Step is one setup command: where it runs, what, and with which variables.
+type Step struct {
+	Dir  string   `json:"dir"`
+	Argv []string `json:"argv"`
+	Env  []string `json:"env,omitempty"`
+	From string   `json:"from,omitempty"`
+}
+
+// setupAcc collects the setup commands seen so far in one scope.
+type setupAcc struct{ steps []Step }
+
+func (a *setupAcc) fork() *setupAcc {
+	if a == nil {
+		return &setupAcc{}
+	}
+	return &setupAcc{steps: append([]Step(nil), a.steps...)}
 }
 
 // Find reads root's entry points and returns the checks they run, merged: the
@@ -53,6 +74,9 @@ type engine struct {
 	just   *justInfo
 	justOK bool // load attempted
 	justEr string
+	// emitted counts emit calls, so a command that produced a check can be told
+	// from one that did not.
+	emitted int
 }
 
 // ctx is the state while one shell text is walked.
@@ -62,6 +86,10 @@ type ctx struct {
 	env    []string          // VAR=value pairs in force (workflow env:, command prefixes)
 	vars   map[string]string // just parameters bound by the caller
 	active map[string]bool   // recipes and scripts being followed (loop guard)
+	setup  *setupAcc         // commands before this point in the scope (nil: not tracked)
+	// noSetup: the command being walked is conditional or part of a pipeline
+	// or background job, so it is not a setup step.
+	noSetup bool
 }
 
 func (c ctx) with(hop string) ctx {
@@ -76,6 +104,7 @@ func (e *engine) exists(rel string) bool {
 }
 
 func (e *engine) emit(c ctx, kind string, argv []string, files []string, note string) {
+	e.emitted++
 	dir := c.dir
 	if strings.Contains(dir, "{{") || hasExpr(argv) || hasExpr(c.env) {
 		if kind != "unknown" {
@@ -102,7 +131,11 @@ func (e *engine) emit(c ctx, kind string, argv []string, files []string, note st
 		return
 	}
 	e.index[key] = len(e.checks)
-	e.checks = append(e.checks, Check{Kind: kind, Dir: dir, Argv: argv, Files: files, From: []string{from}, Note: note, Env: append([]string(nil), c.env...)})
+	var setup []Step
+	if c.setup != nil && kind != "unknown" {
+		setup = append(setup, c.setup.steps...)
+	}
+	e.checks = append(e.checks, Check{Setup: setup, Kind: kind, Dir: dir, Argv: argv, Files: files, From: []string{from}, Note: note, Env: append([]string(nil), c.env...)})
 }
 
 func hasExpr(argv []string) bool {

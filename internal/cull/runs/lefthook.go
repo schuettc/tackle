@@ -62,6 +62,6 @@ func (e *engine) hookJob(file, hook, name string, job *yaml.Node) {
 	if run.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
 		first++
 	}
-	c := ctx{dir: dir, active: map[string]bool{}}
+	c := ctx{dir: dir, active: map[string]bool{}, setup: &setupAcc{}}
 	e.runText(run.Value, first, func(int) string { return hop }, c, true)
 }
