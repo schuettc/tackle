@@ -68,14 +68,36 @@ func (e *engine) loadJust() *justInfo {
 	return e.just
 }
 
+var justNoRun = map[string]bool{
+	"--list": true, "-l": true, "--fmt": true, "--summary": true, "--evaluate": true, "--show": true, "-s": true,
+	"--choose": true, "--dump": true, "--init": true, "--edit": true, "-e": true, "--completions": true,
+	"--variables": true, "--groups": true, "--changelog": true, "--man": true,
+}
+
 // callJust follows `just [flags] recipe [args] [recipe ...]`.
 func (e *engine) callJust(args []string, c *ctx) {
 	var names []string
-	for _, a := range args {
+	flags := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if strings.HasPrefix(a, "-") {
+			flags = true
+			if justNoRun[a] {
+				return // lists, formats or shows; runs no recipe
+			}
+			switch a {
+			case "-f", "--justfile", "-d", "--working-directory", "--set":
+				i++
+				if a == "--set" {
+					i++
+				}
+			}
 			continue
 		}
 		names = append(names, a)
+	}
+	if len(names) == 0 && flags {
+		return // flags and no recipe: not the default recipe
 	}
 	j := e.loadJust()
 	if len(names) == 0 {

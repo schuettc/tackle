@@ -91,9 +91,9 @@ func (e *engine) workflow(rel string, root *yaml.Node) {
 			if run == nil || run.Kind != yaml.ScalarNode {
 				continue
 			}
-			switch scalar(get(st, "shell")) {
-			case "", "bash", "sh", "zsh":
-			default:
+			if sh, _, _ := strings.Cut(strings.TrimSpace(scalar(get(st, "shell"))), " "); sh != "" && sh != "bash" && sh != "sh" && sh != "zsh" {
+				c := ctx{dir: dir, chain: []string{rel + ":" + itoa(run.Line) + " run"}}
+				e.emit(c, "unknown", []string{"shell", sh}, nil, "shell "+sh+" not read")
 				continue
 			}
 			e.runScalar(run, rel, "run", dir)

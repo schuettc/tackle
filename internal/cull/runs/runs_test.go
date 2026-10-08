@@ -368,8 +368,11 @@ func TestNpmForms(t *testing.T) {
 	if c := pick(t, got, "vitest", "npx vitest run src"); c.Dir != "front" {
 		t.Errorf("vitest dir = %q", c.Dir)
 	}
-	if len(got) != 3 {
-		t.Errorf("want 3 checks, got %+v", got)
+	if m := pick(t, got, "unknown", "npm run missing"); !strings.Contains(m.Note, "missing") {
+		t.Errorf("a script that is not there is listed, not dropped: %+v", m)
+	}
+	if len(got) != 4 {
+		t.Errorf("want 4 checks, got %+v", got)
 	}
 }
 

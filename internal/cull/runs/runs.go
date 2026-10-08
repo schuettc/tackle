@@ -77,6 +77,9 @@ func (e *engine) emit(c ctx, kind string, argv []string, files []string, note st
 		if kind != "unknown" {
 			note = "the directory or arguments hold a variable or expression that is not known statically"
 		}
+		if dir == outsideDir {
+			note = "outside the project: not read"
+		}
 		kind = "unknown"
 		files = nil
 		if strings.Contains(dir, "{{") {
@@ -107,4 +110,16 @@ func hasExpr(argv []string) bool {
 	return false
 }
 
-func join(dir, rel string) string { return path.Clean(path.Join(dir, rel)) }
+// outsideDir stands for a directory above the project root.
+const outsideDir = "{{outside the project}}"
+
+func join(dir, rel string) string {
+	if strings.Contains(dir, "{{") {
+		return dir
+	}
+	p := path.Clean(path.Join(dir, rel))
+	if p == ".." || strings.HasPrefix(p, "../") {
+		return outsideDir
+	}
+	return p
+}

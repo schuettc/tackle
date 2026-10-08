@@ -101,40 +101,110 @@ func tokenize(line string) []tok {
 
 var (
 	envWord    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-	redirAlone = regexp.MustCompile(`^\d*(>>?|<|&>)$`)
+	redirAlone = regexp.MustCompile(`^\d*(>>?|<{1,3}-?|&>)$`)
 	redirWith  = regexp.MustCompile(`^(\d*(>>?|<)&?\S+|&>\S+)$`)
 )
 
-// joinContinuations folds backslash-newline pairs, returning each logical line
-// with the (first) physical line it starts on.
 type srcLine struct {
 	no   int
 	text string
 }
 
-func logicalLines(text string, first int) []srcLine {
-	var out []srcLine
-	var cur strings.Builder
-	start := 0
-	for i, l := range strings.Split(text, "\n") {
-		l = strings.TrimRight(l, "\r")
-		if cur.Len() == 0 {
-			start = first + i
-		}
-		if strings.HasSuffix(l, "\\") {
-			cur.WriteString(strings.TrimSuffix(l, "\\"))
-			cur.WriteString(" ")
+// scanShell reports whether s ends inside an open quote, and the delimiters of
+// any heredocs (<<EOF, <<-EOF, <<'EOF') it starts.
+func scanShell(s string) (open bool, heredocs []string) {
+	r := []rune(s)
+	var q rune
+	for i := 0; i < len(r); i++ {
+		c := r[i]
+		if q != 0 {
+			if q == '"' && c == '\\' {
+				i++
+			} else if c == q {
+				q = 0
+			}
 			continue
 		}
-		cur.WriteString(l)
-		t := strings.TrimSpace(cur.String())
-		cur.Reset()
-		if t != "" && !strings.HasPrefix(t, "#") {
-			out = append(out, srcLine{start, t})
+		switch {
+		case c == '\\':
+			i++
+		case c == '\'' || c == '"':
+			q = c
+		case c == '#' && (i == 0 || strings.ContainsRune(" \t;|&(", r[i-1])):
+			return false, heredocs
+		case c == '<' && i+1 < len(r) && r[i+1] == '<':
+			if i+2 < len(r) && r[i+2] == '<' {
+				i += 2
+				continue
+			}
+			j := i + 2
+			if j < len(r) && r[j] == '-' {
+				j++
+			}
+			for j < len(r) && (r[j] == ' ' || r[j] == '\t') {
+				j++
+			}
+			var quote rune
+			if j < len(r) && (r[j] == '\'' || r[j] == '"') {
+				quote = r[j]
+				j++
+			}
+			k := j
+			for k < len(r) && !strings.ContainsRune(" \t;&|<>()'\"", r[k]) {
+				k++
+			}
+			if k > j && (quote != 0 || r[j] == '_' || r[j] >= 'A' && r[j] <= 'Z' || r[j] >= 'a' && r[j] <= 'z') {
+				heredocs = append(heredocs, string(r[j:k]))
+				if quote != 0 && k < len(r) && r[k] == quote {
+					k++
+				}
+				i = k - 1
+			} else {
+				i++
+			}
 		}
 	}
-	if s := strings.TrimSpace(cur.String()); s != "" {
-		out = append(out, srcLine{start, s})
+	return q != 0, heredocs
+}
+
+// logicalLines folds backslash-newline pairs and quoted strings that span lines
+// into one line, and drops heredoc bodies. Each line carries the physical line
+// it starts on.
+func logicalLines(text string, first int) []srcLine {
+	var out []srcLine
+	var pending []string
+	lines := strings.Split(text, "\n")
+	for i := 0; i < len(lines); i++ {
+		l := strings.TrimRight(lines[i], "\r")
+		if len(pending) > 0 {
+			if strings.TrimSpace(l) == pending[0] {
+				pending = pending[1:]
+			}
+			continue
+		}
+		start := first + i
+		cur := l
+		for i+1 < len(lines) {
+			if strings.HasSuffix(cur, "\\") {
+				i++
+				cur = strings.TrimSuffix(cur, "\\") + " " + strings.TrimRight(lines[i], "\r")
+				continue
+			}
+			if open, _ := scanShell(cur); open {
+				i++
+				cur += "\n" + strings.TrimRight(lines[i], "\r")
+				continue
+			}
+			break
+		}
+		cur = strings.TrimSuffix(cur, "\\")
+		t := strings.TrimSpace(cur)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		_, hd := scanShell(t)
+		pending = append(pending, hd...)
+		out = append(out, srcLine{start, t})
 	}
 	return out
 }
@@ -186,7 +256,7 @@ func (e *engine) runLine(line string, c *ctx) {
 
 var shellKeywords = map[string]bool{
 	"if": true, "then": true, "else": true, "elif": true, "do": true, "while": true, "until": true,
-	"!": true, "{": true, "time": true, "exec": true, "command": true,
+	"!": true, "{": true, "exec": true, "command": true,
 }
 
 // clean drops redirections.
@@ -248,6 +318,9 @@ func (e *engine) classify(argv, words []string, c *ctx) {
 		}
 		e.classify(argv, rest, c)
 		return
+	case wrappers[base] != nil:
+		e.classify(argv, peel(base, words[1:]), c)
+		return
 	case (base == "uv" || base == "poetry" || base == "pipenv" || base == "pdm") && len(words) > 2 && words[1] == "run":
 		rest := words[2:]
 		for len(rest) > 0 && wrapperSkipFlag.MatchString(rest[0]) {
@@ -290,7 +363,7 @@ func (e *engine) classify(argv, words []string, c *ctx) {
 		e.shell(argv, words, c)
 		return
 	case base == "make" || base == "gmake" || base == "task" || base == "mage":
-		if !exempt(strings.Join(words[1:], " ")) {
+		if !targetsExempt(words[1:]) {
 			e.emit(*c, "unknown", argv, nil, base+" target: what it runs is not read")
 		}
 		return
@@ -308,7 +381,92 @@ func (e *engine) classify(argv, words []string, c *ctx) {
 
 var exemptWord = regexp.MustCompile(`(?i)lock|export|lint|fmt|format|build|deploy|install|setup|release|publish|clean|migrate|docker|package|bump`)
 
-func exempt(s string) bool { return exemptWord.MatchString(s) }
+var testWords = map[string]bool{"test": true, "tests": true, "spec": true, "e2e": true, "check": true, "verify": true, "ci": true}
+
+var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]+`)
+
+// hasTestWord: some token of s is a test word (test, spec, e2e, check, ...).
+func hasTestWord(s string) bool {
+	for _, t := range nonAlnum.Split(strings.ToLower(s), -1) {
+		if testWords[t] {
+			return true
+		}
+	}
+	return false
+}
+
+// exempt: s names something that builds, installs or lints, and never a test.
+func exempt(s string) bool { return exemptWord.MatchString(s) && !hasTestWord(s) }
+
+// targetsExempt judges each make/task target on its own; no target is the
+// default target, which is not exempt.
+func targetsExempt(args []string) bool {
+	n := 0
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			switch a {
+			case "-C", "-f", "-I", "-o", "-W", "--directory", "--file", "--taskfile", "-d", "-t":
+				i++
+			}
+			continue
+		}
+		if strings.Contains(a, "=") {
+			continue
+		}
+		n++
+		if !exempt(a) {
+			return false
+		}
+	}
+	return n > 0
+}
+
+// wrappers are commands that run another command: name -> flags that take a value.
+var wrappers = map[string]map[string]bool{
+	"env":       {"-u": true, "--unset": true, "-C": true, "--chdir": true, "-S": true},
+	"timeout":   {"-s": true, "--signal": true, "-k": true, "--kill-after": true},
+	"cross-env": {},
+	"xvfb-run":  {"-e": true, "--error-file": true, "-f": true, "--auth-file": true, "-n": true, "--server-num": true, "-s": true, "--server-args": true, "-w": true, "--wait": true},
+	"dotenv":    {"-e": true, "-v": true, "-f": true},
+	"c8": {"-r": true, "--reporter": true, "-x": true, "--exclude": true, "-n": true, "--include": true, "--reports-dir": true,
+		"--temp-directory": true, "-o": true, "--lines": true, "--functions": true, "--branches": true, "--statements": true, "--config": true},
+	"nyc": {"-r": true, "--reporter": true, "-x": true, "--exclude": true, "-n": true, "--include": true, "--report-dir": true,
+		"--temp-dir": true, "-t": true, "--lines": true, "--functions": true, "--branches": true, "--statements": true, "--cwd": true, "--nycrc-path": true},
+	"nice": {"-n": true, "--adjustment": true},
+	"time": {"-f": true, "--format": true, "-o": true, "--output": true},
+	"sudo": {"-u": true, "-g": true, "-h": true, "-p": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true},
+}
+
+// peel drops a wrapper's own flags, variables and arguments, leaving the
+// command it runs (the same slice length as words when there is none).
+func peel(name string, words []string) []string {
+	vf := wrappers[name]
+	i := 0
+	for i < len(words) {
+		w := words[i]
+		switch {
+		case w == "--":
+			i++
+			if name == "dotenv" || name == "env" || name == "sudo" {
+				return words[i:]
+			}
+		case strings.HasPrefix(w, "-") && len(w) > 1:
+			if vf[w] {
+				i++
+			}
+			i++
+		case envWord.MatchString(w) && (name == "env" || name == "cross-env"):
+			i++
+		default:
+			if name == "timeout" {
+				return words[i+1:] // the duration
+			}
+			return words[i:]
+		}
+	}
+	return nil
+}
 
 // otherRunner: test commands of other ecosystems, listed as not understood.
 func otherRunner(w []string) bool {
@@ -326,21 +484,31 @@ func otherRunner(w []string) bool {
 				return true
 			}
 		}
-	case "rspec", "phpunit", "mocha", "ava", "tap", "playwright", "cypress":
+	case "rspec", "phpunit", "mocha", "ava", "tap":
 		return true
+	case "playwright":
+		return arg(1) == "test"
+	case "cypress":
+		return arg(1) == "run"
 	case "bundle":
 		return arg(1) == "exec" && arg(2) == "rspec"
 	}
 	return false
 }
 
+var shellDashC = regexp.MustCompile(`^-[A-Za-z]*c[A-Za-z]*$`)
+
 // shell: `bash -c "..."` is read; `bash file` is a script.
 func (e *engine) shell(argv, words []string, c *ctx) {
 	for i := 1; i < len(words); i++ {
 		w := words[i]
-		if w == "-c" && i+1 < len(words) {
+		if shellDashC.MatchString(w) && i+1 < len(words) {
 			e.runText(words[i+1], 1, func(int) string { return last(c.chain) }, ctx{dir: c.dir, chain: c.chain[:len(c.chain)-1], vars: c.vars, active: c.active}, false)
 			return
+		}
+		if w == "-o" || w == "+o" {
+			i++
+			continue
 		}
 		if strings.HasPrefix(w, "-") {
 			continue
@@ -388,6 +556,14 @@ func (e *engine) node(argv, words []string, c *ctx) {
 			return // a tool binary run through node, not a project script
 		}
 		entry := join(c.dir, w)
+		if strings.HasPrefix(w, "/") || entry == outsideDir {
+			e.emit(ctx{dir: outsideDir, chain: c.chain}, "unknown", argv, nil, "")
+			return
+		}
+		if strings.Contains(entry, "{{") {
+			e.emit(*c, "script", argv, nil, "")
+			return
+		}
 		e.emit(*c, "script", argv, e.localImports(entry), "")
 		return
 	}
