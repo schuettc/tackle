@@ -189,7 +189,7 @@ ALTER TABLE sessions ADD COLUMN ended_at INTEGER NOT NULL DEFAULT 0;
 `
 
 // schemaV4 gives a message the purpose the page posted it with: ” for a
-// message Court wrote, "look-into" for "ask ‹session› to look into it"
+// message Court wrote, "look-into" for "Look into it" (one item or a group)
 // (serve shows the item as being looked into from it, never from words).
 const schemaV4 = `
 ALTER TABLE messages ADD COLUMN purpose TEXT NOT NULL DEFAULT '';

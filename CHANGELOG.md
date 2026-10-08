@@ -4,6 +4,35 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.4.6] - 2026-10-07
+
+### Changed
+- "Look into it" is a card now, not a button under the cards: the last
+  card in the grid, numbered after the decisions (6 on a pull request, 5
+  on an issue), laid out like the others. It reads "‹session› checks its
+  CI and recent activity, finds what's wrong, and comes back with a
+  recommendation. Nothing is decided yet." It is the agent's, not a
+  decision: an amber left edge and number line, like the recommendation
+  card. Its number key picks it. It sends the same message as the button
+  did, and decides nothing. While the session is looking, the card says
+  "‹session› is looking into it" instead and can't be clicked. With no
+  session attached it isn't there. The decision vocabulary's `look_into`
+  carries the card's `label` ("Look into it") and its sentence (`says`,
+  with a `{session}` hole) in place of the button's label.
+- The agent's guide (`casebook_next`) says to look into an item blocked by
+  something it can check, such as a failing CI check, with gh before
+  recommending, to record what it finds with `casebook_evidence`, and not
+  to recommend leaving an item open just because someone needs to look.
+
+### Added
+- "ask ‹session› to look into all N" beside each "agree with all N" in the
+  list foot, when a session is attached. It sends that session one
+  message naming the group's items, with all of them attached and
+  `purpose: "look-into"` (the vocabulary's new `look_into.message_many`,
+  with a `{keys}` hole). Every row of the group says "‹session› is looking
+  into it" until the message settles; serve already marks every item a
+  look-into message names.
+
 ## [casebook 0.4.5] - 2026-10-07
 
 ### Fixed

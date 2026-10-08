@@ -6,7 +6,12 @@
 //   allowedForKind — look up allowed dispositions for one kind from server vocab
 //   allowedForKeys — intersect allowed sets for a mixed-kind selection
 
-import type { ChoiceVocab, DecisionVocabView, NotNowForm } from './wire.d.ts';
+import type {
+  ChoiceVocab,
+  DecisionVocabView,
+  LookIntoVocab,
+  NotNowForm,
+} from './wire.d.ts';
 
 /**
  * kindFromKey extracts the kind from a key by taking the prefix before the
@@ -339,6 +344,39 @@ export function agreeText(g: AgreeGroup): { says: string; action: string } {
   return {
     says: `${g.agent} recommends ${g.label} for ${n}`,
     action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`,
+  };
+}
+
+/**
+ * lookIntoCard is the open item's "Look into it" card, in serve's words
+ * (the vocabulary's look_into): its label, its sentence with the session
+ * named, and the message it sends about key.
+ */
+export function lookIntoCard(
+  words: LookIntoVocab,
+  session: string,
+  key: string,
+): { label: string; says: string; message: string } {
+  return {
+    label: words.label,
+    says: words.says.replaceAll('{session}', session),
+    message: words.message.replaceAll('{key}', key),
+  };
+}
+
+/**
+ * lookIntoAll is the list foot's "ask ‹session› to look into all N" for a
+ * group's keys: the action, and the one message (serve's message_many)
+ * naming them all, joined with ", " as serve joins them.
+ */
+export function lookIntoAll(
+  words: LookIntoVocab,
+  session: string,
+  keys: string[],
+): { action: string; message: string } {
+  return {
+    action: `ask ${session} to look into all ${keys.length}`,
+    message: words.message_many.replaceAll('{keys}', keys.join(', ')),
   };
 }
 

@@ -7,12 +7,16 @@ import (
 	"github.com/schuettc/tackle/internal/casebook/deliver"
 )
 
-// The words of "ask ‹session› to look into it", serve's alone: the
-// decision vocabulary hands them to the page (LookIntoVocab), which fills
-// the holes in.
+// The words of "Look into it", serve's alone: the decision vocabulary
+// hands them to the page (LookIntoVocab), which fills the holes in. The
+// open item's last card is lookIntoLabel and lookIntoSays; it sends
+// lookIntoMessage. The list foot's "look into all N" sends
+// lookIntoMessageMany, one message for the group.
 const (
-	lookIntoLabel   = "ask {session} to look into it"
-	lookIntoMessage = "Look into {key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose)."
+	lookIntoLabel       = "Look into it"
+	lookIntoSays        = "{session} checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet."
+	lookIntoMessage     = "Look into {key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose)."
+	lookIntoMessageMany = "Look into these items: {keys}. For each, check its CI, recent activity and anything blocking it; if a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose)."
 )
 
 // PurposeLookInto is the purpose the page posts the ask with
@@ -26,12 +30,21 @@ func LookIntoText(key string) string {
 	return strings.ReplaceAll(lookIntoMessage, "{key}", key)
 }
 
-// LookIntoVocab is the ask's words in the decision vocabulary: the
-// button's label ({session}: the session's name) and the message ({key}:
-// the item's key).
+// LookIntoManyText is the ask's message about several items, their keys
+// joined with ", " (the page joins them the same way).
+func LookIntoManyText(keys []string) string {
+	return strings.ReplaceAll(lookIntoMessageMany, "{keys}", strings.Join(keys, ", "))
+}
+
+// LookIntoVocab is the ask's words in the decision vocabulary: the card's
+// label and sentence ({session}: the session's name), the message for one
+// item ({key}: its key) and for several ({keys}: their keys, joined with
+// ", ").
 type LookIntoVocab struct {
-	Label   string `json:"label"`
-	Message string `json:"message"`
+	Label       string `json:"label"`
+	Says        string `json:"says"`
+	Message     string `json:"message"`
+	MessageMany string `json:"message_many"`
 }
 
 // Looking says a session is looking into an item: Court asked it to (the

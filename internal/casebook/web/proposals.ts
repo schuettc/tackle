@@ -12,6 +12,7 @@ import type {
   AcceptResult,
   DecideResult,
   ItemDetailView,
+  LookIntoVocab,
   RejectResult,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
@@ -19,6 +20,7 @@ import { openDecideSheet } from './decide.ts';
 import {
   agentFromSource,
   agreeText,
+  lookIntoAll,
   pluralize,
   type AgreeGroup,
 } from './decide-math.ts';
@@ -298,7 +300,15 @@ export function bulkProposalActions(
 /** Handle returned by agreeWithAll; call update() when the rows change. */
 export interface AgreeWithAll {
   el: HTMLElement;
-  update(groups: AgreeGroup[]): void;
+  update(groups: AgreeGroup[], look?: LookAll | null): void;
+}
+
+/** What "look into all N" needs: the attached session's name, serve's
+ * words, and the keys a session is looking into already. */
+export interface LookAll {
+  session: string;
+  words: LookIntoVocab;
+  looking: (key: string) => boolean;
 }
 
 /**
@@ -308,13 +318,19 @@ export interface AgreeWithAll {
  * with all n"; an outward choice reads "send all n to To apply", since
  * accepting it only puts it in To apply). onAgree does the accepting; the
  * button is disabled while it runs.
+ *
+ * With a session attached (look), each group also offers "ask ‹session›
+ * to look into all n": onLook sends that session one message naming the
+ * group's keys (serve's message_many). It is disabled while it runs, and
+ * while every row of the group is being looked into already.
  */
 export function agreeWithAll(
   onAgree: (g: AgreeGroup) => Promise<void>,
+  onLook: (g: AgreeGroup, message: string) => Promise<void>,
 ): AgreeWithAll {
   const el = h('div', { class: 'cb-agree', hidden: true });
 
-  function update(groups: AgreeGroup[]): void {
+  function update(groups: AgreeGroup[], look?: LookAll | null): void {
     el.replaceChildren(
       ...groups.map((g) => {
         const t = agreeText(g);
@@ -332,6 +348,27 @@ export function agreeWithAll(
           },
           t.action,
         ) as HTMLButtonElement;
+        let lookBtn: HTMLButtonElement | null = null;
+        if (look) {
+          const w = lookIntoAll(look.words, look.session, g.keys);
+          const all = g.keys.every((k) => look.looking(k));
+          lookBtn = h(
+            'button',
+            {
+              class: 'kit-btn cb-agree-look',
+              type: 'button',
+              disabled: all,
+              onclick() {
+                if (lookBtn!.disabled) return;
+                lookBtn!.disabled = true;
+                void onLook(g, w.message).finally(() => {
+                  lookBtn!.disabled = false;
+                });
+              },
+            },
+            w.action,
+          ) as HTMLButtonElement;
+        }
         return h(
           'div',
           {
@@ -340,7 +377,7 @@ export function agreeWithAll(
             'data-ids': g.ids.join(' '),
           },
           h('span', { class: 'cb-agree-says' }, t.says),
-          btn,
+          h('span', { class: 'cb-agree-acts' }, btn, lookBtn),
         );
       }),
     );

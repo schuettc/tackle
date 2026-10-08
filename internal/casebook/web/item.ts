@@ -140,6 +140,8 @@ export interface ItemHooks {
   decide?: (disposition: string, until?: string, note?: string) => void;
   /** The recommendation's accept (the card's button, like the a key). */
   accept?: () => void;
+  /** The decision cards are in place: attention adds "Look into it". */
+  cardsReady?: () => void;
 }
 
 // renderDecideSection is the decide step: serve's question for the kind,
@@ -153,7 +155,7 @@ function renderDecideSection(
   const section = h('section', { class: 'cb-decide' });
   const question = h('h2', { class: 'cb-question' });
   // "‹session› is looking into it": Court asked the session to (attention
-  // keeps it current, and offers the ask, under the cards).
+  // keeps it current, and offers the ask as the last card).
   const looking = lookingLine(it.looking);
   const lookingEl = h('p', { class: 'cb-looking', hidden: !looking }, looking);
   const recSlot = h('div', { class: 'cb-rec-slot' });
@@ -165,6 +167,9 @@ function renderDecideSection(
     note: it.decision?.note,
     onPick(d, until, note) {
       hooks.decide?.(d, until, note);
+    },
+    onCards() {
+      hooks.cardsReady?.();
     },
   });
   section.append(question, lookingEl, recSlot, cards);

@@ -490,7 +490,9 @@ export interface UntilForm {
 
 export interface LookIntoVocab {
   label: string;
+  says: string;
   message: string;
+  message_many: string;
 }
 
 export interface NeedsYou {

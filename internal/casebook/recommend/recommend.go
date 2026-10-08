@@ -25,6 +25,7 @@ const fixed = `Recommend one choice for this item, with a one-line reason the us
 - Read the evidence and history first. Recommend from what they show, not from the title alone.
 - When asked to look into an item, read its CI and recent activity with gh, record what you find with casebook_evidence, then recommend.
 - Leave it (keep) when it still needs a person: a human reviewer is waiting, the work is active, or you can't tell.
+- If an item is blocked by something you can check, such as a failing CI check, look into it with gh before recommending, and record what you find with casebook_evidence. Don't recommend leaving it open just because someone needs to look.
 - A bot's PR (dependency or release automation) that is superseded by a newer one, or failing with no recent activity, can close.
 - A branch whose commits are all on the default branch or a merged PR, with nothing unpushed, can be deleted. A branch with unpushed or unmerged commits is kept.
 - A worktree with no uncommitted changes whose branch has landed can be removed.

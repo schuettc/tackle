@@ -357,22 +357,30 @@
   font: 12.5px var(--kit-mono);
 }
 
+/* The says and the actions share a line when they fit; else the actions
+ * (agree, then with a session attached look into all) wrap under it,
+ * together. */
 .cb-agree-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
 }
 
 .cb-agree-says {
   color: var(--kit-agent);
-  flex: 1;
+  flex: 1 1 14em;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-.cb-agree-btn {
+.cb-agree-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   flex-shrink: 0;
+  max-width: 100%;
 }
 
 /* Bulk proposal buttons in the proposed view foot: keep on one line. */
@@ -422,19 +430,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* "ask ‹session› to look into it", under the open item's cards. */
-.cb-look {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 14px 0 0;
-}
-
-.cb-look-note {
-  font: 12.5px var(--kit-mono);
-  color: var(--kit-muted);
 }
 
 /* A recommendation that came while Court was mid-input on the open item:
@@ -502,6 +497,38 @@
   font-size: 14px;
   line-height: 1.5;
   color: var(--kit-muted);
+}
+
+/* "Look into it", the last card: the agent's, not a decision. The kit's
+   amber left edge (edge-agent, as the recommendation card) and an amber
+   number line, never the signal border; the same size as its neighbours
+   (the 3px edge takes 2px of the padding). While a session looks, it says
+   so and can't be clicked. */
+.cb-choice.kit-card.cb-look-card {
+  padding-left: 12px;
+}
+
+.cb-choice.kit-card.cb-look-card:hover {
+  border-color: var(--kit-line);
+  border-left-color: var(--kit-agent);
+}
+
+.cb-choice.kit-card.cb-look-card:not(:disabled):hover {
+  background: var(--kit-agent-soft);
+}
+
+.cb-look-card .cb-choice-k {
+  color: var(--kit-agent);
+}
+
+.cb-choice.kit-card.cb-look-card:disabled {
+  cursor: default;
+}
+
+.cb-look-card.looking .cb-choice-says {
+  font: 12.5px var(--kit-mono);
+  line-height: 1.5;
+  color: var(--kit-agent);
 }
 
 /* Not now's conditions, under the cards. */

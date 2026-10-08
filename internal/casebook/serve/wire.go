@@ -366,7 +366,8 @@ type DecisionVocabView struct {
 	UntilForms []UntilForm `json:"until_forms"`
 	// NotNow is Not now's conditions, in the order the page offers them.
 	NotNow []NotNowForm `json:"not_now"`
-	// LookInto is "ask ‹session› to look into it": its label and message.
+	// LookInto is "Look into it": the card's label and sentence, and the
+	// messages it and "look into all N" send.
 	LookInto LookIntoVocab `json:"look_into"`
 }
 

@@ -650,6 +650,19 @@ function agreeText(g) {
     action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`
   };
 }
+function lookIntoCard(words, session, key) {
+  return {
+    label: words.label,
+    says: words.says.replaceAll("{session}", session),
+    message: words.message.replaceAll("{key}", key)
+  };
+}
+function lookIntoAll(words, session, keys) {
+  return {
+    action: `ask ${session} to look into all ${keys.length}`,
+    message: words.message_many.replaceAll("{keys}", keys.join(", "))
+  };
+}
 function recommendedLine(recommended, notYet) {
   return `${recommended} recommended · ${notYet} not yet`;
 }
@@ -782,7 +795,9 @@ function renderChoices(ctx, kind, opts) {
       (c, i) => choiceCard(c, i + 1, c.disposition === rec)
     );
     grid.append(...cards);
+    grid.dataset.cards = String(cards.length);
     if (opts.chosen) mark(asNotNow(opts.chosen));
+    opts.onCards?.(grid);
     notNow.append(...notNowPicker(vocab2.not_now ?? []));
   });
   function mark(d) {
@@ -3005,9 +3020,9 @@ function bulkProposalActions(ctx, onDone) {
   }
   return { el, update };
 }
-function agreeWithAll(onAgree) {
+function agreeWithAll(onAgree, onLook) {
   const el = h5("div", { class: "cb-agree", hidden: true });
-  function update(groups) {
+  function update(groups, look) {
     el.replaceChildren(
       ...groups.map((g) => {
         const t = agreeText(g);
@@ -3025,6 +3040,27 @@ function agreeWithAll(onAgree) {
           },
           t.action
         );
+        let lookBtn = null;
+        if (look) {
+          const w = lookIntoAll(look.words, look.session, g.keys);
+          const all = g.keys.every((k) => look.looking(k));
+          lookBtn = h5(
+            "button",
+            {
+              class: "kit-btn cb-agree-look",
+              type: "button",
+              disabled: all,
+              onclick() {
+                if (lookBtn.disabled) return;
+                lookBtn.disabled = true;
+                void onLook(g, w.message).finally(() => {
+                  lookBtn.disabled = false;
+                });
+              }
+            },
+            w.action
+          );
+        }
         return h5(
           "div",
           {
@@ -3033,7 +3069,7 @@ function agreeWithAll(onAgree) {
             "data-ids": g.ids.join(" ")
           },
           h5("span", { class: "cb-agree-says" }, t.says),
-          btn
+          h5("span", { class: "cb-agree-acts" }, btn, lookBtn)
         );
       })
     );
@@ -3135,6 +3171,9 @@ function renderDecideSection(ctx, detail, hooks) {
     note: it.decision?.note,
     onPick(d, until, note) {
       hooks.decide?.(d, until, note);
+    },
+    onCards() {
+      hooks.cardsReady?.();
     }
   });
   section.append(question, lookingEl, recSlot, cards);
@@ -3871,10 +3910,31 @@ function makeAttention(ctx) {
     }).catch(() => {
     });
   }
-  const agree = agreeWithAll(agreeAll);
+  const agree = agreeWithAll(agreeAll, lookAll);
   handle.el.querySelector(".kit-foot")?.before(agree.el);
   function updateAgree() {
-    agree.update(vocab2 && !boardHandle ? agreeGroups(vocab2, loadedItems) : []);
+    const t = ctx.dockTarget();
+    const looking = new Set(
+      loadedItems.filter((it) => !!it.looking).map((it) => it.key)
+    );
+    agree.update(
+      vocab2 && !boardHandle ? agreeGroups(vocab2, loadedItems) : [],
+      vocab2 && t ? {
+        session: t.name,
+        words: vocab2.look_into,
+        looking: (k) => looking.has(k)
+      } : null
+    );
+  }
+  ctx.onDockTarget(() => updateAgree());
+  async function lookAll(g, message3) {
+    if (!ctx.dockTarget()) return;
+    const why = await ctx.askSession(message3, { keys: g.keys }, "look-into");
+    if (why) {
+      showReadError(why);
+      return;
+    }
+    await reload();
   }
   async function agreeAll(g) {
     if (deciding) return;
@@ -3921,42 +3981,57 @@ function makeAttention(ctx) {
       // Re-render after a reject or a change from the recommendation card.
       onRefresh: () => void openDetail(key),
       decide: (d, until, note) => void decideOpen(key, d, until, note),
-      accept: () => void acceptOpen()
+      accept: () => void acceptOpen(),
+      cardsReady: () => renderAsk()
     });
     readEl.replaceChildren(el);
     renderAsk();
   }
+  let askingKey = "";
   function renderAsk() {
-    readEl.querySelector(".cb-look")?.remove();
+    const grid = readEl.querySelector(".cb-decide .cb-choices");
+    const old = grid?.querySelector(".cb-look-card");
     const key = currentOpenKey;
     const t = ctx.dockTarget();
-    const cards = readEl.querySelector(".cb-decide .cb-choices-wrap");
-    if (!key || !t || !cards || shownDetail?.item.key !== key) return;
-    if (shownDetail.item.looking) return;
     const words = vocab2?.look_into;
-    if (!words) return;
-    const note = h8("span", { class: "cb-look-note" });
-    const btn = h8(
+    if (!grid || !grid.dataset.cards || !key || !t || !words || shownDetail?.item.key !== key) {
+      old?.remove();
+      return;
+    }
+    const w = lookIntoCard(words, t.name, key);
+    const looking = lookingLine(shownDetail.item.looking);
+    const n = Number(grid.dataset.cards) + 1;
+    const card6 = h8(
       "button",
       {
         type: "button",
-        class: "kit-btn cb-look-ask",
+        class: "kit-card edge-agent cb-choice cb-look-card" + (looking ? " looking" : ""),
+        dataset: { n: String(n) },
+        disabled: !!looking || askingKey === key,
         async onclick() {
-          if (btn.disabled) return;
-          btn.disabled = true;
+          if (card6.disabled) return;
+          const wrap = grid.closest(".cb-choices-wrap");
+          if (wrap) showChoiceError(wrap, "");
+          askingKey = key;
+          card6.disabled = true;
           const why = await ctx.askSession(
-            words.message.replaceAll("{key}", key),
+            w.message,
             { keys: [key] },
             "look-into"
           );
-          btn.disabled = false;
-          if (why) note.textContent = why;
-          else void refreshLooking(key);
+          askingKey = "";
+          if (why) {
+            card6.disabled = false;
+            if (wrap) showChoiceError(wrap, why);
+          } else void refreshLooking(key);
         }
       },
-      words.label.replaceAll("{session}", t.name)
+      h8("span", { class: "cb-choice-k" }, String(n)),
+      h8("span", { class: "cb-choice-label" }, w.label),
+      h8("span", { class: "cb-choice-says" }, looking || w.says)
     );
-    cards.after(h8("div", { class: "cb-look" }, btn, note));
+    if (old) old.replaceWith(card6);
+    else grid.append(card6);
   }
   ctx.onDockTarget(() => renderAsk());
   let lookingSeq = 0;

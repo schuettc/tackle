@@ -19,6 +19,8 @@ import {
   agreeText,
   recommendedLine,
   pastedKeys,
+  lookIntoCard,
+  lookIntoAll,
 } from './decide-math.ts';
 import type { DecisionVocabView, NotNowForm } from './wire.d.ts';
 
@@ -469,5 +471,32 @@ describe('latestSearch', () => {
     answers.get('a')?.([]);
     await wait(0);
     assert.deepEqual(published, []);
+  });
+});
+
+// The look-into words as serve sends them (the vocabulary's look_into).
+const LOOK = {
+  label: 'Look into it',
+  says: "{session} checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet.",
+  message: 'Look into {key}: check it.',
+  message_many: 'Look into these items: {keys}. For each, check it.',
+};
+
+describe('lookIntoCard', () => {
+  test("the card: serve's label, its sentence with the session named, the message for the key", () => {
+    assert.deepEqual(lookIntoCard(LOOK, 'pi \u00b7 a', 'pr:o/r#1'), {
+      label: 'Look into it',
+      says: "pi \u00b7 a checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet.",
+      message: 'Look into pr:o/r#1: check it.',
+    });
+  });
+});
+
+describe('lookIntoAll', () => {
+  test("one message naming every key, and the foot's action", () => {
+    assert.deepEqual(lookIntoAll(LOOK, 'pi \u00b7 a', ['a#1', 'a#2', 'a#3']), {
+      action: 'ask pi \u00b7 a to look into all 3',
+      message: 'Look into these items: a#1, a#2, a#3. For each, check it.',
+    });
   });
 });

@@ -72,17 +72,24 @@
 //   the card's head and the board's cards say "recommends", as the list's
 //     rows do: "pi recommends · Close it without merging"
 //
-// And "ask ‹session› to look into it" (casebook 0.4.5), on a serve and repo
-// of their own:
+// And "Look into it" (casebook 0.4.5; a card since 0.4.6), on a serve and
+// repo of their own:
 //
-//   with no session attached there is no button under the cards
-//   with one, the button sends exactly the ask, the item attached, to that
-//     session's thread only
+//   with no session attached there is no Look into it card, and no "look
+//     into all N" in the list foot
+//   with one, the card is the last in the grid, numbered after the
+//     decisions (6 on a PR, 5 on an issue), the same size as its
+//     neighbours, with the agent's amber left edge and number line
+//   its number key sends exactly the ask, the item attached, to that
+//     session's thread only, and decides nothing
 //   while the message is queued (and worked on), the item says "‹session›
 //     is looking into it" under its question, and its row says so (muted,
-//     agent colour)
+//     agent colour); the card says it in place of its sentence and can't
+//     be clicked
 //   the agent's evidence and recommendation show on the open item with no
 //     reload; its reply clears the marker
+//   "ask ‹session› to look into all 3" sends one message naming the
+//     group's 3 keys, all attached, and all three rows show the marker
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -198,16 +205,18 @@ function readCol(pg) {
       key: item?.getAttribute('data-key') ?? '',
       question: read?.querySelector('.cb-question')?.textContent ?? '',
       rec: rec?.textContent ?? '',
-      cards: [...(read?.querySelectorAll('.cb-choices .cb-choice') ?? [])].map(
-        (c) => ({
-          d: c.getAttribute('data-d') ?? '',
-          label: c.querySelector('.cb-choice-label')?.textContent ?? '',
-          kick: c.querySelector('.cb-choice-k')?.textContent ?? '',
-          says: c.querySelector('.cb-choice-says')?.textContent ?? '',
-          rec: c.classList.contains('rec'),
-          on: c.classList.contains('on'),
-        }),
-      ),
+      cards: [
+        ...(read?.querySelectorAll(
+          '.cb-choices .cb-choice:not(.cb-look-card)',
+        ) ?? []),
+      ].map((c) => ({
+        d: c.getAttribute('data-d') ?? '',
+        label: c.querySelector('.cb-choice-label')?.textContent ?? '',
+        kick: c.querySelector('.cb-choice-k')?.textContent ?? '',
+        says: c.querySelector('.cb-choice-says')?.textContent ?? '',
+        rec: c.classList.contains('rec'),
+        on: c.classList.contains('on'),
+      })),
       err: (() => {
         const e = read?.querySelector('.cb-choice-err');
         return e && !e.hidden ? (e.textContent ?? '') : '';
@@ -431,7 +440,7 @@ async function decideScenario(context, t, s) {
           ?.getBoundingClientRect();
       const cards = [
         ...document.querySelectorAll(
-          '.kit-app > .kit-read:not([hidden]) .cb-choices .cb-choice',
+          '.kit-app > .kit-read:not([hidden]) .cb-choices .cb-choice:not(.cb-look-card)',
         ),
       ].map((c) => {
         const b = c.getBoundingClientRect();
@@ -1721,7 +1730,7 @@ async function closeCommentScenario(context, t, s) {
       const input = f?.querySelector('input.kit-note');
       const cards = [
         ...document.querySelectorAll(
-          '.kit-app > .kit-read:not([hidden]) .cb-choices .cb-choice',
+          '.kit-app > .kit-read:not([hidden]) .cb-choices .cb-choice:not(.cb-look-card)',
         ),
       ];
       const close = cards.find((c) => c.dataset.d === 'close');
@@ -2542,8 +2551,16 @@ async function openRecScenario(context, t, s) {
 
 const LK = 'rd-look';
 const KISSUE = (n) => `issue:schuettc/${LK}#${n}`;
+const KPR = (n) => `pr:schuettc/${LK}#${n}`;
 const LOOK_INTO = (key) =>
   `Look into ${key}: check its CI, recent activity and anything blocking it. If a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+const LOOK_INTO_ALL = (keys) =>
+  `Look into these items: ${keys.join(', ')}. For each, check its CI, recent activity and anything blocking it; if a check is failing, find the cause and what would fix it. Add what you find as evidence (casebook_evidence) and recommend what to do with a one-line reason (casebook_propose).`;
+const LOOK_SAYS = (name) =>
+  `${name} checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet.`;
+// PROBE_SHOTS, when set, is a path prefix the scenario writes its
+// screenshots to (PROBE_SHOTS=/tmp/look-card writes /tmp/look-card-*.png).
+const SHOTS = process.env.PROBE_SHOTS ?? '';
 
 function lookIntoSeed() {
   const item = ([number, title, author], i) => ({
@@ -2561,10 +2578,13 @@ function lookIntoSeed() {
         repo: `schuettc/${LK}`,
         pushed_at: '2026-09-20T00:00:00Z',
         default_branch: 'main',
-        prs: [],
+        prs: [[7, 'Retry the uploader on a 503', 'bob']].map(item),
         issues: [
           [1, 'Uploads fail on the second region', 'alice'],
           [2, 'README typo', 'carol'],
+          [3, 'Old spam about crypto', 'mallory'],
+          [4, 'More spam about crypto', 'mallory'],
+          [5, 'Even more spam', 'mallory'],
         ].map(item),
       },
     ],
@@ -2577,9 +2597,11 @@ async function lookIntoScenario(context, t, s) {
   const agent = createAgent(s.base, s.token);
   const api = (m, p, b) => agent.api(m, p, b);
   const READ = '.kit-app > .kit-read:not([hidden])';
-  const ASK = `${READ} .cb-look-ask`;
+  const CARD = `${READ} .cb-choices .cb-look-card`;
+  const LOOK_ALL = '.kit-app > .kit-list:not([hidden]) .cb-agree-look';
   const MARK = `${READ} .cb-looking`;
   const KEY = KISSUE(1);
+  const GROUP = [3, 4, 5].map(KISSUE);
 
   // Only this repo's items wait on Court.
   const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
@@ -2595,6 +2617,9 @@ async function lookIntoScenario(context, t, s) {
   await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
   await agent.presence(B, 'pi \u00b7 look-b', '/home/court/look-b', 'pi');
   const bThread = await agent.newThread(B, 'b work');
+  // A group the foot offers "agree with all 3" for: three items B
+  // recommends to stop tracking.
+  await agent.propose(B, GROUP, 'ignore', 'spam');
 
   const pg = await context.newPage();
   await pg.goto(`${s.url}#/attention/waiting`, {
@@ -2607,13 +2632,33 @@ async function lookIntoScenario(context, t, s) {
   await row(pg, KEY).click();
   check('issue #1 opens', await opened(t, pg, KEY));
 
-  // ---- no session attached: no button --------------------------------------
+  // ---- no session attached: no card, no "look into all" -------------------
   {
-    await pg.waitForTimeout(500); // kept: no button may appear; a window for it
+    await until(
+      pg,
+      () => !!document.querySelector('.kit-list:not([hidden]) .cb-agree-line'),
+    );
+    await pg.waitForTimeout(500); // kept: no card may appear; a window for it
     const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
+    const cards = await pg.locator(`${READ} .cb-choices .cb-choice`).count();
     check(
-      `with no session attached (dock: ${attach}) there is no "look into it" button`,
-      attach === 'none' && (await pg.locator(ASK).count()) === 0,
+      `with no session attached (dock: ${attach}) there is no Look into it card (${cards} cards, all decisions)`,
+      attach === 'none' &&
+        (await pg.locator(CARD).count()) === 0 &&
+        cards === 4,
+    );
+    const foot = await pg.evaluate(() =>
+      [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
+        ),
+      ].map((l) => l.textContent ?? ''),
+    );
+    check(
+      `and the foot offers "agree with all 3" without "look into all" (${JSON.stringify(foot)})`,
+      foot.length === 1 &&
+        foot[0].includes('agree with all 3') &&
+        (await pg.locator(LOOK_ALL).count()) === 0,
     );
   }
 
@@ -2626,27 +2671,101 @@ async function lookIntoScenario(context, t, s) {
       'here',
   );
   const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  // cardGeo reads the open item's cards: each one's box, and the Look into
+  // it card's words, state and colours.
+  const cardGeo = () =>
+    pg.evaluate((read) => {
+      const cards = [
+        ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+      ];
+      const look = document.querySelector(`${read} .cb-choices .cb-look-card`);
+      const cs = look ? getComputedStyle(look) : null;
+      const k = look?.querySelector('.cb-choice-k');
+      return {
+        boxes: cards.map((c) => {
+          const b = c.getBoundingClientRect();
+          return {
+            top: Math.round(b.top),
+            w: Math.round(b.width),
+            h: Math.round(b.height),
+          };
+        }),
+        lastIsLook: !!look && cards.at(-1) === look,
+        kick: k?.textContent ?? '',
+        label: look?.querySelector('.cb-choice-label')?.textContent ?? '',
+        says: look?.querySelector('.cb-choice-says')?.textContent ?? '',
+        disabled: !!look?.disabled,
+        edge: cs ? cs.borderLeftColor : '',
+        edgeW: cs ? cs.borderLeftWidth : '',
+        top: cs ? cs.borderTopColor : '',
+        bg: cs ? cs.backgroundColor : '',
+        otherBg: cards[0] ? getComputedStyle(cards[0]).backgroundColor : '',
+        kickColor: k ? getComputedStyle(k).color : '',
+      };
+    }, READ);
+  const agentC = await cssColor(pg, 'var(--kit-agent)');
+  const signalC = await cssColor(pg, 'var(--kit-signal)');
+  const dangerC = await cssColor(pg, 'var(--kit-danger)');
+
+  // On the PR: the sixth card, beside Stop tracking it, the same size.
+  await row(pg, KPR(7)).click();
+  check('PR #7 opens', await opened(t, pg, KPR(7)));
+  {
+    const ok = await until(pg, (sel) => !!document.querySelector(sel), CARD);
+    const g = await cardGeo();
+    const [five, six] = g.boxes.slice(-2);
+    check(
+      `on a PR, Look into it is the last card, numbered 6 ("${g.kick}"), of ${g.boxes.length}`,
+      ok && g.lastIsLook && g.boxes.length === 6 && g.kick === '6',
+    );
+    check(
+      `it is the same size as its neighbours: ${six?.w}x${six?.h} beside card 5's ${five?.w}x${five?.h}, in its row (top ${six?.top} vs ${five?.top}); every card ${g.boxes[0]?.w}px wide`,
+      !!five &&
+        !!six &&
+        six.top === five.top &&
+        six.h === five.h &&
+        g.boxes.every((b) => b.w === six.w),
+    );
+    check(
+      `it has the agent's amber edge (border-left ${g.edgeW} ${g.edge}, agent ${agentC}) and number line (${g.kickColor}), not signal or danger, and isn't filled (background ${g.bg}, a decision's ${g.otherBg})`,
+      g.edge === agentC &&
+        g.edgeW === '3px' &&
+        g.kickColor === agentC &&
+        g.top !== agentC &&
+        g.edge !== signalC &&
+        g.edge !== dangerC &&
+        g.bg === g.otherBg,
+    );
+  }
+
+  // Back on issue #1: the fifth card, after its four decisions.
+  await row(pg, KEY).click();
+  check('issue #1 opens again', await opened(t, pg, KEY));
   {
     const ok = await until(
       pg,
       (sel) => !!document.querySelector(sel)?.checkVisibility(),
-      ASK,
+      CARD,
     );
-    const got = await pg.evaluate((sel) => {
-      const b = document.querySelector(sel);
-      const cards = b?.closest('.cb-decide')?.querySelector('.cb-choices-wrap');
-      return {
-        text: b?.textContent ?? '',
-        below:
-          !!b &&
-          !!cards &&
-          b.getBoundingClientRect().top >= cards.getBoundingClientRect().bottom,
-      };
-    }, ASK);
+    const g = await cardGeo();
     check(
-      `with ${aName} attached, "${got.text}" shows under the cards`,
-      ok && got.text === `ask ${aName} to look into it` && got.below,
+      `with ${aName} attached, on an issue, the last card is "${g.kick} · ${g.label}": "${g.says}"`,
+      ok &&
+        g.lastIsLook &&
+        g.boxes.length === 5 &&
+        g.kick === '5' &&
+        g.label === 'Look into it' &&
+        g.says === LOOK_SAYS(aName) &&
+        !g.disabled,
     );
+    if (SHOTS) {
+      await setTheme(pg, 'light');
+      await pg.evaluate(() => document.activeElement?.blur());
+      await pg
+        .locator(`${READ} .cb-choices`)
+        .evaluate((e) => e.scrollIntoView({ block: 'center' }));
+      await pg.screenshot({ path: `${SHOTS}-grid.png` });
+    }
   }
 
   // ---- the ask: exactly the text, the item attached, A's thread only -------
@@ -2662,10 +2781,10 @@ async function lookIntoScenario(context, t, s) {
     }
     return out;
   };
-  await pg.click(ASK);
+  await press(pg, '5');
   let asked = null;
   check(
-    "the button puts exactly the ask (serve's words), with the item attached and the look-into purpose, in the attached session's thread, once",
+    "its number key (5) puts exactly the ask (serve's words), with the item attached and the look-into purpose, in the attached session's thread, once",
     await eventually(async () => {
       const mine = (await msgsOf(A)).filter((m) => m.body === LOOK_INTO(KEY));
       asked = mine[0] ?? null;
@@ -2707,9 +2826,17 @@ async function lookIntoScenario(context, t, s) {
           row: rl ? (rl.textContent ?? '') : '',
           itemColor: m ? getComputedStyle(m).color : '',
           rowColor: rl ? getComputedStyle(rl).color : '',
-          ask: !!document.querySelector(
-            '.kit-app > .kit-read:not([hidden]) .cb-look-ask',
-          ),
+          card: (() => {
+            const c = document.querySelector(
+              '.kit-app > .kit-read:not([hidden]) .cb-choices .cb-look-card',
+            );
+            return c
+              ? {
+                  says: c.querySelector('.cb-choice-says')?.textContent ?? '',
+                  disabled: c.disabled,
+                }
+              : null;
+          })(),
         };
       },
       [MARK, kicker(KEY)],
@@ -2803,7 +2930,19 @@ async function lookIntoScenario(context, t, s) {
       `and it is cut with an ellipsis, not wrapped (white-space ${geo.ws}, overflow ${geo.overflow}, text-overflow ${geo.to})`,
       geo.ws === 'nowrap' && geo.overflow === 'hidden' && geo.to === 'ellipsis',
     );
-    check('and while it looks, the button gives way to the marker', !got.ask);
+    check(
+      `and while it looks, the card says "${got.card?.says}" in place of its sentence, and can't be clicked (disabled ${got.card?.disabled})`,
+      got.card?.says === LOOKING && got.card?.disabled === true,
+    );
+    // Neither its number key nor a click asks again.
+    await press(pg, '5');
+    await pg.click(CARD, { force: true });
+    await pg.waitForTimeout(500); // kept: no second ask may come; a window for it
+    const again = (await msgsOf(A)).filter((m) => m.body === LOOK_INTO(KEY));
+    check(
+      `neither 5 nor a click asks again (${again.length} ask)`,
+      again.length === 1,
+    );
     const under = await pg.evaluate((mark) => {
       const m = document.querySelector(mark);
       const q = m?.closest('.cb-decide')?.querySelector('.cb-question');
@@ -2926,9 +3065,22 @@ async function lookIntoScenario(context, t, s) {
       8000,
     );
     const got = await marks();
+    const back = await until(
+      pg,
+      ([sel, says]) => {
+        const c = document.querySelector(sel);
+        return (
+          !!c &&
+          !c.disabled &&
+          c.querySelector('.cb-choice-says')?.textContent === says
+        );
+      },
+      [CARD, LOOK_SAYS(aName)],
+      8000,
+    );
     check(
-      `the agent's reply clears the marker on the item and its row (item "${got.item}", row "${got.row}"), and the button is back`,
-      ok && got.item === '' && got.row === '' && got.ask,
+      `the agent's reply clears the marker on the item and its row (item "${got.item}", row "${got.row}"), and the card is back to its sentence, clickable`,
+      ok && got.item === '' && got.row === '' && back,
     );
     check(
       'with no reload',
@@ -2936,5 +3088,137 @@ async function lookIntoScenario(context, t, s) {
     );
   }
   await inThemes(t, pg, 'look-into', ['light']);
+
+  // ---- look into all 3: one message, every row marked ---------------------
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(sel)?.checkVisibility(),
+      LOOK_ALL,
+      8000,
+    );
+    const txt = ok ? ((await pg.textContent(LOOK_ALL)) ?? '') : '';
+    check(
+      `with ${aName} attached, the foot offers "${txt}" beside "agree with all 3"`,
+      ok &&
+        txt === `ask ${aName} to look into all 3` &&
+        (await pg.evaluate(
+          (sel) =>
+            document
+              .querySelector(sel)
+              ?.closest('.cb-agree-line')
+              ?.querySelector('.cb-agree-btn')?.textContent ===
+            'agree with all 3',
+          LOOK_ALL,
+        )),
+    );
+    // The line still reads: the says keeps its width (not a letter a line)
+    // and both buttons stay inside the list column.
+    const geo = await pg.evaluate((sel) => {
+      const line = document.querySelector(sel)?.closest('.cb-agree-line');
+      const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
+      const says = line?.querySelector('.cb-agree-says');
+      const lh = says ? parseFloat(getComputedStyle(says).lineHeight) : 0;
+      const sr = says?.getBoundingClientRect();
+      const lr = list?.getBoundingClientRect();
+      const btns = [...(line?.querySelectorAll('button') ?? [])].map((b) =>
+        b.getBoundingClientRect(),
+      );
+      return {
+        saysH: Math.round(sr?.height ?? 0),
+        line: Math.round(Number.isFinite(lh) ? lh : 19),
+        inside:
+          !!lr &&
+          btns.length === 2 &&
+          btns.every((b) => b.left >= lr.left && b.right <= lr.right),
+      };
+    }, LOOK_ALL);
+    check(
+      `the foot's line reads: its says ${geo.saysH}px high (line ${geo.line}px), both buttons inside the list column (${geo.inside})`,
+      geo.saysH > 0 && geo.saysH <= geo.line * 2.2 && geo.inside,
+    );
+    if (SHOTS) {
+      await setTheme(pg, 'light');
+      await pg.evaluate(() => document.activeElement?.blur());
+      await pg.screenshot({ path: `${SHOTS}-foot.png` });
+    }
+  }
+  const before = (await msgsOf(A)).length;
+  await pg.click(LOOK_ALL);
+  check(
+    "it puts one message naming the 3 keys (serve's words), all 3 attached, with the look-into purpose, in the attached session's thread",
+    await eventually(async () => {
+      const ms = await msgsOf(A);
+      const mine = ms.filter((m) => m.body.startsWith('Look into these items'));
+      const all = mine[0] ?? null;
+      const keys = all?.attached?.keys ?? [];
+      return (
+        ms.length === before + 1 &&
+        mine.length === 1 &&
+        keys.length === 3 &&
+        [...keys].sort().join(' ') === [...GROUP].sort().join(' ') &&
+        all.body === LOOK_INTO_ALL(keys) &&
+        all.purpose === 'look-into'
+      );
+    }),
+  );
+  {
+    const b = await msgsOf(B);
+    check(
+      `and nothing in any other session's thread (B has ${b.length} messages)`,
+      b.every((m) => !m.body.startsWith('Look into')),
+    );
+  }
+  {
+    const LOOKING = `${aName} is looking into it`;
+    const ok = await until(
+      pg,
+      ([ks, want]) =>
+        ks.every((k) =>
+          [
+            ...document.querySelectorAll(
+              '.kit-app > .kit-list:not([hidden]) .kit-row',
+            ),
+          ].some(
+            (x) =>
+              x.querySelector('.kit-kicker')?.textContent === k &&
+              x.querySelector('.cb-row-looking')?.textContent === want,
+          ),
+        ),
+      [GROUP.map(kicker), LOOKING],
+      8000,
+    );
+    const rows = await pg.evaluate(
+      (ks) =>
+        ks.map(
+          (k) =>
+            [
+              ...document.querySelectorAll(
+                '.kit-app > .kit-list:not([hidden]) .kit-row',
+              ),
+            ]
+              .find((x) => x.querySelector('.kit-kicker')?.textContent === k)
+              ?.querySelector('.cb-row-looking')?.textContent ?? '',
+        ),
+      GROUP.map(kicker),
+    );
+    check(
+      `all three rows say so: ${JSON.stringify(rows)}`,
+      ok && rows.every((r) => r === LOOKING),
+    );
+    const dis = await pg.evaluate(
+      (sel) => document.querySelector(sel)?.disabled,
+      LOOK_ALL,
+    );
+    check(
+      `while all three are looked into, "look into all 3" can't be clicked again (disabled ${dis})`,
+      dis === true,
+    );
+    if (SHOTS) {
+      await setTheme(pg, 'light');
+      await pg.evaluate(() => document.activeElement?.blur());
+      await pg.screenshot({ path: `${SHOTS}-foot-looking.png` });
+    }
+  }
   await pg.close();
 }

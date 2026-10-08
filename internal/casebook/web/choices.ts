@@ -50,6 +50,9 @@ export interface ChoicesOpts {
   /** The decided close's note: what the closing-comment field starts with. */
   note?: string;
   onPick(d: string, until?: string, note?: string): void;
+  /** The decision cards are in the grid (once): the open item's "Look
+   * into it" card goes after them (attention.ts). */
+  onCards?(grid: HTMLElement): void;
 }
 
 // The disposition that closes a PR or an issue: it asks for a comment.
@@ -139,7 +142,9 @@ export function renderChoices(
       choiceCard(c, i + 1, c.disposition === rec),
     );
     grid.append(...cards);
+    grid.dataset.cards = String(cards.length);
     if (opts.chosen) mark(asNotNow(opts.chosen));
+    opts.onCards?.(grid);
     notNow.append(...notNowPicker(vocab.not_now ?? []));
   });
 
