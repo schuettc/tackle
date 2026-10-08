@@ -140,7 +140,7 @@ func (e *engine) callJust(args []string, c *ctx) {
 }
 
 // runRecipe walks a recipe. acc is its setup scope: the commands before it,
-// shared with its dependency recipes, whose commands run first.
+// filled by its dependency recipes, whose commands run first.
 func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c *ctx, acc *setupAcc) {
 	key := "just\x00" + r.Name
 	if c.active[key] {
@@ -151,14 +151,16 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 	label := "justfile " + r.Name
 	dep := func(d justDep) {
 		if dr, ok := j.Recipes[d.Recipe]; ok {
-			// A dependency that is itself a check (it emitted one) does not
-			// set up what comes after it; one that only prepares does.
-			sub := acc.fork()
+			// A dependency's setup is its own dependencies and body, never
+			// what ran before it. A dependency that is itself a check (it
+			// emitted one) does not set up what comes after it; one that
+			// only prepares does.
+			sub := &setupAcc{}
 			nc := ctx{dir: ".", chain: c.chain, env: c.env, active: c.active, setup: sub}.with(label)
 			before := e.emitted
 			e.runRecipe(j, dr, nil, &nc, sub)
 			if e.emitted == before {
-				acc.steps = sub.steps
+				acc.steps = append(acc.steps, sub.steps...)
 			}
 		}
 	}

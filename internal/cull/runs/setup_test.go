@@ -145,3 +145,53 @@ func TestJustIgnoredFailureLineIsNotSetup(t *testing.T) {
 		t.Fatalf("setup = %v", got)
 	}
 }
+
+func TestSetupNeverComesFromSiblingRecipes(t *testing.T) {
+	needJust(t)
+	root := write(t, map[string]string{
+		"justfile": `all: a-test a-check b-test
+
+a-deps:
+    cd a && npm run build-a-deps
+
+b-deps:
+    cd b && npm run build-b-deps
+
+a-test: a-deps
+    cd a && node --test x.test.ts
+
+a-check:
+    cd a && npm run build-a
+
+b-test: b-deps
+    cd b && node --test y.test.ts
+`,
+		"a/x.test.ts":              "",
+		"b/y.test.ts":              "",
+		"a/package.json":           `{"scripts":{"build-a-deps":"echo","build-a":"echo"}}`,
+		"b/package.json":           `{"scripts":{"build-b-deps":"echo"}}`,
+		".github/workflows/ci.yml": "jobs:\n  a:\n    steps:\n      - run: just all\n",
+	})
+	got := find(t, root)
+	for dir, want := range map[string][][]string{
+		"a": {{"npm", "run", "build-a-deps"}},
+		"b": {{"npm", "run", "build-b-deps"}},
+	} {
+		var have [][]string
+		var found bool
+		for _, c := range got {
+			if c.Dir == dir && c.Kind != "unknown" && strings.Contains(strings.Join(c.Argv, " "), "node --test") {
+				found = true
+				for _, s := range c.Setup {
+					have = append(have, s.Argv)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no check in %s: %+v", dir, got)
+		}
+		if !reflect.DeepEqual(have, want) {
+			t.Errorf("%s setup = %v, want %v", dir, have, want)
+		}
+	}
+}
