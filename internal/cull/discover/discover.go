@@ -105,6 +105,13 @@ func Suite(root, sub string, exclude []string) ([]string, error) {
 // project), have no skipDirs directory below sub, match no exclude glob,
 // and be a test file some registered extractor handles.
 func Keep(sub string, exclude []string, rel string) bool {
+	return InScope(sub, exclude, rel) && extract.ForFile(rel) != nil
+}
+
+// InScope is Keep without the extractor requirement: rel is under sub, in no
+// skipped directory, and matches no exclude glob. Script checks use it, since
+// they are not test files any extractor handles.
+func InScope(sub string, exclude []string, rel string) bool {
 	sub = strings.Trim(filepath.ToSlash(sub), "/")
 	below := rel
 	if sub != "" {
@@ -124,7 +131,7 @@ func Keep(sub string, exclude []string, rel string) bool {
 			return false
 		}
 	}
-	return extract.ForFile(rel) != nil
+	return true
 }
 
 // globMatch reports whether name matches a doublestar-style glob pattern:

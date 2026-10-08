@@ -1,0 +1,45 @@
+{"Time":"2026-10-07T23:32:52.966645-05:00","Action":"start","Package":"example.com/fx/alpha"}
+{"Time":"2026-10-07T23:32:52.966846-05:00","Action":"start","Package":"example.com/fx/beta"}
+{"Time":"2026-10-07T23:32:52.966898-05:00","Action":"start","Package":"example.com/fx/gamma"}
+{"Time":"2026-10-07T23:32:52.966937-05:00","Action":"output","Package":"example.com/fx/gamma","Output":"?   \texample.com/fx/gamma\t[no test files]\n"}
+{"Time":"2026-10-07T23:32:52.966956-05:00","Action":"skip","Package":"example.com/fx/gamma","Elapsed":0}
+{"Time":"2026-10-07T23:32:53.152837-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestFast"}
+{"Time":"2026-10-07T23:32:53.152934-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestFast","Output":"=== RUN   TestFast\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.152955-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestFast","Output":"--- PASS: TestFast (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.152963-05:00","Action":"pass","Package":"example.com/fx/alpha","Test":"TestFast","Elapsed":0}
+{"Time":"2026-10-07T23:32:53.152969-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestSlow"}
+{"Time":"2026-10-07T23:32:53.152973-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestSlow","Output":"=== RUN   TestSlow\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.156584-05:00","Action":"run","Package":"example.com/fx/beta","Test":"TestBroken"}
+{"Time":"2026-10-07T23:32:53.156605-05:00","Action":"output","Package":"example.com/fx/beta","Test":"TestBroken","Output":"=== RUN   TestBroken\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.156619-05:00","Action":"output","Package":"example.com/fx/beta","Test":"TestBroken","Output":"    b_test.go:5: nope\n","OutputType":"error"}
+{"Time":"2026-10-07T23:32:53.156648-05:00","Action":"output","Package":"example.com/fx/beta","Test":"TestBroken","Output":"--- FAIL: TestBroken (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.156659-05:00","Action":"fail","Package":"example.com/fx/beta","Test":"TestBroken","Elapsed":0}
+{"Time":"2026-10-07T23:32:53.156665-05:00","Action":"run","Package":"example.com/fx/beta","Test":"TestFine"}
+{"Time":"2026-10-07T23:32:53.156669-05:00","Action":"output","Package":"example.com/fx/beta","Test":"TestFine","Output":"=== RUN   TestFine\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.15668-05:00","Action":"output","Package":"example.com/fx/beta","Test":"TestFine","Output":"--- PASS: TestFine (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.156685-05:00","Action":"pass","Package":"example.com/fx/beta","Test":"TestFine","Elapsed":0}
+{"Time":"2026-10-07T23:32:53.156689-05:00","Action":"output","Package":"example.com/fx/beta","Output":"FAIL\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.157315-05:00","Action":"output","Package":"example.com/fx/beta","Output":"FAIL\texample.com/fx/beta\t0.190s\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.157332-05:00","Action":"fail","Package":"example.com/fx/beta","Elapsed":0.19}
+{"Time":"2026-10-07T23:32:53.453008-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestSlow","Output":"--- PASS: TestSlow (0.30s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.453073-05:00","Action":"pass","Package":"example.com/fx/alpha","Test":"TestSlow","Elapsed":0.3}
+{"Time":"2026-10-07T23:32:53.453085-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestTable"}
+{"Time":"2026-10-07T23:32:53.453092-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable","Output":"=== RUN   TestTable\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.453099-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestTable/one"}
+{"Time":"2026-10-07T23:32:53.453104-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable/one","Output":"=== RUN   TestTable/one\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.473129-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable/one","Output":"--- PASS: TestTable/one (0.02s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.473201-05:00","Action":"pass","Package":"example.com/fx/alpha","Test":"TestTable/one","Elapsed":0.02}
+{"Time":"2026-10-07T23:32:53.473214-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestTable/two_words"}
+{"Time":"2026-10-07T23:32:53.473219-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable/two_words","Output":"=== RUN   TestTable/two_words\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.494178-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable/two_words","Output":"--- PASS: TestTable/two_words (0.02s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.494202-05:00","Action":"pass","Package":"example.com/fx/alpha","Test":"TestTable/two_words","Elapsed":0.02}
+{"Time":"2026-10-07T23:32:53.49422-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestTable","Output":"--- PASS: TestTable (0.04s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.494225-05:00","Action":"pass","Package":"example.com/fx/alpha","Test":"TestTable","Elapsed":0.04}
+{"Time":"2026-10-07T23:32:53.49423-05:00","Action":"run","Package":"example.com/fx/alpha","Test":"TestSkipped"}
+{"Time":"2026-10-07T23:32:53.494233-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestSkipped","Output":"=== RUN   TestSkipped\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.494245-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestSkipped","Output":"    a_test.go:18: later\n"}
+{"Time":"2026-10-07T23:32:53.494268-05:00","Action":"output","Package":"example.com/fx/alpha","Test":"TestSkipped","Output":"--- SKIP: TestSkipped (0.00s)\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.494273-05:00","Action":"skip","Package":"example.com/fx/alpha","Test":"TestSkipped","Elapsed":0}
+{"Time":"2026-10-07T23:32:53.494277-05:00","Action":"output","Package":"example.com/fx/alpha","Output":"PASS\n","OutputType":"frame"}
+{"Time":"2026-10-07T23:32:53.49471-05:00","Action":"output","Package":"example.com/fx/alpha","Output":"ok  \texample.com/fx/alpha\t0.528s\n"}
+{"Time":"2026-10-07T23:32:53.494728-05:00","Action":"pass","Package":"example.com/fx/alpha","Elapsed":0.528}

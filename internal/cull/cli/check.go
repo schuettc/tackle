@@ -15,12 +15,16 @@ import (
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/schuettc/tackle/internal/cull/speed"
 	tools "github.com/schuettc/tools-common"
 )
 
 var checkFlags = flags("check", "cull check [path] [--diff base] [--json] [--dry-run] [--refresh]",
 	"Judge tests and near-duplicate groups under path (default .) with Jev: whole suite, or\n"+
-		"only what --diff base changed. Writes <root>/.cull/last.json. Requires egress = true in\n"+
+		"only what --diff base changed. Writes <root>/.cull/last.json. Also scans the test files and the\n"+
+		"project's script checks for what makes a suite slow or weak (fixed waits, setup that blocks\n"+
+		"parallel tests, swallowed waits, screenshots) and prints a digest; --dry-run prints it on stderr.\n"+
+		"A \"cull: keep\" comment on a line silences its finding. Requires egress = true in\n"+
 		".cull.toml (or --dry-run, which prints the states that would be sent and sends nothing).\n"+
 		"Also records the run's uncertain items and applies Court's saved answers from the review\n"+
 		"database (cull serve's page); if that database can't be opened, it warns on stderr and\n"+
@@ -86,6 +90,7 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 		}
 
 		if dryRun {
+			speed.WriteText(errw, report.SpeedDigest())
 			return nil
 		}
 
@@ -97,6 +102,7 @@ func runCheck(stdin io.Reader) func(args []string, out, errw io.Writer) error {
 			}
 		} else {
 			check.WriteTable(out, report)
+			speed.WriteText(out, report.SpeedDigest())
 		}
 
 		if n := report.Summary["errors"]; n > 0 {

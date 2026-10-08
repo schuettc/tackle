@@ -36,7 +36,8 @@ const Instructions = `cull judges automated tests with Jev and removes the ones 
 - Court's answers arrive as a channel event from cull. Follow its steps: cull_check, then cull_apply for his cuts; rewrite each group he chose to merge as one table test that keeps every row the event lists, then run cull_check_group on it and fix what it reports.
 - cull_status tells you what is open, answered and sent for this project.
 - When your session runs in a folder that holds several repositories (a workspace), pass the repository's path to every cull tool. The event from Court names the repository's path; use it.
-- You never answer for Court. If cull reports an error, say what failed; don't work around it by editing tests by hand.`
+- You never answer for Court. If cull reports an error, say what failed; don't work around it by editing tests by hand.
+- When Court asks why tests are slow, or checks take long, run cull_time and fix what it and cull_check's speed findings point at; then run cull_time again and report before and after.`
 
 // Identity is the session this channel serves.
 type Identity struct {

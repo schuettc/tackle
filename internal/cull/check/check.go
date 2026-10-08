@@ -22,7 +22,9 @@ import (
 	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/policy"
 	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/schuettc/tackle/internal/cull/runs"
 	"github.com/schuettc/tackle/internal/cull/similar"
+	"github.com/schuettc/tackle/internal/cull/speed"
 	"github.com/schuettc/tackle/internal/cull/store"
 	tools "github.com/schuettc/tools-common"
 )
@@ -131,6 +133,8 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	}
 	skipped = append(skipped, changedSkipped...)
 
+	checks, speedFindings := scanSpeed(root, sub, cfg.Exclude, mode, changes, files, allCases, stderr)
+
 	keptCases := allCases
 	groups := similar.Groups(allCases)
 	if mode == "diff" {
@@ -162,7 +166,8 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 		printDryRunStates(stdout, keptCases, groups, cfg.MaxContextBytes)
 		return Report{
 			Root: root, Mode: mode, Base: opt.Diff,
-			Files: fileInv, Skipped: skipped, Summary: summarize(nil, nil, skipped),
+			Files: fileInv, Skipped: skipped, Summary: withSpeed(summarize(nil, nil, skipped), speedFindings),
+			Checks: checks, Speed: speedFindings,
 		}, nil
 	}
 
@@ -243,7 +248,8 @@ func Run(ctx context.Context, ev judge.Evaluator, opt Options) (Report, error) {
 	report := Report{
 		Root: root, Mode: mode, Base: opt.Diff,
 		Tests: tests, Groups: groupOut, Files: fileInv, Skipped: skipped,
-		Summary: summarize(tests, groupOut, skipped),
+		Summary: withSpeed(summarize(tests, groupOut, skipped), speedFindings),
+		Checks:  checks, Speed: speedFindings,
 	}
 	sess.record(ctx, report, recordItems(keptCases, testJudged, tests, groupStates, groupJudged, groupOut), testRubric.QuestionsHash(), len(keptCases), stderr)
 	if err := writeLastJSON(root, report); err != nil {
@@ -430,4 +436,50 @@ func printDryRunStates(w io.Writer, tests []cases.TestCase, groups []cases.Group
 	for _, g := range groups {
 		_ = enc.Encode(map[string]any{"id": g.ID, "state": judge.GroupStateFor(g, maxContext)})
 	}
+}
+
+// withSpeed adds the number of speed findings to a summary.
+func withSpeed(s map[string]int, fs []speed.Finding) map[string]int {
+	s["speed"] = len(fs)
+	return s
+}
+
+// scanSpeed lists what the project runs and scans the test files plus the
+// script checks' files for speed findings. Diff mode scans only touched files.
+// Reading the entry points never fails the run: a problem is said on stderr.
+func scanSpeed(root, sub string, exclude []string, mode string, changes discover.Changes, files []string, allCases []cases.TestCase, stderr io.Writer) ([]runs.Check, []speed.Finding) {
+	checks, err := runs.Find(root)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "cull: could not read what the project runs: %v\n", err)
+		checks = []runs.Check{}
+	}
+	scanFiles := append([]string(nil), files...)
+	for _, c := range checks {
+		if c.Kind != "script" {
+			continue
+		}
+		for _, f := range c.Files {
+			if mode == "diff" {
+				if _, touched := changes[f]; !touched {
+					continue
+				}
+			} else if !discover.InScope(sub, exclude, f) {
+				continue
+			}
+			scanFiles = append(scanFiles, f)
+		}
+	}
+	spans := map[string][]speed.Span{}
+	for _, tc := range allCases {
+		spans[tc.File] = append(spans[tc.File], speed.Span{ID: tc.ID, Start: tc.Span.Start, End: tc.Span.End})
+	}
+	found, err := speed.ScanTo(root, scanFiles, spans, stderr)
+	if err != nil { // the scan itself never fails a check
+		_, _ = fmt.Fprintf(stderr, "cull: speed scan failed: %v\n", err)
+		found = nil
+	}
+	if found == nil {
+		found = []speed.Finding{}
+	}
+	return checks, found
 }

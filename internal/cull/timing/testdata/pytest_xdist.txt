@@ -1,0 +1,16 @@
+============================= test session starts ==============================
+created: 2/2 workers
+2 workers [3 items]
+
+[gw0] [ 33%] PASSED tests/test_x.py::test_one 
+[gw1] [ 66%] PASSED tests/test_x.py::test_two[a b] 
+[gw0] [100%] PASSED tests/test_y.py::test_three 
+
+============================= slowest durations ================================
+3.00s setup    tests/test_y.py::test_three
+1.00s call     tests/test_y.py::test_three
+0.50s call     tests/test_x.py::test_two[a b]
+0.25s call     tests/test_x.py::test_one
+0.25s setup    tests/test_x.py::test_one
+
+============================== 3 passed in 4.80s ===============================

@@ -19,6 +19,11 @@ func commands(stdin io.Reader) []tools.Command {
 			NewFlags: applyFlags, Run: runApply,
 		},
 		{
+			Name: "time", Group: "check", Synopsis: "[path] [--timeout D] [--json]",
+			Summary:  "run the project's checks with timing and report where the time goes",
+			NewFlags: timeFlags, Run: runTime,
+		},
+		{
 			Name: "serve", Group: "check", Synopsis: "[path] [--no-open] [--port N] [--stop]",
 			Summary:  "open the review page (starts the local server if needed)",
 			NewFlags: serveFlags, Run: runServe,

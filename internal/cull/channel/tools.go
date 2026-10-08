@@ -16,6 +16,7 @@ import (
 	"github.com/schuettc/tackle/internal/cull/jev"
 	"github.com/schuettc/tackle/internal/cull/judge"
 	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/schuettc/tackle/internal/cull/timing"
 	"github.com/schuettc/tools-common/channelmcp"
 )
 
@@ -27,12 +28,14 @@ const pathProp = `"path":{"type":"string","description":"a path inside the proje
 // those are Court's, on the page.
 func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
-		{Name: "cull_check", Description: "Judge the project's automated tests with Jev and record what Court must review. base: the merge base of your branch to judge only the tests you changed (omit for the whole suite). Returns the summary, the ids of the tests to cut, the ids of the groups to merge, and to_review (how many items wait for Court on the review page).",
+		{Name: "cull_check", Description: "Judge the project's automated tests with Jev and record what Court must review. base: the merge base of your branch to judge only the tests you changed (omit for the whole suite). Returns the summary, the ids of the tests to cut, the ids of the groups to merge, to_review (how many items wait for Court on the review page), and speed (a digest of what makes the suite slow or weak: fixed waits, setup that blocks parallel tests, swallowed waits, screenshots).",
 			InputSchema: schema(`{"type":"object","properties":{"base":{"type":"string","description":"git ref; judge only tests changed since it"},` + pathProp + `}}`)},
 		{Name: "cull_apply", Description: "Remove tests from the last cull_check. Without ids it removes every cut (Jev's and Court's), tidies the imports that leaves unused, runs the project's tests before and after, and restores everything if they fail. Never commits. Returns what was applied, what needs you, the tidy report, the verify outcome and the exit (applied, rolled back, rollback failed or refused) with the reason.",
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"string"},"description":"remove exactly these test ids instead of every cut"},` + pathProp + `}}`)},
 		{Name: "cull_check_group", Description: "Verify your rewrite of a near-duplicate group (an id from cull_check's merge list) as one table test: the originals are gone, one new test keeps every row, Jev does not flag it, and the tests pass. Returns the four checks and their results.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"the group id"},` + pathProp + `},"required":["id"]}`)},
+		{Name: "cull_time", Description: "Run the checks the project runs (CI, hooks, recipes) one at a time with timing and return where the time goes: wall time per check, the slowest Go packages and Python files with their share, the 20 slowest tests, and hints (Go packages whose tests are slow and blocked from running in parallel by a t.Setenv helper; Python files that spend half their time in setup). Before each check it first runs the commands that set that check up in the project's recipe or CI step (for example a build), once per check, and reports their time as setup; a failing setup command fails that check. Takes minutes on a large suite. Run it before and after fixing what it and cull_check's speed findings point at.",
+			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
 		{Name: "cull_review", Description: "Open cull's review page for this project (or the repository at path) in Court's browser and make this session the one his answers are sent to. Returns the page URL and how many items are open. Says so, and opens nothing, when there is nothing to review. Use once; never repeatedly.",
 			InputSchema: schema(`{"type":"object","properties":{` + pathProp + `}}`)},
 		{Name: "cull_status", Description: "What is open, answered and sent for this project (or the repository at path), who owns the review, and any sends not yet delivered.",
@@ -91,6 +94,8 @@ func (ch *Channel) call(ctx context.Context, name string, args json.RawMessage) 
 			return "", errors.New("id is required")
 		}
 		return ch.checkGroup(ctx, a.Path, a.ID)
+	case "cull_time":
+		return ch.timeRun(ctx, a.Path)
 	case "cull_review":
 		return ch.review(ctx, a.Path)
 	case "cull_status":
@@ -174,6 +179,9 @@ func (ch *Channel) check(ctx context.Context, path, base string) (string, error)
 		"cut": cut, "merge": merge,
 		// Items on the review page that Court has not answered.
 		"to_review": rep.Summary["review"] + rep.Summary["group_review"],
+		// What makes the suite slow or weak: counts per kind, the literal wait
+		// total in seconds, and the 20 costliest findings. Fix these.
+		"speed": rep.SpeedDigest(),
 	}), nil
 }
 
@@ -311,4 +319,24 @@ func (ch *Channel) review(ctx context.Context, path string) (string, error) {
 		res["open_error"] = oneLine(err.Error())
 	}
 	return pretty(res), nil
+}
+
+func (ch *Channel) timeRun(ctx context.Context, path string) (string, error) {
+	p, err := ch.where(path)
+	if err != nil {
+		return "", err
+	}
+	root, err := discover.Root(p)
+	if err != nil {
+		return "", err
+	}
+	cfg, _, err := check.LoadConfig(root)
+	if err != nil {
+		return "", err
+	}
+	rep, err := timing.Run(ctx, timing.Options{Root: root, TestCommand: cfg.TestCommand})
+	if err != nil {
+		return "", err
+	}
+	return pretty(rep), nil
 }

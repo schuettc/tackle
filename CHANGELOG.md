@@ -345,6 +345,32 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
   refused push keeps the commit, prints the report and says the next sync
   pushes it.
 
+## [cull 0.2.0] - 2026-10-07
+
+### Added
+- cull reads what the project runs: CI workflows, the `justfile` recipes
+  they call, the project's own git hooks (never your global hooks) and
+  `package.json` scripts. It learns which test commands run, with their
+  options and folders, and which scripts run as checks. Commands it can't
+  understand are listed as not understood. Projects with none of these are
+  read by test-file name, as before.
+- `cull check` reports speed findings: fixed waits, Go setup that stops
+  tests running in parallel (`t.Setenv` in a helper most tests use),
+  browser-probe waits that fail silently or pass their timeout in the wrong
+  place, and screenshot-only code. A `cull: keep` comment on a line keeps a
+  deliberate wait. The agent fixes them; none goes to your review page.
+- `cull time` and the `cull_time` channel tool run the project's checks the
+  way CI does, with timing, and report the slowest packages, files and
+  tests and setup that most tests repeat, including tests no check covers.
+  It first runs the commands that set up each check in the project's recipe
+  or CI step (for example a build), reports their time as setup, and fails
+  that check if a setup command fails. Setup runs once per check.
+- `cull doctor` lists the checks cull found the project runs.
+
+### Fixed
+- TypeScript tests in a subdirectory that has its own TypeScript install
+  are now read, such as the ones CI runs with jest in `infra/cdk`.
+
 ## [cull 0.1.2] - 2026-10-06
 
 ### Fixed

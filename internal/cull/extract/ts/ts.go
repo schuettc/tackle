@@ -76,6 +76,22 @@ func findTypescript(root string) (string, bool) {
 	return "", false
 }
 
+// HasTypescript reports whether a typescript package can be used for the test
+// file relpath: $CULL_TS, or the nearest node_modules/typescript walking up
+// from the file's directory (so a test under infra/cdk uses infra/cdk's own).
+func HasTypescript(root, relpath string) bool {
+	_, ok := findTypescriptFor(root, relpath)
+	return ok
+}
+
+// findTypescriptFor is findTypescript starting at relpath's directory.
+func findTypescriptFor(root, relpath string) (string, bool) {
+	if v := os.Getenv("CULL_TS"); v != "" {
+		return v, true
+	}
+	return findTypescript(filepath.Join(root, filepath.Dir(filepath.FromSlash(relpath))))
+}
+
 // helperLine is one line of the helper's JSONL output: either a skip
 // record (Skip non-empty) or a TestCase's fields plus its byte span.
 type helperLine struct {
@@ -122,15 +138,25 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 		return res, nil
 	}
 
-	tsDir, ok := findTypescript(root)
-	if !ok {
-		reason := fmt.Sprintf("typescript not found under %s", root)
-		for _, rel := range relpaths {
+	// Each file uses the nearest typescript above it; files sharing one are
+	// extracted together.
+	var tsDirs []string
+	groups := map[string][]string{}
+	for _, rel := range relpaths {
+		tsDir, ok := findTypescriptFor(root, rel)
+		if !ok {
 			res.Skipped = append(res.Skipped, extract.Skipped{
 				File:   filepath.ToSlash(rel),
-				Reason: reason,
+				Reason: fmt.Sprintf("typescript not found under %s", root),
 			})
+			continue
 		}
+		if _, seen := groups[tsDir]; !seen {
+			tsDirs = append(tsDirs, tsDir)
+		}
+		groups[tsDir] = append(groups[tsDir], rel)
+	}
+	if len(tsDirs) == 0 {
 		return res, nil
 	}
 
@@ -147,9 +173,21 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 		return extract.Result{}, fmt.Errorf("extract/ts: write helper: %w", err)
 	}
 
-	args := make([]string, 0, len(relpaths)+3)
+	for _, tsDir := range tsDirs {
+		rels := groups[tsDir]
+		if err := runHelper(nodePath, helperPath, tsDir, root, rels, maxContext, &res); err != nil {
+			return extract.Result{}, err
+		}
+	}
+	return res, nil
+}
+
+// runHelper runs the extraction helper over rels with one typescript package
+// and appends what it printed to res.
+func runHelper(nodePath, helperPath, tsDir, root string, rels []string, maxContext int, res *extract.Result) error {
+	args := make([]string, 0, len(rels)+3)
 	args = append(args, helperPath, tsDir, root)
-	for _, rel := range relpaths {
+	for _, rel := range rels {
 		args = append(args, filepath.ToSlash(rel))
 	}
 
@@ -159,7 +197,7 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return extract.Result{}, fmt.Errorf("extract/ts: run helper: %w (stderr: %s)", err, stderr.String())
+		return fmt.Errorf("extract/ts: run helper: %w (stderr: %s)", err, stderr.String())
 	}
 
 	scanner := bufio.NewScanner(&stdout)
@@ -171,7 +209,7 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 		}
 		var hl helperLine
 		if err := json.Unmarshal(line, &hl); err != nil {
-			return extract.Result{}, fmt.Errorf("extract/ts: decode helper output %q: %w", line, err)
+			return fmt.Errorf("extract/ts: decode helper output %q: %w", line, err)
 		}
 		if hl.Skip != "" {
 			res.Skipped = append(res.Skipped, extract.Skipped{File: hl.Skip, Reason: hl.Reason})
@@ -194,10 +232,9 @@ func (tsExtractor) Extract(root string, relpaths []string, maxContext int) (extr
 		})
 	}
 	if err := scanner.Err(); err != nil {
-		return extract.Result{}, fmt.Errorf("extract/ts: read helper output: %w", err)
+		return fmt.Errorf("extract/ts: read helper output: %w", err)
 	}
-
-	return res, nil
+	return nil
 }
 
 // tidyResult is the JSON the helper's --tidy mode prints on stdout.
