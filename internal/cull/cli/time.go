@@ -16,7 +16,9 @@ import (
 
 var timeFlags = flags("time", "cull time [path] [--timeout D] [--json]",
 	"Run the checks the project runs (CI, hooks, recipes; found the way cull doctor lists them) one at a\n"+
-		"time, each in its directory, with what timing needs added (go test -json, pytest --durations=0),\n"+
+		"time, each in its directory, after the commands that set it up in its recipe or CI step (for\n"+
+		"example a build; run once per check, timed as setup, and a failing one fails that check),\n"+
+		" with what timing needs added (go test -json, pytest --durations=0),\n"+
 		"and report where the time goes: wall time per check, the slowest Go packages and Python files,\n"+
 		"the 20 slowest tests, and what the speed scan explains. Output is captured, not shown. A check\n"+
 		"that fails or times out is reported with its last lines and the run goes on. The TypeSafe key is\n"+

@@ -655,7 +655,7 @@ func goHints(root string, cr CheckResult) []Hint {
 		}
 		pdir := f.Package
 		if pdir == "" {
-			pdir = path.Dir(f.File)
+			continue
 		}
 		rel, err := filepath.Rel(modDir, filepath.Join(root, filepath.FromSlash(pdir)))
 		if err != nil {

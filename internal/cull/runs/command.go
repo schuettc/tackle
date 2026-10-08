@@ -225,15 +225,22 @@ func (e *engine) runText(text string, first int, hop func(line int) string, c ct
 	}
 }
 
+// lineEvent is one step of a line: a command, or a ( or ) that moves the directory.
+type lineEvent struct {
+	words   []string
+	op      string // "(" or ")" for a group event, else ""
+	prev    string // operator before the command
+	next    string // operator after it
+	noSetup bool
+}
+
 func (e *engine) runLine(line string, c *ctx) {
+	var evs []lineEvent
 	var words []string
-	var stack []string
 	prev := ""
 	flush := func(next string) {
 		if len(words) > 0 {
-			c.noSetup = prev == "||" || prev == "|" || next == "|" || next == "&" || next == "||"
-			e.command(words, c)
-			c.noSetup = false
+			evs = append(evs, lineEvent{words: words, prev: prev, next: next})
 			words = nil
 		}
 	}
@@ -242,26 +249,116 @@ func (e *engine) runLine(line string, c *ctx) {
 		case "":
 			words = append(words, t.word)
 			continue
-		case "(":
+		case "(", ")":
 			flush(t.op)
-			stack = append(stack, c.dir)
-		case ")":
-			flush(t.op)
-			if n := len(stack); n > 0 {
-				c.dir = stack[n-1]
-				stack = stack[:n-1]
-			}
+			evs = append(evs, lineEvent{op: t.op})
 		default:
 			flush(t.op)
 		}
 		prev = t.op
 	}
 	flush("")
+	markConditional(evs)
+	var stack []string
+	for _, ev := range evs {
+		switch ev.op {
+		case "(":
+			stack = append(stack, c.dir)
+		case ")":
+			if n := len(stack); n > 0 {
+				c.dir = stack[n-1]
+				stack = stack[:n-1]
+			}
+		default:
+			c.noSetup = ev.noSetup
+			e.command(ev.words, c)
+			c.noSetup = false
+		}
+	}
+}
+
+// markConditional sets noSetup on the commands of each and-or list that may
+// not run: all of a list that has ||, anything in a pipeline or background
+// job, and a command after && once an earlier one in the chain is a test.
+func markConditional(evs []lineEvent) {
+	for i := 0; i < len(evs); {
+		j := i
+		hasOr := false
+		for j < len(evs) && evs[j].op == "" {
+			if evs[j].next == "||" || evs[j].prev == "||" {
+				hasOr = true
+			}
+			if evs[j].next == ";" || evs[j].next == "&" || evs[j].next == "(" || evs[j].next == ")" || evs[j].next == "" {
+				j++
+				break
+			}
+			j++
+		}
+		if j == i {
+			i++
+			continue
+		}
+		cond := false
+		for k := i; k < j; k++ {
+			ev := &evs[k]
+			ev.noSetup = hasOr || cond || ev.prev == "|" || ev.next == "|" || ev.next == "&"
+			if ev.next == "&&" && isTestCommand(ev.words) {
+				cond = true
+			}
+		}
+		i = j
+	}
+}
+
+// normalize drops redirections, leading shell keywords and variable
+// assignments, and returns the command words and the assignments.
+func normalize(words []string) (rest, prefix []string) {
+	words = clean(words)
+	for len(words) > 0 {
+		w := words[0]
+		switch {
+		case shellKeywords[w] || controlWords[w]:
+			words = words[1:]
+		case w == "command" && len(words) > 1 && words[1] != "-v" && words[1] != "-V":
+			words = words[1:]
+		default:
+			goto done
+		}
+	}
+done:
+	for len(words) > 0 && envWord.MatchString(words[0]) {
+		prefix = append(prefix, words[0])
+		words = words[1:]
+	}
+	return words, prefix
+}
+
+// isTestCommand: the command only checks a condition, so what follows &&
+// may not run.
+func isTestCommand(words []string) bool {
+	w, _ := normalize(words)
+	if len(w) == 0 {
+		return false
+	}
+	switch path.Base(w[0]) {
+	case "[", "[[", "test", "which", "type":
+		return true
+	case "command":
+		return len(w) > 1 && (w[1] == "-v" || w[1] == "-V")
+	}
+	return false
+}
+
+// controlWords are block keywords; they are never commands.
+var controlWords = map[string]bool{
+	"then": true, "elif": true, "else": true, "fi": true, "do": true, "done": true,
+	"for": true, "while": true, "until": true, "case": true, "esac": true, "select": true,
+	"function": true, "in": true, "if": true,
 }
 
 var shellKeywords = map[string]bool{
 	"if": true, "then": true, "else": true, "elif": true, "do": true, "while": true, "until": true,
-	"!": true, "{": true, "exec": true, "command": true,
+	"!": true, "{": true, "exec": true,
 }
 
 // clean drops redirections.
@@ -283,14 +380,36 @@ func clean(words []string) []string {
 
 func (e *engine) command(words []string, c *ctx) {
 	words = clean(words)
-	for len(words) > 0 && shellKeywords[words[0]] {
+	// Track block structure: commands inside if/for/while/case/function
+	// bodies are not setup. The scope's depth carries across lines.
+	body := false
+	for len(words) > 0 && (shellKeywords[words[0]] || controlWords[words[0]] || words[0] == "command" && len(words) > 1 && words[1] != "-v" && words[1] != "-V") {
+		switch words[0] {
+		case "if", "while", "until":
+			c.setup.enter(1)
+		case "for", "select", "case":
+			c.setup.enter(1)
+			return // the rest is the loop header, not a command
+		case "function":
+			c.setup.enter(1)
+			c.setup.fnOpen(words)
+			return
+		case "fi", "done", "esac":
+			c.setup.enter(-1)
+			return
+		case "in":
+			return
+		}
 		words = words[1:]
 	}
-	var prefix []string
-	for len(words) > 0 && envWord.MatchString(words[0]) {
-		prefix = append(prefix, words[0])
-		words = words[1:]
+	if c.setup != nil && c.setup.depth > 0 {
+		body = true
 	}
+	if c.setup != nil && c.setup.fn > 0 {
+		c.setup.fnBraces(words)
+		body = true
+	}
+	words, prefix := normalize(words)
 	if len(words) == 0 {
 		return
 	}
@@ -309,7 +428,7 @@ func (e *engine) command(words []string, c *ctx) {
 	lc.env = mergeEnv(c.env, prefix)
 	before := e.emitted
 	e.classify(words, words, &lc)
-	if e.emitted == before && c.setup != nil && !c.noSetup && !nonSetup[path.Base(words[0])] {
+	if e.emitted == before && c.setup != nil && !body && !c.noSetup && !c.ignoreFail && !nonSetup[path.Base(words[0])] && !isTestCommand(words) {
 		c.setup.steps = append(c.setup.steps, Step{Dir: c.dir, Argv: append([]string(nil), words...), Env: append([]string(nil), lc.env...), From: strings.Join(c.chain, " > ")})
 	}
 }
@@ -319,7 +438,7 @@ var nonSetup = map[string]bool{
 	"[": true, "[[": true, "]": true, "]]": true, "}": true, "test": true, ":": true, "true": true, "false": true,
 	"echo": true, "printf": true, "set": true, "export": true, "unset": true, "trap": true, "source": true, ".": true,
 	"exit": true, "return": true, "read": true, "wait": true, "eval": true, "alias": true, "shopt": true,
-	"declare": true, "local": true, "readonly": true, "umask": true, "ulimit": true, "pwd": true,
+	"declare": true, "which": true, "type": true, "command": true, "local": true, "readonly": true, "umask": true, "ulimit": true, "pwd": true,
 }
 
 // mergeEnv returns base with extra applied on top (a later VAR replaces an earlier one).

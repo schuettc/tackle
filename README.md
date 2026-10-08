@@ -281,7 +281,10 @@ happen, is kept by putting a `cull: keep` comment on its line.
 
 **Timing.** `cull time` (the agent's tool is `cull_time`) runs the project's
 checks the way CI does, with their own options, and times them. It takes as long
-as the suite, so it runs only when asked. It reports the slowest packages, files
+as the suite, so it runs only when asked. Before each check it first runs the
+commands that set up that check in the project's recipe or CI step (for example
+a build), once per check, and reports their time as setup. A setup command that
+fails fails that check. It reports the slowest packages, files
 and tests, and setup that most tests in a package repeat. Tests that no check
 covers are timed too, and marked as such. The results are printed and not
 stored.

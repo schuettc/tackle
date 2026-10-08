@@ -180,8 +180,10 @@ func (e *engine) runRecipe(j *justInfo, r justRecipe, vars map[string]string, c 
 		e.runText(strings.Join(lines, "\n"), 1, hop, base, true)
 	} else {
 		for _, l := range lines {
-			l = strings.TrimLeft(l, "@- ")
-			e.runText(l, 1, hop, base, false)
+			t := strings.TrimLeft(l, "@- ")
+			lb := base
+			lb.ignoreFail = strings.Contains(l[:len(l)-len(t)], "-")
+			e.runText(t, 1, hop, lb, false)
 		}
 	}
 	for i, d := range r.Deps {

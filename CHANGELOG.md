@@ -362,6 +362,9 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 - `cull time` and the `cull_time` channel tool run the project's checks the
   way CI does, with timing, and report the slowest packages, files and
   tests and setup that most tests repeat, including tests no check covers.
+  It first runs the commands that set up each check in the project's recipe
+  or CI step (for example a build), reports their time as setup, and fails
+  that check if a setup command fails. Setup runs once per check.
 - `cull doctor` lists the checks cull found the project runs.
 
 ### Fixed

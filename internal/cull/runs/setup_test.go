@@ -2,6 +2,7 @@ package runs
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -92,5 +93,55 @@ func TestSiblingCheckDependenciesDoNotSetUpEachOther(t *testing.T) {
 	}
 	if a := pick(t, got, "script", "node a.mjs"); len(a.Setup) != 1 {
 		t.Errorf("a setup = %+v", a.Setup)
+	}
+}
+
+func setupArgvs(c Check) []string {
+	var out []string
+	for _, s := range c.Setup {
+		out = append(out, strings.Join(s.Argv, " "))
+	}
+	return out
+}
+
+func TestSetupOnlyUnconditionalCommands(t *testing.T) {
+	body := "for d in a b; do echo $d; done\n" +
+		"if [ ! -d node_modules ]; then npm install; fi\n" +
+		"if ! command -v foo; then curl -o foo x; fi\n" +
+		"test -d dist && rm -rf dist\n" +
+		"go build -o bin/x ./cmd/x\n" +
+		"go test ./..."
+	c := pick(t, wfRun(t, body, nil), "go", "go test ./...")
+	if got := setupArgvs(c); !reflect.DeepEqual(got, []string{"go build -o bin/x ./cmd/x"}) {
+		t.Fatalf("setup = %v", got)
+	}
+}
+
+func TestSetupMultilineBlocksAndChains(t *testing.T) {
+	body := "if [ -z \"$CI\" ]\nthen\n  npm install\nelif x\nthen\n  yarn\nelse\n  pnpm i\nfi\n" +
+		"while true; do\n  sleep 1\ndone\n" +
+		"case $X in\n a) prep a;;\nesac\n" +
+		"function f {\n  prep f\n}\n" +
+		"a1 || b1 && c1\n" +
+		"which foo && prep foo\n" +
+		"command -v bar && prep bar\n" +
+		"command prep ok\n" +
+		"prep last\nnpx jest"
+	c := pick(t, wfRun(t, body, nil), "jest", "npx jest")
+	if got := setupArgvs(c); !reflect.DeepEqual(got, []string{"prep ok", "prep last"}) {
+		t.Fatalf("setup = %v", got)
+	}
+}
+
+func TestJustIgnoredFailureLineIsNotSetup(t *testing.T) {
+	needJust(t)
+	root := write(t, map[string]string{
+		"justfile":                 "probe:\n    -rm -f x\n    prep dep\n    node a.mjs\n",
+		"a.mjs":                    "",
+		".github/workflows/ci.yml": "jobs:\n  j:\n    steps:\n      - run: just probe\n",
+	})
+	c := pick(t, find(t, root), "script", "node a.mjs")
+	if got := setupArgvs(c); !reflect.DeepEqual(got, []string{"prep dep"}) {
+		t.Fatalf("setup = %v", got)
 	}
 }

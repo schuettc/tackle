@@ -40,7 +40,48 @@ type Step struct {
 }
 
 // setupAcc collects the setup commands seen so far in one scope.
-type setupAcc struct{ steps []Step }
+type setupAcc struct {
+	steps []Step
+	depth int // open if/for/while/case/function blocks across lines
+	fn    int // open function bodies
+	fb    int // unclosed { in function bodies
+}
+
+func (a *setupAcc) enter(n int) {
+	if a == nil {
+		return
+	}
+	if a.depth += n; a.depth < 0 {
+		a.depth = 0
+	}
+}
+
+// fnOpen starts a function body; its { may be on the same line.
+func (a *setupAcc) fnOpen(words []string) {
+	if a == nil {
+		return
+	}
+	a.fn++
+	a.fb = 0
+	a.fnBraces(words)
+}
+
+func (a *setupAcc) fnBraces(words []string) {
+	for _, w := range words {
+		switch w {
+		case "{":
+			a.fb++
+		case "}":
+			if a.fb--; a.fb <= 0 {
+				a.fn, a.fb = 0, 0
+				a.depth--
+				if a.depth < 0 {
+					a.depth = 0
+				}
+			}
+		}
+	}
+}
 
 func (a *setupAcc) fork() *setupAcc {
 	if a == nil {
@@ -90,6 +131,8 @@ type ctx struct {
 	// noSetup: the command being walked is conditional or part of a pipeline
 	// or background job, so it is not a setup step.
 	noSetup bool
+	// ignoreFail: a just recipe line with a - prefix, whose failure is ignored.
+	ignoreFail bool
 }
 
 func (c ctx) with(hop string) ctx {
