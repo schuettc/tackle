@@ -712,9 +712,6 @@ function leftOpenMeta(decidedAt, now = /* @__PURE__ */ new Date()) {
   if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
   return `left open · ${d.toLocaleDateString("en-US", opts)}`;
 }
-function leftOpenLabel(n) {
-  return `left open · ${n}`;
-}
 
 // decide.ts
 import {
@@ -3175,26 +3172,10 @@ var VIEWS2 = [
   { id: "due", label: "due" },
   { id: "proposed", label: "proposed" }
 ];
-var FILTER_CHIPS = [
-  { id: "kind", label: "kind" },
-  { id: "repo", label: "repo" },
-  { id: "relation", label: "relation" },
-  { id: "bot", label: "bot/human" },
-  { id: "age", label: "age" },
-  { id: "rule", label: "rule" }
-];
 function emptyFilters() {
-  return {
-    view: "waiting",
-    kind: "",
-    repo: "",
-    relation: "",
-    bot: "",
-    age: "",
-    rule: "",
-    q: ""
-  };
+  return { view: "waiting", q: "" };
 }
+var LEFT_OPEN = "left-open";
 function getUrlQ() {
   return new URLSearchParams(location.search).get("q") ?? "";
 }
@@ -3233,7 +3214,7 @@ function makeAttention(ctx) {
   let searchDebounceTimer = null;
   let totalItemsForView = 0;
   let groups = [];
-  const collapsed = /* @__PURE__ */ new Set();
+  const collapsed = /* @__PURE__ */ new Set([LEFT_OPEN]);
   const groupOfKey = /* @__PURE__ */ new Map();
   const proposalOfKey = /* @__PURE__ */ new Map();
   const busyGroups = /* @__PURE__ */ new Set();
@@ -3325,7 +3306,7 @@ function makeAttention(ctx) {
   const handle = list2({
     label: "attention",
     views: VIEWS2.map((v) => ({ ...v, on: v.id === filters.view })),
-    filters: FILTER_CHIPS,
+    filters: [],
     selection,
     openOnMove: false,
     search: {
@@ -3364,9 +3345,6 @@ function makeAttention(ctx) {
         filters.view = id;
         ctx.route.go("attention", id);
         void reload();
-      } else if (group === "filter") {
-        cycleFilter(id);
-        void reload();
       }
     },
     onOpen(it) {
@@ -3377,40 +3355,13 @@ function makeAttention(ctx) {
     // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot()
   });
-  const filterCycles = {
-    relation: ["", "incoming", "outgoing", "own"],
-    bot: ["", "bot", "human"]
-  };
-  function cycleFilter(id) {
-    const cycle = filterCycles[id];
-    if (cycle) {
-      const cur = filters[id] ?? "";
-      const i = cycle.indexOf(cur);
-      filters[id] = cycle[(i + 1) % cycle.length];
-    }
-  }
-  function updateFilterChips() {
-    handle.setChips(
-      "filter",
-      FILTER_CHIPS.map((c) => ({
-        ...c,
-        on: Boolean(filters[c.id]),
-        label: filters[c.id] ? `${c.label}: ${filters[c.id]}` : c.label
-      }))
-    );
-  }
+  handle.el.classList.add("cb-attention");
   function buildQuery(pageOffset) {
     const p = {
       view: filters.view,
       offset: String(pageOffset),
       limit: String(PAGE_SIZE)
     };
-    if (filters.kind) p["kind"] = filters.kind;
-    if (filters.repo) p["repo"] = filters.repo;
-    if (filters.relation) p["relation"] = filters.relation;
-    if (filters.bot) p["bot"] = filters.bot;
-    if (filters.age) p["age"] = filters.age;
-    if (filters.rule) p["rule"] = filters.rule;
     if (filters.q) p["q"] = filters.q;
     return p;
   }
@@ -3425,7 +3376,6 @@ function makeAttention(ctx) {
     try {
       offset = 0;
       loadedItems = [];
-      updateFilterChips();
       const data = await ctx.api.get("/items", buildQuery(0));
       if (queryKey() !== asked2) {
         void reload();
@@ -3477,10 +3427,10 @@ function makeAttention(ctx) {
     }
   }
   function setRows() {
-    const all = offset >= totalItems;
-    const group = all ? leftOpen : [];
+    const withLeft = offset >= totalItems && leftOpenTotal > 0;
+    const left = withLeft && !collapsed.has(LEFT_OPEN) ? leftOpen : [];
     const open = loadedItems.filter((it) => !collapsed.has(it.group));
-    shown = [...open, ...group];
+    shown = [...open, ...left];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll(
       ".kit-rows > .kit-row"
@@ -3496,17 +3446,15 @@ function makeAttention(ctx) {
       if (says) col.append(h7("div", { class: "cb-row-looking" }, says));
     });
     placeGroupHeads(open, rowEls);
-    if (!group.length) return;
+    if (!withLeft) return;
     for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add("cb-left-open");
     }
-    rowEls[open.length]?.before(
-      h7(
-        "div",
-        { class: "cb-left-open-head", role: "presentation" },
-        leftOpenLabel(leftOpenTotal)
-      )
-    );
+    const head = leftOpenHead();
+    heads.push(head);
+    const first = rowEls[open.length];
+    if (first) first.before(head.el);
+    else handle.el.querySelector(".kit-rows")?.append(head.el);
   }
   function know(items) {
     for (const it of items) {
@@ -3544,14 +3492,71 @@ function makeAttention(ctx) {
       }
     }
   }
-  function groupHead(g) {
-    const isOpen = !collapsed.has(g.id);
+  function headShell(id, label, n, box, hint, data) {
+    const isOpen = !collapsed.has(id);
     const toggleOpen = () => {
-      if (collapsed.has(g.id)) collapsed.delete(g.id);
-      else collapsed.add(g.id);
+      if (collapsed.has(id)) collapsed.delete(id);
+      else collapsed.add(id);
       setRows();
       markOpenRow();
     };
+    const top = h7(
+      "div",
+      { class: "cb-group-top" },
+      h7(
+        "button",
+        {
+          type: "button",
+          class: "cb-group-caret",
+          "aria-expanded": String(isOpen),
+          "aria-label": label,
+          onclick: toggleOpen
+        },
+        isOpen ? "▼" : "▶"
+      ),
+      box ?? h7("span", { class: "cb-group-nobox" }),
+      h7(
+        "span",
+        { class: "cb-group-name", onclick: toggleOpen },
+        h7("span", { class: "cb-group-label" }, label),
+        hint
+      ),
+      h7("span", { class: "cb-group-n" }, String(n))
+    );
+    const acts = h7("div", { class: "cb-group-acts" });
+    const el = h7(
+      "div",
+      {
+        class: "cb-group" + (isOpen ? "" : " collapsed"),
+        role: "presentation",
+        dataset: data
+      },
+      top,
+      acts
+    );
+    return { el, acts };
+  }
+  function groupButton(id, cls, label, run, off = false) {
+    return h7(
+      "button",
+      {
+        type: "button",
+        class: "kit-btn " + cls,
+        disabled: off || busyGroups.has(id),
+        onclick() {
+          if (busyGroups.has(id)) return;
+          busyGroups.add(id);
+          paintAll();
+          void Promise.resolve(run()).finally(() => {
+            busyGroups.delete(id);
+            paintAll();
+          });
+        }
+      },
+      label
+    );
+  }
+  function groupHead(g) {
     const box = h7("span", {
       class: "cb-group-box",
       role: "checkbox",
@@ -3562,60 +3567,11 @@ function makeAttention(ctx) {
       }
     });
     const hint = g.outward && vocab2?.to_apply_hint ? h7("span", { class: "cb-group-where" }, vocab2.to_apply_hint) : null;
-    const top = h7(
-      "div",
-      { class: "cb-group-top" },
-      h7(
-        "button",
-        {
-          type: "button",
-          class: "cb-group-caret",
-          "aria-expanded": String(isOpen),
-          "aria-label": g.label,
-          onclick: toggleOpen
-        },
-        isOpen ? "▼" : "▶"
-      ),
-      box,
-      h7(
-        "span",
-        { class: "cb-group-name", onclick: toggleOpen },
-        h7("span", { class: "cb-group-label" }, g.label),
-        hint
-      ),
-      h7("span", { class: "cb-group-n" }, String(g.total))
-    );
-    const acts = h7("div", { class: "cb-group-acts" });
-    const el = h7(
-      "div",
-      {
-        class: "cb-group" + (isOpen ? "" : " collapsed"),
-        role: "presentation",
-        dataset: { group: g.id, d: g.disposition }
-      },
-      top,
-      acts
-    );
-    function button(cls, label, run, off = false) {
-      return h7(
-        "button",
-        {
-          type: "button",
-          class: "kit-btn " + cls,
-          disabled: off || busyGroups.has(g.id),
-          onclick() {
-            if (busyGroups.has(g.id)) return;
-            busyGroups.add(g.id);
-            paintAll();
-            void Promise.resolve(run()).finally(() => {
-              busyGroups.delete(g.id);
-              paintAll();
-            });
-          }
-        },
-        label
-      );
-    }
+    const { el, acts } = headShell(g.id, g.label, g.total, box, hint, {
+      group: g.id,
+      d: g.disposition
+    });
+    const button = (cls, label, run, off = false) => groupButton(g.id, cls, label, run, off);
     function paint() {
       const ticked = tickedIn(g);
       const n = ticked.length;
@@ -3668,6 +3624,54 @@ function makeAttention(ctx) {
     }
     paint();
     return { el, paint };
+  }
+  function leftOpenHead() {
+    const { el, acts } = headShell(
+      LEFT_OPEN,
+      vocab2?.left_open ?? "",
+      leftOpenTotal,
+      null,
+      null,
+      { group: LEFT_OPEN }
+    );
+    function paint() {
+      if (!vocab2 || !ctx.dockTarget()) {
+        acts.replaceChildren();
+        return;
+      }
+      const look = vocab2.look_many.replaceAll(
+        "{n}",
+        countWord(leftOpenTotal, 0, vocab2.count_words)
+      );
+      const looked = leftOpen.length >= leftOpenTotal && leftOpen.every((it) => !!it.looking);
+      acts.replaceChildren(
+        groupButton(LEFT_OPEN, "cb-group-look", look, lookLeftOpen, looked)
+      );
+    }
+    paint();
+    return { el, paint };
+  }
+  async function lookLeftOpen() {
+    try {
+      await lookInto(await leftOpenKeys());
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function leftOpenKeys() {
+    const out = [];
+    for (let total = Infinity; out.length < total; ) {
+      const data = await ctx.api.get("/items", {
+        ...viewFilters(),
+        limit: String(PAGE_SIZE),
+        left_offset: String(out.length)
+      });
+      const got = (data.left_open ?? []).map((it) => it.key);
+      out.push(...got);
+      total = data.left_open_total;
+      if (!got.length) break;
+    }
+    return out;
   }
   function paintAll() {
     for (const head of heads) head.paint();
@@ -3745,9 +3749,15 @@ function makeAttention(ctx) {
     }
   }
   async function lookGroup(g) {
+    try {
+      await lookInto((await target(g)).keys);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+  async function lookInto(keys) {
     if (!ctx.dockTarget() || !vocab2) return;
     try {
-      const { keys } = await target(g);
       if (!keys.length) return;
       const message3 = vocab2.look_into.message_many.replaceAll(
         "{keys}",

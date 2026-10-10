@@ -141,6 +141,39 @@ func TestKeepGoesToTheLeftOpenGroup(t *testing.T) {
 	}
 }
 
+// TestLeftOpenPagesWithLeftOffset: left_offset pages the left-open group
+// (the page names every left-open key, across pages); offset pages only
+// the items that need a decision.
+func TestLeftOpenPagesWithLeftOffset(t *testing.T) {
+	r := newRig(t)
+	keys := []string{"issue:schuettc/hail#4", "issue:schuettc/hail#5"}
+	for _, k := range keys {
+		r.decideOne(t, k, "keep")
+	}
+	page := func(q string) leftOpenItems {
+		t.Helper()
+		var v leftOpenItems
+		if c := r.do(t, "GET", "/api/items?view=waiting&limit=1"+q, nil, &v); c != 200 {
+			t.Fatalf("items %s: %d", q, c)
+		}
+		return v
+	}
+	for _, c := range []struct {
+		q    string
+		want []string
+	}{
+		{"", keys[:1]},
+		{"&offset=1", keys[:1]},
+		{"&left_offset=1", keys[1:]},
+		{"&left_offset=2", nil},
+	} {
+		v := page(c.q)
+		if !slices.Equal(v.leftKeys(), c.want) || v.LeftOpenTotal != 2 {
+			t.Errorf("%q: left open %v (%d), want %v (2)", c.q, v.leftKeys(), v.LeftOpenTotal, c.want)
+		}
+	}
+}
+
 // TestNewActivityBringsAKeptItemBack: someone else's comment newer than the
 // decision moves the item back up, needing a decision and saying why;
 // Court's own doesn't.

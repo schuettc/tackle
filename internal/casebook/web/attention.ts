@@ -1,6 +1,6 @@
-// attention.ts — the Attention section: list, views, filters, item detail.
+// attention.ts — the Attention section: list, views, search, item detail.
 //
-// makeAttention(ctx) builds the kit list(), wires view + filter chips,
+// makeAttention(ctx) builds the kit list(), wires the view chips and search,
 // fetches items from GET /api/items, and opens items in the reading column via
 // renderItem() from item.ts.
 //
@@ -43,7 +43,6 @@ import {
   countWord,
   groupButtons,
   leftOpenMeta,
-  leftOpenLabel,
   lookIntoCard,
 } from './decide-math.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
@@ -72,42 +71,21 @@ const VIEWS: Chip[] = [
   { id: 'proposed', label: 'proposed' },
 ];
 
-// Filter chip ids are used as query param names.  The text filter is handled
-// separately (a noteField-style input is rendered as a filter chip with no
-// on/off toggle).
-const FILTER_CHIPS: Chip[] = [
-  { id: 'kind', label: 'kind' },
-  { id: 'repo', label: 'repo' },
-  { id: 'relation', label: 'relation' },
-  { id: 'bot', label: 'bot/human' },
-  { id: 'age', label: 'age' },
-  { id: 'rule', label: 'rule' },
-];
+// The list has no filter chips (Court, 2026-10-10: search only). serve's
+// filter parameters stay, for agents' tools.
 
-// State for the current view and active filters.
-interface Filters extends Record<string, string> {
+// State for the current view and the search text.
+interface Filters {
   view: string;
-  kind: string;
-  repo: string;
-  relation: string;
-  bot: string;
-  age: string;
-  rule: string;
   q: string;
 }
 
 function emptyFilters(): Filters {
-  return {
-    view: 'waiting',
-    kind: '',
-    repo: '',
-    relation: '',
-    bot: '',
-    age: '',
-    rule: '',
-    q: '',
-  };
+  return { view: 'waiting', q: '' };
 }
+
+// LEFT_OPEN is the left-open group's id among the groups' (collapsed).
+const LEFT_OPEN = 'left-open';
 
 // ---- URL search param helpers -----------------------------------------------
 
@@ -160,7 +138,8 @@ export function makeAttention(ctx: Ctx): Section {
   // Court collapsed (in memory only). A collapsed group's rows are not
   // given to the list, so j and k pass over them.
   let groups: GroupView[] = [];
-  const collapsed = new Set<string>();
+  // The left-open group starts collapsed.
+  const collapsed = new Set<string>([LEFT_OPEN]);
   // What the page knows of each item it has seen in a group (loaded rows
   // and a group fetched whole): its group and its pending proposal's id.
   // A ticked item on a page not loaded is counted and acted on from here.
@@ -169,8 +148,8 @@ export function makeAttention(ctx: Ctx): Section {
   // The groups whose button is running (their buttons wait).
   const busyGroups = new Set<string>();
   // The view's left-open group (kept items still open: they need no
-  // decision, so the view's count and move-on leave them out). Its rows
-  // follow the items that need a decision, once every page of those is
+  // decision, so the view's count and move-on leave them out). It is the
+  // last group, once every page of the items that need a decision is
   // loaded; shown is what the list renders.
   let leftOpen: ItemView[] = [];
   let leftOpenTotal = 0;
@@ -309,7 +288,7 @@ export function makeAttention(ctx: Ctx): Section {
   const handle: ListHandle<ItemView> = list<ItemView>({
     label: 'attention',
     views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
-    filters: FILTER_CHIPS,
+    filters: [],
     selection,
     openOnMove: false,
     search: {
@@ -357,10 +336,6 @@ export function makeAttention(ctx: Ctx): Section {
         filters.view = id;
         ctx.route.go('attention', id);
         void reload();
-      } else if (group === 'filter') {
-        // Simple toggle cycle for known filter values.
-        cycleFilter(id);
-        void reload();
       }
     },
     onOpen(it: ItemView) {
@@ -373,35 +348,9 @@ export function makeAttention(ctx: Ctx): Section {
     foot: buildFoot(),
   });
 
-  // ---- filter chip cycling --------------------------------------------------
-
-  const filterCycles: Record<string, string[]> = {
-    relation: ['', 'incoming', 'outgoing', 'own'],
-    bot: ['', 'bot', 'human'],
-  };
-
-  function cycleFilter(id: string): void {
-    const cycle = filterCycles[id];
-    if (cycle) {
-      const cur = filters[id] ?? '';
-      const i = cycle.indexOf(cur);
-      filters[id] = cycle[(i + 1) % cycle.length];
-    }
-    // kind/repo/age/rule: no cycle; the chip toggles clearing (Task 4 or later).
-  }
-
-  function updateFilterChips(): void {
-    handle.setChips(
-      'filter',
-      FILTER_CHIPS.map((c) => ({
-        ...c,
-        on: Boolean((filters as Record<string, string>)[c.id]),
-        label: (filters as Record<string, string>)[c.id]
-          ? `${c.label}: ${(filters as Record<string, string>)[c.id]}`
-          : c.label,
-      })),
-    );
-  }
+  // The groups' CSS (indented rows, one row height, the reserved
+  // scrollbar) is Attention's alone.
+  handle.el.classList.add('cb-attention');
 
   // ---- API ------------------------------------------------------------------
 
@@ -411,19 +360,13 @@ export function makeAttention(ctx: Ctx): Section {
       offset: String(pageOffset),
       limit: String(PAGE_SIZE),
     };
-    if (filters.kind) p['kind'] = filters.kind;
-    if (filters.repo) p['repo'] = filters.repo;
-    if (filters.relation) p['relation'] = filters.relation;
-    if (filters.bot) p['bot'] = filters.bot;
-    if (filters.age) p['age'] = filters.age;
-    if (filters.rule) p['rule'] = filters.rule;
     if (filters.q) p['q'] = filters.q;
     return p;
   }
 
-  // reload loads the list's first page for the view, filters and search
-  // as they are when it runs. Coalesced (coalesce.ts): one load in flight
-  // and at most one queued, so a view, filter or search change made while a
+  // reload loads the list's first page for the view and search as they
+  // are when it runs. Coalesced (coalesce.ts): one load in flight and at
+  // most one queued, so a view or search change made while a
   // load is on its way runs once that load ends, never dropped (casebook
   // 0.4.7: it was, and the list kept the old view). A load whose query
   // changed while it was on its way paints nothing: the newer query's load
@@ -442,7 +385,6 @@ export function makeAttention(ctx: Ctx): Section {
     try {
       offset = 0;
       loadedItems = [];
-      updateFilterChips();
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
       if (queryKey() !== asked) {
         // Every change to the query asks for a reload; this one makes sure.
@@ -503,13 +445,13 @@ export function makeAttention(ctx: Ctx): Section {
 
   // setRows renders the items that need a decision, under their groups'
   // headers (a collapsed group's header alone), and, once every page of
-  // them is loaded, the left-open group after them: a quiet divider
-  // ("left open · N", the group's own count) and muted rows.
+  // them is loaded, the left-open group last: its header and (expanded)
+  // its muted rows.
   function setRows(): void {
-    const all = offset >= totalItems;
-    const group = all ? leftOpen : [];
+    const withLeft = offset >= totalItems && leftOpenTotal > 0;
+    const left = withLeft && !collapsed.has(LEFT_OPEN) ? leftOpen : [];
     const open = loadedItems.filter((it) => !collapsed.has(it.group));
-    shown = [...open, ...group];
+    shown = [...open, ...left];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll<HTMLElement>(
       '.kit-rows > .kit-row',
@@ -529,17 +471,15 @@ export function makeAttention(ctx: Ctx): Section {
       if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
     });
     placeGroupHeads(open, rowEls);
-    if (!group.length) return;
+    if (!withLeft) return;
     for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add('cb-left-open');
     }
-    rowEls[open.length]?.before(
-      h(
-        'div',
-        { class: 'cb-left-open-head', role: 'presentation' },
-        leftOpenLabel(leftOpenTotal),
-      ),
-    );
+    const head = leftOpenHead();
+    heads.push(head);
+    const first = rowEls[open.length];
+    if (first) first.before(head.el);
+    else handle.el.querySelector('.kit-rows')?.append(head.el);
   }
 
   // ---- the groups ------------------------------------------------------------
@@ -594,18 +534,97 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
-  // groupHead is one group's header, sticky over its rows: the caret, a
-  // checkbox that ticks every item of the group (every page), its label
-  // (an outward group's "goes to To apply first" under it) and its count;
-  // then its buttons, for the whole group or its ticked items.
-  function groupHead(g: GroupView): { el: HTMLElement; paint(): void } {
-    const isOpen = !collapsed.has(g.id);
+  // headShell is a group's header, sticky over its rows: the caret, the
+  // group's checkbox (box; a blank of its width without one), its label
+  // (hint under it) and its count; then the line its buttons go on, one
+  // line of one height whether or not they are there. The caret and the
+  // label collapse and expand it (id: the group's).
+  function headShell(
+    id: string,
+    label: string,
+    n: number,
+    box: HTMLElement | null,
+    hint: HTMLElement | null,
+    data: Record<string, string>,
+  ): { el: HTMLElement; acts: HTMLElement } {
+    const isOpen = !collapsed.has(id);
     const toggleOpen = (): void => {
-      if (collapsed.has(g.id)) collapsed.delete(g.id);
-      else collapsed.add(g.id);
+      if (collapsed.has(id)) collapsed.delete(id);
+      else collapsed.add(id);
       setRows();
       markOpenRow();
     };
+    const top = h(
+      'div',
+      { class: 'cb-group-top' },
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'cb-group-caret',
+          'aria-expanded': String(isOpen),
+          'aria-label': label,
+          onclick: toggleOpen,
+        },
+        isOpen ? '\u25bc' : '\u25b6',
+      ),
+      box ?? h('span', { class: 'cb-group-nobox' }),
+      h(
+        'span',
+        { class: 'cb-group-name', onclick: toggleOpen },
+        h('span', { class: 'cb-group-label' }, label),
+        hint,
+      ),
+      h('span', { class: 'cb-group-n' }, String(n)),
+    );
+    const acts = h('div', { class: 'cb-group-acts' });
+    const el = h(
+      'div',
+      {
+        class: 'cb-group' + (isOpen ? '' : ' collapsed'),
+        role: 'presentation',
+        dataset: data,
+      },
+      top,
+      acts,
+    );
+    return { el, acts };
+  }
+
+  // groupButton is one of group id's buttons: while one runs, the group's
+  // buttons wait.
+  function groupButton(
+    id: string,
+    cls: string,
+    label: string,
+    run: () => Promise<void> | void,
+    off = false,
+  ): HTMLElement {
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: 'kit-btn ' + cls,
+        disabled: off || busyGroups.has(id),
+        onclick() {
+          if (busyGroups.has(id)) return;
+          busyGroups.add(id);
+          paintAll();
+          void Promise.resolve(run()).finally(() => {
+            busyGroups.delete(id);
+            paintAll();
+          });
+        },
+      },
+      label,
+    );
+  }
+
+  // groupHead is one group's header: a checkbox that ticks every item of
+  // the group (every page), an outward group's "goes to To apply first"
+  // under its label; its buttons act on the whole group or its ticked
+  // items.
+  function groupHead(g: GroupView): { el: HTMLElement; paint(): void } {
     const box = h('span', {
       class: 'cb-group-box',
       role: 'checkbox',
@@ -619,68 +638,16 @@ export function makeAttention(ctx: Ctx): Section {
       g.outward && vocab?.to_apply_hint
         ? h('span', { class: 'cb-group-where' }, vocab.to_apply_hint)
         : null;
-    const top = h(
-      'div',
-      { class: 'cb-group-top' },
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'cb-group-caret',
-          'aria-expanded': String(isOpen),
-          'aria-label': g.label,
-          onclick: toggleOpen,
-        },
-        isOpen ? '\u25bc' : '\u25b6',
-      ),
-      box,
-      h(
-        'span',
-        { class: 'cb-group-name', onclick: toggleOpen },
-        h('span', { class: 'cb-group-label' }, g.label),
-        hint,
-      ),
-      h('span', { class: 'cb-group-n' }, String(g.total)),
-    );
-    const acts = h('div', { class: 'cb-group-acts' });
-    const el = h(
-      'div',
-      {
-        class: 'cb-group' + (isOpen ? '' : ' collapsed'),
-        role: 'presentation',
-        dataset: { group: g.id, d: g.disposition },
-      },
-      top,
-      acts,
-    );
-
-    // button is one of the group's buttons: while one runs, the group's
-    // buttons wait.
-    function button(
+    const { el, acts } = headShell(g.id, g.label, g.total, box, hint, {
+      group: g.id,
+      d: g.disposition,
+    });
+    const button = (
       cls: string,
       label: string,
       run: () => Promise<void> | void,
       off = false,
-    ): HTMLElement {
-      return h(
-        'button',
-        {
-          type: 'button',
-          class: 'kit-btn ' + cls,
-          disabled: off || busyGroups.has(g.id),
-          onclick() {
-            if (busyGroups.has(g.id)) return;
-            busyGroups.add(g.id);
-            paintAll();
-            void Promise.resolve(run()).finally(() => {
-              busyGroups.delete(g.id);
-              paintAll();
-            });
-          },
-        },
-        label,
-      );
-    }
+    ): HTMLElement => groupButton(g.id, cls, label, run, off);
 
     function paint(): void {
       const ticked = tickedIn(g);
@@ -754,6 +721,66 @@ export function makeAttention(ctx: Ctx): Section {
     }
     paint();
     return { el, paint };
+  }
+
+  // leftOpenHead is the left-open group's header (serve's label, its count
+  // across pages). Its items need no decision: no checkbox, no choice, no
+  // discard; with a session attached, Look into, naming every left-open
+  // item (every page).
+  function leftOpenHead(): { el: HTMLElement; paint(): void } {
+    const { el, acts } = headShell(
+      LEFT_OPEN,
+      vocab?.left_open ?? '',
+      leftOpenTotal,
+      null,
+      null,
+      { group: LEFT_OPEN },
+    );
+    function paint(): void {
+      if (!vocab || !ctx.dockTarget()) {
+        acts.replaceChildren();
+        return;
+      }
+      const look = vocab.look_many.replaceAll(
+        '{n}',
+        countWord(leftOpenTotal, 0, vocab.count_words),
+      );
+      const looked =
+        leftOpen.length >= leftOpenTotal &&
+        leftOpen.every((it) => !!it.looking);
+      acts.replaceChildren(
+        groupButton(LEFT_OPEN, 'cb-group-look', look, lookLeftOpen, looked),
+      );
+    }
+    paint();
+    return { el, paint };
+  }
+
+  // lookLeftOpen asks the attached session to look into every left-open
+  // item.
+  async function lookLeftOpen(): Promise<void> {
+    try {
+      await lookInto(await leftOpenKeys());
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // leftOpenKeys is every left-open item's key in the view (every page).
+  async function leftOpenKeys(): Promise<string[]> {
+    const out: string[] = [];
+    for (let total = Infinity; out.length < total;) {
+      const data = await ctx.api.get<ItemsView>('/items', {
+        ...viewFilters(),
+        limit: String(PAGE_SIZE),
+        left_offset: String(out.length),
+      });
+      const got = (data.left_open ?? []).map((it) => it.key);
+      out.push(...got);
+      total = data.left_open_total;
+      if (!got.length) break;
+    }
+    return out;
   }
 
   function paintAll(): void {
@@ -850,14 +877,22 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
-  // lookGroup sends the attached session one message naming a group's keys
-  // (or its ticked ones), all of them attached, with the look-into purpose
-  // (serve marks each while it is underway, and the rows say so). It
-  // decides nothing.
+  // lookGroup asks the attached session to look into a group's items (or
+  // its ticked ones).
   async function lookGroup(g: GroupView): Promise<void> {
+    try {
+      await lookInto((await target(g)).keys);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // lookInto sends the attached session one message naming keys, all of
+  // them attached, with the look-into purpose (serve marks each while it is
+  // underway, and the rows say so). It decides nothing.
+  async function lookInto(keys: string[]): Promise<void> {
     if (!ctx.dockTarget() || !vocab) return;
     try {
-      const { keys } = await target(g);
       if (!keys.length) return;
       const message = vocab.look_into.message_many.replaceAll(
         '{keys}',

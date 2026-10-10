@@ -16,7 +16,6 @@ import {
   keyWithoutKind,
   pluralize,
   leftOpenMeta,
-  leftOpenLabel,
 } from './decide-math.ts';
 import type { DecisionVocabView } from './wire.d.ts';
 
@@ -364,9 +363,5 @@ describe('left open', () => {
       'left open \u00b7 Dec 30, 2025',
     );
     assert.equal(leftOpenMeta(undefined, now), 'left open');
-  });
-  test('the group is labelled with its own count', () => {
-    assert.equal(leftOpenLabel(3), 'left open \u00b7 3');
-    assert.equal(leftOpenLabel(1), 'left open \u00b7 1');
   });
 });

@@ -175,8 +175,8 @@
 
 .cb-group-top {
   display: grid;
-  grid-template-columns: 14px 16px minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-columns: 12px 14px minmax(0, 1fr) auto;
+  gap: 6px;
   align-items: center;
 }
 
@@ -242,23 +242,30 @@
   text-align: right;
 }
 
-/* The buttons, under the label: the choice filled (the primary), then
- * look into and discard; with some ticked, "N ticked" before them and
- * untick after. */
+/* The buttons, under the label (38px: caret, box and their gaps): the
+ * choice filled (the primary), then look into and discard; with some
+ * ticked, "N ticked" before them and untick after. One line, one height,
+ * with buttons or none, so ticking or attaching a session moves nothing. */
 .cb-group-acts {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
+  height: 34px;
   padding: 6px 0 0 38px;
 }
 
-.cb-group-acts:empty {
-  display: none;
-}
-
+/* Too narrow a column cuts the buttons' words rather than wrap the line. */
 .cb-group-acts .kit-btn {
   white-space: nowrap;
+  padding: 3px 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-group-acts > :not(.kit-btn) {
+  flex-shrink: 0;
 }
 
 .cb-group-ticked {
@@ -282,6 +289,50 @@
 .cb-group-note {
   font: 12px var(--kit-mono);
   color: var(--kit-agent);
+}
+
+/* Attention's rows sit under their group's header, indented so a row's
+ * checkbox lines up under the header's label (the header's 8px inset plus
+ * its 38px of caret and checkbox, less the row's own 10px padding). Every
+ * row is one height: kicker, title, and two lines for the reason (cut
+ * there; the item page has it whole), or one with "‹session› is looking
+ * into it" under it. The list keeps its scrollbar's room, so rows don't
+ * move when it comes and goes. */
+.cb-attention .kit-rows {
+  scrollbar-gutter: stable;
+}
+
+.cb-attention .kit-rows > .kit-row {
+  margin-left: 36px;
+  height: 93px;
+  overflow: hidden;
+}
+
+.cb-attention .kit-row .kit-kicker {
+  line-height: 16px;
+}
+
+.cb-attention .kit-row .kit-title {
+  line-height: 21px;
+}
+
+.cb-attention .kit-row .kit-sub,
+.cb-attention .kit-row .cb-row-looking {
+  line-height: 17px;
+}
+
+.cb-attention .kit-row .kit-sub {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cb-attention .kit-row-main:has(.cb-row-looking) .kit-sub {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 
 /* ---- the decide step (item.ts, choices.ts) ------------------------------ */
@@ -1963,17 +2014,8 @@ textarea.cb-needs-edit:focus {
 }
 
 /* ---- the left-open group (Leave it open stays in the list) ---------------- */
-/* A quiet divider after the items that need a decision ("left open · N"),
-   then the kept items still open, muted. */
-.cb-left-open-head {
-  margin: 14px 0 4px;
-  padding: 6px 12px 4px;
-  border-top: 1px solid var(--kit-line);
-  color: var(--kit-muted);
-  font-family: var(--kit-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
+/* The last group (a header as the others', no checkbox), its rows the kept
+   items still open, muted. */
 .kit-row.cb-left-open .kit-title,
 .kit-row.cb-left-open .kit-kicker,
 .kit-row.cb-left-open .kit-meta {

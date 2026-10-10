@@ -156,6 +156,9 @@ func TestVocabularyGroupWords(t *testing.T) {
 	if v.ToApplyHint != "goes to To apply first" || v.Ticked != "{n} ticked" || v.Untick != "untick" {
 		t.Fatalf("hint %q, ticked %q, untick %q", v.ToApplyHint, v.Ticked, v.Untick)
 	}
+	if v.LeftOpen != "left open" {
+		t.Fatalf("left-open group label %q", v.LeftOpen)
+	}
 	for _, k := range v.Kinds {
 		for _, c := range k.Choices {
 			if want := item.Choices(item.Kind(k.Kind)); c.Many == "" || c.Many != want[slices.IndexFunc(want, func(w item.Choice) bool { return w.Label == c.Label })].Many {

@@ -188,9 +188,17 @@ async function listShows(pg, view, q = '', timeout = 6000) {
     }).catch(() => null);
     if (!r?.ok) return false;
     // A row names its item in its kicker: "<kind> · <key without kind>".
-    // The items left open list after the rest.
+    // The items left open are a group after the rest, collapsed: its
+    // header counts them.
     const v = await r.json();
-    const want = [...(v.items ?? []), ...(v.left_open ?? [])]
+    const leftN = await pg
+      .$eval(
+        '.kit-app > .kit-list:not([hidden]) .cb-group[data-group="left-open"] .cb-group-n',
+        (e) => Number(e.textContent ?? ''),
+      )
+      .catch(() => 0);
+    if (leftN !== (v.left_open_total ?? 0)) return false;
+    const want = (v.items ?? [])
       .map((i) =>
         i.kind
           ? `${i.kind} \u00b7 ${i.key.slice(i.key.indexOf(':') + 1)}`
@@ -200,7 +208,7 @@ async function listShows(pg, view, q = '', timeout = 6000) {
     const got = (
       await pg
         .$$eval(
-          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+          '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open) .kit-kicker',
           (els) => els.map((e) => e.textContent ?? ''),
         )
         .catch(() => [])
@@ -5126,7 +5134,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 923;
+const MIN_CHECKS = 934;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,

@@ -432,6 +432,8 @@ type DecisionVocabView struct {
 	ToApplyHint string `json:"to_apply_hint"`
 	Ticked      string `json:"ticked"`
 	Untick      string `json:"untick"`
+	// LeftOpen is the left-open group's label (its count beside it).
+	LeftOpen string `json:"left_open"`
 }
 
 // SummaryVocab is the pinned summary line: OneSession when every item the

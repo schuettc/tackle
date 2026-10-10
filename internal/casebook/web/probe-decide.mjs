@@ -42,7 +42,8 @@
 // of their own:
 //
 //   deciding Leave it open moves the row into the left-open group at the
-//     bottom ("left open · N", rows muted, "left open · date"); the view's
+//     bottom (its header "left open", N; collapsed until clicked; rows
+//     muted, "left open · date"); the view's
 //     count drops; move-on opens the next undecided item, never a
 //     left-open row
 //   opening a left-open row shows its decision (the chosen card) and the
@@ -108,6 +109,15 @@
 //     recommended), nothing is decided, and casebook_next hands the items
 //     out again
 //   groups: discard confirm: a group's Discard withdraws only that group
+//
+// And the steady list, on a serve and repo of their own:
+//
+//   no filter chips; the left-open group last, collapsed, no checkbox,
+//     expanding on a click; Look into on every group (left open's naming
+//     every left-open key) once a session is attached after load, nothing
+//     ticked; rows indented under their header's label; every row one
+//     height, a long reason cut at two lines; the list's scrollbar room
+//     kept; a group's button line one height, ticked or not
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -288,6 +298,7 @@ export async function decideScenarios(shared, t) {
     ['a new recommendation on the open item', openRecScenario, openRecSeed()],
     ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
     ['discard recommendations', discardScenario, discardSeed()],
+    ['the steady list', steadyScenario, steadySeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -2566,15 +2577,33 @@ async function lightLO(t, pg, name) {
   );
 }
 
+// LO_HEAD is the shown list's left-open group header.
+const LO_HEAD = `${LIST} .cb-group[data-group="left-open"]`;
+
+// loCounts waits for the left-open header to read "left open", count n.
+function loCounts(t, pg, n) {
+  return t.until(
+    pg,
+    ({ sel, n }) => {
+      const g = document.querySelector(sel);
+      return (
+        g?.querySelector('.cb-group-label')?.textContent === 'left open' &&
+        g.querySelector('.cb-group-n')?.textContent === n
+      );
+    },
+    { sel: LO_HEAD, n: String(n) },
+  );
+}
+
 // listState reads the shown list: each row's key (its kicker), whether it is
-// in the left-open group, its meta and sub; the group's divider (its text,
-// and how many rows come before it); and the waiting chip's count.
+// in the left-open group, its meta and sub; the group's header ("label ·
+// count", and how many rows come before it); and the waiting chip's count.
 function listState(pg) {
   return pg.evaluate(() => {
     const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
     const body = list?.querySelector('.kit-rows');
     const kids = [...(body?.children ?? [])];
-    const head = list?.querySelector('.cb-left-open-head');
+    const head = list?.querySelector('.cb-group[data-group="left-open"]');
     const chip = list?.querySelector('.kit-chip[data-id="waiting"] .kit-n');
     return {
       rows: kids
@@ -2590,7 +2619,9 @@ function listState(pg) {
           sub: el.querySelector('.kit-sub')?.textContent ?? '',
           color: getComputedStyle(el.querySelector('.kit-title')).color,
         })),
-      head: head?.textContent ?? '',
+      head: head
+        ? `${head.querySelector('.cb-group-label')?.textContent ?? ''} \u00b7 ${head.querySelector('.cb-group-n')?.textContent ?? ''}`
+        : '',
       headAt: head
         ? kids.filter(
             (el) =>
@@ -2640,7 +2671,7 @@ async function leftOpenScenario(context, t, s) {
       [1, 2, 3, 4, 5].map(LISSUE),
     );
     check(
-      `the waiting chip counts 5 (${st.count}), and there is no divider ("${st.head}")`,
+      `the waiting chip counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
       st.count === 5 && st.head === '',
     );
   }
@@ -2660,14 +2691,20 @@ async function leftOpenScenario(context, t, s) {
     await opened(t, pg, LISSUE(2)),
   );
   check(
-    'the list settles with the left-open divider',
-    await until(
-      pg,
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
-        )?.textContent === 'left open \u00b7 1',
-    ),
+    'the list settles with the left-open group, last',
+    await loCounts(t, pg, 1),
+  );
+  // It starts collapsed: a click on its caret shows its rows.
+  await pg.click(`${LO_HEAD} .cb-group-caret`);
+  await until(
+    pg,
+    (k) =>
+      [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-row.cb-left-open .kit-kicker',
+        ),
+      ].some((e) => e.textContent === k),
+    kicker(LISSUE(1)),
   );
   {
     const st = await listState(pg);
@@ -2681,7 +2718,7 @@ async function leftOpenScenario(context, t, s) {
       [2, 3, 4, 5].map(LISSUE).concat([`${LISSUE(1)} (left open)`]),
     );
     check(
-      `the divider "${st.head}" comes after the 4 items that need a decision (at ${st.headAt})`,
+      `the group's header "${st.head}" comes after the 4 items that need a decision (at ${st.headAt})`,
       st.head === 'left open \u00b7 1' && st.headAt === 4,
     );
     const lo = st.rows.find((r) => r.key === LISSUE(1));
@@ -2713,16 +2750,7 @@ async function leftOpenScenario(context, t, s) {
     'move-on after the last item opens the first undecided one (issue #2), not a left-open row',
     await opened(t, pg, LISSUE(2)),
   );
-  check(
-    'the group counts 2',
-    await until(
-      pg,
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
-        )?.textContent === 'left open \u00b7 2',
-    ),
-  );
+  check('the group counts 2', await loCounts(t, pg, 2));
 
   // Opening a left-open row shows its decision and the cards as usual.
   await row(pg, LISSUE(1)).click();
@@ -3806,6 +3834,364 @@ async function lookIntoScenario(context, t, s) {
       await pg.evaluate(() => document.activeElement?.blur());
       await pg.screenshot({ path: `${SHOTS}-foot-looking.png` });
     }
+  }
+  await pg.close();
+}
+
+// ---- the steady list: no filters, left open a group, indented rows --------
+
+const ST = 'rd-steady';
+const SISSUE = (n) => `issue:schuettc/${ST}#${n}`;
+const SPR = (n) => `pr:schuettc/${ST}#${n}`;
+const LONG_REASON =
+  'Superseded by the newer bump that landed last week, which also moves the lockfile and the CI image forward; this one conflicts with it in three files and its checks have been red since the runner image changed, so nothing here is worth rebasing.';
+
+function steadySeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${ST}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${ST}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [
+          [21, 'Bump the uploader dependency', 'renovate'],
+          [22, 'Bump the parser dependency', 'renovate'],
+          [23, 'Fix the retry loop', 'bob'],
+        ].map(item),
+        issues: [
+          [1, 'How do I set the region?', 'alice'],
+          [2, 'Works on my machine', 'carol'],
+          [3, 'A second region', 'dave'],
+          [4, 'Flag docs', 'erin'],
+          [5, 'Tags question', 'frank'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function steadyScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: the steady list');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const LEFT = [4, 5].map(SISSUE);
+  const ALL = [SPR(21), SPR(22), SPR(23), ...[1, 2, 3].map(SISSUE), ...LEFT];
+  const leftSel = `${LIST} .cb-group[data-group="left-open"]`;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !ALL.includes(k));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  // Issues #4 and #5 left open.
+  await api('POST', '/api/decide', { keys: LEFT, disposition: 'keep' });
+
+  // Two sessions, so the dock attaches to neither on its own.
+  const A = 'probe-steady-a';
+  const B = 'probe-steady-b';
+  await agent.presence(A, 'pi \u00b7 steady-a', '/home/court/steady-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 steady-b', '/home/court/steady-b', 'pi');
+  await agent.propose(A, [SPR(21)], 'close', LONG_REASON);
+  await agent.propose(A, [SPR(22)], 'close', 'superseded');
+  await agent.propose(A, [SPR(23)], 'merge', 'green and reviewed');
+  await agent.propose(A, [1, 2].map(SISSUE), 'keep', 'active');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+  const ready = await until(
+    pg,
+    (sel) => !!document.querySelector(sel),
+    leftSel,
+    8000,
+  );
+
+  // ---- no filter chips --------------------------------------------------------
+  {
+    const got = await pg.evaluate((list) => {
+      const f = document.querySelector(`${list} .kit-chips[data-group=filter]`);
+      const v = document.querySelector(`${list} .kit-chips[data-group=view]`);
+      return {
+        chips: f ? f.querySelectorAll('.kit-chip').length : 0,
+        shown: !!f?.checkVisibility(),
+        views: v?.checkVisibility()
+          ? v.querySelectorAll('.kit-chip').length
+          : 0,
+      };
+    }, LIST);
+    check(
+      `no filter chips: Attention shows ${got.chips} filter chips (row shown ${got.shown}), its ${got.views} view chips still show`,
+      got.chips === 0 && !got.shown && got.views === 4,
+    );
+  }
+
+  // ---- left open group --------------------------------------------------------
+  {
+    const heads = await groupHeads(pg);
+    const last = heads[heads.length - 1];
+    const st = await pg.evaluate(
+      ({ sel, list }) => {
+        const g = document.querySelector(sel);
+        const r = g?.getBoundingClientRect();
+        return {
+          collapsed: !!g?.classList.contains('collapsed'),
+          expanded: g
+            ?.querySelector('.cb-group-caret')
+            ?.getAttribute('aria-expanded'),
+          box: !!g?.querySelector('.cb-group-box'),
+          shown: !!g?.checkVisibility() && (r?.height ?? 0) > 0,
+          lastChild:
+            document.querySelector(`${list} .kit-rows`)?.lastElementChild === g,
+        };
+      },
+      { sel: leftSel, list: LIST },
+    );
+    const leftRows = await Promise.all(LEFT.map((k) => row(pg, k).count()));
+    check(
+      `left open group: last of ${heads.length} headers ("${last?.label}" ${last?.n}, ${last?.id}), shown, starts collapsed (${st.collapsed}, aria-expanded ${st.expanded}) with no left-open rows (${leftRows}), no checkbox (${st.box}), no buttons ("${last?.acts.join(' / ')}") (ready ${ready})`,
+      ready &&
+        last?.id === 'left-open' &&
+        last.label === 'left open' &&
+        last.n === '2' &&
+        last.acts.length === 0 &&
+        st.shown &&
+        st.lastChild &&
+        st.collapsed &&
+        st.expanded === 'false' &&
+        !st.box &&
+        leftRows.every((n) => n === 0),
+    );
+  }
+  await pg.click(`${leftSel} .cb-group-caret`);
+  {
+    const ok = await until(
+      pg,
+      ({ list, k }) =>
+        [...document.querySelectorAll(`${list} .kit-row .kit-kicker`)].some(
+          (e) => e.textContent === k,
+        ),
+      { list: LIST, k: kicker(LEFT[0]) },
+    );
+    const seq = await listSequence(pg, ALL);
+    const muted = await cssColor(pg, 'var(--kit-muted)');
+    const colors = await Promise.all(
+      LEFT.map((k) =>
+        row(pg, k)
+          .locator('.kit-title')
+          .evaluate((e) => ({
+            c: getComputedStyle(e).color,
+            v: e.checkVisibility(),
+          })),
+      ),
+    );
+    check(
+      `left open group: a click expands it, its rows last, under its header, shown and muted (${seq.slice(-3).join(', ')}; ${colors.map((c) => c.c).join(', ')})`,
+      ok &&
+        JSON.stringify(seq.slice(-3)) ===
+          JSON.stringify(['H:left open', ...LEFT]) &&
+        colors.every((c) => c.v && c.c === muted),
+    );
+  }
+
+  // ---- rows indented ----------------------------------------------------------
+  {
+    const geo = await pg.evaluate(
+      ({ list, keys }) =>
+        keys.map((k) => {
+          const r = [...document.querySelectorAll(`${list} .kit-row`)].find(
+            (x) => x.querySelector('.kit-kicker')?.textContent === k,
+          );
+          let head = r?.previousElementSibling;
+          while (head && !head.classList.contains('cb-group'))
+            head = head.previousElementSibling;
+          const box = r?.querySelector('.kit-box');
+          const caret = head?.querySelector('.cb-group-caret');
+          const label = head?.querySelector('.cb-group-label');
+          return {
+            box: box?.checkVisibility()
+              ? Math.round(box.getBoundingClientRect().left)
+              : null,
+            caret: caret
+              ? Math.round(caret.getBoundingClientRect().left)
+              : null,
+            label: label
+              ? Math.round(label.getBoundingClientRect().left)
+              : null,
+          };
+        }),
+      { list: LIST, keys: [SPR(21), SISSUE(3), LEFT[0]].map(kicker) },
+    );
+    check(
+      `rows indented: each row's checkbox is 24px or more right of its header's caret (${geo.map((g) => `${g.box} vs ${g.caret}`).join('; ')})`,
+      geo.every(
+        (g) => g.box !== null && g.caret !== null && g.box - g.caret >= 24,
+      ),
+    );
+    check(
+      `and lines up under its header's label (${geo.map((g) => `${g.box} vs ${g.label}`).join('; ')})`,
+      geo.every((g) => g.label !== null && Math.abs(g.box - g.label) <= 1),
+    );
+  }
+
+  // ---- rows one height --------------------------------------------------------
+  {
+    const got = await pg.evaluate(
+      ({ list, long, short }) => {
+        const rows = [...document.querySelectorAll(`${list} .kit-row`)];
+        const find = (k) =>
+          rows.find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        const l = find(long);
+        const sub = l?.querySelector('.kit-sub');
+        const lh = sub ? parseFloat(getComputedStyle(sub).lineHeight) : 0;
+        return {
+          long: Math.round(l?.getBoundingClientRect().height ?? 0),
+          short: Math.round(find(short)?.getBoundingClientRect().height ?? 0),
+          all: rows
+            .filter((x) => x.checkVisibility())
+            .map((x) => Math.round(x.getBoundingClientRect().height)),
+          subH: Math.round(sub?.getBoundingClientRect().height ?? 0),
+          subLines: lh,
+          cut: !!sub && sub.scrollHeight > sub.clientHeight + 1,
+        };
+      },
+      { list: LIST, long: kicker(SPR(21)), short: kicker(SPR(22)) },
+    );
+    check(
+      `rows one height: the long reason's row is ${got.long}px, the short one's ${got.short}px`,
+      got.long > 0 && got.long === got.short,
+    );
+    check(
+      `every row is one height (${[...new Set(got.all)].join(', ')}), the long reason cut at two lines (${got.subH}px, line ${got.subLines}px, cut ${got.cut})`,
+      got.all.length === 8 &&
+        new Set(got.all).size === 1 &&
+        got.cut &&
+        got.subH <= Math.ceil(got.subLines * 2) + 1,
+    );
+  }
+
+  // ---- the list's scrollbar gutter, the button line's height --------------
+  {
+    const gutter = await pg.evaluate(
+      (list) =>
+        getComputedStyle(document.querySelector(`${list} .kit-rows`))
+          .scrollbarGutter,
+      LIST,
+    );
+    check(
+      `the list reserves its scrollbar's space (scrollbar-gutter ${gutter})`,
+      gutter.startsWith('stable'),
+    );
+  }
+
+  // ---- look into on every group -----------------------------------------------
+  // The sessions beat (serve here counts one left after 3s without one).
+  await agent.presence(A, 'pi · steady-a', '/home/court/steady-a', 'pi');
+  await agent.presence(B, 'pi · steady-b', '/home/court/steady-b', 'pi');
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  {
+    await until(
+      pg,
+      (sel) => !!document.querySelector(sel),
+      `${groupSel('')} .cb-group-ask`,
+    );
+    const looks = await pg.evaluate(
+      (list) =>
+        [...document.querySelectorAll(`${list} .cb-group`)].map((g) => {
+          const b = g.querySelector('.cb-group-look');
+          return `${g.getAttribute('data-group') === 'left-open' ? 'left open' : g.getAttribute('data-d')}: ${b?.checkVisibility() ? b.textContent : '-'}`;
+        }),
+      LIST,
+    );
+    const ticked = await pg.evaluate(
+      (list) => document.querySelector(`${list} .cb-sel-count`)?.hidden,
+      LIST,
+    );
+    checkList(
+      `look into on every group: with ${aName} attached after load and nothing ticked (${ticked}), every recommended group and left open show Look into (${looks.join('; ')})`,
+      [...looks].sort(),
+      [
+        ': -',
+        'close: Look into both',
+        'keep: Look into both',
+        'left open: Look into both',
+        'merge: Look into it',
+      ],
+    );
+  }
+  {
+    const acts = async (d) =>
+      pg.evaluate((sel) => {
+        const a = document.querySelector(`${sel} .cb-group-acts`);
+        return {
+          h: Math.round(a?.getBoundingClientRect().height ?? 0),
+          wrap: a ? getComputedStyle(a).flexWrap : '',
+        };
+      }, groupSel(d));
+    const before = await acts('close');
+    await row(pg, SPR(22)).locator('.kit-box').click();
+    await until(
+      pg,
+      (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+      groupSel('close'),
+    );
+    const after = await acts('close');
+    check(
+      `a group's button line keeps its height when one is ticked (${before.h}px, then ${after.h}px) and does not wrap (${after.wrap})`,
+      before.h > 0 && before.h === after.h && after.wrap === 'nowrap',
+    );
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+  }
+  {
+    const msgsOf = async () => {
+      const tv = await api(
+        'GET',
+        `/api/threads?session=${encodeURIComponent(A)}`,
+      );
+      const out = [];
+      for (const th of tv.threads ?? []) {
+        const mv = await agent.messages(th.id);
+        for (const m of mv.messages ?? []) out.push(m);
+      }
+      return out;
+    };
+    await pg.click(`${leftSel} .cb-group-look`);
+    check(
+      "left open's Look into both sends one message naming both left-open keys, both attached",
+      await eventually(async () => {
+        const mine = (await msgsOf()).filter((m) =>
+          m.body.startsWith('Look into these items'),
+        );
+        const keys = [...(mine[0]?.attached?.keys ?? [])].sort();
+        return (
+          mine.length === 1 &&
+          keys.join(' ') === [...LEFT].sort().join(' ') &&
+          mine[0].body === LOOK_INTO_ALL(mine[0].attached.keys) &&
+          mine[0].purpose === 'look-into'
+        );
+      }),
+    );
   }
   await pg.close();
 }

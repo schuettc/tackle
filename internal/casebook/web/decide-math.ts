@@ -450,8 +450,3 @@ export function leftOpenMeta(
   if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
   return `left open \u00b7 ${d.toLocaleDateString('en-US', opts)}`;
 }
-
-/** leftOpenLabel is the left-open group's divider: "left open · 3". */
-export function leftOpenLabel(n: number): string {
-  return `left open \u00b7 ${n}`;
-}

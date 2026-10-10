@@ -224,6 +224,7 @@ export interface DecisionVocabView {
   to_apply_hint: string;
   ticked: string;
   untick: string;
+  left_open: string;
 }
 
 export interface ClearResult {

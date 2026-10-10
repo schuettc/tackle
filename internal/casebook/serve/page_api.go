@@ -133,7 +133,10 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 	if items == nil {
 		items = []ItemView{}
 	}
-	left, leftTotal := s.Index.LeftOpen(group, pending)
+	// left_offset pages the left-open group (offset pages the rest).
+	leftQuery := group
+	leftQuery.Offset = atoi(q.Get("left_offset"))
+	left, leftTotal := s.Index.LeftOpen(leftQuery, pending)
 	looking := s.lookingInto(ctx)
 	withLooking(items, looking)
 	withLooking(left, looking)
@@ -333,6 +336,7 @@ func decisionVocab() DecisionVocabView {
 		ToApplyHint:    "goes to To apply first",
 		Ticked:         "{n} ticked",
 		Untick:         "untick",
+		LeftOpen:       "left open",
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)
