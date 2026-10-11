@@ -1,32 +1,23 @@
-// decide.ts — the decide sheet (single and bulk) and selection wiring.
+// decide.ts — the decide sheet (change… on a recommendation).
 //
 // The server is the single source of truth for the decision vocabulary
 // (which dispositions are valid per kind, which need an `until` condition,
 // and the supported `until` forms).  GET /api/decisions/vocabulary is fetched
-// once and cached; the sheet and the selection wiring read from it.
+// once and cached; the sheet reads from it.
 //
 // Exported pure functions (no server calls):
 //   kindFromKey(key)               — "pr:owner/repo#1" → "pr"
 //   allowedForKind(vocab, kind)    — allowed dispositions for one kind
 //   allowedForKeys(vocab, keys)    — intersection for a mixed-kind selection
 //
-// openDecideSheet(ctx, keys, onDone) opens a kit sheet for a selection: the
+// openDecideSheet(ctx, keys, onDone) opens a kit sheet for keys: the
 // item's question, the same cards the open item shows (choices.ts), a note
 // field, and a filled "<choice> · <n> <kind>s" button that POSTs to
-// /api/decide.
-//
-// wireSelection(ctx, listHandle) subscribes to the shared selection store and
-// updates the bar primary button and the .cb-sel-count element.
+// /api/decide. Ticked items act through their group's buttons
+// (attention.ts), not through a sheet.
 
-import {
-  sheet,
-  h,
-  noteField,
-  type SheetHandle,
-  type ListHandle,
-  type KeyBinding,
-} from '/_kit/kit.js';
-import type { DecideResult, DecisionVocabView, ItemView } from './wire.d.ts';
+import { sheet, h, noteField, type SheetHandle } from '/_kit/kit.js';
+import type { DecideResult, DecisionVocabView } from './wire.d.ts';
 import type { Ctx } from './app.ts';
 import {
   kindFromKey,
@@ -222,62 +213,4 @@ function openDecideSheetWithVocab(
     },
   });
   updateFill();
-}
-
-// ---- wireSelection ----------------------------------------------------------
-
-/**
- * wireSelection subscribes to the list's shared selection store and:
- *  1. Sets the bar primary button to "Decide N" (or hides it when empty).
- *  2. Updates the .cb-sel-count element inside the list (in the foot).
- *  3. Returns the "d" binding (open the decide sheet for the selection) for
- *     the section to list in its Section.keys, so "d" acts only while that
- *     section is shown (app.ts registers section keys on show).
- *
- * Call after the list is created; pass the same ctx the section uses.
- *
- * After a decide, calls list.deselect(decidedIds) so the kit drops those ids
- * from the selection store.
- */
-export function wireSelection(
-  ctx: Ctx,
-  listHandle: ListHandle<ItemView>,
-): KeyBinding {
-  function openSheetForSelection(): void {
-    const keys = listHandle.selectedIds();
-    if (keys.length === 0) return;
-    openDecideSheet(ctx, keys, (decided) => {
-      listHandle.deselect(decided);
-    });
-  }
-
-  listHandle.selection.onChange((ids) => {
-    const countEl = listHandle.el.querySelector('.cb-sel-count');
-    if (countEl instanceof HTMLElement) {
-      if (ids.length > 0) {
-        countEl.textContent = `${ids.length} selected`;
-        countEl.hidden = false;
-      } else {
-        countEl.hidden = true;
-      }
-    }
-
-    if (ids.length === 0) {
-      ctx.setPrimary(null);
-    } else {
-      ctx.setPrimary({
-        label: `Decide ${ids.length}`,
-        run: openSheetForSelection,
-      });
-    }
-  });
-
-  return {
-    keys: 'd',
-    label: 'decide selection',
-    group: 'page',
-    run() {
-      openSheetForSelection();
-    },
-  };
 }

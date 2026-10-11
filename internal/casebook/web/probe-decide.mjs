@@ -20,7 +20,6 @@
 //     even in the same second; u after a re-decide puts the previous back,
 //     and is refused too when the item changed since
 //   a live decide elsewhere doesn't skip the item after it
-//   the multi-select sheet asks with the same cards: "Close it · 2 issues"
 //
 // And move-on past the first page, on a serve and repo of their own: with
 // more than a page of items, deciding one on page two opens the next one on
@@ -129,8 +128,9 @@
 //     the first item; each tooltip names its target; ] into a collapsed
 //     group expands it and opens its first item; [, › and ‹; the row stays
 //     at the top while the item scrolls
-//   the recommendation box beside the description ("‹session› recommends",
-//     the choice, the reason), an empty one where there is none; the cards
+//   the recommendation box above the description ("‹session› recommends",
+//     the choice, two lines of the reason, the buttons and the key hint on
+//     one row), an empty one where there is none; the cards
 //     in one row, one height; nothing above the cards moves between items
 //   the list collapses to a 34px rail, kept across a reload; the item page
 //     is then 1060px wide
@@ -362,6 +362,13 @@ async function decideScenario(context, t, s) {
     [1, 2, 3, 4, 5, 6, 8, 9].map(ISSUE).concat([PR(7)]),
   );
 
+  // Issues #8 and #9 are decided before the walk (ticked items have no
+  // sheet of their own: they act through their group).
+  await api('POST', '/api/decide', {
+    keys: [ISSUE(8), ISSUE(9)],
+    disposition: 'close',
+  });
+
   // A recommendation for issue #1, with its reason.
   const sid = 'probe-rd-decide';
   await agent.presence(sid, 'pi \u00b7 rd', '/home/court/rd', 'pi');
@@ -386,62 +393,6 @@ async function decideScenario(context, t, s) {
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
 
-  // ---- the multi-select sheet: the same question, the same cards ----------
-  {
-    for (const k of [ISSUE(8), ISSUE(9)]) {
-      await row(pg, k).locator('.kit-box').click();
-    }
-    await until(
-      pg,
-      () => document.querySelector('.kit-primary')?.textContent === 'Decide 2',
-    );
-    await pg.click('.kit-primary');
-    await until(pg, () => !!document.querySelector('.kit-sheet .cb-choice'));
-    const sheet = await pg.evaluate(() => {
-      const sh = document.querySelector('.kit-sheet');
-      return {
-        question: sh?.querySelector('.cb-question')?.textContent ?? '',
-        labels: [...(sh?.querySelectorAll('.cb-choice') ?? [])].map(
-          (c) => c.querySelector('.cb-choice-label')?.textContent ?? '',
-        ),
-      };
-    });
-    const iv = kindVocab('issue');
-    check(
-      `the sheet for two issues asks serve's question ("${sheet.question}")`,
-      sheet.question === iv.question,
-    );
-    checkList(
-      "the sheet's cards are serve's choices for an issue",
-      sheet.labels,
-      iv.choices.map((c) => c.label),
-    );
-    await pg.click('.kit-sheet .cb-choice[data-d="close"]');
-    const fill = await pg
-      .locator('.kit-sheet .kit-btn.fill')
-      .textContent({ timeout: 3000 });
-    check(
-      `picking "Close it" makes the fill read "Close it · 2 issues" ("${fill}")`,
-      fill === 'Close it \u00b7 2 issues',
-    );
-    check(
-      'picking a card in the sheet decides nothing yet',
-      (await decisionOf(ISSUE(8))) === null,
-    );
-    await pg.click('.kit-sheet .kit-btn.fill');
-    check(
-      'the fill decides both issues close',
-      await eventually(
-        async () =>
-          (await decisionOf(ISSUE(8)))?.disposition === 'close' &&
-          (await decisionOf(ISSUE(9)))?.disposition === 'close',
-      ),
-    );
-    check(
-      'and the sheet closes',
-      await until(pg, () => !document.querySelector('.kit-sheet')),
-    );
-  }
   const sheetsBefore = await sheets();
 
   // ---- the row's line gives the recommendation's reason -------------------
@@ -480,7 +431,7 @@ async function decideScenario(context, t, s) {
       col.cards.filter((c) => c.rec).length === 1,
   );
   {
-    // Geometry: the recommendation beside the description, above the
+    // Geometry: the recommendation above the description, both above the
     // question; then the cards, one row of equal widths.
     const g = await pg.evaluate(() => {
       const r = (sel) =>
@@ -502,10 +453,11 @@ async function decideScenario(context, t, s) {
     });
     const [c1] = g.cards;
     check(
-      'the recommendation card is beside the description, above the question, which is above the cards',
-      Math.abs(g.rec.top - g.body.top) < 1 &&
-        g.rec.left > g.body.right - 1 &&
-        g.rec.bottom <= g.q.top &&
+      'the recommendation card is above the description, which is above the question, which is above the cards',
+      g.rec.bottom <= g.body.top &&
+        Math.abs(g.rec.left - g.body.left) < 1 &&
+        Math.abs(g.rec.width - g.body.width) < 1 &&
+        g.body.bottom <= g.q.top &&
         g.q.bottom <= c1.top,
     );
     check(
@@ -644,7 +596,7 @@ async function decideScenario(context, t, s) {
   );
   check('and issue #3 opens next', await opened(t, pg, ISSUE(3)));
   check(
-    `no sheet opened for one item (sheets opened since the bulk one: ${(await sheets()) - sheetsBefore})`,
+    `no sheet opened for one item (sheets opened: ${(await sheets()) - sheetsBefore})`,
     (await sheets()) === sheetsBefore,
   );
 
@@ -1382,10 +1334,9 @@ async function groupsScenario(context, t, s) {
       ok &&
         g?.acts.join(' / ') === 'Leave all 3 open / Discard all 3 / untick' &&
         (await pg.evaluate(
-          (list) =>
-            document.querySelector(`${list} .cb-sel-count`)?.textContent,
+          (list) => document.querySelectorAll(`${list} .kit-row.sel`).length,
           LIST,
-        )) === '3 selected',
+        )) === 3,
     );
   }
   await pg.click(`${groupSel('keep')} .cb-group-box`);
@@ -1419,7 +1370,7 @@ async function groupsScenario(context, t, s) {
     'untick unticks it',
     await until(
       pg,
-      (list) => document.querySelector(`${list} .cb-sel-count`)?.hidden,
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
       LIST,
     ),
   );
@@ -2008,9 +1959,11 @@ async function manyScenario(context, t, s) {
     `its checkbox ticks all ${MANY_N}, on every page`,
     await until(
       pg,
-      ({ list, w }) =>
-        document.querySelector(`${list} .cb-sel-count`)?.textContent === w,
-      { list: LIST, w: `${MANY_N} selected` },
+      (head) =>
+        document
+          .querySelector(`${head} .cb-group-box`)
+          ?.getAttribute('aria-checked') === 'true',
+      HEAD,
       8000,
     ),
   );
@@ -4225,7 +4178,7 @@ async function steadyScenario(context, t, s) {
       LIST,
     );
     const ticked = await pg.evaluate(
-      (list) => document.querySelector(`${list} .cb-sel-count`)?.hidden,
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
       LIST,
     );
     checkList(
@@ -4520,8 +4473,113 @@ async function navScenario(context, t, s) {
         stop3.h === stop.h &&
         close3.h === close.h,
     );
+
+    // ---- no decide button: ticked items act through their group --------
+    const bar = await pg.evaluate(
+      (list) => ({
+        decide: [...document.querySelectorAll('button')]
+          .filter((b) => b.checkVisibility() && !b.closest('.cb-group'))
+          .map((b) => b.textContent ?? '')
+          .filter((x) => /decide/i.test(x)),
+        primary: (() => {
+          const p = document.querySelector('.kit-primary');
+          return p && p.checkVisibility() ? p.textContent : '';
+        })(),
+        foot: [...document.querySelectorAll(`${list} .kit-foot *`)]
+          .filter((e) => e.checkVisibility() && /selected/.test(e.textContent))
+          .map((e) => e.textContent),
+        sel: document.querySelectorAll(`${list} .kit-row.sel`).length,
+      }),
+      LIST,
+    );
+    await press(pg, 'd');
+    // Kept: the check is that d opens nothing; a window for a sheet to open.
+    await pg.waitForTimeout(500);
+    const dSheets = await pg.$$eval(
+      '.kit-sheet',
+      (s) => s.filter((x) => x.checkVisibility()).length,
+    );
+    check(
+      `no decide button: with ${bar.sel} ticked the page shows no decide button (${bar.decide.join(', ') || 'none'}), the bar no primary ("${bar.primary}"), the foot no selected count (${bar.foot.join(', ') || 'none'}), and d opens no sheet (${dSheets} shown)`,
+      bar.sel === 6 &&
+        bar.decide.length === 0 &&
+        bar.primary === '' &&
+        bar.foot.length === 0 &&
+        dSheets === 0,
+    );
+    if (dSheets) await pg.keyboard.press('Escape');
+
     await pg.click(`${groupSel('ignore')} .cb-group-untick`);
     await pg.click(`${groupSel('close')} .cb-group-untick`);
+  }
+
+  // ---- ticking a collapsed group opens it ------------------------------------
+  await until(
+    pg,
+    (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+    LIST,
+  );
+  await pg.click(`${groupSel('close')} .cb-group-caret`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.classList.contains('collapsed'),
+    groupSel('close'),
+  );
+  {
+    const shut = await row(pg, CLOSE[0]).count();
+    await pg.click(`${groupSel('close')} .cb-group-box`);
+    await until(
+      pg,
+      (sel) => {
+        const g = document.querySelector(sel);
+        return (
+          !!g &&
+          !g.classList.contains('collapsed') &&
+          g.querySelector('.cb-group-box')?.getAttribute('aria-checked') ===
+            'true'
+        );
+      },
+      groupSel('close'),
+    );
+    const got = await pg.evaluate(
+      ({ sel, list, kicks }) => {
+        const g = document.querySelector(sel);
+        const rows = [...document.querySelectorAll(`${list} .kit-row`)].filter(
+          (r) => kicks.includes(r.querySelector('.kit-kicker')?.textContent),
+        );
+        return {
+          collapsed: !!g?.classList.contains('collapsed'),
+          caret: g
+            ?.querySelector('.cb-group-caret')
+            ?.getAttribute('aria-expanded'),
+          btns: [...(g?.querySelectorAll('.cb-group-acts .kit-btn') ?? [])]
+            .filter((b) => b.checkVisibility())
+            .map((b) => b.textContent ?? ''),
+          rows: rows.filter(
+            (r) =>
+              r.checkVisibility() &&
+              r.getBoundingClientRect().height > 0 &&
+              r.classList.contains('sel'),
+          ).length,
+        };
+      },
+      { sel: groupSel('close'), list: LIST, kicks: CLOSE.map(kicker) },
+    );
+    check(
+      `ticking a collapsed group opens it: Close collapsed (${shut} rows shown), its checkbox ticks all 6 and expands it (collapsed ${got.collapsed}, expanded ${got.caret}), its buttons "${got.btns.join(' · ')}", ${got.rows} of its 6 rows shown and ticked`,
+      shut === 0 &&
+        !got.collapsed &&
+        got.caret === 'true' &&
+        got.btns.join(' · ') ===
+          'Close all 6 · Look into all 6 · Discard all 6' &&
+        got.rows === 6,
+    );
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+    await until(
+      pg,
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+      LIST,
+    );
   }
 
   // ---- collapsed group one line -------------------------------------------------
@@ -4627,6 +4685,10 @@ async function navScenario(context, t, s) {
   }
 
   // ---- the recommendation box and the steady page ----------------------------
+  // The recommendation box above the description, and the description: each
+  // one fixed height.
+  const REC_H = 150;
+  const BODY_H = 140;
   const pageGeo = () =>
     pg.evaluate((read) => {
       const q = (s) => document.querySelector(`${read} ${s}`);
@@ -4690,6 +4752,7 @@ async function navScenario(context, t, s) {
         note: q('.cb-proposal-note')?.textContent ?? '',
         title: box('.cb-title'),
         doc: box('.kit-doc'),
+        item: box('.cb-item'),
       };
     }, READ);
   const a = await pageGeo();
@@ -4703,16 +4766,21 @@ async function navScenario(context, t, s) {
     );
     const agentColor = await cssColor(pg, 'var(--kit-agent)');
     check(
-      `the recommendation box: "${a.head}" in agent colour (${headColor}), then "${a.label}", then "${a.note}"; beside the description (${a.body?.top}/${a.rec?.top}, ${a.body?.left} < ${a.rec?.left}), both 160px (${a.body?.h}, ${a.rec?.h}), wider description (${a.body?.w} > ${a.rec?.w})`,
+      `the recommendation box: "${a.head}" in agent colour (${headColor}), then "${a.label}", then "${a.note}"; above the description (box ${a.rec?.top}+${a.rec?.h}, description ${a.body?.top}), both the reading column's width (${a.rec?.w}, ${a.body?.w}, item ${a.item?.w}) from its left edge (${a.rec?.left}, ${a.body?.left}, ${a.item?.left}), the box ${REC_H}px (${a.rec?.h}), the description ${BODY_H}px (${a.body?.h})`,
       a.head === 'nav-a recommends' &&
         headColor === agentColor &&
         a.label === 'Stop tracking it' &&
         a.note === 'spam' &&
-        a.body?.top === a.rec?.top &&
-        a.body.left < a.rec.left &&
-        a.body.h === 160 &&
-        a.rec.h === 160 &&
-        a.body.w > a.rec.w,
+        !!a.rec &&
+        !!a.body &&
+        !!a.item &&
+        a.rec.top + a.rec.h <= a.body.top &&
+        a.rec.left === a.item.left &&
+        a.body.left === a.item.left &&
+        a.rec.w === a.item.w &&
+        a.body.w === a.item.w &&
+        a.rec.h === REC_H &&
+        a.body.h === BODY_H,
     );
     check(
       `the choice cards: ${a.n} cards at least 150px wide (${a.cardMinW}) in ${a.choicesW}px, one row only when they fit (tops ${a.cardTops.join(',')}), each row one height (${a.rowHs.join(',')}); evidence beside history (${a.evidence}/${a.history}, ${a.evidenceLeft} < ${a.historyLeft})`,
@@ -4795,6 +4863,16 @@ async function navScenario(context, t, s) {
         headFont: parseFloat(getComputedStyle(head).fontSize) || 0,
         headTip: head?.title ?? '',
         headText: head?.textContent ?? '',
+        labelWhole: (() => {
+          const l = card?.querySelector('.cb-proposal-label');
+          return !!l && l.checkVisibility() && l.scrollWidth <= l.clientWidth;
+        })(),
+        noteLines: (() => {
+          const n = card?.querySelector('.cb-proposal-note');
+          if (!n) return 0;
+          const lh = parseFloat(getComputedStyle(n).lineHeight) || 0;
+          return lh ? Math.round(n.getBoundingClientRect().height / lh) : 0;
+        })(),
         btnTops: [
           ...new Set(
             [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].map((b) =>
@@ -4810,6 +4888,40 @@ async function navScenario(context, t, s) {
             return r.right <= c.right + 0.5 && r.bottom <= c.bottom + 0.5;
           },
         ),
+        // Whole: nothing cut, no ellipsis; the kit's own size.
+        btnsWhole: [
+          ...(card?.querySelectorAll('.kit-btns .kit-btn') ?? []),
+        ].every(
+          (b) =>
+            b.checkVisibility() &&
+            b.scrollWidth <= b.clientWidth &&
+            getComputedStyle(b).textOverflow !== 'ellipsis',
+        ),
+        btnFonts: [
+          ...new Set(
+            [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].map(
+              (b) => getComputedStyle(b).fontSize,
+            ),
+          ),
+        ],
+        // The key hint on the button row: shown, whole, past the buttons,
+        // inside the box, in the buttons' band.
+        hint: (() => {
+          const k = card?.querySelector('.cb-keyhint');
+          if (!k || !k.checkVisibility()) return null;
+          const r = k.getBoundingClientRect();
+          const c = card.getBoundingClientRect();
+          const bs = [...card.querySelectorAll('.kit-btns .kit-btn')].map((b) =>
+            b.getBoundingClientRect(),
+          );
+          return {
+            text: k.textContent ?? '',
+            whole: k.scrollWidth <= k.clientWidth,
+            inside: r.right <= c.right + 0.5 && r.bottom <= c.bottom + 0.5,
+            past: bs.every((b) => b.right <= r.left + 0.5),
+            band: bs.every((b) => b.top < r.bottom && r.top < b.bottom),
+          };
+        })(),
         cards: cards.map((c) => ({
           w: Math.round(c.r - c.l),
           t: Math.round(c.t),
@@ -4827,21 +4939,33 @@ async function navScenario(context, t, s) {
       w.r <= outer.r + 0.5;
     const oneLine = g.headH <= Math.ceil(g.headLine || g.headFont * 1.6);
     check(
-      `rec box shows its reason: in a ${g.readW}px reading column the box's body is ${Math.round(g.body?.h ?? 0)}px, "${g.label?.w}" and "${g.note?.w}" inside the box and its body, the head one line (${g.headH}px) whole in its title ("${g.headTip}"), the ${g.btns} buttons on one row (tops ${g.btnTops.join(',')}) inside the box (${g.btnsIn})`,
+      `rec box shows its reason: in a ${g.readW}px reading column, the box above the description, its label whole (${g.labelWhole}), "${g.label?.w}" and "${g.note?.w}" inside the box and its body, the reason ${g.noteLines} lines, the head one line (${g.headH}px) whole in its title ("${g.headTip}"), the ${g.btns} buttons on one row (tops ${g.btnTops.join(',')}) inside the box (${g.btnsIn}), whole (${g.btnsWhole}) at the kit's size (${g.btnFonts.join(',')})`,
       g.readW <= 600 &&
         (g.body?.h ?? 0) > 0 &&
+        g.labelWhole &&
         g.label?.w === 'Close' &&
         g.note?.w === LONG_REASON.split(/\s/)[0] &&
         within(g.label, g.box) &&
         within(g.label, g.body) &&
         within(g.note, g.box) &&
         within(g.note, g.body) &&
+        g.noteLines === 2 &&
         oneLine &&
         g.headTip === 'nav-a recommends' &&
         g.headText === 'nav-a recommends' &&
         g.btns === 3 &&
         g.btnTops.length === 1 &&
-        g.btnsIn,
+        g.btnsIn &&
+        g.btnsWhole &&
+        g.btnFonts.join(',') === '13px',
+    );
+    check(
+      `the key hint on the button row: "${g.hint?.text}" whole (${g.hint?.whole}), after the buttons (${g.hint?.past}), in their band (${g.hint?.band}), inside the box (${g.hint?.inside})`,
+      g.hint?.text === 'a accept \u00b7 r reject' &&
+        g.hint.whole &&
+        g.hint.past &&
+        g.hint.band &&
+        g.hint.inside,
     );
     // Cards in one row share one height.
     const rows = new Map();

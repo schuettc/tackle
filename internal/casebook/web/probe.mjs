@@ -237,24 +237,6 @@ async function chipShows(pg, view, timeout = 6000) {
   }, timeout).then((ok) => settled(ok, `the ${view} chip`));
 }
 
-// selShows waits until the shown list's foot counts n selected (hidden at 0).
-function selShows(pg, n, timeout = 6000) {
-  return until(
-    pg,
-    (n) => {
-      const el = document.querySelector(
-        '.kit-app > .kit-list:not([hidden]) .cb-sel-count',
-      );
-      if (!el) return false;
-      return n === 0
-        ? el.hidden
-        : !el.hidden && el.textContent === `${n} selected`;
-    },
-    n,
-    timeout,
-  );
-}
-
 // clickLifecycle clicks a rule's primary (Activate or Deactivate) and
 // returns serve's reply to it. serve announces the change before it replies,
 // so the page can show the next primary while this request is still in
@@ -1974,10 +1956,7 @@ async function composerScenariosOn(context, serveHandle) {
         after === 'nothing',
       );
       const primaryHidden = await pg.$eval('.kit-primary', (e) => e.hidden);
-      check(
-        "and the bar's primary stays Rules' (none), not Attention's Decide 1",
-        primaryHidden,
-      );
+      check("and the bar's primary stays Rules' (none)", primaryHidden);
 
       // Back to Attention: it re-feeds what is still selected.
       await pg.evaluate(() => {
@@ -1992,14 +1971,6 @@ async function composerScenariosOn(context, serveHandle) {
             document.querySelector('[data-testid="composer-attached"]')
               .textContent === w,
           rest,
-        ),
-      );
-      check(
-        'and its primary again: "Decide 1"',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.kit-primary')?.textContent === 'Decide 1',
         ),
       );
     } finally {
@@ -2076,17 +2047,8 @@ async function keyScopeScenariosOn(context, serveHandle) {
       8000,
     );
     check('Attention shows the open item with its pending proposal', opened);
-    // Select a row too, so "d" has something it could open decide for.
-    await pg.waitForSelector('.kit-row .kit-box', { timeout: 6000 });
-    await pg.click('.kit-row .kit-box');
-    const selected = await until(pg, () =>
-      (document.querySelector('.kit-primary')?.textContent ?? '')
-        .trim()
-        .startsWith('Decide '),
-    );
-    check('Attention has a selection (primary reads Decide N)', selected);
 
-    // Show Rules: Attention's open item and selection stay, hidden.
+    // Show Rules: Attention's open item stays, hidden.
     await pg.evaluate(() => {
       location.hash = '#/rules';
     });
@@ -2098,10 +2060,10 @@ async function keyScopeScenariosOn(context, serveHandle) {
           ?.classList.contains('on') ?? false,
     );
 
-    // r and d first: they only open a sheet, while a failing a settles the
+    // r first: it only opens a sheet, while a failing a settles the
     // proposal r would act on.
     await pressWithFocus(pg, 'r');
-    // Kept (this one and d's, a's): each check is that the key does nothing
+    // Kept (this one and a's): each check is that the key does nothing
     // on #/rules; a window long enough for a sheet or a POST to land.
     await pg.waitForTimeout(500);
     const rSheet = await sheetOpen(pg);
@@ -2110,18 +2072,6 @@ async function keyScopeScenariosOn(context, serveHandle) {
       !rSheet,
     );
     if (rSheet) {
-      await pg.keyboard.press('Escape');
-      await pg.waitForTimeout(300); // only after a failed check
-    }
-
-    await pressWithFocus(pg, 'd');
-    await pg.waitForTimeout(500);
-    const dSheet = await sheetOpen(pg);
-    check(
-      'on #/rules, "d" does not open decide for the invisible selection',
-      !dSheet,
-    );
-    if (dSheet) {
       await pg.keyboard.press('Escape');
       await pg.waitForTimeout(300); // only after a failed check
     }
@@ -2145,18 +2095,6 @@ async function keyScopeScenariosOn(context, serveHandle) {
       undefined,
       8000,
     );
-    await pressWithFocus(pg, 'd');
-    const dBack = await until(
-      pg,
-      () => !!document.querySelector('.kit-sheet'),
-      undefined,
-      4000,
-    );
-    check('back on Attention, "d" opens decide for the selection', dBack);
-    if (dBack) {
-      await pg.keyboard.press('Escape');
-      await until(pg, () => !document.querySelector('.kit-sheet'));
-    }
     await pressWithFocus(pg, 'a');
     check(
       'back on Attention, "a" accepts the open item\'s proposal',
@@ -2179,10 +2117,11 @@ async function keyScopeScenariosOn(context, serveHandle) {
     };
     const onAttention = await overlay();
     check(
-      `on Attention the overlay lists its keys ("search", "accept proposal"), not Rules' (${onAttention.join(', ')})`,
+      `on Attention the overlay lists its keys ("search", "accept proposal"), not Rules' and not d's "decide selection" (${onAttention.join(', ')})`,
       onAttention.includes('search') &&
         onAttention.includes('accept proposal') &&
-        !onAttention.includes('activate the open draft'),
+        !onAttention.includes('activate the open draft') &&
+        !onAttention.includes('decide selection'),
     );
     await agent.api('POST', '/api/rules/draft', {
       id: 'keys-rule',
@@ -5134,7 +5073,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 960;
+const MIN_CHECKS = 945;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5675,303 +5614,26 @@ async function run() {
       check('cb-foot is not hidden when view fits one page', footNotHidden);
     }
 
-    // ---- scenario: dispositions for a mixed-kind selection are the intersection
-    console.log(
-      '\nscenario: dispositions for a mixed-kind selection are the intersection',
-    );
-
+    // Two of the 'new' view's items are decided here, as the bulk decide
+    // that stood here did (ticked items now act through their group), so
+    // the scenarios after it see the casebook they always saw.
     {
-      // Select every visible row in 'new' view (repo:, pr:, issue:, branch: kinds).
-      // Intersection of their allowed dispositions excludes 'merge' (pr-only).
-      // A locator, so each box is found as it is clicked (a live redraw
-      // can replace the rows between two clicks).
-      const boxes = page.locator('.kit-row .kit-box');
-      for (let i = 0, n = await boxes.count(); i < n; i++) {
-        await boxes.nth(i).click();
-      }
-      await selShows(page, await boxes.count());
-
-      // Open the decide sheet.
-      await page.click('.kit-primary').catch(() => {});
-      await page
-        .waitForSelector('.kit-sheet', { timeout: 4000 })
-        .catch(() => {});
-      await page.waitForSelector('.kit-sheet .cb-choice', { timeout: 4000 });
-
-      const dispTexts = await page.$$eval('.kit-sheet .cb-choice', (btns) =>
-        btns.map((b) => b.getAttribute('data-d') ?? ''),
-      );
-
-      // 'merge' is valid only for pr: — must not appear for a mixed selection.
+      const r = await fetch(`${serveHandle.base}/api/items?view=new&limit=2`, {
+        headers: { 'X-Local-Token': serveHandle.token },
+      });
+      const keys = ((await r.json()).items ?? []).map((it) => it.key);
+      const d = await fetch(`${serveHandle.base}/api/decide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Local-Token': serveHandle.token,
+        },
+        body: JSON.stringify({ keys, disposition: 'keep' }),
+      });
       check(
-        `mixed-kind selection does not offer pr-only disposition (merge) (cards: ${dispTexts.join(', ')})`,
-        dispTexts.includes('keep') && !dispTexts.includes('merge'),
+        `serve decides the two items the old bulk decide took (${keys.join(', ')}: ${d.status})`,
+        d.ok && keys.length === 2,
       );
-
-      // Close without deciding and deselect.
-      await page.keyboard.press('Escape');
-      await page
-        .waitForFunction(
-          () => document.querySelector('.kit-backdrop') === null,
-          { timeout: 3000 },
-        )
-        .catch(() => {});
-      const selBoxes = page.locator('.kit-row .kit-box');
-      for (let i = 0, n = await selBoxes.count(); i < n; i++) {
-        await selBoxes
-          .nth(i)
-          .click()
-          .catch(() => {});
-      }
-      await selShows(page, 0);
-    }
-
-    // ---- scenario: partial decide deselects succeeded, keeps failed selected -
-    console.log(
-      '\nscenario: partial decide deselects succeeded and keeps failed selected',
-    );
-
-    {
-      // Use a fresh browser context so the route interceptor is fully isolated
-      // and cannot leak into the subsequent 'decide in bulk' scenario.
-      const partialCtx = await browser.newContext();
-      const partialPage = await partialCtx.newPage();
-      try {
-        await partialPage.goto(serveHandle.url, {
-          waitUntil: 'domcontentloaded',
-          timeout: 15000,
-        });
-        await partialPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        // Navigate to 'new' view and select two rows.
-        await partialPage.evaluate(() => {
-          location.hash = '#/attention/new';
-        });
-        await partialPage.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
-        await listShows(partialPage, 'new');
-        await partialPage
-          .waitForSelector('.kit-row', { timeout: 5000 })
-          .catch(() => {});
-
-        const newBoxes = partialPage.locator('.kit-row .kit-box');
-        if ((await newBoxes.count()) >= 2) {
-          await newBoxes.nth(0).click();
-          await newBoxes.nth(1).click();
-          await selShows(partialPage, 2);
-
-          // Intercept /api/decide to simulate a partial success:
-          // first key decided, second key errors.
-          // The fresh context ensures the route cannot leak into other scenarios.
-          await partialPage.route('**/api/decide', async (route, request) => {
-            const body = JSON.parse(request.postData() || '{}');
-            const keys = body.keys || [];
-            await route.fulfill({
-              status: 200,
-              contentType: 'application/json',
-              body: JSON.stringify({
-                decided: keys.length > 0 ? 1 : 0,
-                decided_keys: keys.length > 0 ? [keys[0]] : [],
-                errors:
-                  keys.length > 1
-                    ? [keys[1] + ': disposition not allowed for this kind']
-                    : [],
-              }),
-            });
-          });
-
-          // Open the decide sheet via the primary button.
-          await partialPage.click('.kit-primary');
-          await partialPage
-            .waitForSelector('.kit-sheet', { timeout: 4000 })
-            .catch(() => {});
-
-          // Pick the first available disposition.
-          const firstDisp = await partialPage.$('.kit-sheet .cb-choice');
-          if (firstDisp) {
-            await firstDisp.click();
-          }
-
-          // Click the sheet's fill ("<choice> · N items").
-          await partialPage.click('.kit-sheet .kit-btn.fill');
-          await until(partialPage, () => {
-            const el = document.querySelector('.kit-sheet .cb-choice-err');
-            return (
-              !!el &&
-              el.offsetParent !== null &&
-              (el.textContent || '').length > 0
-            );
-          });
-
-          // The error for the failed key must be visible inside the sheet.
-          const errVisible = await partialPage
-            .$eval(
-              '.kit-sheet .cb-choice-err',
-              (el) =>
-                el.offsetParent !== null && (el.textContent || '').length > 0,
-            )
-            .catch(() => false);
-          check(
-            'partial decide shows the error for the failed key',
-            errVisible,
-          );
-
-          // Only the first key was decided (deselected). The second key remains
-          // selected. Primary must show 'Decide 1' (not 'Decide 2').
-          const primaryText = await partialPage
-            .$eval('.kit-primary', (el) => el.textContent ?? '')
-            .catch(() => '');
-          check(
-            'partial decide deselects only the succeeded key (primary Decide 1)',
-            primaryText.trim() === 'Decide 1',
-          );
-        } else {
-          check('partial decide shows the error for the failed key', false);
-          check(
-            'partial decide deselects only the succeeded key (primary Decide 1)',
-            false,
-          );
-        }
-      } finally {
-        await partialCtx.close();
-      }
-    }
-
-    // ---- scenario: decide in bulk -------------------------------------------
-    console.log('\nscenario: decide in bulk');
-
-    {
-      // Navigate to the 'new' view (shows all undecided items), so the
-      // waiting items (incoming PRs and issues with incoming-no-reply hits)
-      // are kept for the scenarios after this one.
-      await page.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
-      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
-
-      const boxes = page.locator('.kit-row .kit-box');
-      // Select only 2 items to leave enough items alive for subsequent tests.
-      const selectCount = Math.min(2, await boxes.count());
-
-      for (let i = 0; i < selectCount; i++) {
-        await boxes.nth(i).click();
-      }
-
-      if (selectCount > 0) {
-        await selShows(page, selectCount);
-
-        // 1. Primary reads 'Decide N'.
-        const primaryText = await page
-          .$eval('.kit-primary', (el) => el.textContent ?? '')
-          .catch(() => '');
-        check(
-          'selecting rows updates the primary',
-          primaryText.trim() === `Decide ${selectCount}`,
-        );
-
-        // Open the decide sheet via the primary button.
-        await page.click('.kit-primary');
-        await page
-          .waitForSelector('.kit-sheet', { timeout: 4000 })
-          .catch(() => {});
-
-        const sheetEl = await page.$('.kit-sheet');
-        if (sheetEl) {
-          // Click the first available disposition button (keep is valid for all kinds).
-          // 'keep' is valid for all kinds.
-          const keepCard = await page.$('.kit-sheet .cb-choice[data-d="keep"]');
-          const clickedLabel = keepCard
-            ? await keepCard.$eval(
-                '.cb-choice-label',
-                (el) => el.textContent ?? '',
-              )
-            : '';
-          if (keepCard) await keepCard.click();
-
-          // 2. The fill names the choice and the count:
-          //    "<label> · N <kind>s" (items when the kinds differ).
-          const fill = await page
-            .$eval('.kit-sheet .kit-btn.fill', (el) => el.textContent ?? '')
-            .catch(() => '');
-          check(
-            `the sheet's fill names the choice and the count ("${fill}")`,
-            !!keepCard &&
-              fill.startsWith(`${clickedLabel} \u00b7 ${selectCount} `),
-          );
-
-          // Click the fill.
-          let decided = false;
-          if (keepCard) {
-            await page.click('.kit-sheet .kit-btn.fill');
-            decided = true;
-          }
-
-          // Wait for the API call and list refresh.
-          await selShows(page, 0);
-          await listShows(page, 'new');
-
-          // 3. Decided items gone; primary hidden.
-          const rowsAfter = await page.$$eval(
-            '.kit-row',
-            (rows) => rows.length,
-          );
-          const primaryHidden = await page
-            .$eval('.kit-primary', (el) => el.hidden)
-            .catch(() => true);
-          check(
-            'deciding removes the items and clears the count',
-            decided && (rowsAfter === 0 || primaryHidden),
-          );
-        } else {
-          check("the sheet's fill names the choice and the count", false);
-          check('deciding removes the items and clears the count', false);
-        }
-      } else {
-        check('selecting rows updates the primary', false);
-        check("the sheet's fill names the choice and the count", false);
-        check('deciding removes the items and clears the count', false);
-      }
-    }
-
-    // ---- scenario: deciding drops the ids it decided ------------------------
-    console.log('\nscenario: deciding drops the ids it decided');
-
-    {
-      // After the bulk decide above, no waiting rows remain selected.
-      // Select one row in the 'new' view (items that were not in 'waiting')
-      // and verify the primary shows 'Decide 1' (the decided ids are gone).
-      await page.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
-      await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
-
-      const newBoxes = page.locator('.kit-row .kit-box');
-      if ((await newBoxes.count()) > 0) {
-        await newBoxes.first().click();
-        await selShows(page, 1);
-        const primaryText = await page
-          .$eval('.kit-primary', (el) => el.textContent ?? '')
-          .catch(() => '');
-        // Primary must show exactly 'Decide 1', not more (decided ids not re-counted).
-        check(
-          'a decided id is not re-counted',
-          primaryText.trim() === 'Decide 1',
-        );
-        // Clean up: deselect.
-        await newBoxes.first().click();
-        await selShows(page, 0);
-      } else {
-        // If no 'new' items remain (all are decided), primary must be hidden.
-        const primaryHidden = await page
-          .$eval('.kit-primary', (el) => el.hidden)
-          .catch(() => true);
-        check('a decided id is not re-counted', primaryHidden);
-      }
     }
 
     // ---- scenario: decide one from the detail --------------------------------
@@ -6431,8 +6093,8 @@ async function run() {
             who !== '' && cardHead === `${who} recommends`,
           );
 
-          // Geometry: the recommendation sits beside the description, above
-          // the decide step's question and its cards.
+          // Geometry: the recommendation sits above the description, and
+          // both above the decide step's question and its cards.
           const bodyTop = await propGeoPage
             .$eval('.cb-lead .cb-body', (el) => el.getBoundingClientRect().top)
             .catch(() => -2);
@@ -6452,11 +6114,11 @@ async function run() {
             )
             .catch(() => -1);
           check(
-            `proposal card is beside the description (tops ${cardTop}/${bodyTop}) and above the question (${cardBottom} <= ${questionTop})`,
+            `proposal card is above the description (${cardTop}..${cardBottom} <= ${bodyTop}), which is above the question (${questionTop})`,
             cardTop > 0 &&
-              Math.round(cardTop) === Math.round(bodyTop) &&
-              cardBottom > 0 &&
-              cardBottom <= questionTop,
+              cardBottom > cardTop &&
+              cardBottom <= bodyTop &&
+              bodyTop < questionTop,
           );
 
           // Proposal card is inside the reading document (.kit-doc).
@@ -6477,7 +6139,7 @@ async function run() {
             false,
           );
           check(
-            'proposal card is beside the description and above the question',
+            'proposal card is above the description, which is above the question',
             false,
           );
           check('proposal card is inside the .kit-doc reading document', false);
@@ -6662,15 +6324,16 @@ async function run() {
             .catch(() => false);
 
           if (cardBeforeReject) {
-            // Click the 'reject' button (the last button in the card's actions).
+            // Click the 'reject' button (the last button in the card's
+            // actions; the key hint follows it on the row).
             const rejectBtn = await rejectPage.$(
-              '.cb-proposal-card .kit-btns .kit-btn:last-child',
+              '.cb-proposal-card .kit-btns .kit-btn:last-of-type',
             );
             if (rejectBtn) {
               // By selector: the item may paint again (the proposal's live
               // event) between finding the button and clicking it.
               await rejectPage.click(
-                '.cb-proposal-card .kit-btns .kit-btn:last-child',
+                '.cb-proposal-card .kit-btns .kit-btn:last-of-type',
               );
               await rejectPage
                 .waitForSelector('.kit-sheet', { timeout: 4000 })
@@ -7158,7 +6821,8 @@ async function run() {
             .catch(() => {});
           await listShows(footPage, view);
 
-          // Select all visible rows to trigger the sel-count display.
+          // Tick every visible row: the groups' lines grow, the foot
+          // stays one line.
           const boxes = footPage.locator('.kit-row .kit-box');
           const nBoxes = await boxes.count();
           for (let i = 0; i < nBoxes; i++) {
@@ -7170,11 +6834,7 @@ async function run() {
             const foot = document.querySelector('.cb-foot');
             if (!foot) return null;
             // Gather all interactive foot controls (visible ones only).
-            const selectors = [
-              '.cb-sel-count',
-              '.cb-discard-all',
-              '.cb-foot-more',
-            ];
+            const selectors = ['.cb-discard-all', '.cb-foot-more'];
             const rects = [];
             for (const sel of selectors) {
               const el = foot.querySelector(sel);

@@ -124,7 +124,7 @@ export interface Section {
    */
   primary(): Primary | null;
   /**
-   * keys are the section's own keys that work now (Attention's d, a / r;
+   * keys are the section's own keys that work now (Attention's a / r;
    * Rules' a, activate; Apply's a and p). app.ts asks after every show() and
    * binds them while the section is shown, and only then: a hidden section
    * keeps its open item and selection, and a key must not reach them. It

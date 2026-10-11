@@ -15,7 +15,6 @@ import {
   type Chip,
   type ListHandle,
   type KeyBinding,
-  type Primary,
 } from '/_kit/kit.js';
 import type {
   SummaryView,
@@ -33,7 +32,7 @@ import type {
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
-import { wireSelection, getVocab } from './decide.ts';
+import { getVocab } from './decide.ts';
 import {
   keyWithoutKind,
   pluralize,
@@ -264,11 +263,6 @@ export function makeAttention(ctx: Ctx): Section {
   }) as HTMLButtonElement;
 
   function buildFoot(): HTMLElement {
-    const selCount = h(
-      'span',
-      { class: 'cb-sel-count', hidden: true },
-      '0 selected',
-    );
     const footRight = h(
       'div',
       { class: 'cb-foot-right' },
@@ -285,7 +279,7 @@ export function makeAttention(ctx: Ctx): Section {
         `show ${PAGE_SIZE} more`,
       ),
     );
-    footEl = h('div', { class: 'cb-foot' }, selCount, summaryEl, footRight);
+    footEl = h('div', { class: 'cb-foot' }, summaryEl, footRight);
     return footEl;
   }
 
@@ -350,7 +344,6 @@ export function makeAttention(ctx: Ctx): Section {
       ctx.route.go('item', it.key);
       void openDetail(it.key);
     },
-    // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot(),
   });
 
@@ -1036,7 +1029,8 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // tickGroup ticks every item of g (every page), or, all ticked, unticks
-  // them.
+  // them. Ticking a collapsed group expands it: its buttons act on what
+  // is ticked, and its rows show what that is.
   async function tickGroup(g: GroupView): Promise<void> {
     const ticked = tickedIn(g);
     if (ticked.length >= g.total) {
@@ -1045,6 +1039,10 @@ export function makeAttention(ctx: Ctx): Section {
     }
     try {
       const items = await fetchGroup(g);
+      if (collapsed.delete(g.id)) {
+        setRows();
+        markOpenRow();
+      }
       selection.all(items.map((it) => it.key));
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -1151,7 +1149,7 @@ export function makeAttention(ctx: Ctx): Section {
     if (!footEl) return;
 
     // Show or hide only the show-more button; the foot itself stays visible
-    // so the selection count and the summary remain.
+    // so the summary remains.
     const btn = footEl.querySelector<HTMLElement>('.cb-foot-more');
     if (btn) {
       const remaining = totalItems - offset;
@@ -1730,24 +1728,8 @@ export function makeAttention(ctx: Ctx): Section {
   }
   void reload();
 
-  // Wire selection → primary button and foot count (Task 4). Its "d" key is
-  // one of this section's keys (Section.keys), live only while it is shown.
-  // The bar's primary is the active section's: wireSelection's "Decide N" is
-  // kept here and reaches the bar only while Attention is shown (app.ts asks
-  // primary() on show).
-  let decidePrimary: Primary | null = null;
-  const decideKey = wireSelection(
-    {
-      ...ctx,
-      setPrimary(p) {
-        decidePrimary = p;
-        if (active) ctx.setPrimary(p);
-      },
-    },
-    handle,
-  );
-
-  // The groups' ticked counts and buttons follow the selection.
+  // Ticked items act through their group: the groups' ticked counts and
+  // buttons follow the selection (no bar primary, no d, no foot count).
   selection.onChange(() => {
     paintAll();
     feedAttached();
@@ -1763,7 +1745,7 @@ export function makeAttention(ctx: Ctx): Section {
     return p && p.state === 'pending' ? p : null;
   }
 
-  // 'a' and 'r' accept/reject the open item's proposal. Like "d", they are
+  // 'a' and 'r' accept/reject the open item's proposal. They are
   // Section.keys: app.ts registers them only while Attention is shown, so on
   // #/rules they cannot reach the open item Attention keeps while hidden, and
   // Rules and Apply are free to bind their own a/r.
@@ -1824,7 +1806,6 @@ export function makeAttention(ctx: Ctx): Section {
   });
 
   const listKeys: KeyBinding[] = [
-    decideKey,
     acceptKey,
     rejectKey,
     undoKey,
@@ -1989,7 +1970,7 @@ export function makeAttention(ctx: Ctx): Section {
       }
     },
     primary() {
-      return decidePrimary;
+      return null;
     },
   };
 }

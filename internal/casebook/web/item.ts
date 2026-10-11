@@ -2,10 +2,11 @@
 //
 // renderItem(ctx, detail) produces the full item reading column:
 //   the « ‹ › » row (attention's, when the item is in its list) · kicker ·
-//   h1 title (two lines kept for it) · facts · the description beside the
-//   recommendation box (one fixed height; an empty box when there is no
-//   recommendation) · the decide step (serve's question, the choice cards
-//   in one row: choices.ts) · evidence beside history
+//   h1 title (two lines kept for it) · facts · the recommendation box (one
+//   fixed height; an empty box when there is no recommendation) above the
+//   description (one fixed height), both the column's width · the decide
+//   step (serve's question, the choice cards: choices.ts) · evidence
+//   beside history
 //
 // The parts above the cards keep their sizes from item to item, so moving
 // between items doesn't move the cards.
@@ -151,7 +152,7 @@ export interface ItemHooks {
   nav?: HTMLElement | null;
 }
 
-// renderRecBox is the recommendation box beside the description: the
+// renderRecBox is the recommendation box above the description: the
 // recommendation card when a proposal is pending, else an empty box of the
 // same size (it says nothing, and keeps the page from moving).
 function renderRecBox(
@@ -272,8 +273,8 @@ export function renderItem(
   if (it.landed) factPairs.push(['landed', it.landed_how ?? it.landed]);
   el.append(facts(factPairs));
 
-  // ---- the description beside the recommendation ----------------------------
-  // One fixed height: a long description scrolls in its box.
+  // ---- the recommendation above the description ------------------------------
+  // Each one fixed height: a long description scrolls in its box.
   const bodyWrap = h('div', { class: 'cb-body' });
   // Why a Not now or a Leave it open came back (serve's words: its
   // condition was met, it names something GitHub can't find, or new
@@ -289,7 +290,7 @@ export function renderItem(
     }
   }
   el.append(
-    h('div', { class: 'cb-lead' }, bodyWrap, renderRecBox(ctx, detail, hooks)),
+    h('div', { class: 'cb-lead' }, renderRecBox(ctx, detail, hooks), bodyWrap),
   );
 
   // ---- decide: the question, the cards --------------------------------------

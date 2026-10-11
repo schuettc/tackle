@@ -12,8 +12,8 @@
 //   serve isn't answering …        spec §2.4 "serve dies": the banner, retry
 //   a restarted serve …            spec §2.4: the stale pill, the tab stops
 //   decisions queued offline …     spec §2.4 "offline": offline · N queued
-//   a slow push …                  the decide sheet closes on serve's answer,
-//                                  not on the push after it
+//   a slow push …                  a decide answers on serve's answer, not
+//                                  on the push after it
 //   a list load on its way …       a view or search change while the list
 //                                  loads is queued, not dropped (0.4.7)
 
@@ -184,7 +184,6 @@ const EXPECT = {
     '/',
     ...FAMILY,
     ...PAGE_KEYS,
-    'd',
     'a',
     'r',
     'u',
@@ -355,8 +354,9 @@ async function keyboardScenario(shared, t) {
           ),
         );
 
-        // x selects the cursor's row; ⇧x selects the range to it; d decides
-        // the selection, and it is decided on serve.
+        // x selects the cursor's row; ⇧x selects the range to it. Ticked
+        // rows act through their group (no d): serve decides them here,
+        // and they leave the list and the selection.
         rows = await rowsOf(pg);
         const hasProposal = (r) => r.group !== '' && r.group !== 'none';
         let from = -1;
@@ -375,26 +375,38 @@ async function keyboardScenario(shared, t) {
           const d = i - cur0;
           return Array(Math.abs(d)).fill(d > 0 ? 'j' : 'k');
         };
+        const picked = rows.slice(from, from + 3);
+        const pickedKeys = picked.map((r) => r.kicker.replace(/^pr · /, 'pr:'));
         await press(pg, ...moveTo(from), 'x');
         check(
-          'x selects the cursor\'s row: "Decide 1"',
+          `x selects the cursor's row ("${picked[0]?.title}")`,
           await until(
             pg,
-            () =>
-              document.querySelector('.kit-primary')?.textContent ===
-              'Decide 1',
+            (want) => {
+              const sel = [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+                ),
+              ].filter((r) => r.checkVisibility());
+              return (
+                sel.length === 1 &&
+                sel[0].querySelector('.kit-title')?.textContent === want
+              );
+            },
+            picked[0]?.title,
           ),
         );
         await press(pg, 'j', 'j', 'Shift+X');
-        const picked = rows.slice(from, from + 3);
-        const pickedKeys = picked.map((r) => r.kicker.replace(/^pr · /, 'pr:'));
         check(
-          '⇧x selects the range to the cursor: "Decide 3"',
+          '⇧x selects the range to the cursor (3 rows)',
           await until(
             pg,
             () =>
-              document.querySelector('.kit-primary')?.textContent ===
-              'Decide 3',
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+                ),
+              ].filter((r) => r.checkVisibility()).length === 3,
           ),
         );
         checkList(
@@ -402,49 +414,29 @@ async function keyboardScenario(shared, t) {
           (await rowsOf(pg)).filter((r) => r.sel).map((r) => r.title),
           picked.map((r) => r.title),
         );
-        await press(pg, 'd');
-        const sheetTitle = (await until(
-          pg,
-          () => !!document.querySelector('.kit-sheet'),
-        ))
-          ? await pg.$eval(
-              '.kit-sheet',
-              (e) =>
-                e.querySelector('.kit-sheet-head')?.textContent ??
-                e.textContent,
-            )
-          : '';
+        await agent.api('POST', '/api/decide', {
+          keys: pickedKeys,
+          disposition: 'keep',
+        });
         check(
-          `d opens decide for the selection ("${sheetTitle}")`,
-          sheetTitle.includes('decide 3 items'),
-        );
-        await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
-        await pg.click('.kit-sheet .kit-btn.fill:has-text("· 3 ")');
-        check(
-          'and deciding there decides the three on serve (keep)',
+          'serve decides the three (keep)',
           await eventually(async () => {
             const got = await Promise.all(pickedKeys.map(item));
             return got.every((v) => v?.item?.decision?.disposition === 'keep');
           }),
         );
         check(
-          'the decided rows leave the list and the selection ("Decide N" goes)',
+          'the decided rows leave the list and the selection',
           await until(
             pg,
             () =>
               document.querySelectorAll(
                 '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
               ).length === 3 &&
-              !!document.querySelector('.kit-primary')?.hidden,
+              document.querySelectorAll(
+                '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+              ).length === 0,
           ),
-        );
-        // serve announces the decision (and the rebuilt index) just before
-        // it answers, so the rows can leave while the sheet, modal, is still
-        // open. Keys wait while a sheet is open: the next key waits for it
-        // to close.
-        check(
-          'the decide sheet closes when serve answers',
-          await until(pg, () => !document.querySelector('.kit-sheet')),
         );
 
         // a accepts the open item's proposal; r rejects it (its sheet).
@@ -1538,11 +1530,12 @@ async function offlineQueuedScenario(shared, t) {
 // slowPushScenario: serve answers a decide once the decision is committed
 // and the index rebuilt; the push to the casebook remote follows. Here the
 // remote (a bare repo in the temp home) holds every push in its pre-receive
-// hook until released: the decide sheet closes, and the keys come back,
-// while the push is held, and the status doesn't call it offline.
+// hook until released: a decide from the item's card moves on, and the
+// keys come back, while the push is held, and the status doesn't call it
+// offline.
 async function slowPushScenario(shared, t) {
   const { check, until, eventually } = t;
-  console.log("\nscenario: a slow push doesn't hold the decide sheet");
+  console.log("\nscenario: a slow push doesn't hold a decide");
   const SP = 'sp-probe';
   const KEY = `pr:schuettc/${SP}#71`;
   await withServe(
@@ -1587,30 +1580,29 @@ async function slowPushScenario(shared, t) {
             `two rows, the one to decide among them (row ${at})`,
             two && at >= 0,
           );
-          // Put the cursor on it and select it.
+          // Put the cursor on it and open it.
           for (let i = 0; i < 4 && (await curOf(pg)) !== at; i++) {
             const cur = await curOf(pg);
             await press(pg, cur < at ? 'j' : 'k');
           }
-          await press(pg, 'x');
+          await press(pg, 'o');
+          const card =
+            '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]';
           check(
-            'x selects it: "Decide 1"',
+            'o opens it, its cards shown',
             await until(
               pg,
-              () =>
-                document.querySelector('.kit-primary')?.textContent ===
-                'Decide 1',
+              (sel) => !!document.querySelector(sel)?.checkVisibility(),
+              card,
             ),
           );
-          await pg.click('.kit-primary');
-          await until(pg, () => !!document.querySelector('.kit-sheet'));
-          await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
           const t0 = Date.now();
-          await pg.click('.kit-sheet .kit-btn.fill:has-text("· 1 ")');
-          const closed = await until(
+          await pg.click(card);
+          // Deciding it opens the next item: the row leaves the list.
+          const left = await until(
             pg,
-            () => !document.querySelector('.kit-sheet'),
-            undefined,
+            (sel) => document.querySelectorAll(`${sel} .kit-row`).length === 1,
+            SHOWN,
             3000,
           );
           const ms = Date.now() - t0;
@@ -1619,8 +1611,8 @@ async function slowPushScenario(shared, t) {
           );
           const onRemote = remoteLog().includes(`decide ${KEY}`);
           check(
-            `the decide sheet closes on serve's answer (${ms} ms) while the push is held (held ${held}, on the remote ${onRemote})`,
-            closed && held && !onRemote && ms < 3000,
+            `deciding from its card answers on serve's answer: the row leaves the list (${ms} ms) while the push is held (held ${held}, on the remote ${onRemote})`,
+            left && held && !onRemote && ms < 3000,
           );
           const v = await agent.api(
             'GET',

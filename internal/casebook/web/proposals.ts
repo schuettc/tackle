@@ -173,13 +173,13 @@ export interface ProposalCardOpts {
 }
 
 /**
- * proposalCard renders the recommendation: the amber kit card beside the
+ * proposalCard renders the recommendation: the amber kit card above the
  * item's description. Returns null if the item has no pending proposal.
  *
  * The card head is "‹session› recommends" (opts.who, serve's words) in agent
  * colour (small uppercase mono via the kit's edge:'agent' styling); the body
- * is the choice's label, the proposal's note (its reason), and the keys that
- * act on it (a, r).
+ * is the choice's label and the proposal's note (its reason); the keys that
+ * act on it (a, r) follow the buttons on their row.
  *
  * Buttons: accept (filled), change… (opens seeded decide sheet, posts to
  * /proposals/change), reject (opens openRejectSheet).
@@ -209,15 +209,13 @@ export function proposalCard(
   if (p.until) {
     lines.push(h('p', { class: 'cb-proposal-until' }, `until ${p.until}`));
   }
-  lines.push(
-    h(
-      'p',
-      { class: 'cb-keyhint' },
-      h('kbd', null, 'a'),
-      ' accept \u00b7 ',
-      h('kbd', null, 'r'),
-      ' reject',
-    ),
+  const keyHint = h(
+    'p',
+    { class: 'cb-keyhint' },
+    h('kbd', null, 'a'),
+    ' accept \u00b7 ',
+    h('kbd', null, 'r'),
+    ' reject',
   );
 
   const bodyEl = h('div', { class: 'cb-proposal-body' }, ...lines);
@@ -277,5 +275,7 @@ export function proposalCard(
   // A narrow box cuts the head to one line; its title keeps it whole.
   const headEl = el.querySelector<HTMLElement>('.kit-card-head');
   if (headEl) headEl.title = head;
+  // The key hint follows the buttons, on their row.
+  el.querySelector('.kit-btns')?.append(keyHint);
   return el;
 }

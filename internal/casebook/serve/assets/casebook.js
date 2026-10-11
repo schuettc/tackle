@@ -748,11 +748,7 @@ function shortKey(key) {
 }
 
 // decide.ts
-import {
-  sheet,
-  h as h3,
-  noteField as noteField2
-} from "/_kit/kit.js";
+import { sheet, h as h3, noteField as noteField2 } from "/_kit/kit.js";
 
 // choices.ts
 import { h as h2, noteField, buttons } from "/_kit/kit.js";
@@ -1185,42 +1181,6 @@ function openDecideSheetWithVocab(ctx, keys, vocab2, onDone, seed, customPost) {
     }
   });
   updateFill();
-}
-function wireSelection(ctx, listHandle) {
-  function openSheetForSelection() {
-    const keys = listHandle.selectedIds();
-    if (keys.length === 0) return;
-    openDecideSheet(ctx, keys, (decided) => {
-      listHandle.deselect(decided);
-    });
-  }
-  listHandle.selection.onChange((ids) => {
-    const countEl = listHandle.el.querySelector(".cb-sel-count");
-    if (countEl instanceof HTMLElement) {
-      if (ids.length > 0) {
-        countEl.textContent = `${ids.length} selected`;
-        countEl.hidden = false;
-      } else {
-        countEl.hidden = true;
-      }
-    }
-    if (ids.length === 0) {
-      ctx.setPrimary(null);
-    } else {
-      ctx.setPrimary({
-        label: `Decide ${ids.length}`,
-        run: openSheetForSelection
-      });
-    }
-  });
-  return {
-    keys: "d",
-    label: "decide selection",
-    group: "page",
-    run() {
-      openSheetForSelection();
-    }
-  };
 }
 
 // apply-text.ts
@@ -2977,15 +2937,13 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   if (p.until) {
     lines.push(h5("p", { class: "cb-proposal-until" }, `until ${p.until}`));
   }
-  lines.push(
-    h5(
-      "p",
-      { class: "cb-keyhint" },
-      h5("kbd", null, "a"),
-      " accept · ",
-      h5("kbd", null, "r"),
-      " reject"
-    )
+  const keyHint = h5(
+    "p",
+    { class: "cb-keyhint" },
+    h5("kbd", null, "a"),
+    " accept · ",
+    h5("kbd", null, "r"),
+    " reject"
   );
   const bodyEl = h5("div", { class: "cb-proposal-body" }, ...lines);
   function doAccept() {
@@ -3035,6 +2993,7 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   el.classList.add("cb-proposal-card");
   const headEl = el.querySelector(".kit-card-head");
   if (headEl) headEl.title = head;
+  el.querySelector(".kit-btns")?.append(keyHint);
   return el;
 }
 
@@ -3202,7 +3161,7 @@ function renderItem(ctx, detail, hooks = {}) {
     }
   }
   el.append(
-    h6("div", { class: "cb-lead" }, bodyWrap, renderRecBox(ctx, detail, hooks))
+    h6("div", { class: "cb-lead" }, renderRecBox(ctx, detail, hooks), bodyWrap)
   );
   el.append(renderDecideSection(ctx, detail, hooks));
   el.append(
@@ -3333,11 +3292,6 @@ function makeAttention(ctx) {
     }
   });
   function buildFoot() {
-    const selCount = h7(
-      "span",
-      { class: "cb-sel-count", hidden: true },
-      "0 selected"
-    );
     const footRight = h7(
       "div",
       { class: "cb-foot-right" },
@@ -3355,7 +3309,7 @@ function makeAttention(ctx) {
         `show ${PAGE_SIZE} more`
       )
     );
-    footEl = h7("div", { class: "cb-foot" }, selCount, summaryEl, footRight);
+    footEl = h7("div", { class: "cb-foot" }, summaryEl, footRight);
     return footEl;
   }
   const handle = list2({
@@ -3407,7 +3361,6 @@ function makeAttention(ctx) {
       ctx.route.go("item", it.key);
       void openDetail(it.key);
     },
-    // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot()
   });
   handle.el.classList.add("cb-attention");
@@ -3925,6 +3878,10 @@ function makeAttention(ctx) {
     }
     try {
       const items = await fetchGroup(g);
+      if (collapsed.delete(g.id)) {
+        setRows();
+        markOpenRow();
+      }
       selection.all(items.map((it) => it.key));
     } catch (err) {
       showReadError(err instanceof Error ? err.message : String(err));
@@ -4415,17 +4372,6 @@ function makeAttention(ctx) {
     }
   }
   void reload();
-  let decidePrimary = null;
-  const decideKey = wireSelection(
-    {
-      ...ctx,
-      setPrimary(p) {
-        decidePrimary = p;
-        if (active) ctx.setPrimary(p);
-      }
-    },
-    handle
-  );
   selection.onChange(() => {
     paintAll();
     feedAttached();
@@ -4485,7 +4431,6 @@ function makeAttention(ctx) {
     void navGo(d < 0 ? "prevGroup" : "nextGroup");
   });
   const listKeys = [
-    decideKey,
     acceptKey,
     rejectKey,
     undoKey,
@@ -4583,7 +4528,7 @@ function makeAttention(ctx) {
       }
     },
     primary() {
-      return decidePrimary;
+      return null;
     }
   };
 }

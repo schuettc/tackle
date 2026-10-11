@@ -110,14 +110,6 @@
   flex-shrink: 0;
 }
 
-.cb-sel-count {
-  font: 12.5px var(--kit-mono);
-  color: var(--kit-signal);
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
 .cb-summary {
   font: 12.5px var(--kit-sans);
   color: var(--kit-muted);
@@ -2198,14 +2190,14 @@ textarea.cb-needs-edit:focus {
 }
 
 .cb-lead {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: 24px;
-  height: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
+/* The description: the column's width, one fixed height, scrolls inside. */
 .cb-lead > .cb-body {
-  height: 160px;
+  height: 140px;
   overflow: auto;
   padding: 12px 14px;
   font-size: 14px;
@@ -2228,9 +2220,11 @@ textarea.cb-needs-edit:focus {
   margin: 0 0 8px;
 }
 
+/* The recommendation above it: one fixed height, room for the head, the
+   label, two lines of the reason and the button row. */
 .cb-lead > .cb-proposal-card,
 .cb-lead > .cb-rec-empty {
-  height: 160px;
+  height: 150px;
   margin: 0;
 }
 
@@ -2257,21 +2251,15 @@ textarea.cb-needs-edit:focus {
   line-height: 1.45;
 }
 
-/* accept, change… and reject: one row, however narrow the box. */
+/* accept, change… and reject at the kit's size, then the key hint: one row. */
 .cb-lead > .cb-proposal-card .kit-btns {
   flex: none;
   flex-wrap: nowrap;
-  gap: 6px;
+  align-items: center;
 }
 
 .cb-lead > .cb-proposal-card .kit-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  padding: 3px 4px;
-  font-size: 12px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .cb-proposal-label {
@@ -2289,14 +2277,14 @@ textarea.cb-needs-edit:focus {
   margin: 0;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
 }
 
-/* The box has room for the reason, not the key hint (the ? overlay lists a and r). */
 .cb-lead .cb-keyhint {
-  display: none;
+  margin: 0 0 0 auto;
+  white-space: nowrap;
 }
 
 .cb-rec-empty {
