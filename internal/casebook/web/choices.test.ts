@@ -172,7 +172,13 @@ const VOCAB: DecisionVocabView = {
   ],
   until_forms: null,
   not_now: FORMS,
-};
+  // Serve's words (decisionVocab) the helpers below fill in.
+  recommends: '{session} recommends',
+  discard_confirm:
+    'Discard {count} in {view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+  discard_one: '1 recommendation',
+  discard_some: '{n} recommendations',
+} as DecisionVocabView;
 function c(
   disposition: string,
   label: string,
@@ -230,28 +236,41 @@ describe('fillLabel', () => {
 });
 
 describe('recommendLine', () => {
-  test("the row's line: the agent and serve's label for its kind", () => {
+  // A session serve knows, named as the rows and the recommendation box
+  // name it.
+  const by = {
+    id: 'abc',
+    harness: 'pi',
+    label: '',
+    cwd: '/home/court/tools-workspace',
+    pid: 1,
+    first_seen: '',
+    last_seen: '',
+    busy: false,
+    queued: 0,
+    name: 'tools-workspace/casebook',
+    worker: false,
+    eligible: true,
+  };
+
+  test("the session that recommends, by name, and serve's label for its kind", () => {
     assert.equal(
-      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'close'),
-      'pi recommends Close it',
+      recommendLine(VOCAB, 'issue:o/r#1', by, 'pi:abc', 'close'),
+      'tools-workspace/casebook recommends Close it',
     );
+  });
+
+  test("no session known: the source's agent", () => {
     assert.equal(
-      recommendLine(VOCAB, 'branch:o/r@x', 'rule:stale', 'delete'),
+      recommendLine(VOCAB, 'branch:o/r@x', undefined, 'rule:stale', 'delete'),
       'rule recommends Delete it',
     );
   });
 
   test('watch reads as Not now', () => {
     assert.equal(
-      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'watch'),
-      'pi recommends Not now',
-    );
-  });
-
-  test('before the vocabulary loads: the disposition', () => {
-    assert.equal(
-      recommendLine(null, 'issue:o/r#1', 'pi:abc', 'close'),
-      'pi recommends close',
+      recommendLine(VOCAB, 'issue:o/r#1', by, 'pi:abc', 'watch'),
+      'tools-workspace/casebook recommends Not now',
     );
   });
 });
@@ -310,14 +329,18 @@ describe('groupButtons', () => {
 });
 
 describe('discardConfirm', () => {
-  test('Discard, with what it does', () => {
+  test("serve's sentence, with the count and the view", () => {
     assert.equal(
-      discardConfirm(31, 'waiting on you'),
-      'Discard 31 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+      discardConfirm(VOCAB, 31, 'waiting on you'),
+      VOCAB.discard_confirm
+        .replace('{count}', VOCAB.discard_some.replace('{n}', '31'))
+        .replace('{view}', 'waiting on you'),
     );
-    assert.match(
-      discardConfirm(1, 'new'),
-      /^Discard 1 recommendation in new\? /,
+    assert.equal(
+      discardConfirm(VOCAB, 1, 'new'),
+      VOCAB.discard_confirm
+        .replace('{count}', VOCAB.discard_one)
+        .replace('{view}', 'new'),
     );
   });
 });

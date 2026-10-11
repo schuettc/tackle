@@ -350,8 +350,15 @@ func decisionVocab() DecisionVocabView {
 			None:      "none",
 			Later:     "on the next page",
 		},
-		HideList: "Hide the list",
-		ShowList: "Show the list",
+		HideList:       "Hide the list",
+		ShowList:       "Show the list",
+		DiscardTitle:   "discard recommendations",
+		DiscardConfirm: "Discard {count} in {view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.",
+		DiscardOne:     "1 recommendation",
+		DiscardSome:    "{n} recommendations",
+		DiscardButton:  "discard",
+		DiscardCancel:  "cancel",
+		Asked:          "asked {session}",
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)

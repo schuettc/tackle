@@ -13,7 +13,9 @@ import type {
   GroupView,
   LookIntoVocab,
   NotNowForm,
+  Session,
 } from './wire.d.ts';
+import { sessionName } from './sessions.ts';
 
 /**
  * kindFromKey extracts the kind from a key by taking the prefix before the
@@ -263,14 +265,21 @@ export function choiceLabel(
   );
 }
 
-/** recommendLine is a list row's line for its pending proposal. */
+/**
+ * recommendLine is the line for an item's pending proposal, in serve's
+ * words: the session that recommends (by, named as the rows name it; the
+ * source's agent when serve knows none), then the choice ("‹session›
+ * recommends Close it").
+ */
 export function recommendLine(
-  vocab: DecisionVocabView | null,
+  vocab: DecisionVocabView,
   key: string,
+  by: Session | undefined,
   source: string,
   disposition: string,
 ): string {
-  return `${agentFromSource(source)} recommends ${choiceLabel(vocab, key, disposition)}`;
+  const who = vocab.recommends.replaceAll('{session}', sessionName(by, source));
+  return `${who} ${choiceLabel(vocab, key, disposition)}`;
 }
 
 // ---- the groups of an Attention view ----------------------------------------
@@ -332,11 +341,24 @@ export function lookIntoCard(
 
 /**
  * discardConfirm is the confirm Discard opens for n recommendations in
- * view: discarding withdraws them, with no judgement; the items go back to
- * the agent.
+ * view, in serve's words: discarding withdraws them, with no judgement;
+ * the items go back to the agent.
  */
-export function discardConfirm(n: number, view: string): string {
-  return `Discard ${pluralize(n, 'recommendation')} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`;
+export function discardConfirm(
+  vocab: Pick<
+    DecisionVocabView,
+    'discard_confirm' | 'discard_one' | 'discard_some'
+  >,
+  n: number,
+  view: string,
+): string {
+  const count =
+    n === 1
+      ? vocab.discard_one
+      : vocab.discard_some.replaceAll('{n}', String(n));
+  return vocab.discard_confirm
+    .replaceAll('{count}', count)
+    .replaceAll('{view}', view);
 }
 
 // The kinds each Not now form that names something searches and accepts.

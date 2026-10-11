@@ -220,3 +220,29 @@ func TestVocabularyItemPageWords(t *testing.T) {
 		t.Fatalf("hide %q, show %q", v.HideList, v.ShowList)
 	}
 }
+
+// TestVocabularyDiscardAndAskedWords: the discard confirm (its title, its
+// sentence with the count and the view, its buttons) and the not
+// recommended group's "asked ‹session›" come from serve.
+func TestVocabularyDiscardAndAskedWords(t *testing.T) {
+	r := newRig(t)
+	var v DecisionVocabView
+	if c := r.do(t, "GET", "/api/decisions/vocabulary", nil, &v); c != 200 {
+		t.Fatalf("vocabulary %d", c)
+	}
+	got := []string{v.DiscardTitle, v.DiscardConfirm, v.DiscardOne, v.DiscardSome, v.DiscardButton, v.DiscardCancel, v.Asked}
+	want := []string{
+		"discard recommendations",
+		"Discard {count} in {view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.",
+		"1 recommendation",
+		"{n} recommendations",
+		"discard",
+		"cancel",
+		"asked {session}",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("word %d: %q, want %q", i, got[i], want[i])
+		}
+	}
+}

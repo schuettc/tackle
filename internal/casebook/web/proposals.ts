@@ -4,12 +4,13 @@
 //   agentFromSource(source)            — "pi:session-id" → "pi"
 //   proposalCard(ctx, detail, onDone)   — the recommendation card in the decide step
 //   openRejectSheet(ctx, ids, onDone)   — reason field + POST /proposals/reject
-//   openDiscardSheet(ctx, n, view, body, onDone) — confirm + POST /proposals/withdraw
+//   openDiscardSheet(ctx, vocab, n, view, body, onDone) — confirm + POST /proposals/withdraw
 
 import { card, sheet, noteField, h, type Button } from '/_kit/kit.js';
 import type {
   AcceptResult,
   DecideResult,
+  DecisionVocabView,
   ItemDetailView,
   RejectResult,
   WithdrawResult,
@@ -98,14 +99,15 @@ export function openRejectSheet(
 
 /**
  * openDiscardSheet confirms discarding n agent recommendations in view (the
- * kit's sheet: "Discard n recommendations in ‹view›? …", discard and
- * cancel); discard POSTs body ({ids}, or the view and its filters, with a
+ * kit's sheet in serve's words: "Discard n recommendations in ‹view›? …",
+ * discard and cancel); discard POSTs body ({ids}, or the view and its filters, with a
  * group or without) to /proposals/withdraw and calls onDone with how many
  * were withdrawn. It decides and rejects nothing: the items go back to the
  * agent.
  */
 export function openDiscardSheet(
   ctx: Ctx,
+  vocab: DecisionVocabView,
   n: number,
   view: string,
   body: Record<string, unknown>,
@@ -132,23 +134,23 @@ export function openDiscardSheet(
   }
 
   sh = sheet({
-    title: 'discard recommendations',
+    title: vocab.discard_title,
     body: h(
       'div',
       { class: 'cb-sheet-body cb-discard-confirm' },
-      h('p', { class: 'cb-discard-says' }, discardConfirm(n, view)),
+      h('p', { class: 'cb-discard-says' }, discardConfirm(vocab, n, view)),
       errEl,
     ),
     actions: [
       {
-        label: 'discard',
+        label: vocab.discard_button,
         fill: true,
         run() {
           void doDiscard();
         },
       },
       {
-        label: 'cancel',
+        label: vocab.discard_cancel,
         run() {
           sh?.close();
         },

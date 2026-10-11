@@ -438,20 +438,38 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // paintedQuery is the query the rows were last loaded for: reloading it
-  // keeps every page the list had (a nav button may have loaded one), a
-  // new view or search starts at one page.
+  // keeps every page the list had (a nav button or "show more" may have
+  // loaded one), a new view or search starts at one page. The pages are
+  // asked for one at a time, PAGE_SIZE each (serve caps a page's limit),
+  // and the rows painted once they are all in.
   let paintedQuery = '';
   async function reloadNow(): Promise<void> {
     reloading = true;
     loads++;
     const asked = queryKey();
-    const q = buildQuery(0);
-    if (asked === paintedQuery && offset > PAGE_SIZE)
-      q['limit'] = String(offset);
+    const want =
+      asked === paintedQuery ? Math.max(offset, PAGE_SIZE) : PAGE_SIZE;
     try {
       offset = 0;
       loadedItems = [];
-      const data = await ctx.api.get<ItemsView>('/items', q);
+      const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
+      const items = data.items ?? [];
+      const seen = new Set(items.map((it) => it.key));
+      // at is the offset of the next page, the rows serve sent so far.
+      let at = items.length;
+      while (at < want && at < data.total && queryKey() === asked) {
+        const q = buildQuery(at);
+        q['limit'] = String(Math.min(PAGE_SIZE, want - at));
+        const page = (await ctx.api.get<ItemsView>('/items', q)).items ?? [];
+        if (page.length === 0) break;
+        at += page.length;
+        // A row that moved down a page while they loaded is not listed twice.
+        for (const it of page) {
+          if (seen.has(it.key)) continue;
+          seen.add(it.key);
+          items.push(it);
+        }
+      }
       if (queryKey() !== asked) {
         // Every change to the query asks for a reload; this one makes sure.
         void reload();
@@ -459,7 +477,7 @@ export function makeAttention(ctx: Ctx): Section {
       }
       totalItems = data.total;
       totalItemsForView = data.total;
-      loadedItems = data.items ?? [];
+      loadedItems = items;
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
       groups = data.groups ?? [];
@@ -892,7 +910,11 @@ export function makeAttention(ctx: Ctx): Section {
             : null;
         const note =
           t && asked === t.id
-            ? h('span', { class: 'cb-group-note' }, `asked ${t.name}`)
+            ? h(
+                'span',
+                { class: 'cb-group-note' },
+                vocab.asked.replaceAll('{session}', t.name),
+              )
             : null;
         acts.replaceChildren(...[ask, note].filter((x) => x !== null));
         return;
@@ -1134,15 +1156,23 @@ export function makeAttention(ctx: Ctx): Section {
   // discardGroup confirms, then withdraws the group's agent
   // recommendations (every page), or exactly its ticked items'.
   function discardGroup(g: GroupView): void {
+    if (!vocab) return;
     const ticked = tickedIn(g);
     if (ticked.length && ticked.length < g.total) {
       const ids = ticked
         .map((k) => proposalOfKey.get(k))
         .filter((id): id is number => id !== undefined);
-      openDiscardSheet(ctx, ids.length, viewLabel(), { ids }, discarded);
+      openDiscardSheet(ctx, vocab, ids.length, viewLabel(), { ids }, discarded);
       return;
     }
-    openDiscardSheet(ctx, g.total, viewLabel(), groupFilters(g), discarded);
+    openDiscardSheet(
+      ctx,
+      vocab,
+      g.total,
+      viewLabel(),
+      groupFilters(g),
+      discarded,
+    );
   }
 
   function updateFoot(): void {
@@ -1267,8 +1297,15 @@ export function makeAttention(ctx: Ctx): Section {
   // discardView confirms, then withdraws every agent recommendation in the
   // view and its filters (every page, not only the loaded rows).
   function discardView(): void {
-    if (viewRecs === 0) return;
-    openDiscardSheet(ctx, viewRecs, viewLabel(), viewFilters(), discarded);
+    if (viewRecs === 0 || !vocab) return;
+    openDiscardSheet(
+      ctx,
+      vocab,
+      viewRecs,
+      viewLabel(),
+      viewFilters(),
+      discarded,
+    );
   }
 
   // refreshSummary reads serve's summary: the view chips' counts.
@@ -1455,8 +1492,14 @@ export function makeAttention(ctx: Ctx): Section {
     const says =
       why === 'evidence'
         ? 'new evidence'
-        : p && p.state === 'pending'
-          ? recommendLine(vocab, key, p.source, p.disposition)
+        : p && p.state === 'pending' && vocab
+          ? recommendLine(
+              vocab,
+              key,
+              detail.item.recommended_by,
+              p.source,
+              p.disposition,
+            )
           : 'the recommendation changed';
     const show = h(
       'button',

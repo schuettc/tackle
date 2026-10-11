@@ -442,6 +442,18 @@ type DecisionVocabView struct {
 	// HideList and ShowList are Attention's list's collapse control.
 	HideList string `json:"hide_list"`
 	ShowList string `json:"show_list"`
+	// The discard confirm: its title, its sentence ({count}: DiscardOne,
+	// or DiscardSome with {n} the number; {view}: the view's label) and
+	// its buttons.
+	DiscardTitle   string `json:"discard_title"`
+	DiscardConfirm string `json:"discard_confirm"`
+	DiscardOne     string `json:"discard_one"`
+	DiscardSome    string `json:"discard_some"`
+	DiscardButton  string `json:"discard_button"`
+	DiscardCancel  string `json:"discard_cancel"`
+	// Asked takes the not recommended group's ask's place once the page
+	// asked the attached session ({session}: its name).
+	Asked string `json:"asked"`
 }
 
 // NavVocab is the open item's « ‹ › » row: its place ({pos} of {total} in

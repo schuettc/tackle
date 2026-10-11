@@ -517,6 +517,55 @@ import {
   card
 } from "/_kit/kit.js";
 
+// sessions.ts
+function folderOf(s) {
+  return s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? "" : "";
+}
+function sessionTitle(s) {
+  return s.name || folderOf(s) || s.harness || s.id;
+}
+function sessionName(s, source) {
+  if (s) return sessionTitle(s);
+  const i = source.indexOf(":");
+  return i === -1 ? source : source.slice(0, i);
+}
+function sessionMeta(s) {
+  const folder = folderOf(s);
+  const parts = s.name && folder ? [folder, s.harness] : [s.harness];
+  return parts.filter(Boolean).join(" · ");
+}
+function pickable(sessions) {
+  return sessions.filter((s) => s.eligible).sort((a, b) => {
+    const t = sessionTitle(a).localeCompare(sessionTitle(b), void 0, {
+      sensitivity: "base"
+    });
+    return t !== 0 ? t : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+}
+function resolveAttachment(urlSession2, sessions) {
+  if (urlSession2) return { id: urlSession2, auto: false };
+  const ps = pickable(sessions);
+  return ps.length === 1 ? { id: ps[0].id, auto: true } : { id: "", auto: false };
+}
+function attachedState(id, sessions) {
+  if (!id) return "none";
+  const s = sessions.find((x) => x.id === id);
+  if (!s) return "unknown";
+  return s.left ? "left" : "here";
+}
+function urlSession(href) {
+  return new URL(href).searchParams.get("session") ?? "";
+}
+function urlWithSession(href, session) {
+  const u = new URL(href);
+  if (session) u.searchParams.set("session", session);
+  else u.searchParams.delete("session");
+  return u.toString();
+}
+function lookingLine(l) {
+  return l ? `${sessionTitle(l.session)} is looking into it` : "";
+}
+
 // decide-math.ts
 function kindFromKey(key) {
   const i = key.indexOf(":");
@@ -611,17 +660,14 @@ function fillLabel(label, keys) {
   const count = noun ? pluralize(keys.length, noun[0], noun[1]) : pluralize(keys.length, "item");
   return `${label} · ${count}`;
 }
-function agentFromSource(source) {
-  const i = source.indexOf(":");
-  return i === -1 ? source : source.slice(0, i);
-}
 function choiceLabel(vocab2, key, disposition) {
   const d = disposition === "watch" ? "wait" : disposition;
   if (!vocab2) return disposition;
   return choicesForKeys(vocab2, [key]).find((c) => c.disposition === d)?.label ?? disposition;
 }
-function recommendLine(vocab2, key, source, disposition) {
-  return `${agentFromSource(source)} recommends ${choiceLabel(vocab2, key, disposition)}`;
+function recommendLine(vocab2, key, by, source, disposition) {
+  const who = vocab2.recommends.replaceAll("{session}", sessionName(by, source));
+  return `${who} ${choiceLabel(vocab2, key, disposition)}`;
 }
 function countWord(total, ticked, words) {
   if (ticked > 0 && ticked < total)
@@ -646,8 +692,9 @@ function lookIntoCard(words, session, key) {
     message: words.message.replaceAll("{key}", key)
   };
 }
-function discardConfirm(n, view) {
-  return `Discard ${pluralize(n, "recommendation")} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`;
+function discardConfirm(vocab2, n, view) {
+  const count = n === 1 ? vocab2.discard_one : vocab2.discard_some.replaceAll("{n}", String(n));
+  return vocab2.discard_confirm.replaceAll("{count}", count).replaceAll("{view}", view);
 }
 var PICK_KINDS = {
   pr: ["pr"],
@@ -1434,55 +1481,6 @@ function fmtAge(ts) {
   const mo = Math.floor(d / 30);
   if (mo < 12) return `${mo}mo`;
   return `${Math.floor(mo / 12)}y`;
-}
-
-// sessions.ts
-function folderOf(s) {
-  return s.cwd ? s.cwd.split("/").filter(Boolean).pop() ?? "" : "";
-}
-function sessionTitle(s) {
-  return s.name || folderOf(s) || s.harness || s.id;
-}
-function sessionName(s, source) {
-  if (s) return sessionTitle(s);
-  const i = source.indexOf(":");
-  return i === -1 ? source : source.slice(0, i);
-}
-function sessionMeta(s) {
-  const folder = folderOf(s);
-  const parts = s.name && folder ? [folder, s.harness] : [s.harness];
-  return parts.filter(Boolean).join(" · ");
-}
-function pickable(sessions) {
-  return sessions.filter((s) => s.eligible).sort((a, b) => {
-    const t = sessionTitle(a).localeCompare(sessionTitle(b), void 0, {
-      sensitivity: "base"
-    });
-    return t !== 0 ? t : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  });
-}
-function resolveAttachment(urlSession2, sessions) {
-  if (urlSession2) return { id: urlSession2, auto: false };
-  const ps = pickable(sessions);
-  return ps.length === 1 ? { id: ps[0].id, auto: true } : { id: "", auto: false };
-}
-function attachedState(id, sessions) {
-  if (!id) return "none";
-  const s = sessions.find((x) => x.id === id);
-  if (!s) return "unknown";
-  return s.left ? "left" : "here";
-}
-function urlSession(href) {
-  return new URL(href).searchParams.get("session") ?? "";
-}
-function urlWithSession(href, session) {
-  const u = new URL(href);
-  if (session) u.searchParams.set("session", session);
-  else u.searchParams.delete("session");
-  return u.toString();
-}
-function lookingLine(l) {
-  return l ? `${sessionTitle(l.session)} is looking into it` : "";
 }
 
 // coalesce.ts
@@ -2876,7 +2874,7 @@ function openRejectSheet(ctx, ids, onDone) {
     }
   });
 }
-function openDiscardSheet(ctx, n, view, body, onDone) {
+function openDiscardSheet(ctx, vocab2, n, view, body, onDone) {
   let submitting = false;
   let sh = null;
   const errEl = h5("p", { class: "cb-sheet-err" });
@@ -2896,23 +2894,23 @@ function openDiscardSheet(ctx, n, view, body, onDone) {
     }
   }
   sh = sheet2({
-    title: "discard recommendations",
+    title: vocab2.discard_title,
     body: h5(
       "div",
       { class: "cb-sheet-body cb-discard-confirm" },
-      h5("p", { class: "cb-discard-says" }, discardConfirm(n, view)),
+      h5("p", { class: "cb-discard-says" }, discardConfirm(vocab2, n, view)),
       errEl
     ),
     actions: [
       {
-        label: "discard",
+        label: vocab2.discard_button,
         fill: true,
         run() {
           void doDiscard();
         }
       },
       {
-        label: "cancel",
+        label: vocab2.discard_cancel,
         run() {
           sh?.close();
         }
@@ -3435,20 +3433,33 @@ function makeAttention(ctx) {
     reloading = true;
     loads++;
     const asked2 = queryKey();
-    const q = buildQuery(0);
-    if (asked2 === paintedQuery && offset > PAGE_SIZE)
-      q["limit"] = String(offset);
+    const want = asked2 === paintedQuery ? Math.max(offset, PAGE_SIZE) : PAGE_SIZE;
     try {
       offset = 0;
       loadedItems = [];
-      const data = await ctx.api.get("/items", q);
+      const data = await ctx.api.get("/items", buildQuery(0));
+      const items = data.items ?? [];
+      const seen = new Set(items.map((it) => it.key));
+      let at2 = items.length;
+      while (at2 < want && at2 < data.total && queryKey() === asked2) {
+        const q = buildQuery(at2);
+        q["limit"] = String(Math.min(PAGE_SIZE, want - at2));
+        const page = (await ctx.api.get("/items", q)).items ?? [];
+        if (page.length === 0) break;
+        at2 += page.length;
+        for (const it of page) {
+          if (seen.has(it.key)) continue;
+          seen.add(it.key);
+          items.push(it);
+        }
+      }
       if (queryKey() !== asked2) {
         void reload();
         return;
       }
       totalItems = data.total;
       totalItemsForView = data.total;
-      loadedItems = data.items ?? [];
+      loadedItems = items;
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
       groups = data.groups ?? [];
@@ -3767,7 +3778,11 @@ function makeAttention(ctx) {
           vocab2.recommend_these.replaceAll("{session}", t.name).replaceAll("{n}", countWord(g.total, 0, vocab2.count_words)),
           askTheRest
         ) : null;
-        const note = t && asked === t.id ? h7("span", { class: "cb-group-note" }, `asked ${t.name}`) : null;
+        const note = t && asked === t.id ? h7(
+          "span",
+          { class: "cb-group-note" },
+          vocab2.asked.replaceAll("{session}", t.name)
+        ) : null;
         acts.replaceChildren(...[ask, note].filter((x) => x !== null));
         return;
       }
@@ -3955,13 +3970,21 @@ function makeAttention(ctx) {
     }
   }
   function discardGroup(g) {
+    if (!vocab2) return;
     const ticked = tickedIn(g);
     if (ticked.length && ticked.length < g.total) {
       const ids = ticked.map((k) => proposalOfKey.get(k)).filter((id) => id !== void 0);
-      openDiscardSheet(ctx, ids.length, viewLabel(), { ids }, discarded);
+      openDiscardSheet(ctx, vocab2, ids.length, viewLabel(), { ids }, discarded);
       return;
     }
-    openDiscardSheet(ctx, g.total, viewLabel(), groupFilters(g), discarded);
+    openDiscardSheet(
+      ctx,
+      vocab2,
+      g.total,
+      viewLabel(),
+      groupFilters(g),
+      discarded
+    );
   }
   function updateFoot() {
     if (!footEl) return;
@@ -4046,8 +4069,15 @@ function makeAttention(ctx) {
     void reload();
   }
   function discardView() {
-    if (viewRecs === 0) return;
-    openDiscardSheet(ctx, viewRecs, viewLabel(), viewFilters(), discarded);
+    if (viewRecs === 0 || !vocab2) return;
+    openDiscardSheet(
+      ctx,
+      vocab2,
+      viewRecs,
+      viewLabel(),
+      viewFilters(),
+      discarded
+    );
   }
   function refreshSummary() {
     void ctx.api.get("/summary").then((sv) => {
@@ -4178,7 +4208,13 @@ function makeAttention(ctx) {
       return;
     }
     const p = detail.item.proposal;
-    const says = why === "evidence" ? "new evidence" : p && p.state === "pending" ? recommendLine(vocab2, key, p.source, p.disposition) : "the recommendation changed";
+    const says = why === "evidence" ? "new evidence" : p && p.state === "pending" && vocab2 ? recommendLine(
+      vocab2,
+      key,
+      detail.item.recommended_by,
+      p.source,
+      p.disposition
+    ) : "the recommendation changed";
     const show2 = h7(
       "button",
       {

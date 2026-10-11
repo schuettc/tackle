@@ -74,7 +74,7 @@
 //     reason) and the "recommended" mark show, with no reload
 //   a proposal for another item leaves the open item as it was
 //   with the closing comment typed, or the Not now picker open, the open
-//     item isn't re-rendered under Court: "pi recommends ‹label› · show"
+//     item isn't re-rendered under Court: "openrec recommends ‹label› · show"
 //     shows instead, and "show" re-renders it
 //   the card's head names the session ("openrec recommends"), then the
 //     choice: "Close it without merging"
@@ -134,6 +134,12 @@
 //     in one row, one height; nothing above the cards moves between items
 //   the list collapses to a 34px rail, kept across a reload; the item page
 //     is then 1060px wide
+//
+// And a reload with pages loaded, on a serve and repo of their own:
+//
+//   reload keeps 600 rows: three pages shown, opening the 550th row's item
+//     and a live event reload the list with every page it had, the open
+//     row and its « ‹ › » row still on screen
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -316,6 +322,7 @@ export async function decideScenarios(shared, t) {
     ['discard recommendations', discardScenario, discardSeed()],
     ['the steady list', steadyScenario, steadySeed()],
     ['the item page and its navigation', navScenario, navSeed()],
+    ['reload keeps 600 rows', reloadPagesScenario, reloadPagesSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -1989,6 +1996,141 @@ async function manyScenario(context, t, s) {
   await pg.close();
 }
 
+// ---- reload keeps the pages it had ---------------------------------------------
+
+const RLP = 'rd-reload-pages';
+const RLP_N = 650;
+
+function reloadPagesSeed() {
+  const issues = [];
+  for (let n = 1; n <= RLP_N + 1; n++) {
+    const at = `2026-09-01T0${Math.floor(n / 60) % 10}:${String(n % 60).padStart(2, '0')}:00Z`;
+    issues.push({
+      repo: `schuettc/${RLP}`,
+      number: n,
+      title: `Old question ${n}`,
+      author: 'alice',
+      state: 'OPEN',
+      created_at: at,
+      updated_at: at,
+    });
+  }
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${RLP}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues,
+      },
+    ],
+  };
+}
+
+async function reloadPagesScenario(context, t, s) {
+  const { check, until } = t;
+  console.log('\nscenario: reload keeps 600 rows');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const A = 'probe-reload-pages';
+  await agent.presence(A, 'pi \u00b7 pages', '/home/court/pages', 'pi');
+  const keys = [];
+  for (let n = 1; n <= RLP_N; n++) keys.push(`issue:schuettc/${RLP}#${n}`);
+  await agent.propose(A, keys, 'close', 'stale');
+  const total0 = (await api('GET', '/api/items?view=proposed&limit=1')).total;
+  check(
+    `the proposed view holds the ${RLP_N} recommended closes (${total0})`,
+    total0 === RLP_N,
+  );
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/proposed`, {
+    waitUntil: 'domcontentloaded',
+  });
+  const rowCount = () =>
+    pg.evaluate(
+      (list) => document.querySelectorAll(`${list} .kit-row`).length,
+      LIST,
+    );
+  await until(
+    pg,
+    (list) => document.querySelectorAll(`${list} .kit-row`).length === 200,
+    LIST,
+    10000,
+  );
+  for (const n of [400, 600]) {
+    await pg.click('.cb-foot-more');
+    await until(
+      pg,
+      ({ list, n }) =>
+        document.querySelectorAll(`${list} .kit-row`).length === n,
+      { list: LIST, n },
+      10000,
+    );
+  }
+  check('three pages shown: 600 rows', (await rowCount()) === 600);
+  const target = await pg.evaluate(
+    (list) =>
+      document
+        .querySelectorAll(`${list} .kit-row`)[549]
+        ?.querySelector('.kit-kicker')?.textContent ?? '',
+    LIST,
+  );
+  const targetKey = target.replace(' \u00b7 ', ':');
+  await pg.locator(`${LIST} .kit-row`).nth(549).click();
+  check(`the 550th row, ${targetKey}, opens`, await opened(t, pg, targetKey));
+  // A live event: one more recommendation in the view.
+  await agent.propose(
+    A,
+    [`issue:schuettc/${RLP}#${RLP_N + 1}`],
+    'close',
+    'stale',
+  );
+  const heard = await until(
+    pg,
+    ({ list, n }) =>
+      document.querySelector(`${list} .cb-group[data-d="close"] .cb-group-n`)
+        ?.textContent === String(n),
+    { list: LIST, n: RLP_N + 1 },
+    10000,
+  );
+  await pg.waitForTimeout(400); // kept: a reload after the event has its window
+  const got = await pg.evaluate(
+    ({ list, read, kick }) => {
+      const box = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { h: r.height, w: r.width } : { h: 0, w: 0 };
+      };
+      const open = document.querySelector(`${list} .kit-row.open`);
+      const nav = document.querySelector(`${read} .cb-nav`);
+      return {
+        rows: document.querySelectorAll(`${list} .kit-row`).length,
+        open: open?.querySelector('.kit-kicker')?.textContent ?? '',
+        isTarget: open?.querySelector('.kit-kicker')?.textContent === kick,
+        openBox: box(open),
+        pos: nav?.querySelector('.cb-nav-pos')?.textContent ?? '',
+        navBox: box(nav),
+      };
+    },
+    { list: LIST, read: READ, kick: target },
+  );
+  check(
+    `reload keeps 600 rows: after the open and a live event (heard: ${heard}) the list holds ${got.rows} rows`,
+    heard && got.rows === 600,
+  );
+  check(
+    `the open row is still in the list (${got.open}, ${got.openBox.w}x${got.openBox.h}px)`,
+    got.isTarget && got.openBox.h > 0 && got.openBox.w > 0,
+  );
+  check(
+    `and its nav row is laid out ("${got.pos}", ${got.navBox.w}x${got.navBox.h}px)`,
+    /^\d+ of \d+ in /.test(got.pos) && got.navBox.h > 0 && got.navBox.w > 0,
+  );
+  await pg.close();
+}
+
 // ---- move-on past the first page ---------------------------------------------
 
 const PAGES = 'rd-pages';
@@ -3101,7 +3243,7 @@ async function openRecScenario(context, t, s) {
         JSON.stringify(after) === JSON.stringify(before),
     );
     check(
-      'and no "pi recommends · show" line on it',
+      'and no "‹session› recommends · show" line on it',
       (await pg.locator(LINE).count()) === 0,
     );
   }
@@ -3129,7 +3271,7 @@ async function openRecScenario(context, t, s) {
     const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
     check(
       `with the closing comment typed, the line shows instead ("${line}")`,
-      ok && line === 'pi recommends Leave it open \u00b7 show',
+      ok && line === 'openrec recommends Leave it open \u00b7 show',
     );
     const st = await pg.evaluate((sel) => {
       const f = document.querySelector(sel);
@@ -3191,7 +3333,7 @@ async function openRecScenario(context, t, s) {
       ok &&
         picker &&
         (await tagged()) &&
-        line === 'pi recommends Close it \u00b7 show',
+        line === 'openrec recommends Close it \u00b7 show',
     );
   }
   check('still no reload', await noReload());

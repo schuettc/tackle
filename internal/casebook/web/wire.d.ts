@@ -229,6 +229,13 @@ export interface DecisionVocabView {
   nav: NavVocab;
   hide_list: string;
   show_list: string;
+  discard_title: string;
+  discard_confirm: string;
+  discard_one: string;
+  discard_some: string;
+  discard_button: string;
+  discard_cancel: string;
+  asked: string;
 }
 
 export interface ClearResult {
