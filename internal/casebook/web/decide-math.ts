@@ -450,3 +450,63 @@ export function leftOpenMeta(
   if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
   return `left open \u00b7 ${d.toLocaleDateString('en-US', opts)}`;
 }
+
+// ---- « ‹ › »: the open item's place in the list ----------------------------
+
+/** NavTargets is where the open item's « ‹ › » buttons go (pos 0: the item
+ * is not in the list's rows). */
+export interface NavTargets {
+  prev?: string;
+  next?: string;
+  prevGroup?: string;
+  nextGroup?: string;
+  pos: number;
+  total: number;
+  label: string;
+}
+
+/**
+ * navTargets is key's place in the list: the items before and after it in
+ * order (the list's loaded rows in group order, a collapsed group's rows
+ * included), the first items of the groups before and after its own, its
+ * 1-based position in its group and the group's total and label (serve's,
+ * every page).
+ */
+export function navTargets(
+  order: { key: string; group: string }[],
+  groups: GroupView[],
+  key: string,
+): NavTargets {
+  const i = order.findIndex((r) => r.key === key);
+  if (i < 0) return { pos: 0, total: 0, label: '' };
+  const group = order[i].group;
+  // The first row of each group, in order.
+  const firsts: { group: string; at: number }[] = [];
+  order.forEach((r, j) => {
+    if (j === 0 || order[j - 1].group !== r.group)
+      firsts.push({ group: r.group, at: j });
+  });
+  const g = firsts.findIndex((f) => f.group === group && f.at <= i);
+  const start = firsts[g].at;
+  const gv = groups.find((x) => x.id === group);
+  const out: NavTargets = {
+    pos: i - start + 1,
+    total: gv?.total ?? order.filter((r) => r.group === group).length,
+    label: gv?.label ?? '',
+  };
+  if (i > 0) out.prev = order[i - 1].key;
+  if (i + 1 < order.length) out.next = order[i + 1].key;
+  if (g > 0) out.prevGroup = order[firsts[g - 1].at].key;
+  if (g + 1 < firsts.length) out.nextGroup = order[firsts[g + 1].at].key;
+  return out;
+}
+
+/**
+ * shortKey is a key as a nav button's tooltip names it: without its kind
+ * and owner. "pr:o/nfl-dk#467" → "nfl-dk#467".
+ */
+export function shortKey(key: string): string {
+  const k = keyWithoutKind(key);
+  const i = k.indexOf('/');
+  return i >= 0 ? k.slice(i + 1) : k;
+}

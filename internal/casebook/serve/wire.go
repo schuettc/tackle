@@ -434,6 +434,28 @@ type DecisionVocabView struct {
 	Untick      string `json:"untick"`
 	// LeftOpen is the left-open group's label (its count beside it).
 	LeftOpen string `json:"left_open"`
+	// Recommends is the open item's recommendation box's kicker
+	// ({session}: who recommends).
+	Recommends string `json:"recommends"`
+	// Nav is the open item's « ‹ › » row.
+	Nav NavVocab `json:"nav"`
+	// HideList and ShowList are Attention's list's collapse control.
+	HideList string `json:"hide_list"`
+	ShowList string `json:"show_list"`
+}
+
+// NavVocab is the open item's « ‹ › » row: its place ({pos} of {total} in
+// {group}: its group's label) and each button's tooltip ({target}: the
+// item or group it goes to; None when there is none, Later when it is on a
+// page not loaded yet).
+type NavVocab struct {
+	Position  string `json:"position"`
+	PrevItem  string `json:"prev_item"`
+	NextItem  string `json:"next_item"`
+	PrevGroup string `json:"prev_group"`
+	NextGroup string `json:"next_group"`
+	None      string `json:"none"`
+	Later     string `json:"later"`
 }
 
 // SummaryVocab is the pinned summary line: OneSession when every item the

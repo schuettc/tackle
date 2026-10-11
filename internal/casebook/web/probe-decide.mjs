@@ -24,7 +24,7 @@
 //
 // And move-on past the first page, on a serve and repo of their own: with
 // more than a page of items, deciding one on page two opens the next one on
-// page two.
+// page two; › on page one's last row loads page two and opens its first.
 //
 // And the closing comment and the GitHub link (casebook 0.4.1), on a serve
 // and repo of their own:
@@ -77,8 +77,8 @@
 //   with the closing comment typed, or the Not now picker open, the open
 //     item isn't re-rendered under Court: "pi recommends ‹label› · show"
 //     shows instead, and "show" re-renders it
-//   the card's head says "recommends", as the list's rows do:
-//     "pi recommends · Close it without merging"
+//   the card's head names the session ("openrec recommends"), then the
+//     choice: "Close it without merging"
 //
 // And "Look into it" (casebook 0.4.5; a card since 0.4.6), on a serve and
 // repo of their own:
@@ -118,6 +118,22 @@
 //     ticked; rows indented under their header's label; every row one
 //     height, a long reason cut at two lines; the list's scrollbar room
 //     kept; a group's button line one height, ticked or not
+//
+// And the item page and its navigation, on a serve and repos of their own:
+//
+//   the list 520px wide; every row fits its height (a long repo name's
+//     kicker is one line); every group's button line is one line at
+//     520px, ticked or not; a collapsed group is one line, its hint and
+//     buttons hidden
+//   the « ‹ › » row: the item's place in its group; « and ‹ disabled on
+//     the first item; each tooltip names its target; ] into a collapsed
+//     group expands it and opens its first item; [, › and ‹; the row stays
+//     at the top while the item scrolls
+//   the recommendation box beside the description ("‹session› recommends",
+//     the choice, the reason), an empty one where there is none; the cards
+//     in one row, one height; nothing above the cards moves between items
+//   the list collapses to a 34px rail, kept across a reload; the item page
+//     is then 1060px wide
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -299,6 +315,7 @@ export async function decideScenarios(shared, t) {
     ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
     ['discard recommendations', discardScenario, discardSeed()],
     ['the steady list', steadyScenario, steadySeed()],
+    ['the item page and its navigation', navScenario, navSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -463,7 +480,8 @@ async function decideScenario(context, t, s) {
       col.cards.filter((c) => c.rec).length === 1,
   );
   {
-    // Geometry: question, then the recommendation, then a two-column grid.
+    // Geometry: the recommendation beside the description, above the
+    // question; then the cards, one row of equal widths.
     const g = await pg.evaluate(() => {
       const r = (sel) =>
         document
@@ -479,20 +497,26 @@ async function decideScenario(context, t, s) {
       });
       const q = r('.cb-question');
       const rec = r('.cb-proposal-card');
-      return { q, rec, cards, vh: innerHeight };
+      const body = r('.cb-lead .cb-body');
+      return { q, rec, body, cards, vh: innerHeight };
     });
-    const [c1, c2, c3] = g.cards;
+    const [c1] = g.cards;
     check(
-      'the question is above the recommendation card, which is above the cards',
-      g.q.bottom <= g.rec.top && g.rec.bottom <= c1.top,
+      'the recommendation card is beside the description, above the question, which is above the cards',
+      Math.abs(g.rec.top - g.body.top) < 1 &&
+        g.rec.left > g.body.right - 1 &&
+        g.rec.bottom <= g.q.top &&
+        g.q.bottom <= c1.top,
     );
     check(
-      `the cards are a two-column grid (1 and 2 side by side, 3 below; widths ${c1.w}, ${c2.w})`,
-      Math.abs(c1.top - c2.top) < 1 &&
-        c2.left > c1.left + c1.w - 1 &&
-        c3.top >= c1.bottom &&
-        Math.abs(c3.left - c1.left) < 1 &&
-        Math.abs(c1.w - c2.w) < 1,
+      `the cards are one row of equal widths (tops ${[...new Set(g.cards.map((c) => Math.round(c.top)))].join(', ')}; widths ${[...new Set(g.cards.map((c) => Math.round(c.w)))].join(', ')})`,
+      g.cards.length > 1 &&
+        g.cards.every(
+          (c, i) =>
+            Math.abs(c.top - c1.top) < 1 &&
+            Math.abs(c.w - c1.w) < 1 &&
+            (i === 0 || c.left > g.cards[i - 1].left + c1.w - 1),
+        ),
     );
     check(
       `the cards are on screen at 1600×900 (last card bottom ${Math.round(g.cards.at(-1).bottom)})`,
@@ -2112,6 +2136,71 @@ async function pagesScenario(context, t, s) {
     )) && (await opened(t, pg, keys[207])),
   );
   await pg.close();
+
+  // ---- nav: past the loaded page ------------------------------------------
+  // The last row of page one: › points past the loaded rows, so the next
+  // page loads first and its first row opens, with its place in the group.
+  const fresh = (
+    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+  ).map((it) => it.key);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const pg2 = await context.newPage();
+  await pg2.goto(`${s.url}#/item/${encodeURIComponent(fresh[199])}`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await opened(t, pg2, fresh[199]);
+  await until(pg2, (read) => !!document.querySelector(`${read} .cb-nav`), READ);
+  const navNow = () =>
+    pg2.evaluate((read) => {
+      const n = document.querySelector(`${read} .cb-nav`);
+      const next = n?.querySelector('button[data-nav="next"]');
+      return {
+        pos: n?.querySelector('.cb-nav-pos')?.textContent ?? '',
+        tip: next?.title ?? '',
+        off: !!next?.disabled,
+      };
+    }, READ);
+  {
+    const n = await navNow();
+    check(
+      `nav: past the loaded page: the last row of page one reads "${n.pos}", › enabled (${!n.off}) and "${n.tip}"`,
+      n.pos === `200 of ${fresh.length} in Not recommended yet` &&
+        !n.off &&
+        n.tip === 'Next item: on the next page (j)',
+    );
+  }
+  await pg2.click(`${READ} .cb-nav button[data-nav="next"]`);
+  {
+    const ok = await opened(t, pg2, fresh[200]);
+    await until(
+      pg2,
+      (read) =>
+        document
+          .querySelector(`${read} .cb-nav .cb-nav-pos`)
+          ?.textContent?.startsWith('201 '),
+      READ,
+    );
+    const n = await navNow();
+    const rows = await pg2.evaluate(
+      () =>
+        document.querySelectorAll('.kit-app > .kit-list:not([hidden]) .kit-row')
+          .length,
+    );
+    const openRow = await pg2.evaluate(
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .kit-row.open .kit-kicker',
+        )?.textContent ?? '',
+    );
+    check(
+      `› loads page two and opens its first row, ${fresh[200]} (${ok}): "${n.pos}", the list holds ${rows} rows with it open (${openRow})`,
+      ok &&
+        n.pos === `201 of ${fresh.length} in Not recommended yet` &&
+        rows === fresh.length &&
+        openRow === kicker(fresh[200]),
+    );
+  }
+  await pg2.close();
 }
 
 // ---- the closing comment and the GitHub link ---------------------------------
@@ -3154,7 +3243,7 @@ async function openRecScenario(context, t, s) {
   }
   check('still no reload', await noReload());
 
-  // ---- "recommends", as the list's rows say -------------------------------
+  // ---- "‹session› recommends", then the choice --------------------------
   {
     await row(pg, OPR(4)).click();
     await opened(t, pg, OPR(4));
@@ -3162,9 +3251,13 @@ async function openRecScenario(context, t, s) {
       .locator(`${READ} .cb-proposal-card .kit-card-head`)
       .textContent({ timeout: 8000 })
       .catch(() => '');
+    const label = await pg
+      .locator(`${READ} .cb-proposal-card .cb-proposal-label`)
+      .textContent({ timeout: 8000 })
+      .catch(() => '');
     check(
-      `the recommendation card's head reads "pi recommends · Close it without merging" ("${head}")`,
-      head === 'pi recommends \u00b7 Close it without merging',
+      `the recommendation card's head names the session, "openrec recommends" ("${head}"), then "Close it without merging" ("${label}")`,
+      head === 'openrec recommends' && label === 'Close it without merging',
     );
   }
   await pg.close();
@@ -3439,7 +3532,12 @@ async function lookIntoScenario(context, t, s) {
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         const rl = r?.querySelector('.cb-row-looking');
         return {
-          item: m && m.checkVisibility() ? (m.textContent ?? '') : '',
+          // visibilityProperty: the line keeps its room, hidden, when nobody
+          // is looking.
+          item:
+            m && m.checkVisibility({ visibilityProperty: true })
+              ? (m.textContent ?? '')
+              : '',
           row: rl ? (rl.textContent ?? '') : '',
           itemColor: m ? getComputedStyle(m).color : '',
           rowColor: rl ? getComputedStyle(rl).color : '',
@@ -3511,7 +3609,7 @@ async function lookIntoScenario(context, t, s) {
           ),
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         return (
-          !!m?.checkVisibility() &&
+          !!m?.checkVisibility({ visibilityProperty: true }) &&
           m.textContent === want &&
           r?.querySelector('.cb-row-looking')?.textContent === want
         );
@@ -3675,7 +3773,9 @@ async function lookIntoScenario(context, t, s) {
           ),
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         return (
-          !m?.checkVisibility() && !!r && !r.querySelector('.cb-row-looking')
+          !m?.checkVisibility({ visibilityProperty: true }) &&
+          !!r &&
+          !r.querySelector('.cb-row-looking')
         );
       },
       [MARK, kicker(KEY)],
@@ -4191,6 +4291,593 @@ async function steadyScenario(context, t, s) {
           mine[0].purpose === 'look-into'
         );
       }),
+    );
+  }
+  await pg.close();
+}
+
+// ---- the item page and its navigation ---------------------------------------
+
+const NV = 'rd-nav';
+const LONGREPO = 'cdk-github-microvm-runners-for-every-account';
+const NISSUE = (n) => `issue:schuettc/${NV}#${n}`;
+const NPR = (n) => `pr:schuettc/${NV}#${n}`;
+const LPR = (n) => `pr:schuettc/${LONGREPO}#${n}`;
+const LONG_TITLE =
+  'The region flag is ignored when the profile sets one, and the error that follows names the wrong file, so nobody can tell which setting won';
+const LONG_BODY = Array.from(
+  { length: 14 },
+  (_, i) =>
+    `Line ${i + 1}: with AWS_PROFILE set and --region given, the call goes to the profile's region instead.`,
+).join(' ');
+
+function navSeed() {
+  const item =
+    (repo) =>
+    ([number, title, author, body], i) => ({
+      repo: `schuettc/${repo}`,
+      number,
+      title,
+      author,
+      ...(body ? { body } : {}),
+      state: 'OPEN',
+      created_at: `2026-09-${String((i % 27) + 1).padStart(2, '0')}T00:00:00Z`,
+      updated_at: `2026-09-${String((i % 27) + 1).padStart(2, '0')}T00:00:00Z`,
+    });
+  const issues = [
+    [1, LONG_TITLE, 'alice', LONG_BODY],
+    [2, 'Typo', 'carol', 'teh'],
+  ];
+  for (let n = 3; n <= 16; n++)
+    issues.push([n, `Question ${n}`, 'dave', `Is ${n} supported?`]);
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${NV}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [21, 22, 23, 24, 25, 26, 27]
+          .map((n) => [n, `Bump dependency ${n}`, 'renovate'])
+          .map(item(NV)),
+        issues: issues.map(item(NV)),
+      },
+      {
+        repo: `schuettc/${LONGREPO}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [[42, 'Bump the runner image', 'renovate']].map(item(LONGREPO)),
+        issues: [],
+      },
+    ],
+  };
+}
+
+async function navScenario(context, t, s) {
+  const { check, checkList, until } = t;
+  console.log('\nscenario: the item page and its navigation');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const STOP = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(NISSUE);
+  const CLOSE = [...[21, 22, 23, 24, 25].map(NPR), LPR(42)];
+  const KEEP = [13, 14, 15].map(NISSUE);
+  const MERGE = [26, 27].map(NPR);
+  const NONE = [NISSUE(16)];
+  const ALL = [...STOP, ...CLOSE, ...KEEP, ...MERGE, ...NONE];
+
+  // Only these repos' items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !ALL.includes(k));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  const A = 'probe-nav-a';
+  const B = 'probe-nav-b';
+  const beat = async () => {
+    await agent.presence(A, 'pi \u00b7 nav-a', '/home/court/nav-a', 'pi');
+    await agent.presence(B, 'pi \u00b7 nav-b', '/home/court/nav-b', 'pi');
+  };
+  await beat();
+  await agent.propose(A, STOP, 'ignore', 'spam');
+  await agent.propose(
+    A,
+    CLOSE.filter((k) => k !== LPR(42)),
+    'close',
+    'superseded by a newer bump',
+  );
+  // The long repo name's row has a two-line reason too.
+  await agent.propose(A, [LPR(42)], 'close', LONG_REASON);
+  await agent.propose(A, KEEP, 'keep', 'still being discussed');
+  await agent.propose(A, MERGE, 'merge', 'green and reviewed');
+
+  // The view's order: group by group, key order in each (#1, #10, …).
+  const order = (
+    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+  ).map((it) => it.key);
+  const inOrder = (keys) => order.filter((k) => keys.includes(k));
+  const [S1, S2] = inOrder(STOP);
+  const KEEP_LAST = inOrder(KEEP).at(-1);
+  const [K1, K2] = inOrder(KEEP);
+  const M1 = inOrder(MERGE)[0];
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+  await until(pg, (sel) => !!document.querySelector(sel), groupSel('merge'));
+  {
+    const heads = await groupHeads(pg);
+    checkList(
+      'the groups, in serve order',
+      heads.map((g) => `${g.d || g.id} ${g.n}`),
+      ['ignore 12', 'close 6', 'keep 3', 'merge 2', 'none 1'],
+    );
+  }
+
+  // ---- sidebar width ----------------------------------------------------------
+  {
+    const w = await pg.evaluate(
+      (list) => document.querySelector(list)?.getBoundingClientRect().width,
+      LIST,
+    );
+    check(`sidebar width: Attention's list is 520px wide (${w})`, w === 520);
+  }
+
+  // ---- rows never clip --------------------------------------------------------
+  {
+    const rows = await pg.evaluate(
+      (list) =>
+        [...document.querySelectorAll(`${list} .kit-rows > .kit-row`)]
+          .filter((r) => r.checkVisibility())
+          .map((r) => ({
+            k: r.querySelector('.kit-kicker')?.textContent ?? '',
+            sh: r.scrollHeight,
+            ch: r.clientHeight,
+            kick: Math.round(
+              r.querySelector('.kit-kicker')?.getBoundingClientRect().height ??
+                0,
+            ),
+            tip: r.querySelector('.kit-kicker')?.getAttribute('title') ?? '',
+          })),
+      LIST,
+    );
+    const long = rows.find((r) => r.k === kicker(LPR(42)));
+    const clipped = rows.filter((r) => r.sh > r.ch);
+    check(
+      `rows never clip: every one of ${rows.length} rows fits its height (clipped: ${clipped.map((r) => `${r.k} ${r.sh}>${r.ch}`).join(', ') || 'none'}), the long repo's kicker one line (${long?.kick}px) with its key whole in its title ("${long?.tip}")`,
+      rows.length === ALL.length &&
+        clipped.length === 0 &&
+        !!long &&
+        long.kick <= 17 &&
+        long.tip === kicker(LPR(42)),
+    );
+  }
+
+  // ---- the session, then the button lines -------------------------------------
+  await beat();
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel),
+    `${groupSel('ignore')} .cb-group-look`,
+  );
+  // lineOf reads group d's button line: its texts, whether it is one line
+  // (every child shares one band: each starts above where every other
+  // ends; nothing past its right edge, nothing cut with an ellipsis) and
+  // its height.
+  const lineOf = (d) =>
+    pg.evaluate((sel) => {
+      const a = document.querySelector(`${sel} .cb-group-acts`);
+      const kids = [...(a?.children ?? [])];
+      const r = a?.getBoundingClientRect();
+      return {
+        texts: kids.map((c) => c.textContent ?? ''),
+        h: Math.round(r?.height ?? 0),
+        band:
+          Math.max(...kids.map((c) => c.getBoundingClientRect().top)) <
+          Math.min(...kids.map((c) => c.getBoundingClientRect().bottom)),
+        inside: kids.every(
+          (c) => c.getBoundingClientRect().right <= (r?.right ?? 0) + 0.5,
+        ),
+        whole: kids.every((c) => c.scrollWidth <= c.clientWidth),
+        shown: kids.every((c) => c.checkVisibility()),
+      };
+    }, groupSel(d));
+  const oneLine = (l) =>
+    l.texts.length > 0 && l.band && l.inside && l.whole && l.shown;
+  {
+    const stop = await lineOf('ignore');
+    const close = await lineOf('close');
+    check(
+      `group buttons one line: "${stop.texts.join(' · ')}" (${stop.h}px, inside ${stop.inside}, whole ${stop.whole}) and "${close.texts.join(' · ')}" (${close.h}px)`,
+      stop.texts.join(' · ') ===
+        'Stop tracking all 12 · Look into all 12 · Discard all 12' &&
+        close.texts.join(' · ') ===
+          'Close all 6 · Look into all 6 · Discard all 6' &&
+        oneLine(stop) &&
+        oneLine(close),
+    );
+    for (const k of [STOP[3], STOP[4], STOP[5], CLOSE[0], CLOSE[1], CLOSE[2]])
+      await row(pg, k).locator('.kit-box').click();
+    await until(
+      pg,
+      (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+      groupSel('close'),
+    );
+    const stop3 = await lineOf('ignore');
+    const close3 = await lineOf('close');
+    check(
+      `group buttons one line, 3 ticked: "${stop3.texts.join(' · ')}" (${stop3.h}px, inside ${stop3.inside}, whole ${stop3.whole}) and "${close3.texts.join(' · ')}" (${close3.h}px), the same height as untouched`,
+      stop3.texts.join(' · ') ===
+        '3 ticked · Stop tracking 3 · Look into 3 · Discard 3 · untick' &&
+        close3.texts.join(' · ') ===
+          '3 ticked · Close 3 · Look into 3 · Discard 3 · untick' &&
+        oneLine(stop3) &&
+        oneLine(close3) &&
+        stop3.h === stop.h &&
+        close3.h === close.h,
+    );
+    await pg.click(`${groupSel('ignore')} .cb-group-untick`);
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+  }
+
+  // ---- collapsed group one line -------------------------------------------------
+  await pg.click(`${groupSel('merge')} .cb-group-caret`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.classList.contains('collapsed'),
+    groupSel('merge'),
+  );
+  {
+    const got = await pg.evaluate(
+      ({ merge, stop, close }) => {
+        const inner = (el) => {
+          const cs = getComputedStyle(el);
+          return (
+            el.getBoundingClientRect().height -
+            parseFloat(cs.paddingTop) -
+            parseFloat(cs.paddingBottom) -
+            parseFloat(cs.borderTopWidth) -
+            parseFloat(cs.borderBottomWidth)
+          );
+        };
+        const m = document.querySelector(merge);
+        const o = document.querySelector(stop);
+        return {
+          m: Math.round(inner(m)),
+          line: Math.round(
+            o.querySelector('.cb-group-top').getBoundingClientRect().height,
+          ),
+          buttons: [...m.querySelectorAll('button.kit-btn')].filter((b) =>
+            b.checkVisibility(),
+          ).length,
+          hint: !!m.querySelector('.cb-group-where')?.checkVisibility(),
+          open: !!document
+            .querySelector(`${close} .cb-group-where`)
+            ?.checkVisibility(),
+        };
+      },
+      {
+        merge: groupSel('merge'),
+        stop: groupSel('ignore'),
+        close: groupSel('close'),
+      },
+    );
+    check(
+      `collapsed group one line: Merge's header is ${got.m}px inside, one line (${got.line}px), with ${got.buttons} buttons and its hint ${got.hint ? 'shown' : 'hidden'}; an open outward group keeps its hint (${got.open})`,
+      got.m === got.line && got.buttons === 0 && !got.hint && got.open,
+    );
+  }
+
+  // ---- nav: disabled ends -------------------------------------------------------
+  const navOf = () =>
+    pg.evaluate((read) => {
+      const n = document.querySelector(`${read} .cb-nav`);
+      if (!n || !n.checkVisibility()) return null;
+      const r = n.getBoundingClientRect();
+      return {
+        top: Math.round(r.top),
+        readTop: Math.round(
+          document.querySelector(read).getBoundingClientRect().top,
+        ),
+        pos: n.querySelector('.cb-nav-pos')?.textContent ?? '',
+        buttons: [...n.querySelectorAll('button')].map((b) => ({
+          t: b.textContent ?? '',
+          off: b.disabled,
+          tip: b.title,
+          color: getComputedStyle(b).color,
+          opacity: getComputedStyle(b).opacity,
+        })),
+      };
+    }, READ);
+  await row(pg, S1).click();
+  await opened(t, pg, S1);
+  await until(pg, (read) => !!document.querySelector(`${read} .cb-nav`), READ);
+  {
+    const n = await navOf();
+    const b = n?.buttons ?? [];
+    const greyed = (x) =>
+      x.off && (x.opacity !== '1' || x.color !== b[2]?.color);
+    check(
+      `nav: disabled ends: on the first item « and ‹ are disabled and greyed (${b
+        .slice(0, 2)
+        .map((x) => `${x.t} ${x.off} ${x.opacity} ${x.color}`)
+        .join('; ')}), › and » are not`,
+      b.length === 4 &&
+        b.map((x) => x.t).join(' ') === '\u00ab \u2039 \u203a \u00bb' &&
+        greyed(b[0]) &&
+        greyed(b[1]) &&
+        !b[2].off &&
+        !b[3].off,
+    );
+    checkList(
+      `nav: the row reads "${n?.pos}" and each tooltip names its target`,
+      [n?.pos, ...b.map((x) => x.tip)],
+      [
+        '1 of 12 in Stop tracking it',
+        'Previous group: none ([)',
+        'Previous item: none (k)',
+        `Next item: ${S2.split('/')[1]} (j)`,
+        'Next group: Close it without merging (])',
+      ],
+    );
+  }
+
+  // ---- the recommendation box and the steady page ----------------------------
+  const pageGeo = () =>
+    pg.evaluate((read) => {
+      const q = (s) => document.querySelector(`${read} ${s}`);
+      const top = (s) => Math.round(q(s)?.getBoundingClientRect().top ?? -1);
+      const box = (s) => {
+        const r = q(s)?.getBoundingClientRect();
+        return r
+          ? {
+              top: Math.round(r.top),
+              left: Math.round(r.left),
+              h: Math.round(r.height),
+              w: Math.round(r.width),
+            }
+          : null;
+      };
+      const cards = [
+        ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+      ];
+      return {
+        key: q('.cb-item')?.getAttribute('data-key') ?? '',
+        cards: top('.cb-choices'),
+        cardTops: [
+          ...new Set(
+            cards.map((c) => Math.round(c.getBoundingClientRect().top)),
+          ),
+        ],
+        cardHs: [
+          ...new Set(
+            cards.map((c) => Math.round(c.getBoundingClientRect().height)),
+          ),
+        ],
+        n: cards.length,
+        evidence: top('.cb-evidence .kit-label'),
+        history: top('.cb-history .kit-label'),
+        evidenceLeft: Math.round(
+          q('.cb-evidence')?.getBoundingClientRect().left ?? -1,
+        ),
+        historyLeft: Math.round(
+          q('.cb-history')?.getBoundingClientRect().left ?? -1,
+        ),
+        body: box('.cb-body'),
+        rec: box('.cb-proposal-card') ?? box('.cb-rec-empty'),
+        recEmpty: !!q('.cb-rec-empty'),
+        head: q('.cb-proposal-card .kit-card-head')?.textContent ?? '',
+        label: q('.cb-proposal-label')?.textContent ?? '',
+        note: q('.cb-proposal-note')?.textContent ?? '',
+        title: box('.cb-title'),
+        doc: box('.kit-doc'),
+      };
+    }, READ);
+  const a = await pageGeo();
+  {
+    const headColor = await pg.evaluate(
+      (read) =>
+        getComputedStyle(
+          document.querySelector(`${read} .cb-proposal-card .kit-card-head`),
+        ).color,
+      READ,
+    );
+    const agentColor = await cssColor(pg, 'var(--kit-agent)');
+    check(
+      `the recommendation box: "${a.head}" in agent colour (${headColor}), then "${a.label}", then "${a.note}"; beside the description (${a.body?.top}/${a.rec?.top}, ${a.body?.left} < ${a.rec?.left}), both 160px (${a.body?.h}, ${a.rec?.h}), wider description (${a.body?.w} > ${a.rec?.w})`,
+      a.head === 'nav-a recommends' &&
+        headColor === agentColor &&
+        a.label === 'Stop tracking it' &&
+        a.note === 'spam' &&
+        a.body?.top === a.rec?.top &&
+        a.body.left < a.rec.left &&
+        a.body.h === 160 &&
+        a.rec.h === 160 &&
+        a.body.w > a.rec.w,
+    );
+    check(
+      `the choice cards share one row (${a.n} cards, tops ${a.cardTops.join(',')}) and one height (${a.cardHs.join(',')}); evidence beside history (${a.evidence}/${a.history}, ${a.evidenceLeft} < ${a.historyLeft})`,
+      a.n >= 5 &&
+        a.cardTops.length === 1 &&
+        a.cardHs.length === 1 &&
+        a.evidence === a.history &&
+        a.evidenceLeft < a.historyLeft,
+    );
+  }
+  await press(pg, 'j', 'o');
+  await opened(t, pg, S2);
+  {
+    const b = await pageGeo();
+    check(
+      `item steady: from ${a.key} (long title and description) to ${b.key} (short) with j, the choice cards stay at ${a.cards}px (${b.cards}px) and the evidence heading at ${a.evidence}px (${b.evidence}px)`,
+      b.key === S2 &&
+        a.cards > 0 &&
+        b.cards === a.cards &&
+        b.evidence === a.evidence &&
+        b.title?.h === a.title?.h,
+    );
+  }
+  // An item with no recommendation keeps an empty box of the same size.
+  await row(pg, NONE[0]).click();
+  await opened(t, pg, NONE[0]);
+  {
+    const c = await pageGeo();
+    check(
+      `an item with no recommendation keeps the box empty, in place (${c.recEmpty}, ${c.rec?.top}/${a.rec?.top}, ${c.rec?.h}px), its cards where they were (${c.cards}/${a.cards})`,
+      c.recEmpty &&
+        c.rec?.top === a.rec?.top &&
+        c.rec?.h === a.rec?.h &&
+        c.rec?.w === a.rec?.w &&
+        c.cards === a.cards,
+    );
+  }
+
+  // ---- nav: into a collapsed group ---------------------------------------------
+  await row(pg, KEEP_LAST).click();
+  await opened(t, pg, KEEP_LAST);
+  await press(pg, ']');
+  {
+    const ok = await opened(t, pg, M1);
+    const st = await pg.evaluate(
+      (sel) => ({
+        collapsed: !!document
+          .querySelector(sel)
+          ?.classList.contains('collapsed'),
+      }),
+      groupSel('merge'),
+    );
+    const shown = await row(pg, M1).count();
+    const n = await navOf();
+    check(
+      `nav: into a collapsed group: ] from ${KEEP_LAST}, the last Leave it open item, opens ${M1} (${ok}), Merge expanded (collapsed ${st.collapsed}, row shown ${shown}), the row "${n?.pos}"`,
+      ok && !st.collapsed && shown === 1 && n?.pos === '1 of 2 in Merge it',
+    );
+  }
+  await press(pg, '[');
+  check(
+    `[ opens the first item of the group before (${K1})`,
+    await opened(t, pg, K1),
+  );
+  // › and ‹ step through the list.
+  await pg.click(`${READ} .cb-nav button[data-nav="next"]`);
+  check('› opens the next item', await opened(t, pg, K2));
+  await pg.click(`${READ} .cb-nav button[data-nav="prev"]`);
+  check('‹ opens the item before', await opened(t, pg, K1));
+
+  // ---- the nav row stays put while the item scrolls -------------------------
+  {
+    await pg.setViewportSize({ width: 1600, height: 600 });
+    const before = await navOf();
+    await pg.evaluate((read) => {
+      document.querySelector(read).scrollTop = 400;
+    }, READ);
+    await pg.waitForTimeout(100); // kept: a frame for the scroll to paint
+    const after = await navOf();
+    const scrolled = await pg.evaluate(
+      (read) => document.querySelector(read).scrollTop,
+      READ,
+    );
+    check(
+      `the « ‹ › » row is at the top of the reading column (${before?.top} vs ${before?.readTop}) and stays there scrolled ${scrolled}px (${after?.top})`,
+      !!before &&
+        !!after &&
+        scrolled > 0 &&
+        before.top === before.readTop &&
+        after.top === before.top,
+    );
+    await pg.setViewportSize({ width: 1600, height: 900 });
+  }
+
+  // ---- sidebar collapse --------------------------------------------------------
+  const layout = () =>
+    pg.evaluate(
+      ({ read }) => {
+        const list = document.querySelector(
+          '.kit-app > .kit-list:not([hidden])',
+        );
+        const r = document.querySelector(read)?.getBoundingClientRect();
+        const rail = document.querySelector('.kit-app > .kit-rail');
+        const l = list?.getBoundingClientRect();
+        const label = list?.querySelector('.cb-list-rail-label');
+        return {
+          w: Math.round(l?.width ?? 0),
+          right: Math.round(l?.right ?? 0),
+          readLeft: Math.round(r?.left ?? 0),
+          readRight: Math.round(r?.right ?? 0),
+          dockLeft: Math.round(rail?.getBoundingClientRect().left ?? 0),
+          rows: !!list?.querySelector('.kit-rows')?.checkVisibility(),
+          label: label?.checkVisibility() ? label.textContent : '',
+          mode: label ? getComputedStyle(label).writingMode : '',
+          stored: localStorage.getItem('casebook.sidebar'),
+        };
+      },
+      { read: READ },
+    );
+  await pg.click(`${LIST} .cb-list-hide`);
+  await until(
+    pg,
+    () =>
+      document
+        .querySelector('.kit-app > .kit-list:not([hidden])')
+        ?.getBoundingClientRect().width === 34,
+  );
+  {
+    const l = await layout();
+    check(
+      `sidebar collapse: the list is a ${l.w}px rail reading "${l.label}" (${l.mode}), no rows shown (${l.rows}); the reading column fills the rest (${l.right} → ${l.readLeft}, ${l.readRight} → ${l.dockLeft}); stored ${l.stored}`,
+      l.w === 34 &&
+        l.label === 'waiting on you \u00b7 24' &&
+        l.mode.startsWith('vertical') &&
+        !l.rows &&
+        l.readLeft === l.right &&
+        l.readRight === l.dockLeft &&
+        l.stored === 'closed',
+    );
+  }
+
+  // ---- item wide -------------------------------------------------------------
+  await pg.evaluate((k) => {
+    location.hash = `#/item/${encodeURIComponent(k)}`;
+  }, CLOSE[0]);
+  await opened(t, pg, CLOSE[0]);
+  {
+    const g = await pageGeo();
+    check(
+      `item wide: at 1600px with the list collapsed the item page is ${g.doc?.w}px wide, its ${g.n} cards on one row (tops ${g.cardTops.join(',')})`,
+      (g.doc?.w ?? 0) > 1000 &&
+        (g.n === 5 || g.n === 6) &&
+        g.cardTops.length === 1,
+    );
+  }
+
+  // The collapse survives a reload; » brings the list back.
+  await pg.reload({ waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('.kit-row', { state: 'attached', timeout: 8000 });
+  await until(pg, () => !!document.querySelector('.cb-list-show'));
+  {
+    const l = await layout();
+    check(
+      `sidebar collapse survives a reload (${l.w}px, stored ${l.stored})`,
+      l.w === 34 && l.stored === 'closed',
+    );
+  }
+  await pg.click(`${LIST} .cb-list-show`);
+  await until(
+    pg,
+    () =>
+      document
+        .querySelector('.kit-app > .kit-list:not([hidden])')
+        ?.getBoundingClientRect().width === 520,
+  );
+  {
+    const l = await layout();
+    check(
+      `» brings the list back (${l.w}px, rows ${l.rows}, stored ${l.stored})`,
+      l.w === 520 && l.rows && l.stored === 'open',
     );
   }
   await pg.close();

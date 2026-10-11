@@ -66,6 +66,12 @@ function navKeys(nav) {
   }
   return ks.map((k) => ({ ...k, group: "family" }));
 }
+function groupKeys(jump) {
+  return [
+    { keys: "[", label: "previous group", group: "page", run: () => jump(-1) },
+    { keys: "]", label: "next group", group: "page", run: () => jump(1) }
+  ];
+}
 function makeKeyLayer(create, report) {
   const page = [];
   let current = create();
@@ -711,6 +717,34 @@ function leftOpenMeta(decidedAt, now = /* @__PURE__ */ new Date()) {
   const opts = { month: "short", day: "numeric" };
   if (d.getFullYear() !== now.getFullYear()) opts.year = "numeric";
   return `left open · ${d.toLocaleDateString("en-US", opts)}`;
+}
+function navTargets(order, groups, key) {
+  const i = order.findIndex((r) => r.key === key);
+  if (i < 0) return { pos: 0, total: 0, label: "" };
+  const group = order[i].group;
+  const firsts = [];
+  order.forEach((r, j) => {
+    if (j === 0 || order[j - 1].group !== r.group)
+      firsts.push({ group: r.group, at: j });
+  });
+  const g = firsts.findIndex((f) => f.group === group && f.at <= i);
+  const start2 = firsts[g].at;
+  const gv = groups.find((x) => x.id === group);
+  const out = {
+    pos: i - start2 + 1,
+    total: gv?.total ?? order.filter((r) => r.group === group).length,
+    label: gv?.label ?? ""
+  };
+  if (i > 0) out.prev = order[i - 1].key;
+  if (i + 1 < order.length) out.next = order[i + 1].key;
+  if (g > 0) out.prevGroup = order[firsts[g - 1].at].key;
+  if (g + 1 < firsts.length) out.nextGroup = order[firsts[g + 1].at].key;
+  return out;
+}
+function shortKey(key) {
+  const k = keyWithoutKind(key);
+  const i = k.indexOf("/");
+  return i >= 0 ? k.slice(i + 1) : k;
 }
 
 // decide.ts
@@ -2931,9 +2965,10 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   const proposal = detail.item.proposal;
   if (!proposal || proposal.state !== "pending") return null;
   const p = proposal;
-  const agent = agentFromSource(p.source);
-  const head = `${agent} recommends · ${opts.label ?? p.disposition}`;
-  const lines = [];
+  const head = opts.who ?? "";
+  const lines = [
+    h5("p", { class: "cb-proposal-label" }, opts.label ?? p.disposition)
+  ];
   if (p.note) {
     const noteEl = h5("p", { class: "cb-proposal-note" });
     noteEl.textContent = p.note;
@@ -3080,13 +3115,33 @@ function renderHistory(events, decisions, ownKey) {
   }
   return section;
 }
+function renderRecBox(ctx, detail, hooks) {
+  const it = detail.item;
+  const slot = h6("div", { class: "cb-rec-empty" });
+  const pending = it.proposal && it.proposal.state === "pending" ? it.proposal : null;
+  if (!pending) return slot;
+  void getVocab(ctx).then((vocab2) => {
+    const kv = (vocab2.kinds ?? []).find((k) => k.kind === it.kind);
+    const rec = asNotNow(pending.disposition);
+    const label = kv?.choices?.find((c) => c.disposition === rec)?.label;
+    const card6 = proposalCard(ctx, detail, hooks.onRefresh, {
+      label,
+      who: vocab2.recommends.replaceAll(
+        "{session}",
+        sessionName(it.recommended_by, pending.source)
+      ),
+      accept: hooks.accept
+    });
+    if (card6) slot.replaceWith(card6);
+  });
+  return slot;
+}
 function renderDecideSection(ctx, detail, hooks) {
   const it = detail.item;
   const section = h6("section", { class: "cb-decide" });
   const question = h6("h2", { class: "cb-question" });
   const looking = lookingLine(it.looking);
   const lookingEl = h6("p", { class: "cb-looking", hidden: !looking }, looking);
-  const recSlot = h6("div", { class: "cb-rec-slot" });
   const pending = it.proposal && it.proposal.state === "pending" ? it.proposal : null;
   const cards = renderChoices(ctx, it.kind, {
     recommended: pending?.disposition,
@@ -3099,18 +3154,10 @@ function renderDecideSection(ctx, detail, hooks) {
       hooks.cardsReady?.();
     }
   });
-  section.append(question, lookingEl, recSlot, cards);
+  section.append(question, lookingEl, cards);
   void getVocab(ctx).then((vocab2) => {
     const kv = (vocab2.kinds ?? []).find((k) => k.kind === it.kind);
     question.textContent = kv?.question ?? "";
-    const rec = asNotNow(pending?.disposition);
-    const label = kv?.choices?.find((c) => c.disposition === rec)?.label;
-    const card6 = proposalCard(ctx, detail, hooks.onRefresh, {
-      label,
-      accept: hooks.accept
-    });
-    if (card6) recSlot.replaceWith(card6);
-    else recSlot.remove();
   });
   return section;
 }
@@ -3128,9 +3175,8 @@ function renderItem(ctx, detail, hooks = {}) {
     kicker.append(part);
   });
   el.append(kicker);
-  el.append(
-    h6("h1", { class: "cb-title kit-h1" }, it.title ?? keyWithoutKind(it.key))
-  );
+  const title = it.title ?? keyWithoutKind(it.key);
+  el.append(h6("h1", { class: "cb-title kit-h1", title }, title));
   const factPairs = [];
   if (it.repo) factPairs.push(["repo", it.repo]);
   if (it.status) factPairs.push(["status", it.status]);
@@ -3142,24 +3188,30 @@ function renderItem(ctx, detail, hooks = {}) {
     factPairs.push(["labels", it.labels.join(", ")]);
   if (it.landed) factPairs.push(["landed", it.landed_how ?? it.landed]);
   el.append(facts2(factPairs));
+  const bodyWrap = h6("div", { class: "cb-body" });
   if (it.due_reason)
-    el.append(h6("p", { class: "cb-due-reason" }, it.due_reason));
+    bodyWrap.append(h6("p", { class: "cb-due-reason" }, it.due_reason));
   if (it.body) {
     const excerpt = it.body.slice(0, BODY_CAP);
     const rest = it.body.slice(BODY_CAP);
-    const bodyWrap = h6("div", { class: "cb-body" });
     bodyWrap.append(h6("p", null, excerpt));
     if (rest) {
       bodyWrap.append(fold("read more", h6("p", null, rest)));
     }
-    el.append(bodyWrap);
   }
-  el.append(renderDecideSection(ctx, detail, hooks));
-  el.append(renderEvidence(detail.evidence ?? []));
   el.append(
-    renderHistory(detail.history ?? [], detail.decisions ?? [], it.key)
+    h6("div", { class: "cb-lead" }, bodyWrap, renderRecBox(ctx, detail, hooks))
   );
-  return h6("div", { class: "kit-doc" }, el);
+  el.append(renderDecideSection(ctx, detail, hooks));
+  el.append(
+    h6(
+      "div",
+      { class: "cb-trail" },
+      renderEvidence(detail.evidence ?? []),
+      renderHistory(detail.history ?? [], detail.decisions ?? [], it.key)
+    )
+  );
+  return h6("div", { class: "kit-doc cb-item-doc" }, hooks.nav ?? null, el);
 }
 
 // attention.ts
@@ -3176,6 +3228,7 @@ function emptyFilters() {
   return { view: "waiting", q: "" };
 }
 var LEFT_OPEN = "left-open";
+var SIDEBAR = "casebook.sidebar";
 function getUrlQ() {
   return new URLSearchParams(location.search).get("q") ?? "";
 }
@@ -3356,6 +3409,57 @@ function makeAttention(ctx) {
     foot: buildFoot()
   });
   handle.el.classList.add("cb-attention");
+  const hideBtn = h7(
+    "button",
+    {
+      type: "button",
+      class: "cb-list-hide",
+      onclick() {
+        setSidebar(false);
+      }
+    },
+    "«"
+  );
+  const showBtn = h7(
+    "button",
+    { type: "button", class: "cb-list-show" },
+    "»"
+  );
+  const railLabel = h7("span", { class: "cb-list-rail-label" });
+  const rail = h7(
+    "div",
+    {
+      class: "cb-list-rail",
+      onclick() {
+        setSidebar(true);
+      }
+    },
+    showBtn,
+    railLabel
+  );
+  handle.el.append(hideBtn, rail);
+  function storedSidebar() {
+    try {
+      return localStorage.getItem(SIDEBAR) !== "closed";
+    } catch {
+      return true;
+    }
+  }
+  function setSidebar(open) {
+    handle.el.classList.toggle("cb-list-closed", !open);
+    try {
+      localStorage.setItem(SIDEBAR, open ? "open" : "closed");
+    } catch {
+    }
+  }
+  handle.el.classList.toggle("cb-list-closed", !storedSidebar());
+  function paintRail() {
+    railLabel.textContent = `${viewLabel()} · ${totalItemsForView}`;
+    if (vocab2) {
+      hideBtn.title = vocab2.hide_list;
+      showBtn.title = vocab2.show_list;
+    }
+  }
   function buildQuery(pageOffset) {
     const p = {
       view: filters.view,
@@ -3369,14 +3473,18 @@ function makeAttention(ctx) {
   function queryKey() {
     return JSON.stringify(buildQuery(0));
   }
+  let paintedQuery = "";
   async function reloadNow() {
     reloading = true;
     loads++;
     const asked2 = queryKey();
+    const q = buildQuery(0);
+    if (asked2 === paintedQuery && offset > PAGE_SIZE)
+      q["limit"] = String(offset);
     try {
       offset = 0;
       loadedItems = [];
-      const data = await ctx.api.get("/items", buildQuery(0));
+      const data = await ctx.api.get("/items", q);
       if (queryKey() !== asked2) {
         void reload();
         return;
@@ -3391,6 +3499,7 @@ function makeAttention(ctx) {
       know(loadedItems);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
+      paintedQuery = asked2;
       setRows();
       markOpenRow();
       updateFoot();
@@ -3439,6 +3548,10 @@ function makeAttention(ctx) {
       if (it.new_activity) rowEls[i]?.classList.add("cb-new-activity");
     });
     shown.forEach((it, i) => {
+      for (const sel of [".kit-kicker", ".kit-title"]) {
+        const el = rowEls[i]?.querySelector(sel);
+        if (el) el.title = el.textContent ?? "";
+      }
       const col = rowEls[i]?.querySelector(".kit-title")?.parentElement;
       if (!col) return;
       col.querySelector(".cb-row-looking")?.remove();
@@ -3446,6 +3559,8 @@ function makeAttention(ctx) {
       if (says) col.append(h7("div", { class: "cb-row-looking" }, says));
     });
     placeGroupHeads(open, rowEls);
+    paintRail();
+    refreshNav();
     if (!withLeft) return;
     for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add("cb-left-open");
@@ -3455,6 +3570,111 @@ function makeAttention(ctx) {
     const first = rowEls[open.length];
     if (first) first.before(head.el);
     else handle.el.querySelector(".kit-rows")?.append(head.el);
+  }
+  function navOrder() {
+    const rows = loadedItems.map((it) => ({ key: it.key, group: it.group }));
+    if (offset >= totalItems && leftOpenTotal > 0)
+      rows.push(...leftOpen.map((it) => ({ key: it.key, group: LEFT_OPEN })));
+    return rows;
+  }
+  function navGroups() {
+    return [
+      ...groups,
+      {
+        id: LEFT_OPEN,
+        source: "",
+        disposition: "",
+        label: vocab2?.left_open ?? "",
+        outward: false,
+        many: "",
+        total: leftOpenTotal
+      }
+    ];
+  }
+  function renderNav(key) {
+    if (!vocab2) return null;
+    const words = vocab2.nav;
+    const n = navTargets(navOrder(), navGroups(), key);
+    if (!n.pos) return null;
+    const more = offset < totalItems;
+    const labelOf = (k) => {
+      const g = navOrder().find((r) => r.key === k)?.group ?? "";
+      return navGroups().find((x) => x.id === g)?.label ?? "";
+    };
+    const button = (which, glyph, tip, target2, name, later) => h7(
+      "button",
+      {
+        type: "button",
+        class: "cb-nav-b",
+        dataset: {
+          nav: which === "prevGroup" ? "prev-group" : which === "nextGroup" ? "next-group" : which
+        },
+        disabled: !target2 && !later,
+        title: tip.replaceAll(
+          "{target}",
+          target2 ? name(target2) : later ? words.later : words.none
+        ),
+        onclick() {
+          void navGo(which);
+        }
+      },
+      glyph
+    );
+    const pos = words.position.replaceAll("{pos}", String(n.pos)).replaceAll("{total}", String(n.total)).replaceAll("{group}", n.label);
+    return h7(
+      "nav",
+      { class: "cb-nav" },
+      button(
+        "prevGroup",
+        "«",
+        words.prev_group,
+        n.prevGroup,
+        labelOf,
+        false
+      ),
+      button("prev", "‹", words.prev_item, n.prev, shortKey, false),
+      h7("span", { class: "cb-nav-pos" }, pos),
+      button("next", "›", words.next_item, n.next, shortKey, more),
+      button(
+        "nextGroup",
+        "»",
+        words.next_group,
+        n.nextGroup,
+        labelOf,
+        more
+      )
+    );
+  }
+  function refreshNav() {
+    const doc = readEl.querySelector(".cb-item-doc");
+    if (!doc || !currentOpenKey || shownDetail?.item.key !== currentOpenKey)
+      return;
+    const nav = renderNav(currentOpenKey);
+    const old = doc.querySelector(":scope > .cb-nav");
+    if (old && nav) old.replaceWith(nav);
+    else if (nav) doc.prepend(nav);
+    else old?.remove();
+  }
+  async function navGo(which) {
+    const key = currentOpenKey;
+    if (!key) return;
+    let target2 = navTargets(navOrder(), navGroups(), key)[which];
+    const ahead = which === "next" || which === "nextGroup";
+    while (!target2 && ahead && offset < totalItems) {
+      const before = offset;
+      if (reloading) await reload();
+      else await loadMore();
+      if (currentOpenKey !== key) return;
+      target2 = navTargets(navOrder(), navGroups(), key)[which];
+      if (!target2 && offset === before && !reloading) break;
+    }
+    if (!target2 || currentOpenKey !== key) return;
+    const group = navOrder().find((r) => r.key === target2)?.group ?? "";
+    if (collapsed.has(group)) {
+      collapsed.delete(group);
+      setRows();
+    }
+    openKey(target2);
   }
   function know(items) {
     for (const it of items) {
@@ -3892,7 +4112,8 @@ function makeAttention(ctx) {
       onRefresh: () => void openDetail(key),
       decide: (d, until, note) => void decideOpen(key, d, until, note),
       accept: () => void acceptOpen(),
-      cardsReady: () => renderAsk()
+      cardsReady: () => renderAsk(),
+      nav: renderNav(key)
     });
     readEl.replaceChildren(el);
     renderAsk();
@@ -4257,12 +4478,17 @@ function makeAttention(ctx) {
       card6.click();
     }
   }));
+  const jumpKeys = groupKeys((d) => {
+    if (!currentOpenKey) return;
+    void navGo(d < 0 ? "prevGroup" : "nextGroup");
+  });
   const listKeys = [
     decideKey,
     acceptKey,
     rejectKey,
     undoKey,
-    ...choiceKeys
+    ...choiceKeys,
+    ...jumpKeys
   ];
   refreshSummary();
   void getVocab(ctx).then((v) => {

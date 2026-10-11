@@ -84,6 +84,17 @@ function navKeys(nav: NavLike): KeyLike[] {
   return ks.map((k) => ({ ...k, group: 'family' }));
 }
 
+/**
+ * groupKeys are Attention's [ and ]: open the first item of the group
+ * before or after the open item's (jump(-1), jump(1)).
+ */
+export function groupKeys(jump: (d: number) => void): KeyLike[] {
+  return [
+    { keys: '[', label: 'previous group', group: 'page', run: () => jump(-1) },
+    { keys: ']', label: 'next group', group: 'page', run: () => jump(1) },
+  ];
+}
+
 export function makeKeyLayer(
   create: (list?: NavLike) => KeysLike,
   report: (message: string) => void,

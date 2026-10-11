@@ -167,3 +167,56 @@ func TestVocabularyGroupWords(t *testing.T) {
 		}
 	}
 }
+
+// TestItemDetailNamesRecommender: GET /api/item names the session whose
+// pending proposal the item has, as GET /api/items does (the recommendation
+// box's "‹session› recommends").
+func TestItemDetailNamesRecommender(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+	r.info(t, map[string]any{"id": "s1", "name": "tools-workspace/casebook", "pid": 1})
+	r.recommend(t, "s1", "issue:schuettc/hail#4")
+	var d ItemDetailView
+	if c := r.do(t, "GET", "/api/item?key="+url.QueryEscape("issue:schuettc/hail#4"), nil, &d); c != 200 {
+		t.Fatalf("GET /api/item: %d", c)
+	}
+	if s := d.Item.RecommendedBy; s == nil || s.ID != "s1" || s.Name != "tools-workspace/casebook" {
+		t.Fatalf("recommended_by: %+v", s)
+	}
+	var none ItemDetailView
+	if c := r.do(t, "GET", "/api/item?key="+url.QueryEscape("pr:schuettc/hail#3"), nil, &none); c != 200 {
+		t.Fatalf("GET /api/item: %d", c)
+	}
+	if none.Item.RecommendedBy != nil {
+		t.Fatalf("unrecommended item: %+v", none.Item.RecommendedBy)
+	}
+}
+
+// TestVocabularyItemPageWords: the item page's words come from serve: the
+// recommendation box's kicker, the « ‹ › » row and its tooltips, and the
+// list's collapse control.
+func TestVocabularyItemPageWords(t *testing.T) {
+	r := newRig(t)
+	var v DecisionVocabView
+	if c := r.do(t, "GET", "/api/decisions/vocabulary", nil, &v); c != 200 {
+		t.Fatalf("vocabulary %d", c)
+	}
+	if v.Recommends != "{session} recommends" {
+		t.Fatalf("recommends %q", v.Recommends)
+	}
+	want := NavVocab{
+		Position:  "{pos} of {total} in {group}",
+		PrevItem:  "Previous item: {target} (k)",
+		NextItem:  "Next item: {target} (j)",
+		PrevGroup: "Previous group: {target} ([)",
+		NextGroup: "Next group: {target} (])",
+		None:      "none",
+		Later:     "on the next page",
+	}
+	if v.Nav != want {
+		t.Fatalf("nav %+v", v.Nav)
+	}
+	if v.HideList != "Hide the list" || v.ShowList != "Show the list" {
+		t.Fatalf("hide %q, show %q", v.HideList, v.ShowList)
+	}
+}

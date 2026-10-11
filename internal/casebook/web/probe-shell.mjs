@@ -189,6 +189,9 @@ const EXPECT = {
     'r',
     'u',
     ...'123456789',
+    // « and »: the group before or after the open item's.
+    '[',
+    ']',
   ],
   rules: [...MOVE_OPEN, ...FAMILY, ...PAGE_KEYS, 'a'],
   apply: [...MOVE_OPEN, ...SELECT, ...FAMILY, ...PAGE_KEYS, 'a', 'p'],

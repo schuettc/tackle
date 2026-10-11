@@ -225,6 +225,10 @@ export interface DecisionVocabView {
   ticked: string;
   untick: string;
   left_open: string;
+  recommends: string;
+  nav: NavVocab;
+  hide_list: string;
+  show_list: string;
 }
 
 export interface ClearResult {
@@ -535,6 +539,16 @@ export interface CountWords {
   two: string;
   all: string;
   some: string;
+}
+
+export interface NavVocab {
+  position: string;
+  prev_item: string;
+  next_item: string;
+  prev_group: string;
+  next_group: string;
+  none: string;
+  later: string;
 }
 
 export interface NeedsYou {

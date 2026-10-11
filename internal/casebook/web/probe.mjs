@@ -5134,7 +5134,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 934;
+const MIN_CHECKS = 957;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -6392,25 +6392,50 @@ async function run() {
         );
 
         if (hasCard) {
-          // Card head: "<agent> recommends · <choice>" not "pending proposal".
+          // Card head: "‹session› recommends" (serve's words), then the
+          // choice's label, not "pending proposal".
           const cardHead = await propGeoPage
             .$eval(
               '.cb-proposal-card .kit-card-head',
               (el) => el.textContent ?? '',
             )
             .catch(() => '');
+          const cardLabel = await propGeoPage
+            .$eval('.cb-proposal-card .cb-proposal-label', (el) =>
+              el.checkVisibility() ? (el.textContent ?? '') : '',
+            )
+            .catch(() => '');
           check(
-            `proposal card head contains "recommends ·" ("${cardHead}")`,
-            cardHead.includes('recommends \u00b7') &&
-              !cardHead.includes('proposes'),
+            `proposal card head reads "‹session› recommends" ("${cardHead}"), the choice's label under it ("${cardLabel}")`,
+            cardHead.endsWith(' recommends') &&
+              !cardHead.includes('proposes') &&
+              cardLabel !== '',
           );
+          // The session serve names as the recommender: its name, else its
+          // folder, else its harness, else its id (sessions.ts).
+          const by =
+            (
+              await createAgent(serveHandle.base, serveHandle.token).api(
+                'GET',
+                '/api/item?key=' + encodeURIComponent('pr:schuettc/hail#3'),
+              )
+            ).item?.recommended_by ?? null;
+          const who = by
+            ? by.name ||
+              (by.cwd ?? '').split('/').filter(Boolean).pop() ||
+              by.harness ||
+              by.id
+            : '';
           check(
-            'proposal card head uses real agent name (pi), not hardcoded string',
-            cardHead.toLowerCase().startsWith('pi'),
+            `proposal card head names the recommending session serve names ("${who}"), not a hardcoded string`,
+            who !== '' && cardHead === `${who} recommends`,
           );
 
-          // Geometry: the recommendation sits between the decide step's
-          // question and its cards.
+          // Geometry: the recommendation sits beside the description, above
+          // the decide step's question and its cards.
+          const bodyTop = await propGeoPage
+            .$eval('.cb-lead .cb-body', (el) => el.getBoundingClientRect().top)
+            .catch(() => -2);
           const cardBottom = await propGeoPage
             .$eval(
               '.cb-proposal-card',
@@ -6420,24 +6445,18 @@ async function run() {
           const cardTop = await propGeoPage
             .$eval('.cb-proposal-card', (el) => el.getBoundingClientRect().top)
             .catch(() => -1);
-          const questionBottom = await propGeoPage
+          const questionTop = await propGeoPage
             .$eval(
               '.cb-decide .cb-question',
-              (el) => el.getBoundingClientRect().bottom,
-            )
-            .catch(() => -1);
-          const cardsTop = await propGeoPage
-            .$eval(
-              '.cb-decide .cb-choices',
               (el) => el.getBoundingClientRect().top,
             )
             .catch(() => -1);
           check(
-            'proposal card is between the question and the choice cards (geometry)',
-            questionBottom > 0 &&
-              questionBottom <= cardTop &&
+            `proposal card is beside the description (tops ${cardTop}/${bodyTop}) and above the question (${cardBottom} <= ${questionTop})`,
+            cardTop > 0 &&
+              Math.round(cardTop) === Math.round(bodyTop) &&
               cardBottom > 0 &&
-              cardBottom <= cardsTop,
+              cardBottom <= questionTop,
           );
 
           // Proposal card is inside the reading document (.kit-doc).
@@ -6449,13 +6468,16 @@ async function run() {
             cardInDoc,
           );
         } else {
-          check('proposal card head contains "recommends ·"', false);
           check(
-            'proposal card head uses real agent name (pi), not hardcoded string',
+            'proposal card head reads "‹session› recommends", the choice\'s label under it',
             false,
           );
           check(
-            'proposal card is between the question and the choice cards (geometry)',
+            'proposal card head names the recommending session serve names, not a hardcoded string',
+            false,
+          );
+          check(
+            'proposal card is beside the description and above the question',
             false,
           );
           check('proposal card is inside the .kit-doc reading document', false);
@@ -6645,7 +6667,11 @@ async function run() {
               '.cb-proposal-card .kit-btns .kit-btn:last-child',
             );
             if (rejectBtn) {
-              await rejectBtn.click();
+              // By selector: the item may paint again (the proposal's live
+              // event) between finding the button and clicking it.
+              await rejectPage.click(
+                '.cb-proposal-card .kit-btns .kit-btn:last-child',
+              );
               await rejectPage
                 .waitForSelector('.kit-sheet', { timeout: 4000 })
                 .catch(() => {});
@@ -8618,8 +8644,8 @@ async function run() {
             !!document.querySelector('.kit-read .kit-label'),
         );
 
-        // 1. Reading document geometry: left edge ≥ 40 px from list right edge;
-        //    document width ≤ 700 px.
+        // 1. Reading document geometry: its text starts ≥ 40 px from the
+        //    list's right edge; an item's document is at most 1060 px wide.
         {
           const listRight = await fidPage
             .$eval('.kit-list', (el) => el.getBoundingClientRect().right)
@@ -8627,16 +8653,19 @@ async function run() {
           const docRect = await fidPage
             .$eval('.kit-doc', (el) => {
               const r = el.getBoundingClientRect();
-              return { left: r.left, width: r.width };
+              return {
+                left: r.left + parseFloat(getComputedStyle(el).paddingLeft),
+                width: r.width,
+              };
             })
             .catch(() => ({ left: 0, width: 0 }));
           check(
-            'reading document left edge is ≥ 40 px from list right edge',
+            `reading document's text starts ≥ 40 px from list right edge (${docRect.left} - ${listRight})`,
             docRect.left - listRight >= 40,
           );
           check(
-            'reading document width is ≤ 700 px',
-            docRect.width > 0 && docRect.width <= 700,
+            `reading document width is ≤ 1060 px (${docRect.width})`,
+            docRect.width > 0 && docRect.width <= 1060,
           );
         }
 

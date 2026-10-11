@@ -5,6 +5,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  groupKeys,
   makeKeyLayer,
   type KeyLike,
   type KeysLike,
@@ -276,5 +277,46 @@ describe('makeKeyLayer', () => {
     });
     assert.equal(errors.length, 1);
     assert.match(errors[0], /key clash in the page: "x" \(page x\)/);
+  });
+
+  test('[ and ] are bound in Attention, listed, and clash with nothing', () => {
+    const k = kit();
+    const errors: string[] = [];
+    const layer = makeKeyLayer(k.create, (m) => errors.push(m));
+    // The page-wide keys (the dock's, the section switches).
+    for (const [keys, label] of [
+      ['.', 'focus the composer'],
+      ['\u2318\u21b5', 'send'],
+      ['g a', 'go to attention'],
+      ['g r', 'go to rules'],
+      ['g p', 'go to apply'],
+    ])
+      layer.keys.register(key(keys, label));
+    // Attention's own keys: d, a, r, u, 1..9, then [ and ].
+    const jumps: number[] = [];
+    const own = [
+      key('d', 'decide'),
+      key('a', 'accept proposal'),
+      key('r', 'reject proposal'),
+      key('u', 'undo the last decision'),
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => key(String(n), `pick ${n}`)),
+      ...groupKeys((d) => jumps.push(d)),
+    ];
+    layer.bind({
+      id: 'attention',
+      listKeys: () => ({ nav: nav('att', true), selects: true }),
+      keys: () => own,
+    });
+    assert.deepEqual(errors, []);
+    const listed = layer.keys.bindings();
+    assert.deepEqual(
+      listed
+        .filter((b) => b.keys === '[' || b.keys === ']')
+        .map((b) => `${b.keys} ${b.label} (${b.group})`),
+      ['[ previous group (page)', '] next group (page)'],
+    );
+    k.press('[');
+    k.press(']');
+    assert.deepEqual(jumps, [-1, 1]);
   });
 });

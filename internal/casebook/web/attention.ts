@@ -44,7 +44,10 @@ import {
   groupButtons,
   leftOpenMeta,
   lookIntoCard,
+  navTargets,
+  shortKey,
 } from './decide-math.ts';
+import { groupKeys } from './key-layer.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { lookingLine, sessionName } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
@@ -86,6 +89,9 @@ function emptyFilters(): Filters {
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
 const LEFT_OPEN = 'left-open';
+
+// SIDEBAR is where the list's collapse is kept ('open' or 'closed').
+const SIDEBAR = 'casebook.sidebar';
 
 // ---- URL search param helpers -----------------------------------------------
 
@@ -352,6 +358,66 @@ export function makeAttention(ctx: Ctx): Section {
   // scrollbar) is Attention's alone.
   handle.el.classList.add('cb-attention');
 
+  // ---- the list collapses to a rail -----------------------------------------
+
+  // « hides the list: it becomes a thin rail showing » and the view with
+  // its count, written up the rail; the rail (or ») brings it back. The
+  // choice is kept across reloads.
+  const hideBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'cb-list-hide',
+      onclick() {
+        setSidebar(false);
+      },
+    },
+    '\u00ab',
+  );
+  const showBtn = h(
+    'button',
+    { type: 'button', class: 'cb-list-show' },
+    '\u00bb',
+  );
+  const railLabel = h('span', { class: 'cb-list-rail-label' });
+  const rail = h(
+    'div',
+    {
+      class: 'cb-list-rail',
+      onclick() {
+        setSidebar(true);
+      },
+    },
+    showBtn,
+    railLabel,
+  );
+  handle.el.append(hideBtn, rail);
+  function storedSidebar(): boolean {
+    try {
+      return localStorage.getItem(SIDEBAR) !== 'closed';
+    } catch {
+      return true;
+    }
+  }
+  function setSidebar(open: boolean): void {
+    handle.el.classList.toggle('cb-list-closed', !open);
+    try {
+      localStorage.setItem(SIDEBAR, open ? 'open' : 'closed');
+    } catch {
+      // storage refused: the choice lasts this page only
+    }
+  }
+  handle.el.classList.toggle('cb-list-closed', !storedSidebar());
+  // paintRail writes the rail's view and count, and the controls' tooltips
+  // (serve's words).
+  function paintRail(): void {
+    railLabel.textContent = `${viewLabel()} \u00b7 ${totalItemsForView}`;
+    if (vocab) {
+      hideBtn.title = vocab.hide_list;
+      showBtn.title = vocab.show_list;
+    }
+  }
+
   // ---- API ------------------------------------------------------------------
 
   function buildQuery(pageOffset: number): Record<string, string> {
@@ -378,14 +444,21 @@ export function makeAttention(ctx: Ctx): Section {
     return JSON.stringify(buildQuery(0));
   }
 
+  // paintedQuery is the query the rows were last loaded for: reloading it
+  // keeps every page the list had (a nav button may have loaded one), a
+  // new view or search starts at one page.
+  let paintedQuery = '';
   async function reloadNow(): Promise<void> {
     reloading = true;
     loads++;
     const asked = queryKey();
+    const q = buildQuery(0);
+    if (asked === paintedQuery && offset > PAGE_SIZE)
+      q['limit'] = String(offset);
     try {
       offset = 0;
       loadedItems = [];
-      const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
+      const data = await ctx.api.get<ItemsView>('/items', q);
       if (queryKey() !== asked) {
         // Every change to the query asks for a reload; this one makes sure.
         void reload();
@@ -401,6 +474,7 @@ export function makeAttention(ctx: Ctx): Section {
       know(loadedItems);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
+      paintedQuery = asked;
       setRows();
       markOpenRow();
       updateFoot();
@@ -464,6 +538,12 @@ export function makeAttention(ctx: Ctx): Section {
     // It goes where the row's sub line goes: in the text column, under the
     // title (and any recommendation's reason), one line.
     shown.forEach((it, i) => {
+      // The kicker and the title are one line each, cut with an ellipsis:
+      // whole in their tooltips.
+      for (const sel of ['.kit-kicker', '.kit-title']) {
+        const el = rowEls[i]?.querySelector<HTMLElement>(sel);
+        if (el) el.title = el.textContent ?? '';
+      }
       const col = rowEls[i]?.querySelector('.kit-title')?.parentElement;
       if (!col) return;
       col.querySelector('.cb-row-looking')?.remove();
@@ -471,6 +551,8 @@ export function makeAttention(ctx: Ctx): Section {
       if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
     });
     placeGroupHeads(open, rowEls);
+    paintRail();
+    refreshNav();
     if (!withLeft) return;
     for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add('cb-left-open');
@@ -480,6 +562,148 @@ export function makeAttention(ctx: Ctx): Section {
     const first = rowEls[open.length];
     if (first) first.before(head.el);
     else handle.el.querySelector('.kit-rows')?.append(head.el);
+  }
+
+  // ---- « ‹ › »: the open item's place in the list ---------------------------
+
+  // navOrder is the list's loaded rows in group order, a collapsed group's
+  // included, the left-open group last once every page is loaded.
+  function navOrder(): { key: string; group: string }[] {
+    const rows = loadedItems.map((it) => ({ key: it.key, group: it.group }));
+    if (offset >= totalItems && leftOpenTotal > 0)
+      rows.push(...leftOpen.map((it) => ({ key: it.key, group: LEFT_OPEN })));
+    return rows;
+  }
+
+  // navGroups is the view's groups, the left-open group's with them.
+  function navGroups(): GroupView[] {
+    return [
+      ...groups,
+      {
+        id: LEFT_OPEN,
+        source: '',
+        disposition: '',
+        label: vocab?.left_open ?? '',
+        outward: false,
+        many: '',
+        total: leftOpenTotal,
+      },
+    ];
+  }
+
+  type NavWhich = 'prevGroup' | 'prev' | 'next' | 'nextGroup';
+
+  // renderNav is the open item's « ‹ › » row: its place in its group, and
+  // a button to the group before, the item before, the item after and the
+  // group after, each naming where it goes (disabled where there is
+  // none). Null when key is not in the list's rows.
+  function renderNav(key: string): HTMLElement | null {
+    if (!vocab) return null;
+    const words = vocab.nav;
+    const n = navTargets(navOrder(), navGroups(), key);
+    if (!n.pos) return null;
+    // More pages: what comes after may be on one not loaded yet.
+    const more = offset < totalItems;
+    const labelOf = (k: string): string => {
+      const g = navOrder().find((r) => r.key === k)?.group ?? '';
+      return navGroups().find((x) => x.id === g)?.label ?? '';
+    };
+    const button = (
+      which: NavWhich,
+      glyph: string,
+      tip: string,
+      target: string | undefined,
+      name: (k: string) => string,
+      later: boolean,
+    ): HTMLElement =>
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'cb-nav-b',
+          dataset: {
+            nav:
+              which === 'prevGroup'
+                ? 'prev-group'
+                : which === 'nextGroup'
+                  ? 'next-group'
+                  : which,
+          },
+          disabled: !target && !later,
+          title: tip.replaceAll(
+            '{target}',
+            target ? name(target) : later ? words.later : words.none,
+          ),
+          onclick() {
+            void navGo(which);
+          },
+        },
+        glyph,
+      );
+    const pos = words.position
+      .replaceAll('{pos}', String(n.pos))
+      .replaceAll('{total}', String(n.total))
+      .replaceAll('{group}', n.label);
+    return h(
+      'nav',
+      { class: 'cb-nav' },
+      button(
+        'prevGroup',
+        '\u00ab',
+        words.prev_group,
+        n.prevGroup,
+        labelOf,
+        false,
+      ),
+      button('prev', '\u2039', words.prev_item, n.prev, shortKey, false),
+      h('span', { class: 'cb-nav-pos' }, pos),
+      button('next', '\u203a', words.next_item, n.next, shortKey, more),
+      button(
+        'nextGroup',
+        '\u00bb',
+        words.next_group,
+        n.nextGroup,
+        labelOf,
+        more,
+      ),
+    );
+  }
+
+  // refreshNav puts the open item's « ‹ › » row in place again (the list
+  // changed), or takes it away when the item is no longer in the rows.
+  function refreshNav(): void {
+    const doc = readEl.querySelector<HTMLElement>('.cb-item-doc');
+    if (!doc || !currentOpenKey || shownDetail?.item.key !== currentOpenKey)
+      return;
+    const nav = renderNav(currentOpenKey);
+    const old = doc.querySelector(':scope > .cb-nav');
+    if (old && nav) old.replaceWith(nav);
+    else if (nav) doc.prepend(nav);
+    else old?.remove();
+  }
+
+  // navGo opens which of the open item's targets: past the loaded rows,
+  // the next page loads first. A target in a collapsed group expands it.
+  async function navGo(which: NavWhich): Promise<void> {
+    const key = currentOpenKey;
+    if (!key) return;
+    let target = navTargets(navOrder(), navGroups(), key)[which];
+    const ahead = which === 'next' || which === 'nextGroup';
+    while (!target && ahead && offset < totalItems) {
+      const before = offset;
+      if (reloading) await reload();
+      else await loadMore();
+      if (currentOpenKey !== key) return;
+      target = navTargets(navOrder(), navGroups(), key)[which];
+      if (!target && offset === before && !reloading) break;
+    }
+    if (!target || currentOpenKey !== key) return;
+    const group = navOrder().find((r) => r.key === target)?.group ?? '';
+    if (collapsed.has(group)) {
+      collapsed.delete(group);
+      setRows();
+    }
+    openKey(target);
   }
 
   // ---- the groups ------------------------------------------------------------
@@ -1082,6 +1306,7 @@ export function makeAttention(ctx: Ctx): Section {
       decide: (d, until, note) => void decideOpen(key, d, until, note),
       accept: () => void acceptOpen(),
       cardsReady: () => renderAsk(),
+      nav: renderNav(key),
     });
     readEl.replaceChildren(el);
     renderAsk();
@@ -1591,12 +1816,20 @@ export function makeAttention(ctx: Ctx): Section {
     },
   }));
 
+  // [ and ] open the first item of the group before or after the open
+  // item's (« and »).
+  const jumpKeys: KeyBinding[] = groupKeys((d) => {
+    if (!currentOpenKey) return;
+    void navGo(d < 0 ? 'prevGroup' : 'nextGroup');
+  });
+
   const listKeys: KeyBinding[] = [
     decideKey,
     acceptKey,
     rejectKey,
     undoKey,
     ...choiceKeys,
+    ...jumpKeys,
   ];
 
   // Load summary for the view chips' counts.

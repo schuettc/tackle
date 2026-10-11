@@ -223,6 +223,9 @@ func (s *Server) itemDetail(ctx context.Context, it engine.Item, k item.Key) Ite
 	}
 	v := newItemView(it, prop)
 	v.Looking = s.lookingInto(ctx)[it.ID]
+	if prop != nil {
+		v.RecommendedBy = s.recommenders(ctx)(prop.Source)
+	}
 	proposals, _ := s.Props.ForKey(ctx, it.ID)
 	evidence, _ := s.Props.Evidence(ctx, it.ID)
 	events, _ := s.App.Events()
@@ -337,6 +340,18 @@ func decisionVocab() DecisionVocabView {
 		Ticked:         "{n} ticked",
 		Untick:         "untick",
 		LeftOpen:       "left open",
+		Recommends:     "{session} recommends",
+		Nav: NavVocab{
+			Position:  "{pos} of {total} in {group}",
+			PrevItem:  "Previous item: {target} (k)",
+			NextItem:  "Next item: {target} (j)",
+			PrevGroup: "Previous group: {target} ([)",
+			NextGroup: "Next group: {target} (])",
+			None:      "none",
+			Later:     "on the next page",
+		},
+		HideList: "Hide the list",
+		ShowList: "Show the list",
 	}
 	for i, k := range kinds {
 		allowed := item.Allowed(k)
