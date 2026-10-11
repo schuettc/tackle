@@ -1170,8 +1170,13 @@ async function groupsScenario(context, t, s) {
   // Two sessions here, so the dock attaches to neither on its own.
   const A = 'probe-groups-a';
   const B = 'probe-groups-b';
-  await agent.presence(A, 'pi \u00b7 groups-a', '/home/court/groups-a', 'pi');
-  await agent.presence(B, 'pi \u00b7 groups-b', '/home/court/groups-b', 'pi');
+  // beat keeps both sessions present: serve here marks a session left
+  // after 3s without one, and a left session is no target for the ask.
+  const beat = async () => {
+    await agent.presence(A, 'pi \u00b7 groups-a', '/home/court/groups-a', 'pi');
+    await agent.presence(B, 'pi \u00b7 groups-b', '/home/court/groups-b', 'pi');
+  };
+  await beat();
   // B already has a thread of its own: the ask must not land there.
   const bThread = await agent.newThread(B, 'b work');
   await agent.propose(A, CLOSE, 'close', 'superseded');
@@ -1566,6 +1571,7 @@ async function groupsScenario(context, t, s) {
     }
     return out;
   };
+  await beat();
   await pg.click(`${groupSel('')} .cb-group-ask`);
   check(
     "groups: none group asks: the exact message reaches the attached session's thread, once",
