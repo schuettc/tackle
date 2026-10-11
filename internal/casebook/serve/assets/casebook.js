@@ -3792,11 +3792,6 @@ function makeAttention(ctx) {
       const looked = scoped ? ticked.every((k) => rows.some((it) => it.key === k && it.looking)) : rows.length >= g.total && rows.every((it) => !!it.looking);
       acts.replaceChildren(
         ...[
-          scoped ? h7(
-            "span",
-            { class: "cb-group-ticked" },
-            vocab2.ticked.replaceAll("{n}", String(n))
-          ) : null,
           button("fill cb-group-act", w.act, () => actGroup(g)),
           t ? button("cb-group-look", w.look, () => lookGroup(g), looked) : null,
           g.source.startsWith("rule:") ? null : button("cb-group-discard", w.discard, () => discardGroup(g)),

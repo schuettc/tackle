@@ -236,7 +236,7 @@
 
 /* The buttons, under the label (38px: caret, box and their gaps): the
  * choice filled (the primary), then look into and discard; with some
- * ticked, "N ticked" before them and untick after. One line, one height,
+ * ticked, each names how many and untick ends the line. One line, one height,
  * with buttons or none, so ticking or attaching a session moves nothing. */
 .cb-group-acts {
   display: flex;
@@ -260,13 +260,6 @@
 
 .cb-group-acts > :not(.kit-btn) {
   flex-shrink: 0;
-}
-
-.cb-group-ticked {
-  font: 12px var(--kit-mono);
-  color: var(--kit-signal);
-  white-space: nowrap;
-  margin-right: 2px;
 }
 
 .cb-group-untick {

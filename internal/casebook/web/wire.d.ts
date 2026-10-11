@@ -222,7 +222,6 @@ export interface DecisionVocabView {
   summary: SummaryVocab;
   count_words: CountWords;
   to_apply_hint: string;
-  ticked: string;
   untick: string;
   left_open: string;
   recommends: string;

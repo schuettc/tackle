@@ -337,7 +337,6 @@ func decisionVocab() DecisionVocabView {
 		Summary:        SummaryVocab{OneSession: "{n} items, all recommended by {session}", Mixed: "{n} items, {r} recommended"},
 		CountWords:     countWords,
 		ToApplyHint:    "goes to To apply first",
-		Ticked:         "{n} ticked",
 		Untick:         "untick",
 		LeftOpen:       "left open",
 		Recommends:     "{session} recommends",

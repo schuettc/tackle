@@ -928,13 +928,6 @@ export function makeAttention(ctx: Ctx): Section {
         : rows.length >= g.total && rows.every((it) => !!it.looking);
       acts.replaceChildren(
         ...[
-          scoped
-            ? h(
-                'span',
-                { class: 'cb-group-ticked' },
-                vocab.ticked.replaceAll('{n}', String(n)),
-              )
-            : null,
           button('fill cb-group-act', w.act, () => actGroup(g)),
           t
             ? button('cb-group-look', w.look, () => lookGroup(g), looked)

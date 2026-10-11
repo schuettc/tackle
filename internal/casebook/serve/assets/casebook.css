@@ -193,12 +193,6 @@
 .cb-group-acts > :not(.kit-btn) {
   flex-shrink: 0;
 }
-.cb-group-ticked {
-  font: 12px var(--kit-mono);
-  color: var(--kit-signal);
-  white-space: nowrap;
-  margin-right: 2px;
-}
 .cb-group-untick {
   font: 12px var(--kit-mono);
   color: var(--kit-muted);

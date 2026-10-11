@@ -153,8 +153,8 @@ func TestVocabularyGroupWords(t *testing.T) {
 	if v.CountWords != (CountWords{One: "it", Two: "both", All: "all {n}", Some: "{n}"}) {
 		t.Fatalf("count words %+v", v.CountWords)
 	}
-	if v.ToApplyHint != "goes to To apply first" || v.Ticked != "{n} ticked" || v.Untick != "untick" {
-		t.Fatalf("hint %q, ticked %q, untick %q", v.ToApplyHint, v.Ticked, v.Untick)
+	if v.ToApplyHint != "goes to To apply first" || v.Untick != "untick" {
+		t.Fatalf("hint %q, untick %q", v.ToApplyHint, v.Untick)
 	}
 	if v.LeftOpen != "left open" {
 		t.Fatalf("left-open group label %q", v.LeftOpen)

@@ -116,13 +116,14 @@
 //     every left-open key) once a session is attached after load, nothing
 //     ticked; rows indented under their header's label; every row one
 //     height, a long reason cut at two lines; the list's scrollbar room
-//     kept; a group's button line one height, ticked or not
+//     kept (measured with a classic 15px scrollbar); a group's button line
+//     one height, ticked or not
 //
 // And the item page and its navigation, on a serve and repos of their own:
 //
-//   the list 520px wide; every row fits its height (a long repo name's
-//     kicker is one line); every group's button line is one line at
-//     520px, ticked or not; a collapsed group is one line, its hint and
+//   the list 520px wide, with a classic 15px scrollbar; every row fits its
+//     height (a long repo name's kicker is one line); every group's button
+//     line is one line at 520px, ticked or not; a collapsed group is one line, its hint and
 //     buttons hidden
 //   the « ‹ › » row: the item's place in its group; « and ‹ disabled on
 //     the first item; each tooltip names its target; ] into a collapsed
@@ -200,6 +201,22 @@ async function setTheme(pg, theme) {
     if (th === theme) return;
     await pg.click('button.kit-ctl:has-text("theme")');
   }
+}
+
+// classicScrollbar gives the list a classic 15px scrollbar, as CI's
+// macOS runner and any Mac set to always show scrollbars draw it (this
+// one's overlay scrollbars take no room), and returns the room it takes
+// in the list.
+async function classicScrollbar(pg) {
+  await pg.addStyleTag({
+    content:
+      '.kit-rows::-webkit-scrollbar { width: 15px }' +
+      ' .kit-rows::-webkit-scrollbar-thumb { background: #999 }',
+  });
+  return pg.evaluate((list) => {
+    const r = document.querySelector(`${list} .kit-rows`);
+    return r ? r.offsetWidth - r.clientWidth : -1;
+  }, LIST);
 }
 
 // inThemes shows the page in each theme, asserting the theme took (the
@@ -1032,8 +1049,8 @@ const RECOMMEND_THE_REST =
   'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
 
 // groupHeads reads the shown list's group headers: label, the "goes to To
-// apply first" hint, count, and the texts of its button line (a ticked
-// count, buttons, untick).
+// apply first" hint, count, and the texts of its button line (buttons,
+// untick).
 function groupHeads(pg) {
   return pg.evaluate(
     (list) =>
@@ -1368,7 +1385,7 @@ async function groupsScenario(context, t, s) {
     const g = (await groupHeads(pg)).find((x) => x.d === 'keep');
     check(
       `one ticked: "${g?.acts.join(' / ')}", the box partly ticked (${g?.box})`,
-      g?.acts.join(' / ') === '1 ticked / Leave 1 open / Discard 1 / untick' &&
+      g?.acts.join(' / ') === 'Leave 1 open / Discard 1 / untick' &&
         g?.box === 'mixed',
     );
   }
@@ -1418,7 +1435,7 @@ async function groupsScenario(context, t, s) {
     await row(pg, k).locator('.kit-box').click();
   await until(
     pg,
-    (sel) => !!document.querySelector(`${sel} .cb-group-ticked`),
+    (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
     groupSel('close'),
   );
   {
@@ -1427,7 +1444,7 @@ async function groupsScenario(context, t, s) {
     const merge = heads.find((x) => x.d === 'merge');
     check(
       `groups: ticks scope per group: Close reads "${close?.acts.join(' / ')}" (${close?.box}), Merge "${merge?.acts.join(' / ')}" (${merge?.box})`,
-      close?.acts.join(' / ') === '3 ticked / Close 3 / Discard 3 / untick' &&
+      close?.acts.join(' / ') === 'Close 3 / Discard 3 / untick' &&
         close.box === 'mixed' &&
         merge?.acts.join(' / ') === 'Merge it / Discard it / untick' &&
         merge.box === 'true',
@@ -4109,6 +4126,8 @@ async function steadyScenario(context, t, s) {
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
   await setTheme(pg, 'light');
+  const bar = await classicScrollbar(pg);
+  check(`the list's scrollbar is a classic 15px one (${bar}px)`, bar === 15);
   const ready = await until(
     pg,
     (sel) => !!document.querySelector(sel),
@@ -4502,6 +4521,10 @@ async function navScenario(context, t, s) {
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
   await setTheme(pg, 'light');
+  {
+    const bar = await classicScrollbar(pg);
+    check(`the list's scrollbar is a classic 15px one (${bar}px)`, bar === 15);
+  }
   await until(pg, (sel) => !!document.querySelector(sel), groupSel('merge'));
   {
     const heads = await groupHeads(pg);
@@ -4632,9 +4655,9 @@ async function navScenario(context, t, s) {
     check(
       `group buttons one line, 3 ticked: "${stop3.texts.join(' · ')}" (${stop3.h}px, inside ${stop3.inside}, whole ${stop3.whole}, text/box ${stop3.widths}) and "${close3.texts.join(' · ')}" (${close3.h}px), the same height as untouched`,
       stop3.texts.join(' · ') ===
-        '3 ticked · Stop tracking 3 · Look into 3 · Discard 3 · untick' &&
+        'Stop tracking 3 · Look into 3 · Discard 3 · untick' &&
         close3.texts.join(' · ') ===
-          '3 ticked · Close 3 · Look into 3 · Discard 3 · untick' &&
+          'Close 3 · Look into 3 · Discard 3 · untick' &&
         oneLine(stop3) &&
         oneLine(close3) &&
         stop3.h === stop.h &&
