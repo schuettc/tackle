@@ -4577,7 +4577,32 @@ async function navScenario(context, t, s) {
         inside: kids.every(
           (c) => c.getBoundingClientRect().right <= (r?.right ?? 0) + 0.5,
         ),
-        whole: kids.every((c) => c.scrollWidth <= c.clientWidth),
+        // whole: each child's text fits its inner width. Measured from
+        // fractional rects: scrollWidth and clientWidth are rounded
+        // separately, so a box sized exactly to its text can read 1px over
+        // on another machine with nothing cut.
+        whole: kids.every((c) => {
+          const cs = getComputedStyle(c);
+          const rg = document.createRange();
+          rg.selectNodeContents(c);
+          const pad = [
+            'paddingLeft',
+            'paddingRight',
+            'borderLeftWidth',
+            'borderRightWidth',
+          ].reduce((n, k) => n + parseFloat(cs[k]), 0);
+          return (
+            rg.getBoundingClientRect().width <=
+            c.getBoundingClientRect().width - pad + 0.5
+          );
+        }),
+        widths: kids
+          .map((c) => {
+            const rg = document.createRange();
+            rg.selectNodeContents(c);
+            return `${rg.getBoundingClientRect().width.toFixed(1)}/${c.getBoundingClientRect().width.toFixed(1)}`;
+          })
+          .join(' '),
         shown: kids.every((c) => c.checkVisibility()),
       };
     }, groupSel(d));
@@ -4587,7 +4612,7 @@ async function navScenario(context, t, s) {
     const stop = await lineOf('ignore');
     const close = await lineOf('close');
     check(
-      `group buttons one line: "${stop.texts.join(' · ')}" (${stop.h}px, inside ${stop.inside}, whole ${stop.whole}) and "${close.texts.join(' · ')}" (${close.h}px)`,
+      `group buttons one line: "${stop.texts.join(' · ')}" (${stop.h}px, inside ${stop.inside}, whole ${stop.whole}, text/box ${stop.widths}) and "${close.texts.join(' · ')}" (${close.h}px)`,
       stop.texts.join(' · ') ===
         'Stop tracking all 12 · Look into all 12 · Discard all 12' &&
         close.texts.join(' · ') ===
@@ -4605,7 +4630,7 @@ async function navScenario(context, t, s) {
     const stop3 = await lineOf('ignore');
     const close3 = await lineOf('close');
     check(
-      `group buttons one line, 3 ticked: "${stop3.texts.join(' · ')}" (${stop3.h}px, inside ${stop3.inside}, whole ${stop3.whole}) and "${close3.texts.join(' · ')}" (${close3.h}px), the same height as untouched`,
+      `group buttons one line, 3 ticked: "${stop3.texts.join(' · ')}" (${stop3.h}px, inside ${stop3.inside}, whole ${stop3.whole}, text/box ${stop3.widths}) and "${close3.texts.join(' · ')}" (${close3.h}px), the same height as untouched`,
       stop3.texts.join(' · ') ===
         '3 ticked · Stop tracking 3 · Look into 3 · Discard 3 · untick' &&
         close3.texts.join(' · ') ===
