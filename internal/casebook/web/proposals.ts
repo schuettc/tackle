@@ -274,5 +274,8 @@ export function proposalCard(
 
   const el = card({ edge: 'agent', head, body: bodyEl, actions });
   el.classList.add('cb-proposal-card');
+  // A narrow box cuts the head to one line; its title keeps it whole.
+  const headEl = el.querySelector<HTMLElement>('.kit-card-head');
+  if (headEl) headEl.title = head;
   return el;
 }

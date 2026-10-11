@@ -1775,6 +1775,9 @@ textarea.cb-needs-edit:focus {
 .cb-lead > .cb-proposal-card .kit-card-head {
   flex: none;
   margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cb-lead > .cb-proposal-card .kit-card-body {
   flex: 1;
@@ -1786,16 +1789,37 @@ textarea.cb-needs-edit:focus {
 }
 .cb-lead > .cb-proposal-card .kit-btns {
   flex: none;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+.cb-lead > .cb-proposal-card .kit-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .cb-proposal-label {
   font-weight: 600;
   margin: 0 0 2px;
 }
+.cb-lead .cb-proposal-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .cb-lead .cb-proposal-note {
   margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
 }
 .cb-lead .cb-keyhint {
-  margin: 4px 0 0;
+  display: none;
 }
 .cb-rec-empty {
   border: 1px dashed var(--kit-line);
@@ -1814,9 +1838,7 @@ textarea.cb-needs-edit:focus {
   visibility: hidden;
 }
 .cb-item .cb-choices {
-  grid-template-columns: none;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 .cb-item .cb-choice.kit-card {
   padding: 10px 12px;

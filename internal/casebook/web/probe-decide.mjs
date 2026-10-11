@@ -4659,6 +4659,21 @@ async function navScenario(context, t, s) {
           ),
         ],
         n: cards.length,
+        // Each row of cards (by top) and how many heights it has.
+        rowHs: Object.values(
+          Object.groupBy(cards, (c) =>
+            Math.round(c.getBoundingClientRect().top),
+          ),
+        ).map(
+          (row) =>
+            new Set(
+              row.map((c) => Math.round(c.getBoundingClientRect().height)),
+            ).size,
+        ),
+        cardMinW: Math.min(
+          ...cards.map((c) => Math.round(c.getBoundingClientRect().width)),
+        ),
+        choicesW: Math.round(q('.cb-choices')?.clientWidth ?? 0),
         evidence: top('.cb-evidence .kit-label'),
         history: top('.cb-history .kit-label'),
         evidenceLeft: Math.round(
@@ -4700,10 +4715,12 @@ async function navScenario(context, t, s) {
         a.body.w > a.rec.w,
     );
     check(
-      `the choice cards share one row (${a.n} cards, tops ${a.cardTops.join(',')}) and one height (${a.cardHs.join(',')}); evidence beside history (${a.evidence}/${a.history}, ${a.evidenceLeft} < ${a.historyLeft})`,
+      `the choice cards: ${a.n} cards at least 150px wide (${a.cardMinW}) in ${a.choicesW}px, one row only when they fit (tops ${a.cardTops.join(',')}), each row one height (${a.rowHs.join(',')}); evidence beside history (${a.evidence}/${a.history}, ${a.evidenceLeft} < ${a.historyLeft})`,
       a.n >= 5 &&
-        a.cardTops.length === 1 &&
-        a.cardHs.length === 1 &&
+        a.cardMinW >= 150 &&
+        (a.cardTops.length === 1) ===
+          a.n * 150 + (a.n - 1) * 10 <= a.choicesW &&
+        a.rowHs.every((n) => n === 1) &&
         a.evidence === a.history &&
         a.evidenceLeft < a.historyLeft,
     );
@@ -4735,6 +4752,110 @@ async function navScenario(context, t, s) {
         c.cards === a.cards,
     );
   }
+
+  // ---- a narrow reading column: 1440x900, the list and the dock open --------
+  await pg.setViewportSize({ width: 1440, height: 900 });
+  await row(pg, LPR(42)).click();
+  await opened(t, pg, LPR(42));
+  {
+    // narrow reads the recommendation box and the cards: whether the
+    // body shows, where the first word of the label and of the note sit
+    // against the box and the body (a Range over the text, so a clipped
+    // line counts as hidden), the head's lines and the buttons' tops.
+    const g = await pg.evaluate((read) => {
+      const q = (s) => document.querySelector(`${read} ${s}`);
+      const rect = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r
+          ? { t: r.top, b: r.bottom, l: r.left, r: r.right, h: r.height }
+          : null;
+      };
+      const firstWord = (el) => {
+        const n = el?.firstChild;
+        if (!n || n.nodeType !== Node.TEXT_NODE) return null;
+        const end = n.textContent.search(/\s|$/);
+        const range = document.createRange();
+        range.setStart(n, 0);
+        range.setEnd(n, end);
+        return { w: n.textContent.slice(0, end), ...rect(range) };
+      };
+      const card = q('.cb-proposal-card');
+      const head = card?.querySelector('.kit-card-head');
+      const cards = [
+        ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+      ].map((c) => rect(c));
+      return {
+        readW: Math.round(document.querySelector(read).clientWidth),
+        box: rect(card),
+        body: rect(card?.querySelector('.kit-card-body')),
+        label: firstWord(card?.querySelector('.cb-proposal-label')),
+        note: firstWord(card?.querySelector('.cb-proposal-note')),
+        headH: Math.round(rect(head)?.h ?? 0),
+        headLine: parseFloat(getComputedStyle(head).lineHeight) || 0,
+        headFont: parseFloat(getComputedStyle(head).fontSize) || 0,
+        headTip: head?.title ?? '',
+        headText: head?.textContent ?? '',
+        btnTops: [
+          ...new Set(
+            [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].map((b) =>
+              Math.round(b.getBoundingClientRect().top),
+            ),
+          ),
+        ],
+        btns: card?.querySelectorAll('.kit-btns .kit-btn').length ?? 0,
+        btnsIn: [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].every(
+          (b) => {
+            const r = b.getBoundingClientRect();
+            const c = card.getBoundingClientRect();
+            return r.right <= c.right + 0.5 && r.bottom <= c.bottom + 0.5;
+          },
+        ),
+        cards: cards.map((c) => ({
+          w: Math.round(c.r - c.l),
+          t: Math.round(c.t),
+          h: Math.round(c.h),
+        })),
+      };
+    }, READ);
+    const within = (w, outer) =>
+      !!w &&
+      !!outer &&
+      w.h > 0 &&
+      w.t >= outer.t - 0.5 &&
+      w.b <= outer.b + 0.5 &&
+      w.l >= outer.l - 0.5 &&
+      w.r <= outer.r + 0.5;
+    const oneLine = g.headH <= Math.ceil(g.headLine || g.headFont * 1.6);
+    check(
+      `rec box shows its reason: in a ${g.readW}px reading column the box's body is ${Math.round(g.body?.h ?? 0)}px, "${g.label?.w}" and "${g.note?.w}" inside the box and its body, the head one line (${g.headH}px) whole in its title ("${g.headTip}"), the ${g.btns} buttons on one row (tops ${g.btnTops.join(',')}) inside the box (${g.btnsIn})`,
+      g.readW <= 600 &&
+        (g.body?.h ?? 0) > 0 &&
+        g.label?.w === 'Close' &&
+        g.note?.w === LONG_REASON.split(/\s/)[0] &&
+        within(g.label, g.box) &&
+        within(g.label, g.body) &&
+        within(g.note, g.box) &&
+        within(g.note, g.body) &&
+        oneLine &&
+        g.headTip === 'nav-a recommends' &&
+        g.headText === 'nav-a recommends' &&
+        g.btns === 3 &&
+        g.btnTops.length === 1 &&
+        g.btnsIn,
+    );
+    // Cards in one row share one height.
+    const rows = new Map();
+    for (const c of g.cards) rows.set(c.t, [...(rows.get(c.t) ?? []), c.h]);
+    const evenRows = [...rows.values()].every((hs) => new Set(hs).size === 1);
+    check(
+      `cards readable: in a ${g.readW}px reading column every one of ${g.cards.length} cards is 150px or wider (${g.cards.map((c) => c.w).join(',')}), each row one height (${[...rows.entries()].map(([t, hs]) => `${t}: ${hs.join('/')}`).join('; ')})`,
+      g.readW <= 600 &&
+        g.cards.length >= 5 &&
+        g.cards.every((c) => c.w >= 150) &&
+        evenRows,
+    );
+  }
+  await pg.setViewportSize({ width: 1600, height: 900 });
 
   // ---- nav: into a collapsed group ---------------------------------------------
   await row(pg, KEEP_LAST).click();
@@ -4853,6 +4974,24 @@ async function navScenario(context, t, s) {
         g.cardTops.length === 1,
     );
   }
+  // cards readable, wide: at 1600x1000 with the list collapsed, a
+  // five-card item keeps its cards on one row.
+  await pg.setViewportSize({ width: 1600, height: 1000 });
+  await pg.evaluate((k) => {
+    location.hash = `#/item/${encodeURIComponent(k)}`;
+  }, S1);
+  await opened(t, pg, S1);
+  {
+    const g = await pageGeo();
+    check(
+      `cards readable: at 1600x1000 with the list collapsed ${g.key}'s ${g.n} cards share one row (tops ${g.cardTops.join(',')}) and one height (${g.cardHs.join(',')})`,
+      g.key === S1 &&
+        g.n === 5 &&
+        g.cardTops.length === 1 &&
+        g.cardHs.length === 1,
+    );
+  }
+  await pg.setViewportSize({ width: 1600, height: 900 });
 
   // The collapse survives a reload; » brings the list back.
   await pg.reload({ waitUntil: 'domcontentloaded' });

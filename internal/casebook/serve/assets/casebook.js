@@ -3033,6 +3033,8 @@ function proposalCard(ctx, detail, onDone, opts = {}) {
   ];
   const el = card2({ edge: "agent", head, body: bodyEl, actions });
   el.classList.add("cb-proposal-card");
+  const headEl = el.querySelector(".kit-card-head");
+  if (headEl) headEl.title = head;
   return el;
 }
 
