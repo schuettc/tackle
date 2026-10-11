@@ -4,6 +4,25 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.5.0] - 2026-10-11
+
+### Changed
+- Attention's list is grouped by recommendation. Each group has a header (a checkbox for the whole group, the choice, the count) and its own buttons: "Close all 27 · Look into all 27 · Discard all 27", or "Close 3 · Look into 3 · Discard 3" for the items ticked in it. A group's buttons act on the whole group across every page, never on another group. Collapsed, a group is one line; ticking a collapsed group opens it. Items with no recommendation are a last group, "Not recommended yet", with "Ask ‹session› to recommend N". Left open is a group too, collapsed at first, with Look into.
+- Each row shows the agent's reason under its title, and every row is one height.
+- "Clear" is now "Discard": it throws away the agent's recommendation and nothing else.
+- The summary ("36 items, 36 recommended", with "discard all N") is pinned to the bottom of the list.
+- The list is 520px wide and collapses to a thin strip (it remembers which).
+- The item page is wider. The agent's recommendation sits above the description at a fixed size, with accept, change… and reject; the choices wrap when the column is narrow. Moving between items, choosing a card, or an item having no recommendation moves nothing on the page.
+- serve names the session behind each recommendation; the page says "tools-workspace/casebook recommends", not "pi recommends".
+
+### Added
+- « ‹ › » at the top of an open item: the previous or next item, and the previous or next group's first item, with "1 of 27 in Close it without merging". The `[` and `]` keys jump groups.
+
+### Removed
+- The board view. A link to it opens waiting on you; `casebook_open` no longer offers it.
+- The kind, repo, relation, bot/human, age and rule chips (four did nothing). Search stays; agents' filters stay in the API.
+- The generic "Decide N selected" button and its d key: ticked items act through their group's buttons.
+
 ## [casebook 0.4.8] - 2026-10-08
 
 ### Added
