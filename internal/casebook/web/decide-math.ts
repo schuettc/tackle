@@ -8,10 +8,14 @@
 
 import type {
   ChoiceVocab,
+  CountWords,
   DecisionVocabView,
+  GroupView,
   LookIntoVocab,
   NotNowForm,
+  Session,
 } from './wire.d.ts';
+import { sessionName } from './sessions.ts';
 
 /**
  * kindFromKey extracts the kind from a key by taking the prefix before the
@@ -261,89 +265,60 @@ export function choiceLabel(
   );
 }
 
-/** recommendLine is a list row's line for its pending proposal. */
+/**
+ * recommendLine is the line for an item's pending proposal, in serve's
+ * words: the session that recommends (by, named as the rows name it; the
+ * source's agent when serve knows none), then the choice ("‹session›
+ * recommends Close it").
+ */
 export function recommendLine(
-  vocab: DecisionVocabView | null,
+  vocab: DecisionVocabView,
   key: string,
+  by: Session | undefined,
   source: string,
   disposition: string,
 ): string {
-  return `${agentFromSource(source)} recommends ${choiceLabel(vocab, key, disposition)}`;
+  const who = vocab.recommends.replaceAll('{session}', sessionName(by, source));
+  return `${who} ${choiceLabel(vocab, key, disposition)}`;
 }
 
-/** What agreeGroups reads from a list row. */
-export interface Recommendable {
-  key: string;
-  proposal?: {
-    id: number;
-    disposition: string;
-    source: string;
-    state: string;
-  } | null;
-}
+// ---- the groups of an Attention view ----------------------------------------
 
-/** A group of rows whose pending proposals share an agent and a choice. */
-export interface AgreeGroup {
-  agent: string;
-  disposition: string;
-  /** serve's label, joined when the kinds word it differently. */
-  label: string;
-  /** The choice goes to To apply (close, merge, archive, delete). */
-  outward: boolean;
-  ids: number[];
-  keys: string[];
+/**
+ * countWord is the word for a group button's {n} (serve's count_words, the
+ * rule serve's CountWord states): the ticked items when some of the group's
+ * total are ticked ("3"), otherwise the whole group ("it", "both", "all
+ * 27"). Ticking every item counts as the whole group.
+ */
+export function countWord(
+  total: number,
+  ticked: number,
+  words: CountWords,
+): string {
+  if (ticked > 0 && ticked < total)
+    return words.some.replaceAll('{n}', String(ticked));
+  if (total === 1) return words.one;
+  if (total === 2) return words.two;
+  return words.all.replaceAll('{n}', String(total));
 }
 
 /**
- * agreeGroups groups the rows shown whose pending proposals come from the
- * same agent and recommend the same choice, two or more to a group, in the
- * order each group first appears. "agree with all" accepts exactly a
- * group's ids.
+ * groupButtons is a group's three buttons in serve's words, for the whole
+ * group (ticked 0) or the ticked items of it: its choice for several items
+ * ("Close all 27", "Close 3"), look into them, and discard their
+ * recommendations.
  */
-export function agreeGroups(
-  vocab: DecisionVocabView,
-  items: Recommendable[],
-): AgreeGroup[] {
-  const groups = new Map<
-    string,
-    { agent: string; d: string; rows: Recommendable[] }
-  >();
-  for (const it of items) {
-    const p = it.proposal;
-    if (!p || p.state !== 'pending') continue;
-    const agent = agentFromSource(p.source);
-    const d = p.disposition === 'watch' ? 'wait' : p.disposition;
-    const id = `${agent}\u0000${d}`;
-    const g = groups.get(id) ?? { agent, d, rows: [] };
-    g.rows.push(it);
-    groups.set(id, g);
-  }
-  const out: AgreeGroup[] = [];
-  for (const g of groups.values()) {
-    if (g.rows.length < 2) continue;
-    const keys = g.rows.map((r) => r.key);
-    const c = choicesForKeys(vocab, keys).find((x) => x.disposition === g.d);
-    out.push({
-      agent: g.agent,
-      disposition: g.d,
-      label: c?.label ?? g.d,
-      outward: c?.outward ?? false,
-      ids: g.rows.map((r) => r.proposal!.id),
-      keys,
-    });
-  }
-  return out;
-}
-
-/**
- * agreeText is a group's line in the list foot: what is recommended, and the
- * action ("agree with all 3"; an outward choice "send all 2 to To apply").
- */
-export function agreeText(g: AgreeGroup): { says: string; action: string } {
-  const n = g.ids.length;
+export function groupButtons(
+  g: GroupView,
+  ticked: number,
+  vocab: Pick<DecisionVocabView, 'look_many' | 'discard_many' | 'count_words'>,
+): { act: string; look: string; discard: string } {
+  const n = countWord(g.total, ticked, vocab.count_words);
+  const fill = (s: string): string => s.replaceAll('{n}', n);
   return {
-    says: `${g.agent} recommends ${g.label} for ${n}`,
-    action: g.outward ? `send all ${n} to To apply` : `agree with all ${n}`,
+    act: fill(g.many || g.label),
+    look: fill(vocab.look_many),
+    discard: fill(vocab.discard_many),
   };
 }
 
@@ -365,42 +340,25 @@ export function lookIntoCard(
 }
 
 /**
- * lookIntoAll is the list foot's "ask ‹session› to look into all N" for a
- * group's keys: the action, and the one message (serve's message_many)
- * naming them all, joined with ", " as serve joins them.
+ * discardConfirm is the confirm Discard opens for n recommendations in
+ * view, in serve's words: discarding withdraws them, with no judgement;
+ * the items go back to the agent.
  */
-export function lookIntoAll(
-  words: LookIntoVocab,
-  session: string,
-  keys: string[],
-): { action: string; message: string } {
-  return {
-    action: `ask ${session} to look into all ${keys.length}`,
-    message: words.message_many.replaceAll('{keys}', keys.join(', ')),
-  };
-}
-
-/** recommendedLine is the line at the top of Attention. */
-export function recommendedLine(recommended: number, notYet: number): string {
-  return `${recommended} recommended \u00b7 ${notYet} not yet`;
-}
-
-/**
- * clearRecs is "clear recommendations" in words: the recommended line's
- * action for the view's n agent recommendations, a foot group's ("clear
- * these n"), and the confirm both open. Clearing withdraws them: no
- * judgement, the items go back to the agent.
- */
-export function clearRecs(
+export function discardConfirm(
+  vocab: Pick<
+    DecisionVocabView,
+    'discard_confirm' | 'discard_one' | 'discard_some'
+  >,
   n: number,
   view: string,
-): { action: string; these: string; confirm: string } {
-  const recs = pluralize(n, 'recommendation');
-  return {
-    action: `clear ${recs}`,
-    these: `clear these ${n}`,
-    confirm: `Clear ${recs} in ${view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.`,
-  };
+): string {
+  const count =
+    n === 1
+      ? vocab.discard_one
+      : vocab.discard_some.replaceAll('{n}', String(n));
+  return vocab.discard_confirm
+    .replaceAll('{count}', count)
+    .replaceAll('{view}', view);
 }
 
 // The kinds each Not now form that names something searches and accepts.
@@ -515,7 +473,62 @@ export function leftOpenMeta(
   return `left open \u00b7 ${d.toLocaleDateString('en-US', opts)}`;
 }
 
-/** leftOpenLabel is the left-open group's divider: "left open · 3". */
-export function leftOpenLabel(n: number): string {
-  return `left open \u00b7 ${n}`;
+// ---- « ‹ › »: the open item's place in the list ----------------------------
+
+/** NavTargets is where the open item's « ‹ › » buttons go (pos 0: the item
+ * is not in the list's rows). */
+export interface NavTargets {
+  prev?: string;
+  next?: string;
+  prevGroup?: string;
+  nextGroup?: string;
+  pos: number;
+  total: number;
+  label: string;
+}
+
+/**
+ * navTargets is key's place in the list: the items before and after it in
+ * order (the list's loaded rows in group order, a collapsed group's rows
+ * included), the first items of the groups before and after its own, its
+ * 1-based position in its group and the group's total and label (serve's,
+ * every page).
+ */
+export function navTargets(
+  order: { key: string; group: string }[],
+  groups: GroupView[],
+  key: string,
+): NavTargets {
+  const i = order.findIndex((r) => r.key === key);
+  if (i < 0) return { pos: 0, total: 0, label: '' };
+  const group = order[i].group;
+  // The first row of each group, in order.
+  const firsts: { group: string; at: number }[] = [];
+  order.forEach((r, j) => {
+    if (j === 0 || order[j - 1].group !== r.group)
+      firsts.push({ group: r.group, at: j });
+  });
+  const g = firsts.findIndex((f) => f.group === group && f.at <= i);
+  const start = firsts[g].at;
+  const gv = groups.find((x) => x.id === group);
+  const out: NavTargets = {
+    pos: i - start + 1,
+    total: gv?.total ?? order.filter((r) => r.group === group).length,
+    label: gv?.label ?? '',
+  };
+  if (i > 0) out.prev = order[i - 1].key;
+  if (i + 1 < order.length) out.next = order[i + 1].key;
+  if (g > 0) out.prevGroup = order[firsts[g - 1].at].key;
+  if (g + 1 < firsts.length) out.nextGroup = order[firsts[g + 1].at].key;
+  return out;
+}
+
+/**
+ * shortKey is a key as a nav button's tooltip names it: without its kind
+ * and owner. "pr:o/nfl-dk#467" → "nfl-dk#467".
+ */
+export function shortKey(key: string): string {
+  const k = keyWithoutKind(key);
+  const i = k.indexOf('/');
+  return i >= 0 ? k.slice(i + 1) : k;
 }

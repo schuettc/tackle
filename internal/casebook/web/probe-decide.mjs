@@ -20,11 +20,10 @@
 //     even in the same second; u after a re-decide puts the previous back,
 //     and is refused too when the item changed since
 //   a live decide elsewhere doesn't skip the item after it
-//   the multi-select sheet asks with the same cards: "Close it · 2 issues"
 //
 // And move-on past the first page, on a serve and repo of their own: with
 // more than a page of items, deciding one on page two opens the next one on
-// page two.
+// page two; › on page one's last row loads page two and opens its first.
 //
 // And the closing comment and the GitHub link (casebook 0.4.1), on a serve
 // and repo of their own:
@@ -42,7 +41,8 @@
 // of their own:
 //
 //   deciding Leave it open moves the row into the left-open group at the
-//     bottom ("left open · N", rows muted, "left open · date"); the view's
+//     bottom (its header "left open", N; collapsed until clicked; rows
+//     muted, "left open · date"); the view's
 //     count drops; move-on opens the next undecided item, never a
 //     left-open row
 //   opening a left-open row shows its decision (the chosen card) and the
@@ -51,14 +51,21 @@
 //     it back up to the top, flagged "new activity since you left it
 //     open", counted again; Court's own newer comment doesn't
 //
-// And recommendations in the list (Task 4), on a serve and repo of their own:
+// And the groups (the grouped list), on a serve and repo of their own:
 //
-//   recommended items first; each row reads "pi recommends ‹label›"
-//   "n recommended · m not yet" with serve's counts
-//   "ask ‹session› to recommend the rest": only with a session attached, and
-//     its message reaches that session's thread and no other's
-//   "agree with all 3" accepts exactly those three; the next item opens
-//   an outward group: "send all 2 to To apply"; To apply lists them; no job
+//   groups: headers in serve's order, with counts; each group's rows under
+//     its header, giving the recommendation's reason in agent colour
+//   each group's buttons: its choice (the primary), Discard; Look into with
+//     a session attached; the not recommended only "Ask ‹session› to
+//     recommend N"
+//   summary pinned: its bottom edge is the sidebar's
+//   the group's checkbox ticks all of it; untick; collapse and expand
+//   groups: ticks scope per group: 3 ticked in Close and Merge's one give
+//     "Close 3" and "Merge it", each accepting exactly its own
+//   groups: emptied group goes after its accept, from the live event
+//   groups: none group asks: the message reaches the attached session only
+//
+// And a group bigger than a page: "Close all 250" posts all 250 ids.
 //
 // And a new recommendation on the open item (casebook 0.4.5), on a serve
 // and repo of their own:
@@ -67,16 +74,16 @@
 //     reason) and the "recommended" mark show, with no reload
 //   a proposal for another item leaves the open item as it was
 //   with the closing comment typed, or the Not now picker open, the open
-//     item isn't re-rendered under Court: "pi recommends ‹label› · show"
+//     item isn't re-rendered under Court: "openrec recommends ‹label› · show"
 //     shows instead, and "show" re-renders it
-//   the card's head and the board's cards say "recommends", as the list's
-//     rows do: "pi recommends · Close it without merging"
+//   the card's head names the session ("openrec recommends"), then the
+//     choice: "Close it without merging"
 //
 // And "Look into it" (casebook 0.4.5; a card since 0.4.6), on a serve and
 // repo of their own:
 //
-//   with no session attached there is no Look into it card, and no "look
-//     into all N" in the list foot
+//   with no session attached there is no Look into it card, and no "Look
+//     into all N" on its group
 //   with one, the card is the last in the grid, numbered after the
 //     decisions (6 on a PR, 5 on an issue), the same size as its
 //     neighbours, with the agent's amber left edge and number line
@@ -88,20 +95,52 @@
 //     be clicked
 //   the agent's evidence and recommendation show on the open item with no
 //     reload; its reply clears the marker
-//   "ask ‹session› to look into all 3" sends one message naming the
-//     group's 3 keys, all attached, and all three rows show the marker
+//   the group's "Look into all 3" sends one message naming the group's 3
+//     keys, all attached, and all three rows show the marker
 //
-// And clearing recommendations (casebook 0.4.8), on a serve and repo of
-// their own, every item recommended:
+// And discarding recommendations, on a serve and repo of their own, every
+// item recommended:
 //
-//   the line offers "clear 5 recommendations" (the view's count, serve's)
-//     and no "ask … to recommend the rest" (nothing is left)
-//   clicking it opens a confirm, "Clear 5 recommendations in waiting on
-//     you? …", with clear and cancel; cancel changes nothing
-//   clear: the rows lose their "recommends" lines, the line reads "0
-//     recommended", the ask offer appears, and casebook_next hands the
-//     items out again; nothing is decided
-//   "clear these 2" on a foot group clears exactly that group's
+//   the summary: "5 items, all recommended by ‹session›" and "discard all
+//     5"; its confirm, "Discard 5 recommendations in waiting on you? …",
+//     with discard and cancel; cancel changes nothing
+//   discard: the rows lose their reasons, one group is left (the not
+//     recommended), nothing is decided, and casebook_next hands the items
+//     out again
+//   groups: discard confirm: a group's Discard withdraws only that group
+//
+// And the steady list, on a serve and repo of their own:
+//
+//   no filter chips; the left-open group last, collapsed, no checkbox,
+//     expanding on a click; Look into on every group (left open's naming
+//     every left-open key) once a session is attached after load, nothing
+//     ticked; rows indented under their header's label; every row one
+//     height, a long reason cut at two lines; the list's scrollbar room
+//     kept (measured with a classic 15px scrollbar); a group's button line
+//     one height, ticked or not
+//
+// And the item page and its navigation, on a serve and repos of their own:
+//
+//   the list 520px wide, with a classic 15px scrollbar; every row fits its
+//     height (a long repo name's kicker is one line); every group's button
+//     line is one line at 520px, ticked or not; a collapsed group is one line, its hint and
+//     buttons hidden
+//   the « ‹ › » row: the item's place in its group; « and ‹ disabled on
+//     the first item; each tooltip names its target; ] into a collapsed
+//     group expands it and opens its first item; [, › and ‹; the row stays
+//     at the top while the item scrolls
+//   the recommendation box above the description ("‹session› recommends",
+//     the choice, two lines of the reason, the buttons and the key hint on
+//     one row), an empty one where there is none; the cards
+//     in one row, one height; nothing above the cards moves between items
+//   the list collapses to a 34px rail, kept across a reload; the item page
+//     is then 1060px wide
+//
+// And a reload with pages loaded, on a serve and repo of their own:
+//
+//   reload keeps 600 rows: three pages shown, opening the 550th row's item
+//     and a live event reload the list with every page it had, the open
+//     row and its « ‹ › » row still on screen
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -162,6 +201,22 @@ async function setTheme(pg, theme) {
     if (th === theme) return;
     await pg.click('button.kit-ctl:has-text("theme")');
   }
+}
+
+// classicScrollbar gives the list a classic 15px scrollbar, as CI's
+// macOS runner and any Mac set to always show scrollbars draw it (this
+// one's overlay scrollbars take no room), and returns the room it takes
+// in the list.
+async function classicScrollbar(pg) {
+  await pg.addStyleTag({
+    content:
+      '.kit-rows::-webkit-scrollbar { width: 15px }' +
+      ' .kit-rows::-webkit-scrollbar-thumb { background: #999 }',
+  });
+  return pg.evaluate((list) => {
+    const r = document.querySelector(`${list} .kit-rows`);
+    return r ? r.offsetWidth - r.clientWidth : -1;
+  }, LIST);
 }
 
 // inThemes shows the page in each theme, asserting the theme took (the
@@ -270,7 +325,8 @@ function opened(t, pg, key) {
 export async function decideScenarios(shared, t) {
   for (const [name, scenario, seeded] of [
     ['the decide step', decideScenario, seed()],
-    ['recommendations in the list', recommendScenario, recSeed()],
+    ['the groups', groupsScenario, groupsSeed()],
+    ['a group bigger than a page', manyScenario, manySeed()],
     ['move-on past the first page', pagesScenario, pagesSeed()],
     [
       'the closing comment and the GitHub link',
@@ -280,7 +336,10 @@ export async function decideScenarios(shared, t) {
     ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
     ['a new recommendation on the open item', openRecScenario, openRecSeed()],
     ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
-    ['clear recommendations', clearRecScenario, clearRecSeed()],
+    ['discard recommendations', discardScenario, discardSeed()],
+    ['the steady list', steadyScenario, steadySeed()],
+    ['the item page and its navigation', navScenario, navSeed()],
+    ['reload keeps 600 rows', reloadPagesScenario, reloadPagesSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -327,6 +386,13 @@ async function decideScenario(context, t, s) {
     [1, 2, 3, 4, 5, 6, 8, 9].map(ISSUE).concat([PR(7)]),
   );
 
+  // Issues #8 and #9 are decided before the walk (ticked items have no
+  // sheet of their own: they act through their group).
+  await api('POST', '/api/decide', {
+    keys: [ISSUE(8), ISSUE(9)],
+    disposition: 'close',
+  });
+
   // A recommendation for issue #1, with its reason.
   const sid = 'probe-rd-decide';
   await agent.presence(sid, 'pi \u00b7 rd', '/home/court/rd', 'pi');
@@ -351,72 +417,16 @@ async function decideScenario(context, t, s) {
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
 
-  // ---- the multi-select sheet: the same question, the same cards ----------
-  {
-    for (const k of [ISSUE(8), ISSUE(9)]) {
-      await row(pg, k).locator('.kit-box').click();
-    }
-    await until(
-      pg,
-      () => document.querySelector('.kit-primary')?.textContent === 'Decide 2',
-    );
-    await pg.click('.kit-primary');
-    await until(pg, () => !!document.querySelector('.kit-sheet .cb-choice'));
-    const sheet = await pg.evaluate(() => {
-      const sh = document.querySelector('.kit-sheet');
-      return {
-        question: sh?.querySelector('.cb-question')?.textContent ?? '',
-        labels: [...(sh?.querySelectorAll('.cb-choice') ?? [])].map(
-          (c) => c.querySelector('.cb-choice-label')?.textContent ?? '',
-        ),
-      };
-    });
-    const iv = kindVocab('issue');
-    check(
-      `the sheet for two issues asks serve's question ("${sheet.question}")`,
-      sheet.question === iv.question,
-    );
-    checkList(
-      "the sheet's cards are serve's choices for an issue",
-      sheet.labels,
-      iv.choices.map((c) => c.label),
-    );
-    await pg.click('.kit-sheet .cb-choice[data-d="close"]');
-    const fill = await pg
-      .locator('.kit-sheet .kit-btn.fill')
-      .textContent({ timeout: 3000 });
-    check(
-      `picking "Close it" makes the fill read "Close it · 2 issues" ("${fill}")`,
-      fill === 'Close it \u00b7 2 issues',
-    );
-    check(
-      'picking a card in the sheet decides nothing yet',
-      (await decisionOf(ISSUE(8))) === null,
-    );
-    await pg.click('.kit-sheet .kit-btn.fill');
-    check(
-      'the fill decides both issues close',
-      await eventually(
-        async () =>
-          (await decisionOf(ISSUE(8)))?.disposition === 'close' &&
-          (await decisionOf(ISSUE(9)))?.disposition === 'close',
-      ),
-    );
-    check(
-      'and the sheet closes',
-      await until(pg, () => !document.querySelector('.kit-sheet')),
-    );
-  }
   const sheetsBefore = await sheets();
 
-  // ---- the row's line names serve's label for the recommendation ----------
+  // ---- the row's line gives the recommendation's reason -------------------
   {
     const sub = await row(pg, ISSUE(1))
       .locator('.kit-sub')
       .textContent({ timeout: 5000 });
     check(
-      `issue #1's row reads "pi recommends Close it" ("${sub}")`,
-      sub === 'pi recommends Close it',
+      `issue #1's row gives the recommendation's reason ("${sub}")`,
+      sub === REASON,
     );
   }
 
@@ -445,7 +455,8 @@ async function decideScenario(context, t, s) {
       col.cards.filter((c) => c.rec).length === 1,
   );
   {
-    // Geometry: question, then the recommendation, then a two-column grid.
+    // Geometry: the recommendation above the description, both above the
+    // question; then the cards, one row of equal widths.
     const g = await pg.evaluate(() => {
       const r = (sel) =>
         document
@@ -461,20 +472,27 @@ async function decideScenario(context, t, s) {
       });
       const q = r('.cb-question');
       const rec = r('.cb-proposal-card');
-      return { q, rec, cards, vh: innerHeight };
+      const body = r('.cb-lead .cb-body');
+      return { q, rec, body, cards, vh: innerHeight };
     });
-    const [c1, c2, c3] = g.cards;
+    const [c1] = g.cards;
     check(
-      'the question is above the recommendation card, which is above the cards',
-      g.q.bottom <= g.rec.top && g.rec.bottom <= c1.top,
+      'the recommendation card is above the description, which is above the question, which is above the cards',
+      g.rec.bottom <= g.body.top &&
+        Math.abs(g.rec.left - g.body.left) < 1 &&
+        Math.abs(g.rec.width - g.body.width) < 1 &&
+        g.body.bottom <= g.q.top &&
+        g.q.bottom <= c1.top,
     );
     check(
-      `the cards are a two-column grid (1 and 2 side by side, 3 below; widths ${c1.w}, ${c2.w})`,
-      Math.abs(c1.top - c2.top) < 1 &&
-        c2.left > c1.left + c1.w - 1 &&
-        c3.top >= c1.bottom &&
-        Math.abs(c3.left - c1.left) < 1 &&
-        Math.abs(c1.w - c2.w) < 1,
+      `the cards are one row of equal widths (tops ${[...new Set(g.cards.map((c) => Math.round(c.top)))].join(', ')}; widths ${[...new Set(g.cards.map((c) => Math.round(c.w)))].join(', ')})`,
+      g.cards.length > 1 &&
+        g.cards.every(
+          (c, i) =>
+            Math.abs(c.top - c1.top) < 1 &&
+            Math.abs(c.w - c1.w) < 1 &&
+            (i === 0 || c.left > g.cards[i - 1].left + c1.w - 1),
+        ),
     );
     check(
       `the cards are on screen at 1600×900 (last card bottom ${Math.round(g.cards.at(-1).bottom)})`,
@@ -602,7 +620,7 @@ async function decideScenario(context, t, s) {
   );
   check('and issue #3 opens next', await opened(t, pg, ISSUE(3)));
   check(
-    `no sheet opened for one item (sheets opened since the bulk one: ${(await sheets()) - sheetsBefore})`,
+    `no sheet opened for one item (sheets opened: ${(await sheets()) - sheetsBefore})`,
     (await sheets()) === sheetsBefore,
   );
 
@@ -1024,13 +1042,572 @@ async function decideScenario(context, t, s) {
 
 // ---- recommendations in the list ---------------------------------------------
 
-// ---- clear recommendations ---------------------------------------------------
+// ---- the groups -----------------------------------------------------------------
+
+const LIST = '.kit-app > .kit-list:not([hidden])';
+const RECOMMEND_THE_REST =
+  'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
+
+// groupHeads reads the shown list's group headers: label, the "goes to To
+// apply first" hint, count, and the texts of its button line (buttons,
+// untick).
+function groupHeads(pg) {
+  return pg.evaluate(
+    (list) =>
+      [...document.querySelectorAll(`${list} .cb-group`)].map((g) => ({
+        id: g.getAttribute('data-group') ?? '',
+        d: g.getAttribute('data-d') ?? '',
+        label: g.querySelector('.cb-group-label')?.textContent ?? '',
+        where: g.querySelector('.cb-group-where')?.textContent ?? '',
+        n: g.querySelector('.cb-group-n')?.textContent ?? '',
+        box: g.querySelector('.cb-group-box')?.getAttribute('aria-checked'),
+        acts: [...(g.querySelector('.cb-group-acts')?.children ?? [])].map(
+          (c) => c.textContent ?? '',
+        ),
+      })),
+    LIST,
+  );
+}
+
+// headLine is a header as one line: "label | hint | count".
+const headLine = (g) => `${g.label} | ${g.where} | ${g.n}`;
+
+// listSequence is the shown list top to bottom: "H:label" for a header,
+// the key for a row.
+function listSequence(pg, keys) {
+  return pg.evaluate(
+    ({ list, keys }) =>
+      [
+        ...document.querySelectorAll(
+          `${list} .kit-rows > .cb-group, ${list} .kit-rows > .kit-row`,
+        ),
+      ].map((e) => {
+        if (e.classList.contains('cb-group'))
+          return `H:${e.querySelector('.cb-group-label')?.textContent ?? ''}`;
+        const k = e.querySelector('.kit-kicker')?.textContent ?? '';
+        return keys.find((x) => x.replace(':', ' \u00b7 ') === k) ?? k;
+      }),
+    { list: LIST, keys },
+  );
+}
+
+// groupSel is the shown list's header for disposition d.
+const groupSel = (d) => `${LIST} .cb-group[data-d="${d}"]`;
+
+// acceptedIds waits for the page's next POST /proposals/accept and gives
+// its ids, sorted.
+function acceptedIds(pg) {
+  return pg
+    .waitForRequest(
+      (r) => r.method() === 'POST' && r.url().endsWith('/proposals/accept'),
+      { timeout: 10000 },
+    )
+    .then((r) => [...(r.postDataJSON()?.ids ?? [])].sort((a, b) => a - b))
+    .catch(() => null);
+}
+
+const GRP = 'rd-groups';
+const GISSUE = (n) => `issue:schuettc/${GRP}#${n}`;
+const GPR = (n) => `pr:schuettc/${GRP}#${n}`;
+
+function groupsSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${GRP}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${GRP}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [
+          [9, 'Bump the uploader dependency', 'renovate'],
+          [10, 'Bump the parser dependency', 'renovate'],
+          [11, 'Bump the linter', 'renovate'],
+          [12, 'Bump the formatter', 'renovate'],
+          [13, 'Fix the retry loop', 'bob'],
+        ].map(item),
+        issues: [
+          [1, 'How do I set the region?', 'alice'],
+          [2, 'Works on my machine', 'carol'],
+          [3, 'A second region', 'dave'],
+          [4, 'Flag docs', 'erin'],
+          [5, 'Tags question', 'frank'],
+          [6, 'Thanks for the tool', 'grace'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function groupsScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: the groups');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const decisionOf = async (key) =>
+    (await api('GET', `/api/item?key=${encodeURIComponent(key)}`)).item
+      .decision ?? null;
+  const CLOSE = [9, 10, 11, 12].map(GPR);
+  const KEEP = [2, 4, 6].map(GISSUE);
+  const NONE = [1, 3, 5].map(GISSUE);
+  const ALL = [...CLOSE, GPR(13), ...KEEP, ...NONE];
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !ALL.includes(k));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+
+  // Two sessions here, so the dock attaches to neither on its own.
+  const A = 'probe-groups-a';
+  const B = 'probe-groups-b';
+  // beat keeps both sessions present: serve here marks a session left
+  // after 3s without one, and a left session is no target for the ask.
+  const beat = async () => {
+    await agent.presence(A, 'pi \u00b7 groups-a', '/home/court/groups-a', 'pi');
+    await agent.presence(B, 'pi \u00b7 groups-b', '/home/court/groups-b', 'pi');
+  };
+  await beat();
+  // B already has a thread of its own: the ask must not land there.
+  const bThread = await agent.newThread(B, 'b work');
+  await agent.propose(A, CLOSE, 'close', 'superseded');
+  await agent.propose(A, KEEP, 'keep', 'active');
+  await agent.propose(A, [GPR(13)], 'merge', 'green and reviewed');
+  const idOf = {};
+  for (const it of (await api('GET', '/api/items?view=waiting&limit=500'))
+    .items ?? [])
+    if (it.proposal) idOf[it.key] = it.proposal.id;
+  const serveHeads = async () =>
+    ((await api('GET', '/api/items?view=waiting&limit=1')).groups ?? []).map(
+      (g) =>
+        `${g.label} | ${g.outward ? 'goes to To apply first' : ''} | ${g.total}`,
+    );
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+
+  // ---- groups: headers -----------------------------------------------------
+  {
+    const want = await serveHeads();
+    const ok = await until(
+      pg,
+      ({ list, n }) =>
+        document.querySelectorAll(`${list} .cb-group .cb-group-acts`).length ===
+          n && !!document.querySelector(`${list} .cb-group .kit-btn`),
+      { list: LIST, n: want.length },
+      8000,
+    );
+    const got = (await groupHeads(pg)).map(headLine);
+    checkList(
+      `groups: headers: in serve's order, with counts (ready ${ok})`,
+      got,
+      want,
+    );
+    checkList("and they are serve's groups for this seed", want, [
+      'Close it without merging | goes to To apply first | 4',
+      'Leave it open |  | 3',
+      'Merge it | goes to To apply first | 1',
+      'Not recommended yet |  | 3',
+    ]);
+    checkList(
+      "each group's rows follow its header",
+      await listSequence(pg, ALL),
+      [
+        'H:Close it without merging',
+        ...[...CLOSE].sort(), // serve's key order: #10 before #9
+        'H:Leave it open',
+        ...KEEP,
+        'H:Merge it',
+        GPR(13),
+        'H:Not recommended yet',
+        ...NONE,
+      ],
+    );
+    const vis = await pg.evaluate((list) => {
+      const gs = [...document.querySelectorAll(`${list} .cb-group`)];
+      const lr = document.querySelector(list).getBoundingClientRect();
+      return gs.map((g) => {
+        const r = g.getBoundingClientRect();
+        return (
+          g.checkVisibility() &&
+          getComputedStyle(g).position === 'sticky' &&
+          r.height > 0 &&
+          r.left >= lr.left - 1 &&
+          r.right <= lr.right + 1
+        );
+      });
+    }, LIST);
+    check(
+      `the headers show, sticky, inside the list column (${vis.join(', ')})`,
+      vis.length === 4 && vis.every(Boolean),
+    );
+  }
+  {
+    const agentC = await cssColor(pg, 'var(--kit-agent)');
+    const sub = await pg.evaluate(
+      ({ list, k }) => {
+        const r = [...document.querySelectorAll(`${list} .kit-row`)].find(
+          (x) => x.querySelector('.kit-kicker')?.textContent === k,
+        );
+        const el = r?.querySelector('.kit-sub');
+        return el
+          ? {
+              text: el.textContent ?? '',
+              color: getComputedStyle(el).color,
+              shown: el.checkVisibility(),
+            }
+          : null;
+      },
+      { list: LIST, k: kicker(GPR(9)) },
+    );
+    const none = await row(pg, GISSUE(1)).locator('.kit-sub').count();
+    check(
+      `a row in a group gives its reason in the agent's colour ("${sub?.text}", ${sub?.color}); a not recommended row has none`,
+      sub?.text === 'superseded' &&
+        sub.color === agentC &&
+        sub.shown &&
+        none === 0,
+    );
+  }
+  {
+    const heads = await groupHeads(pg);
+    checkList(
+      'with no session attached each group offers its choice and Discard, the not recommended nothing',
+      heads.map((g) => `${g.label}: ${g.acts.join(' / ')}`),
+      [
+        'Close it without merging: Close all 4 / Discard all 4',
+        'Leave it open: Leave all 3 open / Discard all 3',
+        'Merge it: Merge it / Discard it',
+        'Not recommended yet: ',
+      ],
+    );
+    const signal = await cssColor(pg, 'var(--kit-signal)');
+    const danger = await cssColor(pg, 'var(--kit-danger)');
+    const colors = await pg.evaluate(
+      (sel) => ({
+        act: getComputedStyle(document.querySelector(`${sel} .cb-group-act`))
+          .backgroundColor,
+        discard: getComputedStyle(
+          document.querySelector(`${sel} .cb-group-discard`),
+        ).color,
+      }),
+      groupSel('close'),
+    );
+    check(
+      `the choice is the primary (${colors.act}), Discard is not danger (${colors.discard})`,
+      colors.act === signal && colors.discard !== danger,
+    );
+  }
+
+  // ---- summary pinned ---------------------------------------------------------
+  {
+    const ok = await until(
+      pg,
+      (list) =>
+        document.querySelector(`${list} .cb-discard-all`)?.checkVisibility() ===
+        true,
+      LIST,
+    );
+    const got = await pg.evaluate((list) => {
+      const l = document.querySelector(list).getBoundingClientRect();
+      const foot = document.querySelector(`${list} .kit-foot`);
+      const f = foot.getBoundingClientRect();
+      const sum = document.querySelector(`${list} .cb-summary`);
+      return {
+        text: sum?.textContent ?? '',
+        discard: document.querySelector(`${list} .cb-discard-all`)?.textContent,
+        shown: !!sum?.checkVisibility() && foot.checkVisibility(),
+        footBottom: Math.round(f.bottom),
+        listBottom: Math.round(l.bottom),
+        inView: f.bottom <= window.innerHeight + 1 && f.height > 0,
+      };
+    }, LIST);
+    check(
+      `summary pinned: "${got.text}" with "${got.discard}", its bottom edge (${got.footBottom}) the sidebar's (${got.listBottom})`,
+      ok &&
+        got.text === '11 items, 8 recommended' &&
+        got.discard === 'discard all 8' &&
+        got.shown &&
+        got.inView &&
+        Math.abs(got.footBottom - got.listBottom) <= 1,
+    );
+  }
+
+  // ---- the group's checkbox ticks every item; untick ---------------------
+  await pg.click(`${groupSel('keep')} .cb-group-box`);
+  {
+    const ok = await until(
+      pg,
+      (sel) =>
+        document
+          .querySelector(`${sel} .cb-group-box`)
+          ?.getAttribute('aria-checked') === 'true',
+      groupSel('keep'),
+    );
+    const g = (await groupHeads(pg)).find((x) => x.d === 'keep');
+    check(
+      `the group's checkbox ticks all 3 (${g?.box}); its buttons stay the whole group's ("${g?.acts.join(' / ')}")`,
+      ok &&
+        g?.acts.join(' / ') === 'Leave all 3 open / Discard all 3 / untick' &&
+        (await pg.evaluate(
+          (list) => document.querySelectorAll(`${list} .kit-row.sel`).length,
+          LIST,
+        )) === 3,
+    );
+  }
+  await pg.click(`${groupSel('keep')} .cb-group-box`);
+  check(
+    'clicking it again unticks them',
+    await until(
+      pg,
+      (sel) =>
+        document
+          .querySelector(`${sel} .cb-group-box`)
+          ?.getAttribute('aria-checked') === 'false',
+      groupSel('keep'),
+    ),
+  );
+  await row(pg, GISSUE(2)).locator('.kit-box').click();
+  await until(
+    pg,
+    (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+    groupSel('keep'),
+  );
+  {
+    const g = (await groupHeads(pg)).find((x) => x.d === 'keep');
+    check(
+      `one ticked: "${g?.acts.join(' / ')}", the box partly ticked (${g?.box})`,
+      g?.acts.join(' / ') === 'Leave 1 open / Discard 1 / untick' &&
+        g?.box === 'mixed',
+    );
+  }
+  await pg.click(`${groupSel('keep')} .cb-group-untick`);
+  check(
+    'untick unticks it',
+    await until(
+      pg,
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+      LIST,
+    ),
+  );
+
+  // ---- collapse --------------------------------------------------------------
+  await pg.click(`${groupSel('keep')} .cb-group-caret`);
+  {
+    const ok = await until(
+      pg,
+      (sel) =>
+        document.querySelector(sel)?.classList.contains('collapsed') === true,
+      groupSel('keep'),
+    );
+    const seq = await listSequence(pg, ALL);
+    check(
+      `collapsing a group hides its rows and keeps its header (${seq.join(', ')})`,
+      ok &&
+        seq.includes('H:Leave it open') &&
+        KEEP.every((k) => !seq.includes(k)) &&
+        seq.indexOf('H:Leave it open') + 1 === seq.indexOf('H:Merge it'),
+    );
+  }
+  await pg.click(`${groupSel('keep')} .cb-group-label`);
+  check(
+    'clicking its label expands it again',
+    await until(
+      pg,
+      ({ list, k }) =>
+        [...document.querySelectorAll(`${list} .kit-row .kit-kicker`)].some(
+          (e) => e.textContent === k,
+        ),
+      { list: LIST, k: kicker(KEEP[0]) },
+    ),
+  );
+
+  // ---- groups: ticks scope per group ------------------------------------------
+  for (const k of [GPR(9), GPR(10), GPR(11), GPR(13)])
+    await row(pg, k).locator('.kit-box').click();
+  await until(
+    pg,
+    (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+    groupSel('close'),
+  );
+  {
+    const heads = await groupHeads(pg);
+    const close = heads.find((x) => x.d === 'close');
+    const merge = heads.find((x) => x.d === 'merge');
+    check(
+      `groups: ticks scope per group: Close reads "${close?.acts.join(' / ')}" (${close?.box}), Merge "${merge?.acts.join(' / ')}" (${merge?.box})`,
+      close?.acts.join(' / ') === 'Close 3 / Discard 3 / untick' &&
+        close.box === 'mixed' &&
+        merge?.acts.join(' / ') === 'Merge it / Discard it / untick' &&
+        merge.box === 'true',
+    );
+  }
+  {
+    const sent = acceptedIds(pg);
+    await pg.click(`${groupSel('close')} .cb-group-act`);
+    const ids = await sent;
+    const want = [GPR(9), GPR(10), GPR(11)]
+      .map((k) => idOf[k])
+      .sort((a, b) => a - b);
+    check(
+      `Close 3 accepts exactly the 3 ticked (${JSON.stringify(ids)}, want ${JSON.stringify(want)})`,
+      JSON.stringify(ids) === JSON.stringify(want),
+    );
+    check(
+      'and decides exactly those: PR #12 stays undecided',
+      await eventually(async () => {
+        const ds = await Promise.all(
+          [GPR(9), GPR(10), GPR(11), GPR(12)].map(decisionOf),
+        );
+        return (
+          ds.slice(0, 3).every((d) => d?.disposition === 'close') &&
+          ds[3] === null
+        );
+      }),
+    );
+  }
+  {
+    await until(
+      pg,
+      (sel) =>
+        document.querySelector(`${sel} .cb-group-n`)?.textContent === '1',
+      groupSel('close'),
+      8000,
+    );
+    const sent = acceptedIds(pg);
+    await pg.click(`${groupSel('merge')} .cb-group-act`);
+    const ids = await sent;
+    check(
+      `Merge it accepts exactly PR #13's (${JSON.stringify(ids)})`,
+      JSON.stringify(ids) === JSON.stringify([idOf[GPR(13)]]),
+    );
+  }
+
+  // ---- groups: emptied group goes ---------------------------------------------
+  {
+    const ok = await until(
+      pg,
+      (list) =>
+        !document.querySelector(`${list} .cb-group[data-d="merge"]`) &&
+        document.querySelectorAll(`${list} .cb-group`).length === 3,
+      LIST,
+      8000,
+    );
+    const got = (await groupHeads(pg)).map(headLine);
+    checkList(
+      `groups: emptied group goes: Merge's header is gone, Close counts 1 (${ok})`,
+      got,
+      await serveHeads(),
+    );
+    checkList('and serve agrees', got, [
+      'Leave it open |  | 3',
+      'Close it without merging | goes to To apply first | 1',
+      'Not recommended yet |  | 3',
+    ]);
+  }
+  {
+    const ds = await Promise.all([GPR(9), GPR(10), GPR(11)].map(decisionOf));
+    check(
+      `accepting the closes records no closing comment: the reason ("superseded") stays on the proposals (notes: ${ds.map((d) => JSON.stringify(d?.note ?? '')).join(', ')})`,
+      ds.every((d) => d?.disposition === 'close' && !d.note),
+    );
+    const jobs = await api('GET', '/api/jobs');
+    check(
+      `the outward groups only went to To apply: no job was started (${(jobs.jobs ?? []).length} jobs)`,
+      (jobs.jobs ?? []).length === 0,
+    );
+  }
+
+  // ---- groups: none group asks ------------------------------------------------
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  {
+    const ok = await until(
+      pg,
+      (sel) => !!document.querySelector(`${sel} .cb-group-ask`),
+      groupSel(''),
+    );
+    const heads = await groupHeads(pg);
+    checkList(
+      `with ${aName} attached, the not recommended offer the ask and the others Look into`,
+      heads.map((g) => `${g.label}: ${g.acts.join(' / ')}`),
+      [
+        'Leave it open: Leave all 3 open / Look into all 3 / Discard all 3',
+        'Close it without merging: Close it / Look into it / Discard it',
+        `Not recommended yet: Ask ${aName} to recommend all 3`,
+      ],
+    );
+    check('(the ask showed)', ok);
+  }
+  await inThemes(t, pg, 'groups', ['light']);
+  const bodiesOf = async (session) => {
+    const tv = await api(
+      'GET',
+      `/api/threads?session=${encodeURIComponent(session)}`,
+    );
+    const out = [];
+    for (const th of tv.threads ?? []) {
+      const mv = await agent.messages(th.id);
+      for (const m of mv.messages ?? []) out.push(m.body);
+    }
+    return out;
+  };
+  await beat();
+  await pg.click(`${groupSel('')} .cb-group-ask`);
+  check(
+    "groups: none group asks: the exact message reaches the attached session's thread, once",
+    await eventually(async () => {
+      const a = await bodiesOf(A);
+      return a.filter((b) => b === RECOMMEND_THE_REST).length === 1;
+    }),
+  );
+  {
+    const b = await bodiesOf(B);
+    const bt = (await agent.messages(bThread.id)).messages ?? [];
+    check(
+      `and nothing in any other session's thread (B has ${b.length} messages)`,
+      !b.includes(RECOMMEND_THE_REST) &&
+        bt.every((m) => m.body !== RECOMMEND_THE_REST),
+    );
+  }
+  check(
+    `the ask gives way to "asked ${aName}"`,
+    await until(
+      pg,
+      ({ sel, w }) =>
+        document.querySelector(`${sel} .cb-group-acts`)?.textContent === w,
+      { sel: groupSel(''), w: `asked ${aName}` },
+    ),
+  );
+  await pg.close();
+}
+
+// ---- discard recommendations --------------------------------------------------
 
 const CLR = 'rd-clear';
 const XISSUE = (n) => `issue:schuettc/${CLR}#${n}`;
 const XPR = (n) => `pr:schuettc/${CLR}#${n}`;
 
-function clearRecSeed() {
+function discardSeed() {
   const item = ([number, title, author], i) => ({
     repo: `schuettc/${CLR}`,
     number,
@@ -1060,19 +1637,18 @@ function clearRecSeed() {
   };
 }
 
-async function clearRecScenario(context, t, s) {
+async function discardScenario(context, t, s) {
   const { check, checkList, until, eventually } = t;
-  console.log('\nscenario: clear recommendations');
+  console.log('\nscenario: discard recommendations');
   const agent = createAgent(s.base, s.token);
   const api = (m, p, b) => agent.api(m, p, b);
-  const LIST = '.kit-app > .kit-list:not([hidden])';
   const ISSUES = [1, 2, 3].map(XISSUE);
   const PRS = [9, 10].map(XPR);
   const ALL = [...ISSUES, ...PRS];
 
   // Only this repo's issues and PRs need a decision: every other
   // undecided item (waiting, due, new; the repo itself too) stops being
-  // tracked, so the line's counts are theirs.
+  // tracked, so the summary's counts are theirs.
   for (const v of ['waiting', 'due', 'new']) {
     const l = await api('GET', `/api/items?view=${v}&limit=500`);
     const others = (l.items ?? [])
@@ -1090,13 +1666,6 @@ async function clearRecScenario(context, t, s) {
     await agent.propose(A, PRS, 'close', 'superseded');
   };
   await recommendAll();
-  {
-    const sv = await api('GET', '/api/summary');
-    check(
-      `every item needing a decision is recommended (${sv.recommended} recommended, ${sv.not_recommended} not yet)`,
-      sv.recommended === 5 && sv.not_recommended === 0,
-    );
-  }
 
   const pg = await context.newPage();
   await pg.goto(`${s.url}#/attention/waiting`, {
@@ -1113,7 +1682,7 @@ async function clearRecScenario(context, t, s) {
   );
   const aName = await pg.textContent('[data-testid="dock-session-name"]');
 
-  // subs is each row's "recommends" line ('' for none), by key.
+  // subs is each row's reason ('' for none), by key.
   const subs = () =>
     pg.evaluate(
       ({ list, keys }) => {
@@ -1127,17 +1696,15 @@ async function clearRecScenario(context, t, s) {
       },
       { list: LIST, keys: ALL },
     );
-  const line = () =>
+  const summary = () =>
     pg.evaluate((list) => {
-      const l = document.querySelector(`${list} .cb-rec-line`);
-      const shownText = (sel) => {
-        const b = l?.querySelector(sel);
-        return b && !b.hidden ? (b.textContent ?? '') : '';
-      };
+      const b = document.querySelector(`${list} .cb-discard-all`);
+      const who = document.querySelector(`${list} .cb-summary-who`);
       return {
-        counts: l?.querySelector('.cb-rec-counts')?.textContent ?? '',
-        clear: shownText('.cb-rec-clear'),
-        ask: shownText('.cb-rec-ask'),
+        text: document.querySelector(`${list} .cb-summary`)?.textContent ?? '',
+        who: who?.textContent ?? '',
+        whoColor: who ? getComputedStyle(who).color : '',
+        discard: b?.checkVisibility() ? (b.textContent ?? '') : '',
       };
     }, LIST);
   const pendingKeys = async () =>
@@ -1149,7 +1716,7 @@ async function clearRecScenario(context, t, s) {
       const sh = document.querySelector('.kit-sheet');
       return sh
         ? {
-            says: sh.querySelector('.cb-clear-says')?.textContent ?? '',
+            says: sh.querySelector('.cb-discard-says')?.textContent ?? '',
             btns: [...sh.querySelectorAll('.kit-btn')].map(
               (b) => b.textContent ?? '',
             ),
@@ -1157,37 +1724,37 @@ async function clearRecScenario(context, t, s) {
         : null;
     });
 
-  // ---- the line offers "clear 5 recommendations"; no ask offer -----------
+  // ---- the summary: one session recommended them all ---------------------
   {
     const ok = await until(
       pg,
-      (list) =>
-        document.querySelector(`${list} .cb-rec-clear`)?.checkVisibility() ===
-        true,
+      (list) => !!document.querySelector(`${list} .cb-summary-who`),
       LIST,
       8000,
     );
-    const got = await line();
+    const got = await summary();
+    const agentC = await cssColor(pg, 'var(--kit-agent)');
     check(
-      `the line reads "${got.counts}" and offers "${got.clear}", with no ask offer`,
+      `the summary reads "${got.text}", the session in the agent's colour (${got.whoColor}), with "${got.discard}"`,
       ok &&
-        got.counts === '5 recommended \u00b7 0 not yet' &&
-        got.clear === 'clear 5 recommendations' &&
-        got.ask === '',
+        got.text === `5 items, all recommended by ${aName}` &&
+        got.who === aName &&
+        got.whoColor === agentC &&
+        got.discard === 'discard all 5',
     );
   }
 
   // ---- cancel changes nothing ---------------------------------------------
   const CONFIRM5 =
-    'Clear 5 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
-  await pg.click(`${LIST} .cb-rec-clear`);
+    'Discard 5 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
+  await pg.click(`${LIST} .cb-discard-all`);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
   {
     const sh = await sheetText();
     check(
-      `clicking it opens a confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
+      `discard all opens a confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
       sh?.says === CONFIRM5 &&
-        JSON.stringify(sh.btns) === JSON.stringify(['clear', 'cancel']),
+        JSON.stringify(sh.btns) === JSON.stringify(['discard', 'cancel']),
     );
   }
   await pg.locator('.kit-sheet .kit-btn', { hasText: /^cancel$/ }).click();
@@ -1199,62 +1766,51 @@ async function clearRecScenario(context, t, s) {
   {
     const keys = await pendingKeys();
     const rs = await subs();
-    const got = await line();
+    const got = await summary();
     check(
-      `and changes nothing: ${keys.length} still recommended, every row says so, the line reads "${got.counts}"`,
+      `and changes nothing: ${keys.length} still recommended, every row gives its reason, the summary reads "${got.text}"`,
       keys.length === 5 &&
-        ALL.every((k) => (rs[k] ?? '').startsWith('pi recommends')) &&
-        got.counts === '5 recommended \u00b7 0 not yet' &&
-        got.clear === 'clear 5 recommendations',
+        ALL.every((k) => (rs[k] ?? '') !== '') &&
+        got.discard === 'discard all 5',
     );
   }
 
-  // ---- clear: the confirm, then every recommendation in the view goes ----
-  await pg.click(`${LIST} .cb-rec-clear`);
+  // ---- discard all: every recommendation in the view goes -----------------
+  await pg.click(`${LIST} .cb-discard-all`);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
-  // PROBE_SHOTS=/tmp/clear-rec writes /tmp/clear-rec-confirm.png.
+  // PROBE_SHOTS=/tmp/discard writes /tmp/discard-confirm.png.
   if (SHOTS) await pg.screenshot({ path: `${SHOTS}-confirm.png` });
-  await pg.locator('.kit-sheet .kit-btn', { hasText: /^clear$/ }).click();
+  await pg.locator('.kit-sheet .kit-btn', { hasText: /^discard$/ }).click();
   check(
-    'clear withdraws every recommendation in the view',
+    'discard withdraws every recommendation in the view',
     await eventually(async () => (await pendingKeys()).length === 0),
-  );
-  check(
-    'the rows lose their "recommends" lines',
-    await until(
-      pg,
-      ({ list, n }) => {
-        const rows = document.querySelectorAll(`${list} .kit-row`);
-        return (
-          rows.length === n &&
-          [...rows].every(
-            (r) =>
-              !(r.querySelector('.kit-sub')?.textContent ?? '').includes(
-                'recommends',
-              ),
-          )
-        );
-      },
-      { list: LIST, n: ALL.length },
-      8000,
-    ),
   );
   {
     const ok = await until(
       pg,
-      ({ list, w }) =>
-        document.querySelector(`${list} .cb-rec-counts`)?.textContent === w &&
-        document.querySelector(`${list} .cb-rec-ask`)?.checkVisibility() ===
-          true,
-      { list: LIST, w: '0 recommended \u00b7 5 not yet' },
+      ({ list, n }) => {
+        const rows = document.querySelectorAll(`${list} .kit-row`);
+        const gs = document.querySelectorAll(`${list} .cb-group`);
+        return (
+          rows.length === n &&
+          [...rows].every((r) => !r.querySelector('.kit-sub')) &&
+          gs.length === 1 &&
+          gs[0].getAttribute('data-group') === 'none'
+        );
+      },
+      { list: LIST, n: ALL.length },
       8000,
     );
-    const got = await line();
+    const heads = await groupHeads(pg);
+    const got = await summary();
     check(
-      `the line reads "${got.counts}", the clear offer goes ("${got.clear}") and "${got.ask}" appears`,
+      `the rows lose their reasons, one group is left ("${heads.map((g) => `${headLine(g)}: ${g.acts.join(' / ')}`).join('; ')}"), the summary reads "${got.text}" with no discard`,
       ok &&
-        got.clear === '' &&
-        got.ask === `ask ${aName} to recommend the rest`,
+        heads.length === 1 &&
+        headLine(heads[0]) === 'Not recommended yet |  | 5' &&
+        heads[0].acts.join(' / ') === `Ask ${aName} to recommend all 5` &&
+        got.text === '5 items, 0 recommended' &&
+        got.discard === '',
     );
   }
   {
@@ -1286,38 +1842,39 @@ async function clearRecScenario(context, t, s) {
     );
   }
 
-  // ---- clear these 2: exactly that foot group -----------------------------
+  // ---- groups: discard confirm: exactly that group ------------------------
   await recommendAll();
-  const CLOSE_CLEAR = `${LIST} .cb-agree-line[data-d="close"] .cb-agree-clear`;
+  const CLOSE_DISCARD = `${LIST} .cb-group[data-d="close"] .cb-group-discard`;
   {
     const ok = await until(
       pg,
       (sel) => document.querySelector(sel)?.checkVisibility() === true,
-      CLOSE_CLEAR,
+      CLOSE_DISCARD,
       8000,
     );
-    const txt = ok ? await pg.textContent(CLOSE_CLEAR) : '';
+    const txt = ok ? await pg.textContent(CLOSE_DISCARD) : '';
     check(
-      `each foot group offers "clear these N" ("${txt}")`,
-      txt === 'clear these 2' &&
+      `each group offers Discard for itself ("${txt}")`,
+      txt === 'Discard both' &&
         (await pg.textContent(
-          `${LIST} .cb-agree-line[data-d="keep"] .cb-agree-clear`,
-        )) === 'clear these 3',
+          `${LIST} .cb-group[data-d="keep"] .cb-group-discard`,
+        )) === 'Discard all 3',
     );
   }
-  await pg.click(CLOSE_CLEAR);
+  await pg.click(CLOSE_DISCARD);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
   {
     const sh = await sheetText();
     check(
-      `it confirms too: "${sh?.says}"`,
+      `groups: discard confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
       sh?.says ===
-        'Clear 2 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+        'Discard 2 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.' &&
+        JSON.stringify(sh.btns) === JSON.stringify(['discard', 'cancel']),
     );
   }
-  await pg.locator('.kit-sheet .kit-btn', { hasText: /^clear$/ }).click();
+  await pg.locator('.kit-sheet .kit-btn', { hasText: /^discard$/ }).click();
   check(
-    'clear these 2 withdraws only that group: the issues stay recommended',
+    'it withdraws only that group: the issues stay recommended',
     await eventually(
       async () =>
         JSON.stringify(await pendingKeys()) === JSON.stringify([...ISSUES]),
@@ -1326,447 +1883,274 @@ async function clearRecScenario(context, t, s) {
   {
     const ok = await until(
       pg,
-      ({ list, w }) =>
-        document.querySelector(`${list} .cb-rec-counts`)?.textContent === w,
-      { list: LIST, w: '3 recommended \u00b7 2 not yet' },
+      (list) => !document.querySelector(`${list} .cb-group[data-d="close"]`),
+      LIST,
       8000,
     );
     const rs = await subs();
-    const got = await line();
+    const heads = (await groupHeads(pg)).map(headLine);
     check(
-      `the PR rows lose their line, the issues keep theirs; the line reads "${got.counts}" and offers "${got.clear}"`,
+      `the PR rows lose their reason, the issues keep theirs; the groups read ${JSON.stringify(heads)}`,
       ok &&
         PRS.every((k) => rs[k] === '') &&
-        ISSUES.every((k) => rs[k] === 'pi recommends Leave it open') &&
-        got.clear === 'clear 3 recommendations',
+        ISSUES.every((k) => rs[k] === 'active') &&
+        JSON.stringify(heads) ===
+          JSON.stringify([
+            'Leave it open |  | 3',
+            'Not recommended yet |  | 2',
+          ]),
     );
   }
   await pg.close();
 }
 
-const REC = 'rd-rec';
-const RISSUE = (n) => `issue:schuettc/${REC}#${n}`;
-const RPR = (n) => `pr:schuettc/${REC}#${n}`;
-const RECOMMEND_THE_REST =
-  'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
+// ---- close all acts on every page -------------------------------------------
 
-function recSeed() {
-  const item = ([number, title, author], i) => ({
-    repo: `schuettc/${REC}`,
-    number,
-    title,
-    author,
-    state: 'OPEN',
-    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
-    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
-  });
+const MANY = 'rd-many';
+const MANY_N = 250;
+
+function manySeed() {
+  const issues = [];
+  for (let n = 1; n <= MANY_N; n++) {
+    const at = `2026-09-01T0${Math.floor(n / 60) % 10}:${String(n % 60).padStart(2, '0')}:00Z`;
+    issues.push({
+      repo: `schuettc/${MANY}`,
+      number: n,
+      title: `Stale question ${n}`,
+      author: 'alice',
+      state: 'OPEN',
+      created_at: at,
+      updated_at: at,
+    });
+  }
   return {
     seedRepos: [
       {
-        repo: `schuettc/${REC}`,
+        repo: `schuettc/${MANY}`,
         pushed_at: '2026-09-20T00:00:00Z',
         default_branch: 'main',
-        prs: [
-          [9, 'Bump the uploader dependency', 'renovate'],
-          [10, 'Bump the parser dependency', 'renovate'],
-        ].map(item),
-        issues: [
-          [1, 'How do I set the region?', 'alice'],
-          [2, 'Works on my machine', 'carol'],
-          [3, 'A second region', 'dave'],
-          [4, 'Flag docs', 'erin'],
-          [5, 'Tags question', 'frank'],
-          [6, 'Thanks for the tool', 'grace'],
-        ].map(item),
+        prs: [],
+        issues,
       },
     ],
   };
 }
 
-async function recommendScenario(context, t, s) {
-  const { check, checkList, until, eventually } = t;
-  console.log('\nscenario: recommendations in the list');
+async function manyScenario(context, t, s) {
+  const { check, until, eventually } = t;
+  console.log('\nscenario: a group bigger than a page');
   const agent = createAgent(s.base, s.token);
   const api = (m, p, b) => agent.api(m, p, b);
-  const decisionOf = async (key) =>
-    (await api('GET', `/api/item?key=${encodeURIComponent(key)}`)).item
-      .decision ?? null;
-
-  // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
-    .map((it) => it.key)
-    .filter((k) => !k.includes(`/${REC}`));
-  if (others.length)
-    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
-
-  // Two sessions here, so the dock attaches to neither on its own.
-  const A = 'probe-rec-a';
-  const B = 'probe-rec-b';
-  await agent.presence(A, 'pi \u00b7 rec-a', '/home/court/rec-a', 'pi');
-  await agent.presence(B, 'pi \u00b7 rec-b', '/home/court/rec-b', 'pi');
-  // B already has a thread of its own: the ask must not land there.
-  const bThread = await agent.newThread(B, 'b work');
-  // pi recommends leaving three issues open and closing both bot PRs.
-  await agent.propose(A, [RISSUE(2), RISSUE(4), RISSUE(6)], 'keep', 'active');
-  await agent.propose(A, [RPR(9), RPR(10)], 'close', 'superseded');
+  const A = 'probe-many-a';
+  await agent.presence(A, 'pi \u00b7 many', '/home/court/many', 'pi');
+  const keys = [];
+  for (let n = 1; n <= MANY_N; n++) keys.push(`issue:schuettc/${MANY}#${n}`);
+  await agent.propose(A, keys, 'close', 'stale');
+  const listed = await api('GET', '/api/items?view=proposed&limit=500');
+  const ids = (listed.items ?? [])
+    .filter((it) => keys.includes(it.key))
+    .map((it) => it.proposal.id)
+    .sort((a, b) => a - b);
+  check(
+    `the proposed view holds the ${MANY_N} recommended closes (${ids.length})`,
+    ids.length === MANY_N,
+  );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/proposed`, {
     waitUntil: 'domcontentloaded',
   });
-  await pg.waitForSelector('.kit-row', { timeout: 8000 });
-  await setTheme(pg, 'light');
-
-  const kickers = () =>
-    pg.$$eval(
-      '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
-      (els) => els.map((e) => e.textContent ?? ''),
-    );
-  const recommended = [RISSUE(2), RISSUE(4), RISSUE(6), RPR(10), RPR(9)];
-  const notYet = [RISSUE(1), RISSUE(3), RISSUE(5)];
-  await until(
-    pg,
-    (want) =>
-      [
-        ...document.querySelectorAll(
-          '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
-        ),
-      ].length === want,
-    recommended.length + notYet.length,
-  );
-  checkList(
-    'the recommended items come first, each group in key order',
-    await kickers(),
-    [...recommended, ...notYet].map(kicker),
-  );
+  const HEAD = `${LIST} .cb-group[data-d="close"]`;
   {
-    const subs = {};
-    for (const k of [RISSUE(2), RPR(9), RISSUE(1)]) {
-      subs[k] =
-        (await row(pg, k).locator('.kit-sub').count()) > 0
-          ? await row(pg, k).locator('.kit-sub').textContent()
-          : '';
-    }
-    check(
-      `the rows name serve's label ("${subs[RISSUE(2)]}", "${subs[RPR(9)]}"), and an item with none has no line`,
-      subs[RISSUE(2)] === 'pi recommends Leave it open' &&
-        subs[RPR(9)] === 'pi recommends Close it without merging' &&
-        subs[RISSUE(1)] === '',
-    );
-  }
-
-  // ---- the line: serve's counts; no session attached, no offer -------------
-  const lineText = () =>
-    pg.evaluate(() => {
-      const l = document.querySelector(
-        '.kit-app > .kit-list:not([hidden]) .cb-rec-line',
-      );
-      return {
-        shown: !!l && !l.hidden,
-        counts: l?.querySelector('.cb-rec-counts')?.textContent ?? '',
-        ask: (() => {
-          const b = l?.querySelector('.cb-rec-ask');
-          return b && !b.hidden ? (b.textContent ?? '') : '';
-        })(),
-        note: l?.querySelector('.cb-rec-note')?.textContent ?? '',
-      };
-    });
-  const summaryLine = async () => {
-    const sv = await api('GET', '/api/summary');
-    return `${sv.recommended} recommended \u00b7 ${sv.not_recommended} not yet`;
-  };
-  {
-    const want = await summaryLine();
     const ok = await until(
       pg,
-      (w) =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .cb-rec-counts',
-        )?.textContent === w,
-      want,
+      (sel) => !!document.querySelector(`${sel} .cb-group-act`),
+      HEAD,
+      10000,
     );
-    const got = await lineText();
-    check(
-      `the line reads serve's counts ("${got.counts}", serve: "${want}")`,
-      ok && got.shown && want.startsWith('5 recommended'),
+    const got = await pg.evaluate(
+      ({ head, list }) => ({
+        n: document.querySelector(`${head} .cb-group-n`)?.textContent,
+        act: document.querySelector(`${head} .cb-group-act`)?.textContent,
+        rows: document.querySelectorAll(`${list} .kit-row`).length,
+      }),
+      { head: HEAD, list: LIST },
     );
-    const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
     check(
-      `with no session attached (dock: ${attach}) the offer is absent`,
-      attach === 'none' && got.ask === '',
+      `the group counts all ${MANY_N} ("${got.n}", "${got.act}") with ${got.rows} rows loaded`,
+      ok &&
+        got.n === String(MANY_N) &&
+        got.act === `Close all ${MANY_N}` &&
+        got.rows === 200,
     );
   }
-
-  // ---- the foot: agree with all ---------------------------------------------
-  const agreeLines = () =>
-    pg.$$eval(
-      '.kit-app > .kit-list:not([hidden]) .cb-agree:not([hidden]) .cb-agree-line',
-      (els) =>
-        els.map(
-          (e) =>
-            `${e.querySelector('.cb-agree-says')?.textContent} | ${e.querySelector('.cb-agree-btn')?.textContent}`,
-        ),
-    );
-  checkList(
-    'the foot offers agree with all per agreeing group',
-    await agreeLines(),
-    [
-      'pi recommends Leave it open for 3 | agree with all 3',
-      'pi recommends Close it without merging for 2 | send all 2 to To apply',
-    ],
+  await pg.click(`${HEAD} .cb-group-box`);
+  check(
+    `its checkbox ticks all ${MANY_N}, on every page`,
+    await until(
+      pg,
+      (head) =>
+        document
+          .querySelector(`${head} .cb-group-box`)
+          ?.getAttribute('aria-checked') === 'true',
+      HEAD,
+      8000,
+    ),
   );
   {
-    const agentC = await cssColor(pg, 'var(--kit-agent)');
-    const dangerC = await cssColor(pg, 'var(--kit-danger)');
-    const got = await pg.evaluate(() => {
-      const ls = document.querySelectorAll(
-        '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
-      );
-      return [...ls].map((l) => ({
-        says: getComputedStyle(l.querySelector('.cb-agree-says')).color,
-        btn: getComputedStyle(l.querySelector('.cb-agree-btn')).color,
-      }));
-    });
+    const sent = acceptedIds(pg);
+    await pg.click(`${HEAD} .cb-group-act`);
+    const got = await sent;
     check(
-      `what is recommended is the agent's colour, and no action is danger (${got.map((g) => `${g.says}/${g.btn}`).join(', ')})`,
-      got.length === 2 &&
-        got.every((g) => g.says === agentC && g.btn !== dangerC),
+      `groups: close all acts on every page: "Close all ${MANY_N}" posts ${got?.length} ids, exactly the group's`,
+      JSON.stringify(got) === JSON.stringify(ids),
     );
   }
+  // serve decides them one at a time: give it a while.
+  let left = -1;
+  check(
+    'and serve decides them all',
+    await eventually(async () => {
+      left = (await api('GET', '/api/items?view=proposed&limit=1')).total;
+      return left === 0;
+    }, 90000),
+  );
+  if (left !== 0) console.log(`    (${left} still recommended)`);
+  await pg.close();
+}
 
-  // ---- attach session A: the offer names it ---------------------------------
-  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+// ---- reload keeps the pages it had ---------------------------------------------
+
+const RLP = 'rd-reload-pages';
+const RLP_N = 650;
+
+function reloadPagesSeed() {
+  const issues = [];
+  for (let n = 1; n <= RLP_N + 1; n++) {
+    const at = `2026-09-01T0${Math.floor(n / 60) % 10}:${String(n % 60).padStart(2, '0')}:00Z`;
+    issues.push({
+      repo: `schuettc/${RLP}`,
+      number: n,
+      title: `Old question ${n}`,
+      author: 'alice',
+      state: 'OPEN',
+      created_at: at,
+      updated_at: at,
+    });
+  }
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${RLP}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues,
+      },
+    ],
+  };
+}
+
+async function reloadPagesScenario(context, t, s) {
+  const { check, until } = t;
+  console.log('\nscenario: reload keeps 600 rows');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const A = 'probe-reload-pages';
+  await agent.presence(A, 'pi \u00b7 pages', '/home/court/pages', 'pi');
+  const keys = [];
+  for (let n = 1; n <= RLP_N; n++) keys.push(`issue:schuettc/${RLP}#${n}`);
+  await agent.propose(A, keys, 'close', 'stale');
+  const total0 = (await api('GET', '/api/items?view=proposed&limit=1')).total;
+  check(
+    `the proposed view holds the ${RLP_N} recommended closes (${total0})`,
+    total0 === RLP_N,
+  );
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/proposed`, {
+    waitUntil: 'domcontentloaded',
+  });
+  const rowCount = () =>
+    pg.evaluate(
+      (list) => document.querySelectorAll(`${list} .kit-row`).length,
+      LIST,
+    );
   await until(
     pg,
-    () =>
-      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
-      'here',
+    (list) => document.querySelectorAll(`${list} .kit-row`).length === 200,
+    LIST,
+    10000,
   );
-  const aName = await pg.textContent('[data-testid="dock-session-name"]');
-  check(
-    `with ${aName} attached the line offers "ask ${aName} to recommend the rest"`,
-    !!aName &&
-      (await until(
-        pg,
-        (w) => {
-          const b = document.querySelector(
-            '.kit-app > .kit-list:not([hidden]) .cb-rec-ask',
-          );
-          return !!b && !b.hidden && b.textContent === w;
-        },
-        `ask ${aName} to recommend the rest`,
-      )),
-  );
-  await inThemes(t, pg, 'list', ['light']);
-
-  // ---- ask: the message reaches A's thread only -----------------------------
-  const bodiesOf = async (session) => {
-    const tv = await api(
-      'GET',
-      `/api/threads?session=${encodeURIComponent(session)}`,
-    );
-    const out = [];
-    for (const th of tv.threads ?? []) {
-      const mv = await agent.messages(th.id);
-      for (const m of mv.messages ?? []) out.push(m.body);
-    }
-    return out;
-  };
-  await pg.click('.kit-app > .kit-list:not([hidden]) .cb-rec-ask');
-  check(
-    "asking puts the exact message in the attached session's thread, once",
-    await eventually(async () => {
-      const a = await bodiesOf(A);
-      return a.filter((b) => b === RECOMMEND_THE_REST).length === 1;
-    }),
-  );
-  {
-    const b = await bodiesOf(B);
-    const bt = (await agent.messages(bThread.id)).messages ?? [];
-    check(
-      `and nothing in any other session's thread (B has ${b.length} messages)`,
-      !b.includes(RECOMMEND_THE_REST) &&
-        bt.every((m) => m.body !== RECOMMEND_THE_REST),
-    );
-  }
-  {
-    const got = await lineText();
-    check(
-      `the offer gives way to "${got.note}"`,
-      got.ask === '' && got.note === `asked ${aName}`,
-    );
-  }
-
-  // ---- agree with all 3: exactly those three; the next item opens ----------
-  await row(pg, RISSUE(2)).click();
-  await opened(t, pg, RISSUE(2));
-  await pg.click(
-    '.kit-app > .kit-list:not([hidden]) .cb-agree-line[data-d="keep"] .cb-agree-btn',
-  );
-  check(
-    'agree with all 3 decides exactly issues #2, #4 and #6 keep, from the recommendation',
-    await eventually(async () => {
-      const ds = await Promise.all(
-        [RISSUE(2), RISSUE(4), RISSUE(6)].map(decisionOf),
-      );
-      return ds.every(
-        (d) => d?.disposition === 'keep' && (d.proposed_by ?? '').includes(A),
-      );
-    }),
-  );
-  {
-    const rest = await Promise.all(
-      [RISSUE(1), RISSUE(3), RISSUE(5), RPR(9), RPR(10)].map(decisionOf),
-    );
-    const proposed = await api('GET', '/api/items?view=proposed&limit=500');
-    checkList(
-      'and nothing else: the rest are undecided, the PRs still recommended',
-      [
-        ...rest.map((d) => (d ? d.disposition : 'undecided')),
-        ...(proposed.items ?? []).map((it) => it.key).sort(),
-      ],
-      [
-        'undecided',
-        'undecided',
-        'undecided',
-        'undecided',
-        'undecided',
-        RPR(10),
-        RPR(9),
-      ],
-    );
-  }
-  check(
-    'and the next undecided item (pull request #10) opens',
-    await opened(t, pg, RPR(10)),
-  );
-  check(
-    "and the list's open row follows it",
+  for (const n of [400, 600]) {
+    await pg.click('.cb-foot-more');
     await until(
       pg,
-      (kick) =>
-        [
-          ...document.querySelectorAll(
-            '.kit-app > .kit-list:not([hidden]) .kit-row.open .kit-kicker',
-          ),
-        ].map((e) => e.textContent) +
-          '' ===
-        kick,
-      kicker(RPR(10)),
-    ),
-  );
-  checkList(
-    'the foot now offers only the outward group',
-    await (async () => {
-      await until(
-        pg,
-        () =>
-          document.querySelectorAll(
-            '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
-          ).length === 1,
-      );
-      return agreeLines();
-    })(),
-    ['pi recommends Close it without merging for 2 | send all 2 to To apply'],
-  );
-
-  // ---- an outward group goes to To apply, and runs nothing -----------------
-  await pg.click(
-    '.kit-app > .kit-list:not([hidden]) .cb-agree-line[data-d="close"] .cb-agree-btn',
-  );
-  check(
-    'send all 2 to To apply decides both pull requests close',
-    await eventually(async () => {
-      const ds = await Promise.all([RPR(9), RPR(10)].map(decisionOf));
-      return ds.every((d) => d?.disposition === 'close');
-    }),
-  );
-  check(
-    'and issue #1, the next undecided item, opens',
-    await opened(t, pg, RISSUE(1)),
-  );
-  {
-    const jobs = await api('GET', '/api/jobs');
-    check(
-      `no job was started (${(jobs.jobs ?? []).length} jobs)`,
-      (jobs.jobs ?? []).length === 0,
+      ({ list, n }) =>
+        document.querySelectorAll(`${list} .kit-row`).length === n,
+      { list: LIST, n },
+      10000,
     );
   }
-  {
-    const want = await summaryLine();
-    check(
-      `the line follows serve ("${want}")`,
-      want.startsWith('0 recommended') &&
-        (await until(
-          pg,
-          (w) =>
-            document.querySelector(
-              '.kit-app > .kit-list:not([hidden]) .cb-rec-counts',
-            )?.textContent === w,
-          want,
-        )),
-    );
-  }
-  await pg.goto(`${s.url}#/apply`, { waitUntil: 'domcontentloaded' });
-  await pg.click('.kit-chip[data-id="ready"]');
-  check(
-    "To apply's ready list holds both pull requests",
-    await until(
-      pg,
-      (want) => {
-        const ks = [
-          ...document.querySelectorAll('.cb-apply-list .kit-row'),
-        ].map((e) => e.dataset.key);
-        return want.every((k) => ks.includes(k));
-      },
-      [RPR(9), RPR(10)],
-      8000,
-    ),
+  check('three pages shown: 600 rows', (await rowCount()) === 600);
+  const target = await pg.evaluate(
+    (list) =>
+      document
+        .querySelectorAll(`${list} .kit-row`)[549]
+        ?.querySelector('.kit-kicker')?.textContent ?? '',
+    LIST,
+  );
+  const targetKey = target.replace(' \u00b7 ', ':');
+  await pg.locator(`${LIST} .kit-row`).nth(549).click();
+  check(`the 550th row, ${targetKey}, opens`, await opened(t, pg, targetKey));
+  // A live event: one more recommendation in the view.
+  await agent.propose(
+    A,
+    [`issue:schuettc/${RLP}#${RLP_N + 1}`],
+    'close',
+    'stale',
+  );
+  const heard = await until(
+    pg,
+    ({ list, n }) =>
+      document.querySelector(`${list} .cb-group[data-d="close"] .cb-group-n`)
+        ?.textContent === String(n),
+    { list: LIST, n: RLP_N + 1 },
+    10000,
+  );
+  await pg.waitForTimeout(400); // kept: a reload after the event has its window
+  const got = await pg.evaluate(
+    ({ list, read, kick }) => {
+      const box = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r ? { h: r.height, w: r.width } : { h: 0, w: 0 };
+      };
+      const open = document.querySelector(`${list} .kit-row.open`);
+      const nav = document.querySelector(`${read} .cb-nav`);
+      return {
+        rows: document.querySelectorAll(`${list} .kit-row`).length,
+        open: open?.querySelector('.kit-kicker')?.textContent ?? '',
+        isTarget: open?.querySelector('.kit-kicker')?.textContent === kick,
+        openBox: box(open),
+        pos: nav?.querySelector('.cb-nav-pos')?.textContent ?? '',
+        navBox: box(nav),
+      };
+    },
+    { list: LIST, read: READ, kick: target },
   );
   check(
-    'and still no job',
-    ((await api('GET', '/api/jobs')).jobs ?? []).length === 0,
+    `reload keeps 600 rows: after the open and a live event (heard: ${heard}) the list holds ${got.rows} rows`,
+    heard && got.rows === 600,
   );
-
-  // ---- the recommendation's reason is never the closing comment -----------
-  {
-    const ds = await Promise.all([RPR(9), RPR(10)].map(decisionOf));
-    check(
-      `agreeing with the closes records no note: the reason ("superseded") stays on the proposals (notes: ${ds.map((d) => JSON.stringify(d?.note ?? '')).join(', ')})`,
-      ds.every((d) => d?.disposition === 'close' && !d.note),
-    );
-    const plan = await api('POST', '/api/apply/plan', {
-      keys: [RPR(9), RPR(10)],
-    });
-    await pg.evaluate((j) => {
-      location.hash = `#/apply/${j}`;
-    }, plan.job?.id);
-    await until(
-      pg,
-      () => document.querySelectorAll('.cb-plan .cb-plan-step').length === 2,
-      undefined,
-      8000,
-    );
-    const shown = await pg.$$eval('.cb-plan .cb-plan-step', (els) =>
-      els.map(
-        (e) =>
-          `${e.dataset.key} :: ${e.querySelector('.cb-cmd')?.textContent ?? ''}`,
-      ),
-    );
-    checkList(
-      "To apply's steps for the agreed closes post no comment",
-      shown.sort(),
-      [9, 10]
-        .map((n) => `${RPR(n)} :: gh pr close ${n} -R 'schuettc/${REC}'`)
-        .sort(),
-    );
-    const steps = plan.job?.steps ?? [];
-    check(
-      `and serve's steps post nothing (${steps.map((st) => st.posts === true).join(', ')})`,
-      steps.length === 2 && steps.every((st) => !st.posts),
-    );
-  }
+  check(
+    `the open row is still in the list (${got.open}, ${got.openBox.w}x${got.openBox.h}px)`,
+    got.isTarget && got.openBox.h > 0 && got.openBox.w > 0,
+  );
+  check(
+    `and its nav row is laid out ("${got.pos}", ${got.navBox.w}x${got.navBox.h}px)`,
+    /^\d+ of \d+ in /.test(got.pos) && got.navBox.h > 0 && got.navBox.w > 0,
+  );
   await pg.close();
 }
 
@@ -1870,6 +2254,71 @@ async function pagesScenario(context, t, s) {
     )) && (await opened(t, pg, keys[207])),
   );
   await pg.close();
+
+  // ---- nav: past the loaded page ------------------------------------------
+  // The last row of page one: › points past the loaded rows, so the next
+  // page loads first and its first row opens, with its place in the group.
+  const fresh = (
+    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+  ).map((it) => it.key);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const pg2 = await context.newPage();
+  await pg2.goto(`${s.url}#/item/${encodeURIComponent(fresh[199])}`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await opened(t, pg2, fresh[199]);
+  await until(pg2, (read) => !!document.querySelector(`${read} .cb-nav`), READ);
+  const navNow = () =>
+    pg2.evaluate((read) => {
+      const n = document.querySelector(`${read} .cb-nav`);
+      const next = n?.querySelector('button[data-nav="next"]');
+      return {
+        pos: n?.querySelector('.cb-nav-pos')?.textContent ?? '',
+        tip: next?.title ?? '',
+        off: !!next?.disabled,
+      };
+    }, READ);
+  {
+    const n = await navNow();
+    check(
+      `nav: past the loaded page: the last row of page one reads "${n.pos}", › enabled (${!n.off}) and "${n.tip}"`,
+      n.pos === `200 of ${fresh.length} in Not recommended yet` &&
+        !n.off &&
+        n.tip === 'Next item: on the next page (j)',
+    );
+  }
+  await pg2.click(`${READ} .cb-nav button[data-nav="next"]`);
+  {
+    const ok = await opened(t, pg2, fresh[200]);
+    await until(
+      pg2,
+      (read) =>
+        document
+          .querySelector(`${read} .cb-nav .cb-nav-pos`)
+          ?.textContent?.startsWith('201 '),
+      READ,
+    );
+    const n = await navNow();
+    const rows = await pg2.evaluate(
+      () =>
+        document.querySelectorAll('.kit-app > .kit-list:not([hidden]) .kit-row')
+          .length,
+    );
+    const openRow = await pg2.evaluate(
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .kit-row.open .kit-kicker',
+        )?.textContent ?? '',
+    );
+    check(
+      `› loads page two and opens its first row, ${fresh[200]} (${ok}): "${n.pos}", the list holds ${rows} rows with it open (${openRow})`,
+      ok &&
+        n.pos === `201 of ${fresh.length} in Not recommended yet` &&
+        rows === fresh.length &&
+        openRow === kicker(fresh[200]),
+    );
+  }
+  await pg2.close();
 }
 
 // ---- the closing comment and the GitHub link ---------------------------------
@@ -2335,15 +2784,33 @@ async function lightLO(t, pg, name) {
   );
 }
 
+// LO_HEAD is the shown list's left-open group header.
+const LO_HEAD = `${LIST} .cb-group[data-group="left-open"]`;
+
+// loCounts waits for the left-open header to read "left open", count n.
+function loCounts(t, pg, n) {
+  return t.until(
+    pg,
+    ({ sel, n }) => {
+      const g = document.querySelector(sel);
+      return (
+        g?.querySelector('.cb-group-label')?.textContent === 'left open' &&
+        g.querySelector('.cb-group-n')?.textContent === n
+      );
+    },
+    { sel: LO_HEAD, n: String(n) },
+  );
+}
+
 // listState reads the shown list: each row's key (its kicker), whether it is
-// in the left-open group, its meta and sub; the group's divider (its text,
-// and how many rows come before it); and the waiting chip's count.
+// in the left-open group, its meta and sub; the group's header ("label ·
+// count", and how many rows come before it); and the waiting chip's count.
 function listState(pg) {
   return pg.evaluate(() => {
     const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
     const body = list?.querySelector('.kit-rows');
     const kids = [...(body?.children ?? [])];
-    const head = list?.querySelector('.cb-left-open-head');
+    const head = list?.querySelector('.cb-group[data-group="left-open"]');
     const chip = list?.querySelector('.kit-chip[data-id="waiting"] .kit-n');
     return {
       rows: kids
@@ -2359,7 +2826,9 @@ function listState(pg) {
           sub: el.querySelector('.kit-sub')?.textContent ?? '',
           color: getComputedStyle(el.querySelector('.kit-title')).color,
         })),
-      head: head?.textContent ?? '',
+      head: head
+        ? `${head.querySelector('.cb-group-label')?.textContent ?? ''} \u00b7 ${head.querySelector('.cb-group-n')?.textContent ?? ''}`
+        : '',
       headAt: head
         ? kids.filter(
             (el) =>
@@ -2409,7 +2878,7 @@ async function leftOpenScenario(context, t, s) {
       [1, 2, 3, 4, 5].map(LISSUE),
     );
     check(
-      `the waiting chip counts 5 (${st.count}), and there is no divider ("${st.head}")`,
+      `the waiting chip counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
       st.count === 5 && st.head === '',
     );
   }
@@ -2429,14 +2898,20 @@ async function leftOpenScenario(context, t, s) {
     await opened(t, pg, LISSUE(2)),
   );
   check(
-    'the list settles with the left-open divider',
-    await until(
-      pg,
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
-        )?.textContent === 'left open \u00b7 1',
-    ),
+    'the list settles with the left-open group, last',
+    await loCounts(t, pg, 1),
+  );
+  // It starts collapsed: a click on its caret shows its rows.
+  await pg.click(`${LO_HEAD} .cb-group-caret`);
+  await until(
+    pg,
+    (k) =>
+      [
+        ...document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-row.cb-left-open .kit-kicker',
+        ),
+      ].some((e) => e.textContent === k),
+    kicker(LISSUE(1)),
   );
   {
     const st = await listState(pg);
@@ -2450,7 +2925,7 @@ async function leftOpenScenario(context, t, s) {
       [2, 3, 4, 5].map(LISSUE).concat([`${LISSUE(1)} (left open)`]),
     );
     check(
-      `the divider "${st.head}" comes after the 4 items that need a decision (at ${st.headAt})`,
+      `the group's header "${st.head}" comes after the 4 items that need a decision (at ${st.headAt})`,
       st.head === 'left open \u00b7 1' && st.headAt === 4,
     );
     const lo = st.rows.find((r) => r.key === LISSUE(1));
@@ -2482,16 +2957,7 @@ async function leftOpenScenario(context, t, s) {
     'move-on after the last item opens the first undecided one (issue #2), not a left-open row',
     await opened(t, pg, LISSUE(2)),
   );
-  check(
-    'the group counts 2',
-    await until(
-      pg,
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .cb-left-open-head',
-        )?.textContent === 'left open \u00b7 2',
-    ),
-  );
+  check('the group counts 2', await loCounts(t, pg, 2));
 
   // Opening a left-open row shows its decision and the cards as usual.
   await row(pg, LISSUE(1)).click();
@@ -2782,9 +3248,8 @@ async function openRecScenario(context, t, s) {
         ].some(
           (r) =>
             r.querySelector('.kit-kicker')?.textContent === k &&
-            (r.querySelector('.kit-sub')?.textContent ?? '').includes(
-              'recommends',
-            ),
+            (r.querySelector('.kit-sub')?.textContent ?? '') ===
+              'still being discussed',
         ),
       kicker(OISSUE(2)),
       8000,
@@ -2801,7 +3266,7 @@ async function openRecScenario(context, t, s) {
         JSON.stringify(after) === JSON.stringify(before),
     );
     check(
-      'and no "pi recommends · show" line on it',
+      'and no "‹session› recommends · show" line on it',
       (await pg.locator(LINE).count()) === 0,
     );
   }
@@ -2829,7 +3294,7 @@ async function openRecScenario(context, t, s) {
     const line = ok ? ((await pg.textContent(LINE)) ?? '') : '';
     check(
       `with the closing comment typed, the line shows instead ("${line}")`,
-      ok && line === 'pi recommends Leave it open \u00b7 show',
+      ok && line === 'openrec recommends Leave it open \u00b7 show',
     );
     const st = await pg.evaluate((sel) => {
       const f = document.querySelector(sel);
@@ -2891,12 +3356,12 @@ async function openRecScenario(context, t, s) {
       ok &&
         picker &&
         (await tagged()) &&
-        line === 'pi recommends Close it \u00b7 show',
+        line === 'openrec recommends Close it \u00b7 show',
     );
   }
   check('still no reload', await noReload());
 
-  // ---- "recommends", as the list's rows say -------------------------------
+  // ---- "‹session› recommends", then the choice --------------------------
   {
     await row(pg, OPR(4)).click();
     await opened(t, pg, OPR(4));
@@ -2904,19 +3369,13 @@ async function openRecScenario(context, t, s) {
       .locator(`${READ} .cb-proposal-card .kit-card-head`)
       .textContent({ timeout: 8000 })
       .catch(() => '');
+    const label = await pg
+      .locator(`${READ} .cb-proposal-card .cb-proposal-label`)
+      .textContent({ timeout: 8000 })
+      .catch(() => '');
     check(
-      `the recommendation card's head reads "pi recommends · Close it without merging" ("${head}")`,
-      head === 'pi recommends \u00b7 Close it without merging',
-    );
-    await pg.evaluate(() => {
-      location.hash = '#/attention/board';
-    });
-    const sel = `.cb-board .kit-card[data-id="${OPR(4)}"] .cb-card-prop`;
-    const ok = await until(pg, (q) => !!document.querySelector(q), sel, 8000);
-    const prop = ok ? ((await pg.textContent(sel)) ?? '') : '';
-    check(
-      `the board's card says "recommends" too ("${prop}")`,
-      prop === 'pi recommends close',
+      `the recommendation card's head names the session, "openrec recommends" ("${head}"), then "Close it without merging" ("${label}")`,
+      head === 'openrec recommends' && label === 'Close it without merging',
     );
   }
   await pg.close();
@@ -2973,7 +3432,9 @@ async function lookIntoScenario(context, t, s) {
   const api = (m, p, b) => agent.api(m, p, b);
   const READ = '.kit-app > .kit-read:not([hidden])';
   const CARD = `${READ} .cb-choices .cb-look-card`;
-  const LOOK_ALL = '.kit-app > .kit-list:not([hidden]) .cb-agree-look';
+  const GROUP_HEAD =
+    '.kit-app > .kit-list:not([hidden]) .cb-group[data-d="ignore"]';
+  const LOOK_ALL = `${GROUP_HEAD} .cb-group-look`;
   const MARK = `${READ} .cb-looking`;
   const KEY = KISSUE(1);
   const GROUP = [3, 4, 5].map(KISSUE);
@@ -2992,8 +3453,7 @@ async function lookIntoScenario(context, t, s) {
   await agent.presence(A, 'pi \u00b7 look-a', '/home/court/look-a', 'pi');
   await agent.presence(B, 'pi \u00b7 look-b', '/home/court/look-b', 'pi');
   const bThread = await agent.newThread(B, 'b work');
-  // A group the foot offers "agree with all 3" for: three items B
-  // recommends to stop tracking.
+  // A group of three: three items B recommends to stop tracking.
   await agent.propose(B, GROUP, 'ignore', 'spam');
 
   const pg = await context.newPage();
@@ -3007,12 +3467,9 @@ async function lookIntoScenario(context, t, s) {
   await row(pg, KEY).click();
   check('issue #1 opens', await opened(t, pg, KEY));
 
-  // ---- no session attached: no card, no "look into all" -------------------
+  // ---- no session attached: no card, no "Look into all 3" ----------------
   {
-    await until(
-      pg,
-      () => !!document.querySelector('.kit-list:not([hidden]) .cb-agree-line'),
-    );
+    await until(pg, (sel) => !!document.querySelector(sel), GROUP_HEAD);
     await pg.waitForTimeout(500); // kept: no card may appear; a window for it
     const attach = await pg.getAttribute('.cb-dock-header', 'data-attach');
     const cards = await pg.locator(`${READ} .cb-choices .cb-choice`).count();
@@ -3022,17 +3479,13 @@ async function lookIntoScenario(context, t, s) {
         (await pg.locator(CARD).count()) === 0 &&
         cards === 4,
     );
-    const foot = await pg.evaluate(() =>
-      [
-        ...document.querySelectorAll(
-          '.kit-app > .kit-list:not([hidden]) .cb-agree-line',
-        ),
-      ].map((l) => l.textContent ?? ''),
+    const acts = await pg.$$eval(`${GROUP_HEAD} .cb-group-acts button`, (bs) =>
+      bs.map((b) => b.textContent ?? ''),
     );
     check(
-      `and the foot offers "agree with all 3" without "look into all" (${JSON.stringify(foot)})`,
-      foot.length === 1 &&
-        foot[0].includes('agree with all 3') &&
+      `and the group offers its buttons without "Look into all 3" (${JSON.stringify(acts)})`,
+      JSON.stringify(acts) ===
+        JSON.stringify(['Stop tracking all 3', 'Discard all 3']) &&
         (await pg.locator(LOOK_ALL).count()) === 0,
     );
   }
@@ -3197,7 +3650,12 @@ async function lookIntoScenario(context, t, s) {
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         const rl = r?.querySelector('.cb-row-looking');
         return {
-          item: m && m.checkVisibility() ? (m.textContent ?? '') : '',
+          // visibilityProperty: the line keeps its room, hidden, when nobody
+          // is looking.
+          item:
+            m && m.checkVisibility({ visibilityProperty: true })
+              ? (m.textContent ?? '')
+              : '',
           row: rl ? (rl.textContent ?? '') : '',
           itemColor: m ? getComputedStyle(m).color : '',
           rowColor: rl ? getComputedStyle(rl).color : '',
@@ -3269,7 +3727,7 @@ async function lookIntoScenario(context, t, s) {
           ),
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         return (
-          !!m?.checkVisibility() &&
+          !!m?.checkVisibility({ visibilityProperty: true }) &&
           m.textContent === want &&
           r?.querySelector('.cb-row-looking')?.textContent === want
         );
@@ -3393,7 +3851,7 @@ async function lookIntoScenario(context, t, s) {
           (x) =>
             x.querySelector('.kit-kicker')?.textContent === k &&
             (x.querySelector('.kit-sub')?.textContent ?? '').includes(
-              'recommends',
+              'config line',
             ) &&
             !!x.querySelector('.cb-row-looking'),
         ),
@@ -3402,7 +3860,7 @@ async function lookIntoScenario(context, t, s) {
     );
     const geo = await rowLooking();
     check(
-      `on the row, the marker matches "pi recommends …": left ${geo.left} vs ${geo.sub?.left}, colour ${geo.color} vs ${geo.sub?.color}, size ${geo.font} vs ${geo.sub?.font}; one line (${geo.height}px)`,
+      `on the row, the marker matches the recommendation's reason: left ${geo.left} vs ${geo.sub?.left}, colour ${geo.color} vs ${geo.sub?.color}, size ${geo.font} vs ${geo.sub?.font}; one line (${geo.height}px)`,
       geo.found &&
         !!geo.sub &&
         geo.left === geo.sub.left &&
@@ -3433,7 +3891,9 @@ async function lookIntoScenario(context, t, s) {
           ),
         ].find((x) => x.querySelector('.kit-kicker')?.textContent === k);
         return (
-          !m?.checkVisibility() && !!r && !r.querySelector('.cb-row-looking')
+          !m?.checkVisibility({ visibilityProperty: true }) &&
+          !!r &&
+          !r.querySelector('.cb-row-looking')
         );
       },
       [MARK, kicker(KEY)],
@@ -3474,43 +3934,41 @@ async function lookIntoScenario(context, t, s) {
     );
     const txt = ok ? ((await pg.textContent(LOOK_ALL)) ?? '') : '';
     check(
-      `with ${aName} attached, the foot offers "${txt}" beside "agree with all 3"`,
+      `with ${aName} attached, the group offers "${txt}" beside "Stop tracking all 3"`,
       ok &&
-        txt === `ask ${aName} to look into all 3` &&
-        (await pg.evaluate(
-          (sel) =>
-            document
-              .querySelector(sel)
-              ?.closest('.cb-agree-line')
-              ?.querySelector('.cb-agree-btn')?.textContent ===
-            'agree with all 3',
-          LOOK_ALL,
-        )),
+        txt === 'Look into all 3' &&
+        (await pg.textContent(`${GROUP_HEAD} .cb-group-act`)) ===
+          'Stop tracking all 3',
     );
-    // The line still reads: the says keeps its width (not a letter a line)
-    // and both buttons stay inside the list column.
-    const geo = await pg.evaluate((sel) => {
-      const line = document.querySelector(sel)?.closest('.cb-agree-line');
+    // The header still reads: its label on one line, and its three buttons
+    // shown inside the list column.
+    const geo = await pg.evaluate((head) => {
+      const el = document.querySelector(head);
       const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
-      const says = line?.querySelector('.cb-agree-says');
-      const lh = says ? parseFloat(getComputedStyle(says).lineHeight) : 0;
-      const sr = says?.getBoundingClientRect();
+      const label = el?.querySelector('.cb-group-label');
+      const lh = label ? parseFloat(getComputedStyle(label).lineHeight) : 0;
       const lr = list?.getBoundingClientRect();
-      const btns = [...(line?.querySelectorAll('button') ?? [])].map((b) =>
-        b.getBoundingClientRect(),
-      );
+      const btns = [...(el?.querySelectorAll('.cb-group-acts button') ?? [])];
       return {
-        saysH: Math.round(sr?.height ?? 0),
+        labelH: Math.round(label?.getBoundingClientRect().height ?? 0),
         line: Math.round(Number.isFinite(lh) ? lh : 19),
         inside:
           !!lr &&
           btns.length === 3 &&
-          btns.every((b) => b.left >= lr.left && b.right <= lr.right),
+          btns.every((b) => {
+            const r = b.getBoundingClientRect();
+            return (
+              b.checkVisibility() &&
+              r.width > 0 &&
+              r.left >= lr.left &&
+              r.right <= lr.right
+            );
+          }),
       };
-    }, LOOK_ALL);
+    }, GROUP_HEAD);
     check(
-      `the foot's line reads: its says ${geo.saysH}px high (line ${geo.line}px), all three buttons (agree, look into all, clear these) inside the list column (${geo.inside})`,
-      geo.saysH > 0 && geo.saysH <= geo.line * 2.2 && geo.inside,
+      `the group's header reads: its label ${geo.labelH}px high (line ${geo.line}px), all three buttons (stop tracking, look into, discard) shown inside the list column (${geo.inside})`,
+      geo.labelH > 0 && geo.labelH <= geo.line * 1.2 && geo.inside,
     );
     if (SHOTS) {
       await setTheme(pg, 'light');
@@ -3586,7 +4044,7 @@ async function lookIntoScenario(context, t, s) {
       LOOK_ALL,
     );
     check(
-      `while all three are looked into, "look into all 3" can't be clicked again (disabled ${dis})`,
+      `while all three are looked into, "Look into all 3" can't be clicked again (disabled ${dis})`,
       dis === true,
     );
     if (SHOTS) {
@@ -3594,6 +4052,1368 @@ async function lookIntoScenario(context, t, s) {
       await pg.evaluate(() => document.activeElement?.blur());
       await pg.screenshot({ path: `${SHOTS}-foot-looking.png` });
     }
+  }
+  await pg.close();
+}
+
+// ---- the steady list: no filters, left open a group, indented rows --------
+
+const ST = 'rd-steady';
+const SISSUE = (n) => `issue:schuettc/${ST}#${n}`;
+const SPR = (n) => `pr:schuettc/${ST}#${n}`;
+const LONG_REASON =
+  'Superseded by the newer bump that landed last week, which also moves the lockfile and the CI image forward; this one conflicts with it in three files and its checks have been red since the runner image changed, so nothing here is worth rebasing.';
+
+function steadySeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${ST}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${ST}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [
+          [21, 'Bump the uploader dependency', 'renovate'],
+          [22, 'Bump the parser dependency', 'renovate'],
+          [23, 'Fix the retry loop', 'bob'],
+        ].map(item),
+        issues: [
+          [1, 'How do I set the region?', 'alice'],
+          [2, 'Works on my machine', 'carol'],
+          [3, 'A second region', 'dave'],
+          [4, 'Flag docs', 'erin'],
+          [5, 'Tags question', 'frank'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function steadyScenario(context, t, s) {
+  const { check, checkList, until, eventually } = t;
+  console.log('\nscenario: the steady list');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const LEFT = [4, 5].map(SISSUE);
+  const ALL = [SPR(21), SPR(22), SPR(23), ...[1, 2, 3].map(SISSUE), ...LEFT];
+  const leftSel = `${LIST} .cb-group[data-group="left-open"]`;
+
+  // Only this repo's items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !ALL.includes(k));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  // Issues #4 and #5 left open.
+  await api('POST', '/api/decide', { keys: LEFT, disposition: 'keep' });
+
+  // Two sessions, so the dock attaches to neither on its own.
+  const A = 'probe-steady-a';
+  const B = 'probe-steady-b';
+  await agent.presence(A, 'pi \u00b7 steady-a', '/home/court/steady-a', 'pi');
+  await agent.presence(B, 'pi \u00b7 steady-b', '/home/court/steady-b', 'pi');
+  await agent.propose(A, [SPR(21)], 'close', LONG_REASON);
+  await agent.propose(A, [SPR(22)], 'close', 'superseded');
+  await agent.propose(A, [SPR(23)], 'merge', 'green and reviewed');
+  await agent.propose(A, [1, 2].map(SISSUE), 'keep', 'active');
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+  const bar = await classicScrollbar(pg);
+  check(`the list's scrollbar is a classic 15px one (${bar}px)`, bar === 15);
+  const ready = await until(
+    pg,
+    (sel) => !!document.querySelector(sel),
+    leftSel,
+    8000,
+  );
+
+  // ---- no filter chips --------------------------------------------------------
+  {
+    const got = await pg.evaluate((list) => {
+      const f = document.querySelector(`${list} .kit-chips[data-group=filter]`);
+      const v = document.querySelector(`${list} .kit-chips[data-group=view]`);
+      return {
+        chips: f ? f.querySelectorAll('.kit-chip').length : 0,
+        shown: !!f?.checkVisibility(),
+        views: v?.checkVisibility()
+          ? v.querySelectorAll('.kit-chip').length
+          : 0,
+      };
+    }, LIST);
+    check(
+      `no filter chips: Attention shows ${got.chips} filter chips (row shown ${got.shown}), its ${got.views} view chips still show`,
+      got.chips === 0 && !got.shown && got.views === 4,
+    );
+  }
+
+  // ---- left open group --------------------------------------------------------
+  {
+    const heads = await groupHeads(pg);
+    const last = heads[heads.length - 1];
+    const st = await pg.evaluate(
+      ({ sel, list }) => {
+        const g = document.querySelector(sel);
+        const r = g?.getBoundingClientRect();
+        return {
+          collapsed: !!g?.classList.contains('collapsed'),
+          expanded: g
+            ?.querySelector('.cb-group-caret')
+            ?.getAttribute('aria-expanded'),
+          box: !!g?.querySelector('.cb-group-box'),
+          shown: !!g?.checkVisibility() && (r?.height ?? 0) > 0,
+          lastChild:
+            document.querySelector(`${list} .kit-rows`)?.lastElementChild === g,
+        };
+      },
+      { sel: leftSel, list: LIST },
+    );
+    const leftRows = await Promise.all(LEFT.map((k) => row(pg, k).count()));
+    check(
+      `left open group: last of ${heads.length} headers ("${last?.label}" ${last?.n}, ${last?.id}), shown, starts collapsed (${st.collapsed}, aria-expanded ${st.expanded}) with no left-open rows (${leftRows}), no checkbox (${st.box}), no buttons ("${last?.acts.join(' / ')}") (ready ${ready})`,
+      ready &&
+        last?.id === 'left-open' &&
+        last.label === 'left open' &&
+        last.n === '2' &&
+        last.acts.length === 0 &&
+        st.shown &&
+        st.lastChild &&
+        st.collapsed &&
+        st.expanded === 'false' &&
+        !st.box &&
+        leftRows.every((n) => n === 0),
+    );
+  }
+  await pg.click(`${leftSel} .cb-group-caret`);
+  {
+    const ok = await until(
+      pg,
+      ({ list, k }) =>
+        [...document.querySelectorAll(`${list} .kit-row .kit-kicker`)].some(
+          (e) => e.textContent === k,
+        ),
+      { list: LIST, k: kicker(LEFT[0]) },
+    );
+    const seq = await listSequence(pg, ALL);
+    const muted = await cssColor(pg, 'var(--kit-muted)');
+    const colors = await Promise.all(
+      LEFT.map((k) =>
+        row(pg, k)
+          .locator('.kit-title')
+          .evaluate((e) => ({
+            c: getComputedStyle(e).color,
+            v: e.checkVisibility(),
+          })),
+      ),
+    );
+    check(
+      `left open group: a click expands it, its rows last, under its header, shown and muted (${seq.slice(-3).join(', ')}; ${colors.map((c) => c.c).join(', ')})`,
+      ok &&
+        JSON.stringify(seq.slice(-3)) ===
+          JSON.stringify(['H:left open', ...LEFT]) &&
+        colors.every((c) => c.v && c.c === muted),
+    );
+  }
+
+  // ---- rows indented ----------------------------------------------------------
+  {
+    const geo = await pg.evaluate(
+      ({ list, keys }) =>
+        keys.map((k) => {
+          const r = [...document.querySelectorAll(`${list} .kit-row`)].find(
+            (x) => x.querySelector('.kit-kicker')?.textContent === k,
+          );
+          let head = r?.previousElementSibling;
+          while (head && !head.classList.contains('cb-group'))
+            head = head.previousElementSibling;
+          const box = r?.querySelector('.kit-box');
+          const caret = head?.querySelector('.cb-group-caret');
+          const label = head?.querySelector('.cb-group-label');
+          return {
+            box: box?.checkVisibility()
+              ? Math.round(box.getBoundingClientRect().left)
+              : null,
+            caret: caret
+              ? Math.round(caret.getBoundingClientRect().left)
+              : null,
+            label: label
+              ? Math.round(label.getBoundingClientRect().left)
+              : null,
+          };
+        }),
+      { list: LIST, keys: [SPR(21), SISSUE(3), LEFT[0]].map(kicker) },
+    );
+    check(
+      `rows indented: each row's checkbox is 24px or more right of its header's caret (${geo.map((g) => `${g.box} vs ${g.caret}`).join('; ')})`,
+      geo.every(
+        (g) => g.box !== null && g.caret !== null && g.box - g.caret >= 24,
+      ),
+    );
+    check(
+      `and lines up under its header's label (${geo.map((g) => `${g.box} vs ${g.label}`).join('; ')})`,
+      geo.every((g) => g.label !== null && Math.abs(g.box - g.label) <= 1),
+    );
+  }
+
+  // ---- rows one height --------------------------------------------------------
+  {
+    const got = await pg.evaluate(
+      ({ list, long, short }) => {
+        const rows = [...document.querySelectorAll(`${list} .kit-row`)];
+        const find = (k) =>
+          rows.find((x) => x.querySelector('.kit-kicker')?.textContent === k);
+        const l = find(long);
+        const sub = l?.querySelector('.kit-sub');
+        const lh = sub ? parseFloat(getComputedStyle(sub).lineHeight) : 0;
+        return {
+          long: Math.round(l?.getBoundingClientRect().height ?? 0),
+          short: Math.round(find(short)?.getBoundingClientRect().height ?? 0),
+          all: rows
+            .filter((x) => x.checkVisibility())
+            .map((x) => Math.round(x.getBoundingClientRect().height)),
+          subH: Math.round(sub?.getBoundingClientRect().height ?? 0),
+          subLines: lh,
+          cut: !!sub && sub.scrollHeight > sub.clientHeight + 1,
+        };
+      },
+      { list: LIST, long: kicker(SPR(21)), short: kicker(SPR(22)) },
+    );
+    check(
+      `rows one height: the long reason's row is ${got.long}px, the short one's ${got.short}px`,
+      got.long > 0 && got.long === got.short,
+    );
+    check(
+      `every row is one height (${[...new Set(got.all)].join(', ')}), the long reason cut at two lines (${got.subH}px, line ${got.subLines}px, cut ${got.cut})`,
+      got.all.length === 8 &&
+        new Set(got.all).size === 1 &&
+        got.cut &&
+        got.subH <= Math.ceil(got.subLines * 2) + 1,
+    );
+  }
+
+  // ---- the list's scrollbar gutter, the button line's height --------------
+  {
+    const gutter = await pg.evaluate(
+      (list) =>
+        getComputedStyle(document.querySelector(`${list} .kit-rows`))
+          .scrollbarGutter,
+      LIST,
+    );
+    check(
+      `the list reserves its scrollbar's space (scrollbar-gutter ${gutter})`,
+      gutter.startsWith('stable'),
+    );
+  }
+
+  // ---- look into on every group -----------------------------------------------
+  // The sessions beat (serve here counts one left after 3s without one).
+  await agent.presence(A, 'pi · steady-a', '/home/court/steady-a', 'pi');
+  await agent.presence(B, 'pi · steady-b', '/home/court/steady-b', 'pi');
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    () =>
+      document.querySelector('.cb-dock-header')?.getAttribute('data-attach') ===
+      'here',
+  );
+  const aName = await pg.textContent('[data-testid="dock-session-name"]');
+  {
+    await until(
+      pg,
+      (sel) => !!document.querySelector(sel),
+      `${groupSel('')} .cb-group-ask`,
+    );
+    const looks = await pg.evaluate(
+      (list) =>
+        [...document.querySelectorAll(`${list} .cb-group`)].map((g) => {
+          const b = g.querySelector('.cb-group-look');
+          return `${g.getAttribute('data-group') === 'left-open' ? 'left open' : g.getAttribute('data-d')}: ${b?.checkVisibility() ? b.textContent : '-'}`;
+        }),
+      LIST,
+    );
+    const ticked = await pg.evaluate(
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+      LIST,
+    );
+    checkList(
+      `look into on every group: with ${aName} attached after load and nothing ticked (${ticked}), every recommended group and left open show Look into (${looks.join('; ')})`,
+      [...looks].sort(),
+      [
+        ': -',
+        'close: Look into both',
+        'keep: Look into both',
+        'left open: Look into both',
+        'merge: Look into it',
+      ],
+    );
+  }
+  {
+    const acts = async (d) =>
+      pg.evaluate((sel) => {
+        const a = document.querySelector(`${sel} .cb-group-acts`);
+        return {
+          h: Math.round(a?.getBoundingClientRect().height ?? 0),
+          wrap: a ? getComputedStyle(a).flexWrap : '',
+        };
+      }, groupSel(d));
+    const before = await acts('close');
+    await row(pg, SPR(22)).locator('.kit-box').click();
+    await until(
+      pg,
+      (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+      groupSel('close'),
+    );
+    const after = await acts('close');
+    check(
+      `a group's button line keeps its height when one is ticked (${before.h}px, then ${after.h}px) and does not wrap (${after.wrap})`,
+      before.h > 0 && before.h === after.h && after.wrap === 'nowrap',
+    );
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+  }
+  {
+    const msgsOf = async () => {
+      const tv = await api(
+        'GET',
+        `/api/threads?session=${encodeURIComponent(A)}`,
+      );
+      const out = [];
+      for (const th of tv.threads ?? []) {
+        const mv = await agent.messages(th.id);
+        for (const m of mv.messages ?? []) out.push(m);
+      }
+      return out;
+    };
+    await pg.click(`${leftSel} .cb-group-look`);
+    check(
+      "left open's Look into both sends one message naming both left-open keys, both attached",
+      await eventually(async () => {
+        const mine = (await msgsOf()).filter((m) =>
+          m.body.startsWith('Look into these items'),
+        );
+        const keys = [...(mine[0]?.attached?.keys ?? [])].sort();
+        return (
+          mine.length === 1 &&
+          keys.join(' ') === [...LEFT].sort().join(' ') &&
+          mine[0].body === LOOK_INTO_ALL(mine[0].attached.keys) &&
+          mine[0].purpose === 'look-into'
+        );
+      }),
+    );
+  }
+  await pg.close();
+}
+
+// ---- the item page and its navigation ---------------------------------------
+
+const NV = 'rd-nav';
+const LONGREPO = 'cdk-github-microvm-runners-for-every-account';
+const NISSUE = (n) => `issue:schuettc/${NV}#${n}`;
+const NPR = (n) => `pr:schuettc/${NV}#${n}`;
+const LPR = (n) => `pr:schuettc/${LONGREPO}#${n}`;
+const LONG_TITLE =
+  'The region flag is ignored when the profile sets one, and the error that follows names the wrong file, so nobody can tell which setting won';
+const LONG_BODY = Array.from(
+  { length: 14 },
+  (_, i) =>
+    `Line ${i + 1}: with AWS_PROFILE set and --region given, the call goes to the profile's region instead.`,
+).join(' ');
+
+function navSeed() {
+  const item =
+    (repo) =>
+    ([number, title, author, body], i) => ({
+      repo: `schuettc/${repo}`,
+      number,
+      title,
+      author,
+      ...(body ? { body } : {}),
+      state: 'OPEN',
+      created_at: `2026-09-${String((i % 27) + 1).padStart(2, '0')}T00:00:00Z`,
+      updated_at: `2026-09-${String((i % 27) + 1).padStart(2, '0')}T00:00:00Z`,
+    });
+  const issues = [
+    [1, LONG_TITLE, 'alice', LONG_BODY],
+    [2, 'Typo', 'carol', 'teh'],
+  ];
+  for (let n = 3; n <= 16; n++)
+    issues.push([n, `Question ${n}`, 'dave', `Is ${n} supported?`]);
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${NV}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [21, 22, 23, 24, 25, 26, 27]
+          .map((n) => [n, `Bump dependency ${n}`, 'renovate'])
+          .map(item(NV)),
+        issues: issues.map(item(NV)),
+      },
+      {
+        repo: `schuettc/${LONGREPO}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [[42, 'Bump the runner image', 'renovate']].map(item(LONGREPO)),
+        issues: [],
+      },
+    ],
+  };
+}
+
+async function navScenario(context, t, s) {
+  const { check, checkList, until } = t;
+  console.log('\nscenario: the item page and its navigation');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const READ = '.kit-app > .kit-read:not([hidden])';
+  const STOP = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(NISSUE);
+  const CLOSE = [...[21, 22, 23, 24, 25].map(NPR), LPR(42)];
+  const KEEP = [13, 14, 15].map(NISSUE);
+  const MERGE = [26, 27].map(NPR);
+  const NONE = [NISSUE(16)];
+  const ALL = [...STOP, ...CLOSE, ...KEEP, ...MERGE, ...NONE];
+
+  // Only these repos' items wait on Court.
+  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
+  const others = (waiting0.items ?? [])
+    .map((it) => it.key)
+    .filter((k) => !ALL.includes(k));
+  if (others.length)
+    await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  const A = 'probe-nav-a';
+  const B = 'probe-nav-b';
+  const beat = async () => {
+    await agent.presence(A, 'pi \u00b7 nav-a', '/home/court/nav-a', 'pi');
+    await agent.presence(B, 'pi \u00b7 nav-b', '/home/court/nav-b', 'pi');
+  };
+  await beat();
+  await agent.propose(A, STOP, 'ignore', 'spam');
+  await agent.propose(
+    A,
+    CLOSE.filter((k) => k !== LPR(42)),
+    'close',
+    'superseded by a newer bump',
+  );
+  // The long repo name's row has a two-line reason too.
+  await agent.propose(A, [LPR(42)], 'close', LONG_REASON);
+  await agent.propose(A, KEEP, 'keep', 'still being discussed');
+  await agent.propose(A, MERGE, 'merge', 'green and reviewed');
+
+  // The view's order: group by group, key order in each (#1, #10, …).
+  const order = (
+    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+  ).map((it) => it.key);
+  const inOrder = (keys) => order.filter((k) => keys.includes(k));
+  const [S1, S2] = inOrder(STOP);
+  const KEEP_LAST = inOrder(KEEP).at(-1);
+  const [K1, K2] = inOrder(KEEP);
+  const M1 = inOrder(MERGE)[0];
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/waiting`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await pg.waitForSelector('.kit-row', { timeout: 8000 });
+  await setTheme(pg, 'light');
+  {
+    const bar = await classicScrollbar(pg);
+    check(`the list's scrollbar is a classic 15px one (${bar}px)`, bar === 15);
+  }
+  await until(pg, (sel) => !!document.querySelector(sel), groupSel('merge'));
+  {
+    const heads = await groupHeads(pg);
+    checkList(
+      'the groups, in serve order',
+      heads.map((g) => `${g.d || g.id} ${g.n}`),
+      ['ignore 12', 'close 6', 'keep 3', 'merge 2', 'none 1'],
+    );
+  }
+
+  // ---- sidebar width ----------------------------------------------------------
+  {
+    const w = await pg.evaluate(
+      (list) => document.querySelector(list)?.getBoundingClientRect().width,
+      LIST,
+    );
+    check(`sidebar width: Attention's list is 520px wide (${w})`, w === 520);
+  }
+
+  // ---- rows never clip --------------------------------------------------------
+  {
+    const rows = await pg.evaluate(
+      (list) =>
+        [...document.querySelectorAll(`${list} .kit-rows > .kit-row`)]
+          .filter((r) => r.checkVisibility())
+          .map((r) => ({
+            k: r.querySelector('.kit-kicker')?.textContent ?? '',
+            sh: r.scrollHeight,
+            ch: r.clientHeight,
+            kick: Math.round(
+              r.querySelector('.kit-kicker')?.getBoundingClientRect().height ??
+                0,
+            ),
+            tip: r.querySelector('.kit-kicker')?.getAttribute('title') ?? '',
+          })),
+      LIST,
+    );
+    const long = rows.find((r) => r.k === kicker(LPR(42)));
+    const clipped = rows.filter((r) => r.sh > r.ch);
+    check(
+      `rows never clip: every one of ${rows.length} rows fits its height (clipped: ${clipped.map((r) => `${r.k} ${r.sh}>${r.ch}`).join(', ') || 'none'}), the long repo's kicker one line (${long?.kick}px) with its key whole in its title ("${long?.tip}")`,
+      rows.length === ALL.length &&
+        clipped.length === 0 &&
+        !!long &&
+        long.kick <= 17 &&
+        long.tip === kicker(LPR(42)),
+    );
+  }
+
+  // ---- the session, then the button lines -------------------------------------
+  await beat();
+  await pg.click(`.cb-dock-chooser .cb-dock-pick-item[data-session="${A}"]`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel),
+    `${groupSel('ignore')} .cb-group-look`,
+  );
+  // lineOf reads group d's button line: its texts, whether it is one line
+  // (every child shares one band: each starts above where every other
+  // ends; nothing past its right edge, nothing cut with an ellipsis) and
+  // its height.
+  const lineOf = (d) =>
+    pg.evaluate((sel) => {
+      const a = document.querySelector(`${sel} .cb-group-acts`);
+      const kids = [...(a?.children ?? [])];
+      const r = a?.getBoundingClientRect();
+      return {
+        texts: kids.map((c) => c.textContent ?? ''),
+        h: Math.round(r?.height ?? 0),
+        band:
+          Math.max(...kids.map((c) => c.getBoundingClientRect().top)) <
+          Math.min(...kids.map((c) => c.getBoundingClientRect().bottom)),
+        inside: kids.every(
+          (c) => c.getBoundingClientRect().right <= (r?.right ?? 0) + 0.5,
+        ),
+        // whole: each child's text fits its inner width. Measured from
+        // fractional rects: scrollWidth and clientWidth are rounded
+        // separately, so a box sized exactly to its text can read 1px over
+        // on another machine with nothing cut.
+        whole: kids.every((c) => {
+          const cs = getComputedStyle(c);
+          const rg = document.createRange();
+          rg.selectNodeContents(c);
+          const pad = [
+            'paddingLeft',
+            'paddingRight',
+            'borderLeftWidth',
+            'borderRightWidth',
+          ].reduce((n, k) => n + parseFloat(cs[k]), 0);
+          return (
+            rg.getBoundingClientRect().width <=
+            c.getBoundingClientRect().width - pad + 0.5
+          );
+        }),
+        widths: kids
+          .map((c) => {
+            const rg = document.createRange();
+            rg.selectNodeContents(c);
+            return `${rg.getBoundingClientRect().width.toFixed(1)}/${c.getBoundingClientRect().width.toFixed(1)}`;
+          })
+          .join(' '),
+        shown: kids.every((c) => c.checkVisibility()),
+      };
+    }, groupSel(d));
+  const oneLine = (l) =>
+    l.texts.length > 0 && l.band && l.inside && l.whole && l.shown;
+  {
+    const stop = await lineOf('ignore');
+    const close = await lineOf('close');
+    check(
+      `group buttons one line: "${stop.texts.join(' · ')}" (${stop.h}px, inside ${stop.inside}, whole ${stop.whole}, text/box ${stop.widths}) and "${close.texts.join(' · ')}" (${close.h}px)`,
+      stop.texts.join(' · ') ===
+        'Stop tracking all 12 · Look into all 12 · Discard all 12' &&
+        close.texts.join(' · ') ===
+          'Close all 6 · Look into all 6 · Discard all 6' &&
+        oneLine(stop) &&
+        oneLine(close),
+    );
+    for (const k of [STOP[3], STOP[4], STOP[5], CLOSE[0], CLOSE[1], CLOSE[2]])
+      await row(pg, k).locator('.kit-box').click();
+    await until(
+      pg,
+      (sel) => !!document.querySelector(`${sel} .cb-group-untick`),
+      groupSel('close'),
+    );
+    const stop3 = await lineOf('ignore');
+    const close3 = await lineOf('close');
+    check(
+      `group buttons one line, 3 ticked: "${stop3.texts.join(' · ')}" (${stop3.h}px, inside ${stop3.inside}, whole ${stop3.whole}, text/box ${stop3.widths}) and "${close3.texts.join(' · ')}" (${close3.h}px), the same height as untouched`,
+      stop3.texts.join(' · ') ===
+        'Stop tracking 3 · Look into 3 · Discard 3 · untick' &&
+        close3.texts.join(' · ') ===
+          'Close 3 · Look into 3 · Discard 3 · untick' &&
+        oneLine(stop3) &&
+        oneLine(close3) &&
+        stop3.h === stop.h &&
+        close3.h === close.h,
+    );
+
+    // ---- no decide button: ticked items act through their group --------
+    const bar = await pg.evaluate(
+      (list) => ({
+        decide: [...document.querySelectorAll('button')]
+          .filter((b) => b.checkVisibility() && !b.closest('.cb-group'))
+          .map((b) => b.textContent ?? '')
+          .filter((x) => /decide/i.test(x)),
+        primary: (() => {
+          const p = document.querySelector('.kit-primary');
+          return p && p.checkVisibility() ? p.textContent : '';
+        })(),
+        foot: [...document.querySelectorAll(`${list} .kit-foot *`)]
+          .filter((e) => e.checkVisibility() && /selected/.test(e.textContent))
+          .map((e) => e.textContent),
+        sel: document.querySelectorAll(`${list} .kit-row.sel`).length,
+      }),
+      LIST,
+    );
+    await press(pg, 'd');
+    // Kept: the check is that d opens nothing; a window for a sheet to open.
+    await pg.waitForTimeout(500);
+    const dSheets = await pg.$$eval(
+      '.kit-sheet',
+      (s) => s.filter((x) => x.checkVisibility()).length,
+    );
+    check(
+      `no decide button: with ${bar.sel} ticked the page shows no decide button (${bar.decide.join(', ') || 'none'}), the bar no primary ("${bar.primary}"), the foot no selected count (${bar.foot.join(', ') || 'none'}), and d opens no sheet (${dSheets} shown)`,
+      bar.sel === 6 &&
+        bar.decide.length === 0 &&
+        bar.primary === '' &&
+        bar.foot.length === 0 &&
+        dSheets === 0,
+    );
+    if (dSheets) await pg.keyboard.press('Escape');
+
+    await pg.click(`${groupSel('ignore')} .cb-group-untick`);
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+  }
+
+  // ---- ticking a collapsed group opens it ------------------------------------
+  await until(
+    pg,
+    (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+    LIST,
+  );
+  await pg.click(`${groupSel('close')} .cb-group-caret`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.classList.contains('collapsed'),
+    groupSel('close'),
+  );
+  {
+    const shut = await row(pg, CLOSE[0]).count();
+    await pg.click(`${groupSel('close')} .cb-group-box`);
+    await until(
+      pg,
+      (sel) => {
+        const g = document.querySelector(sel);
+        return (
+          !!g &&
+          !g.classList.contains('collapsed') &&
+          g.querySelector('.cb-group-box')?.getAttribute('aria-checked') ===
+            'true'
+        );
+      },
+      groupSel('close'),
+    );
+    const got = await pg.evaluate(
+      ({ sel, list, kicks }) => {
+        const g = document.querySelector(sel);
+        const rows = [...document.querySelectorAll(`${list} .kit-row`)].filter(
+          (r) => kicks.includes(r.querySelector('.kit-kicker')?.textContent),
+        );
+        return {
+          collapsed: !!g?.classList.contains('collapsed'),
+          caret: g
+            ?.querySelector('.cb-group-caret')
+            ?.getAttribute('aria-expanded'),
+          btns: [...(g?.querySelectorAll('.cb-group-acts .kit-btn') ?? [])]
+            .filter((b) => b.checkVisibility())
+            .map((b) => b.textContent ?? ''),
+          rows: rows.filter(
+            (r) =>
+              r.checkVisibility() &&
+              r.getBoundingClientRect().height > 0 &&
+              r.classList.contains('sel'),
+          ).length,
+        };
+      },
+      { sel: groupSel('close'), list: LIST, kicks: CLOSE.map(kicker) },
+    );
+    check(
+      `ticking a collapsed group opens it: Close collapsed (${shut} rows shown), its checkbox ticks all 6 and expands it (collapsed ${got.collapsed}, expanded ${got.caret}), its buttons "${got.btns.join(' · ')}", ${got.rows} of its 6 rows shown and ticked`,
+      shut === 0 &&
+        !got.collapsed &&
+        got.caret === 'true' &&
+        got.btns.join(' · ') ===
+          'Close all 6 · Look into all 6 · Discard all 6' &&
+        got.rows === 6,
+    );
+    await pg.click(`${groupSel('close')} .cb-group-untick`);
+    await until(
+      pg,
+      (list) => document.querySelectorAll(`${list} .kit-row.sel`).length === 0,
+      LIST,
+    );
+  }
+
+  // ---- collapsed group one line -------------------------------------------------
+  await pg.click(`${groupSel('merge')} .cb-group-caret`);
+  await until(
+    pg,
+    (sel) => !!document.querySelector(sel)?.classList.contains('collapsed'),
+    groupSel('merge'),
+  );
+  {
+    const got = await pg.evaluate(
+      ({ merge, stop, close }) => {
+        const inner = (el) => {
+          const cs = getComputedStyle(el);
+          return (
+            el.getBoundingClientRect().height -
+            parseFloat(cs.paddingTop) -
+            parseFloat(cs.paddingBottom) -
+            parseFloat(cs.borderTopWidth) -
+            parseFloat(cs.borderBottomWidth)
+          );
+        };
+        const m = document.querySelector(merge);
+        const o = document.querySelector(stop);
+        return {
+          m: Math.round(inner(m)),
+          line: Math.round(
+            o.querySelector('.cb-group-top').getBoundingClientRect().height,
+          ),
+          buttons: [...m.querySelectorAll('button.kit-btn')].filter((b) =>
+            b.checkVisibility(),
+          ).length,
+          hint: !!m.querySelector('.cb-group-where')?.checkVisibility(),
+          open: !!document
+            .querySelector(`${close} .cb-group-where`)
+            ?.checkVisibility(),
+        };
+      },
+      {
+        merge: groupSel('merge'),
+        stop: groupSel('ignore'),
+        close: groupSel('close'),
+      },
+    );
+    check(
+      `collapsed group one line: Merge's header is ${got.m}px inside, one line (${got.line}px), with ${got.buttons} buttons and its hint ${got.hint ? 'shown' : 'hidden'}; an open outward group keeps its hint (${got.open})`,
+      got.m === got.line && got.buttons === 0 && !got.hint && got.open,
+    );
+  }
+
+  // ---- nav: disabled ends -------------------------------------------------------
+  const navOf = () =>
+    pg.evaluate((read) => {
+      const n = document.querySelector(`${read} .cb-nav`);
+      if (!n || !n.checkVisibility()) return null;
+      const r = n.getBoundingClientRect();
+      return {
+        top: Math.round(r.top),
+        readTop: Math.round(
+          document.querySelector(read).getBoundingClientRect().top,
+        ),
+        pos: n.querySelector('.cb-nav-pos')?.textContent ?? '',
+        buttons: [...n.querySelectorAll('button')].map((b) => ({
+          t: b.textContent ?? '',
+          off: b.disabled,
+          tip: b.title,
+          color: getComputedStyle(b).color,
+          opacity: getComputedStyle(b).opacity,
+        })),
+      };
+    }, READ);
+  await row(pg, S1).click();
+  await opened(t, pg, S1);
+  await until(pg, (read) => !!document.querySelector(`${read} .cb-nav`), READ);
+  {
+    const n = await navOf();
+    const b = n?.buttons ?? [];
+    const greyed = (x) =>
+      x.off && (x.opacity !== '1' || x.color !== b[2]?.color);
+    check(
+      `nav: disabled ends: on the first item « and ‹ are disabled and greyed (${b
+        .slice(0, 2)
+        .map((x) => `${x.t} ${x.off} ${x.opacity} ${x.color}`)
+        .join('; ')}), › and » are not`,
+      b.length === 4 &&
+        b.map((x) => x.t).join(' ') === '\u00ab \u2039 \u203a \u00bb' &&
+        greyed(b[0]) &&
+        greyed(b[1]) &&
+        !b[2].off &&
+        !b[3].off,
+    );
+    checkList(
+      `nav: the row reads "${n?.pos}" and each tooltip names its target`,
+      [n?.pos, ...b.map((x) => x.tip)],
+      [
+        '1 of 12 in Stop tracking it',
+        'Previous group: none ([)',
+        'Previous item: none (k)',
+        `Next item: ${S2.split('/')[1]} (j)`,
+        'Next group: Close it without merging (])',
+      ],
+    );
+  }
+
+  // ---- the recommendation box and the steady page ----------------------------
+  // The recommendation box above the description, and the description: each
+  // one fixed height.
+  const REC_H = 150;
+  const BODY_H = 140;
+  const pageGeo = () =>
+    pg.evaluate((read) => {
+      const q = (s) => document.querySelector(`${read} ${s}`);
+      const top = (s) => Math.round(q(s)?.getBoundingClientRect().top ?? -1);
+      const box = (s) => {
+        const r = q(s)?.getBoundingClientRect();
+        return r
+          ? {
+              top: Math.round(r.top),
+              left: Math.round(r.left),
+              h: Math.round(r.height),
+              w: Math.round(r.width),
+            }
+          : null;
+      };
+      const cards = [
+        ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+      ];
+      return {
+        key: q('.cb-item')?.getAttribute('data-key') ?? '',
+        cards: top('.cb-choices'),
+        cardTops: [
+          ...new Set(
+            cards.map((c) => Math.round(c.getBoundingClientRect().top)),
+          ),
+        ],
+        cardHs: [
+          ...new Set(
+            cards.map((c) => Math.round(c.getBoundingClientRect().height)),
+          ),
+        ],
+        n: cards.length,
+        // Each row of cards (by top) and how many heights it has.
+        rowHs: Object.values(
+          Object.groupBy(cards, (c) =>
+            Math.round(c.getBoundingClientRect().top),
+          ),
+        ).map(
+          (row) =>
+            new Set(
+              row.map((c) => Math.round(c.getBoundingClientRect().height)),
+            ).size,
+        ),
+        cardMinW: Math.min(
+          ...cards.map((c) => Math.round(c.getBoundingClientRect().width)),
+        ),
+        choicesW: Math.round(q('.cb-choices')?.clientWidth ?? 0),
+        evidence: top('.cb-evidence .kit-label'),
+        history: top('.cb-history .kit-label'),
+        evidenceLeft: Math.round(
+          q('.cb-evidence')?.getBoundingClientRect().left ?? -1,
+        ),
+        historyLeft: Math.round(
+          q('.cb-history')?.getBoundingClientRect().left ?? -1,
+        ),
+        body: box('.cb-body'),
+        rec: box('.cb-proposal-card') ?? box('.cb-rec-empty'),
+        recEmpty: !!q('.cb-rec-empty'),
+        head: q('.cb-proposal-card .kit-card-head')?.textContent ?? '',
+        label: q('.cb-proposal-label')?.textContent ?? '',
+        note: q('.cb-proposal-note')?.textContent ?? '',
+        title: box('.cb-title'),
+        doc: box('.kit-doc'),
+        item: box('.cb-item'),
+      };
+    }, READ);
+  const a = await pageGeo();
+  {
+    const headColor = await pg.evaluate(
+      (read) =>
+        getComputedStyle(
+          document.querySelector(`${read} .cb-proposal-card .kit-card-head`),
+        ).color,
+      READ,
+    );
+    const agentColor = await cssColor(pg, 'var(--kit-agent)');
+    check(
+      `the recommendation box: "${a.head}" in agent colour (${headColor}), then "${a.label}", then "${a.note}"; above the description (box ${a.rec?.top}+${a.rec?.h}, description ${a.body?.top}), both the reading column's width (${a.rec?.w}, ${a.body?.w}, item ${a.item?.w}) from its left edge (${a.rec?.left}, ${a.body?.left}, ${a.item?.left}), the box ${REC_H}px (${a.rec?.h}), the description ${BODY_H}px (${a.body?.h})`,
+      a.head === 'nav-a recommends' &&
+        headColor === agentColor &&
+        a.label === 'Stop tracking it' &&
+        a.note === 'spam' &&
+        !!a.rec &&
+        !!a.body &&
+        !!a.item &&
+        a.rec.top + a.rec.h <= a.body.top &&
+        a.rec.left === a.item.left &&
+        a.body.left === a.item.left &&
+        a.rec.w === a.item.w &&
+        a.body.w === a.item.w &&
+        a.rec.h === REC_H &&
+        a.body.h === BODY_H,
+    );
+    check(
+      `the choice cards: ${a.n} cards at least 150px wide (${a.cardMinW}) in ${a.choicesW}px, one row only when they fit (tops ${a.cardTops.join(',')}), each row one height (${a.rowHs.join(',')}); evidence beside history (${a.evidence}/${a.history}, ${a.evidenceLeft} < ${a.historyLeft})`,
+      a.n >= 5 &&
+        a.cardMinW >= 150 &&
+        (a.cardTops.length === 1) ===
+          a.n * 150 + (a.n - 1) * 10 <= a.choicesW &&
+        a.rowHs.every((n) => n === 1) &&
+        a.evidence === a.history &&
+        a.evidenceLeft < a.historyLeft,
+    );
+  }
+  await press(pg, 'j', 'o');
+  await opened(t, pg, S2);
+  {
+    const b = await pageGeo();
+    check(
+      `item steady: from ${a.key} (long title and description) to ${b.key} (short) with j, the choice cards stay at ${a.cards}px (${b.cards}px) and the evidence heading at ${a.evidence}px (${b.evidence}px)`,
+      b.key === S2 &&
+        a.cards > 0 &&
+        b.cards === a.cards &&
+        b.evidence === a.evidence &&
+        b.title?.h === a.title?.h,
+    );
+  }
+  // An item with no recommendation keeps an empty box of the same size.
+  await row(pg, NONE[0]).click();
+  await opened(t, pg, NONE[0]);
+  {
+    const c = await pageGeo();
+    check(
+      `an item with no recommendation keeps the box empty, in place (${c.recEmpty}, ${c.rec?.top}/${a.rec?.top}, ${c.rec?.h}px), its cards where they were (${c.cards}/${a.cards})`,
+      c.recEmpty &&
+        c.rec?.top === a.rec?.top &&
+        c.rec?.h === a.rec?.h &&
+        c.rec?.w === a.rec?.w &&
+        c.cards === a.cards,
+    );
+  }
+
+  // ---- a narrow reading column: 1440x900, the list and the dock open --------
+  await pg.setViewportSize({ width: 1440, height: 900 });
+  await row(pg, LPR(42)).click();
+  await opened(t, pg, LPR(42));
+  {
+    // narrow reads the recommendation box and the cards: whether the
+    // body shows, where the first word of the label and of the note sit
+    // against the box and the body (a Range over the text, so a clipped
+    // line counts as hidden), the head's lines and the buttons' tops.
+    const g = await pg.evaluate((read) => {
+      const q = (s) => document.querySelector(`${read} ${s}`);
+      const rect = (el) => {
+        const r = el?.getBoundingClientRect();
+        return r
+          ? { t: r.top, b: r.bottom, l: r.left, r: r.right, h: r.height }
+          : null;
+      };
+      const firstWord = (el) => {
+        const n = el?.firstChild;
+        if (!n || n.nodeType !== Node.TEXT_NODE) return null;
+        const end = n.textContent.search(/\s|$/);
+        const range = document.createRange();
+        range.setStart(n, 0);
+        range.setEnd(n, end);
+        return { w: n.textContent.slice(0, end), ...rect(range) };
+      };
+      const card = q('.cb-proposal-card');
+      const head = card?.querySelector('.kit-card-head');
+      const cards = [
+        ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+      ].map((c) => rect(c));
+      return {
+        readW: Math.round(document.querySelector(read).clientWidth),
+        box: rect(card),
+        body: rect(card?.querySelector('.kit-card-body')),
+        label: firstWord(card?.querySelector('.cb-proposal-label')),
+        note: firstWord(card?.querySelector('.cb-proposal-note')),
+        headH: Math.round(rect(head)?.h ?? 0),
+        headLine: parseFloat(getComputedStyle(head).lineHeight) || 0,
+        headFont: parseFloat(getComputedStyle(head).fontSize) || 0,
+        headTip: head?.title ?? '',
+        headText: head?.textContent ?? '',
+        labelWhole: (() => {
+          const l = card?.querySelector('.cb-proposal-label');
+          return !!l && l.checkVisibility() && l.scrollWidth <= l.clientWidth;
+        })(),
+        noteLines: (() => {
+          const n = card?.querySelector('.cb-proposal-note');
+          if (!n) return 0;
+          const lh = parseFloat(getComputedStyle(n).lineHeight) || 0;
+          return lh ? Math.round(n.getBoundingClientRect().height / lh) : 0;
+        })(),
+        btnTops: [
+          ...new Set(
+            [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].map((b) =>
+              Math.round(b.getBoundingClientRect().top),
+            ),
+          ),
+        ],
+        btns: card?.querySelectorAll('.kit-btns .kit-btn').length ?? 0,
+        btnsIn: [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].every(
+          (b) => {
+            const r = b.getBoundingClientRect();
+            const c = card.getBoundingClientRect();
+            return r.right <= c.right + 0.5 && r.bottom <= c.bottom + 0.5;
+          },
+        ),
+        // Whole: nothing cut, no ellipsis; the kit's own size.
+        btnsWhole: [
+          ...(card?.querySelectorAll('.kit-btns .kit-btn') ?? []),
+        ].every(
+          (b) =>
+            b.checkVisibility() &&
+            b.scrollWidth <= b.clientWidth &&
+            getComputedStyle(b).textOverflow !== 'ellipsis',
+        ),
+        btnFonts: [
+          ...new Set(
+            [...(card?.querySelectorAll('.kit-btns .kit-btn') ?? [])].map(
+              (b) => getComputedStyle(b).fontSize,
+            ),
+          ),
+        ],
+        // The key hint on the button row: shown, whole, past the buttons,
+        // inside the box, in the buttons' band.
+        hint: (() => {
+          const k = card?.querySelector('.cb-keyhint');
+          if (!k || !k.checkVisibility()) return null;
+          const r = k.getBoundingClientRect();
+          const c = card.getBoundingClientRect();
+          const bs = [...card.querySelectorAll('.kit-btns .kit-btn')].map((b) =>
+            b.getBoundingClientRect(),
+          );
+          return {
+            text: k.textContent ?? '',
+            whole: k.scrollWidth <= k.clientWidth,
+            inside: r.right <= c.right + 0.5 && r.bottom <= c.bottom + 0.5,
+            past: bs.every((b) => b.right <= r.left + 0.5),
+            band: bs.every((b) => b.top < r.bottom && r.top < b.bottom),
+          };
+        })(),
+        cards: cards.map((c) => ({
+          w: Math.round(c.r - c.l),
+          t: Math.round(c.t),
+          h: Math.round(c.h),
+        })),
+      };
+    }, READ);
+    const within = (w, outer) =>
+      !!w &&
+      !!outer &&
+      w.h > 0 &&
+      w.t >= outer.t - 0.5 &&
+      w.b <= outer.b + 0.5 &&
+      w.l >= outer.l - 0.5 &&
+      w.r <= outer.r + 0.5;
+    const oneLine = g.headH <= Math.ceil(g.headLine || g.headFont * 1.6);
+    check(
+      `rec box shows its reason: in a ${g.readW}px reading column, the box above the description, its label whole (${g.labelWhole}), "${g.label?.w}" and "${g.note?.w}" inside the box and its body, the reason ${g.noteLines} lines, the head one line (${g.headH}px) whole in its title ("${g.headTip}"), the ${g.btns} buttons on one row (tops ${g.btnTops.join(',')}) inside the box (${g.btnsIn}), whole (${g.btnsWhole}) at the kit's size (${g.btnFonts.join(',')})`,
+      g.readW <= 600 &&
+        (g.body?.h ?? 0) > 0 &&
+        g.labelWhole &&
+        g.label?.w === 'Close' &&
+        g.note?.w === LONG_REASON.split(/\s/)[0] &&
+        within(g.label, g.box) &&
+        within(g.label, g.body) &&
+        within(g.note, g.box) &&
+        within(g.note, g.body) &&
+        g.noteLines === 2 &&
+        oneLine &&
+        g.headTip === 'nav-a recommends' &&
+        g.headText === 'nav-a recommends' &&
+        g.btns === 3 &&
+        g.btnTops.length === 1 &&
+        g.btnsIn &&
+        g.btnsWhole &&
+        g.btnFonts.join(',') === '13px',
+    );
+    check(
+      `the key hint on the button row: "${g.hint?.text}" whole (${g.hint?.whole}), after the buttons (${g.hint?.past}), in their band (${g.hint?.band}), inside the box (${g.hint?.inside})`,
+      g.hint?.text === 'a accept \u00b7 r reject' &&
+        g.hint.whole &&
+        g.hint.past &&
+        g.hint.band &&
+        g.hint.inside,
+    );
+    // Cards in one row share one height.
+    const rows = new Map();
+    for (const c of g.cards) rows.set(c.t, [...(rows.get(c.t) ?? []), c.h]);
+    const evenRows = [...rows.values()].every((hs) => new Set(hs).size === 1);
+    check(
+      `cards readable: in a ${g.readW}px reading column every one of ${g.cards.length} cards is 150px or wider (${g.cards.map((c) => c.w).join(',')}), each row one height (${[...rows.entries()].map(([t, hs]) => `${t}: ${hs.join('/')}`).join('; ')})`,
+      g.readW <= 600 &&
+        g.cards.length >= 5 &&
+        g.cards.every((c) => c.w >= 150) &&
+        evenRows,
+    );
+  }
+  // ---- choosing moves nothing: the same column, LPR(42) recommends Close ----
+  {
+    // still reads every card's top and height and the question's top.
+    const still = () =>
+      pg.evaluate((read) => {
+        const q = document.querySelector(`${read} .cb-question`);
+        return {
+          q: Math.round(q?.getBoundingClientRect().top ?? -1),
+          cards: [
+            ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+          ].map((c) => {
+            const r = c.getBoundingClientRect();
+            return `${Math.round(r.top)}/${Math.round(r.height)}`;
+          }),
+          on: [
+            ...document.querySelectorAll(`${read} .cb-choices .cb-choice.on`),
+          ].map((c) => c.dataset.d),
+          comment: !!document
+            .querySelector(`${read} .cb-close-comment`)
+            ?.checkVisibility(),
+          notNow: !!document
+            .querySelector(`${read} .cb-notnow`)
+            ?.checkVisibility(),
+        };
+      }, READ);
+    // A fresh beat: the dock's session (and its Look into it card) outlives
+    // the steps below.
+    await beat();
+    // Scrolled as Court would to see every card (so a click never has to
+    // scroll one into view).
+    await pg.evaluate((read) => {
+      const col = document.querySelector(read);
+      const cards = col.querySelector('.cb-choices').getBoundingClientRect();
+      col.scrollTop += Math.max(0, cards.bottom - innerHeight + 40);
+    }, READ);
+    const base = await still();
+    const same = (g) =>
+      g.q === base.q &&
+      g.cards.length === base.cards.length &&
+      g.cards.every((c, i) => c === base.cards[i]);
+    const steps = [
+      [
+        'the recommended card (Close)',
+        () => pg.click(`${READ} .cb-choice[data-d="close"]`),
+        (g) => g.on.join() === 'close' && g.comment,
+      ],
+      [
+        'then Not now',
+        () => pg.click(`${READ} .cb-choice[data-d="wait"]`),
+        (g) => g.on.join() === 'wait' && g.notNow && !g.comment,
+      ],
+      [
+        'then Close again',
+        () => pg.click(`${READ} .cb-choice[data-d="close"]`),
+        (g) => g.on.join() === 'close' && g.comment && !g.notNow,
+      ],
+      [
+        'then Esc',
+        () => pg.keyboard.press('Escape'),
+        (g) => g.on.length === 0 && !g.comment,
+      ],
+    ];
+    for (const [name, act, shows] of steps) {
+      await act();
+      // Wait for the step's state, then a frame for any layout it causes.
+      let g = await still();
+      await t.eventually(async () => shows((g = await still())), 3000);
+      await pg.evaluate(() => new Promise((r) => requestAnimationFrame(r)));
+      g = await still();
+      check(
+        `choosing moves nothing: ${name} on ${LPR(42)} at 1440x900 (${g.on.join() || 'none'} chosen, comment ${g.comment}, not now ${g.notNow}): the question at ${g.q}px (${base.q}), every card top/height ${g.cards.join(' ')} (${base.cards.join(' ')})`,
+        base.cards.length >= 5 && shows(g) && same(g),
+      );
+    }
+    await beat();
+  }
+  await pg.setViewportSize({ width: 1600, height: 900 });
+
+  // ---- nav: into a collapsed group ---------------------------------------------
+  await row(pg, KEEP_LAST).click();
+  await opened(t, pg, KEEP_LAST);
+  await press(pg, ']');
+  {
+    const ok = await opened(t, pg, M1);
+    const st = await pg.evaluate(
+      (sel) => ({
+        collapsed: !!document
+          .querySelector(sel)
+          ?.classList.contains('collapsed'),
+      }),
+      groupSel('merge'),
+    );
+    const shown = await row(pg, M1).count();
+    const n = await navOf();
+    check(
+      `nav: into a collapsed group: ] from ${KEEP_LAST}, the last Leave it open item, opens ${M1} (${ok}), Merge expanded (collapsed ${st.collapsed}, row shown ${shown}), the row "${n?.pos}"`,
+      ok && !st.collapsed && shown === 1 && n?.pos === '1 of 2 in Merge it',
+    );
+  }
+  await press(pg, '[');
+  check(
+    `[ opens the first item of the group before (${K1})`,
+    await opened(t, pg, K1),
+  );
+  // › and ‹ step through the list.
+  await pg.click(`${READ} .cb-nav button[data-nav="next"]`);
+  check('› opens the next item', await opened(t, pg, K2));
+  await pg.click(`${READ} .cb-nav button[data-nav="prev"]`);
+  check('‹ opens the item before', await opened(t, pg, K1));
+
+  // ---- the nav row stays put while the item scrolls -------------------------
+  {
+    await pg.setViewportSize({ width: 1600, height: 600 });
+    const before = await navOf();
+    await pg.evaluate((read) => {
+      document.querySelector(read).scrollTop = 400;
+    }, READ);
+    await pg.waitForTimeout(100); // kept: a frame for the scroll to paint
+    const after = await navOf();
+    const scrolled = await pg.evaluate(
+      (read) => document.querySelector(read).scrollTop,
+      READ,
+    );
+    check(
+      `the « ‹ › » row is at the top of the reading column (${before?.top} vs ${before?.readTop}) and stays there scrolled ${scrolled}px (${after?.top})`,
+      !!before &&
+        !!after &&
+        scrolled > 0 &&
+        before.top === before.readTop &&
+        after.top === before.top,
+    );
+    await pg.setViewportSize({ width: 1600, height: 900 });
+  }
+
+  // ---- sidebar collapse --------------------------------------------------------
+  const layout = () =>
+    pg.evaluate(
+      ({ read }) => {
+        const list = document.querySelector(
+          '.kit-app > .kit-list:not([hidden])',
+        );
+        const r = document.querySelector(read)?.getBoundingClientRect();
+        const rail = document.querySelector('.kit-app > .kit-rail');
+        const l = list?.getBoundingClientRect();
+        const label = list?.querySelector('.cb-list-rail-label');
+        return {
+          w: Math.round(l?.width ?? 0),
+          right: Math.round(l?.right ?? 0),
+          readLeft: Math.round(r?.left ?? 0),
+          readRight: Math.round(r?.right ?? 0),
+          dockLeft: Math.round(rail?.getBoundingClientRect().left ?? 0),
+          rows: !!list?.querySelector('.kit-rows')?.checkVisibility(),
+          label: label?.checkVisibility() ? label.textContent : '',
+          mode: label ? getComputedStyle(label).writingMode : '',
+          stored: localStorage.getItem('casebook.sidebar'),
+        };
+      },
+      { read: READ },
+    );
+  await pg.click(`${LIST} .cb-list-hide`);
+  await until(
+    pg,
+    () =>
+      document
+        .querySelector('.kit-app > .kit-list:not([hidden])')
+        ?.getBoundingClientRect().width === 34,
+  );
+  {
+    const l = await layout();
+    check(
+      `sidebar collapse: the list is a ${l.w}px rail reading "${l.label}" (${l.mode}), no rows shown (${l.rows}); the reading column fills the rest (${l.right} → ${l.readLeft}, ${l.readRight} → ${l.dockLeft}); stored ${l.stored}`,
+      l.w === 34 &&
+        l.label === 'waiting on you \u00b7 24' &&
+        l.mode.startsWith('vertical') &&
+        !l.rows &&
+        l.readLeft === l.right &&
+        l.readRight === l.dockLeft &&
+        l.stored === 'closed',
+    );
+  }
+
+  // ---- item wide -------------------------------------------------------------
+  await pg.evaluate((k) => {
+    location.hash = `#/item/${encodeURIComponent(k)}`;
+  }, CLOSE[0]);
+  await opened(t, pg, CLOSE[0]);
+  {
+    const g = await pageGeo();
+    check(
+      `item wide: at 1600px with the list collapsed the item page is ${g.doc?.w}px wide, its ${g.n} cards on one row (tops ${g.cardTops.join(',')})`,
+      (g.doc?.w ?? 0) > 1000 &&
+        (g.n === 5 || g.n === 6) &&
+        g.cardTops.length === 1,
+    );
+  }
+  // cards readable, wide: at 1600x1000 with the list collapsed, a
+  // five-card item keeps its cards on one row.
+  await pg.setViewportSize({ width: 1600, height: 1000 });
+  await pg.evaluate((k) => {
+    location.hash = `#/item/${encodeURIComponent(k)}`;
+  }, S1);
+  await opened(t, pg, S1);
+  {
+    const g = await pageGeo();
+    check(
+      `cards readable: at 1600x1000 with the list collapsed ${g.key}'s ${g.n} cards share one row (tops ${g.cardTops.join(',')}) and one height (${g.cardHs.join(',')})`,
+      g.key === S1 &&
+        g.n === 5 &&
+        g.cardTops.length === 1 &&
+        g.cardHs.length === 1,
+    );
+  }
+  await pg.setViewportSize({ width: 1600, height: 900 });
+
+  // The collapse survives a reload; » brings the list back.
+  await pg.reload({ waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector('.kit-row', { state: 'attached', timeout: 8000 });
+  await until(pg, () => !!document.querySelector('.cb-list-show'));
+  {
+    const l = await layout();
+    check(
+      `sidebar collapse survives a reload (${l.w}px, stored ${l.stored})`,
+      l.w === 34 && l.stored === 'closed',
+    );
+  }
+  await pg.click(`${LIST} .cb-list-show`);
+  await until(
+    pg,
+    () =>
+      document
+        .querySelector('.kit-app > .kit-list:not([hidden])')
+        ?.getBoundingClientRect().width === 520,
+  );
+  {
+    const l = await layout();
+    check(
+      `» brings the list back (${l.w}px, rows ${l.rows}, stored ${l.stored})`,
+      l.w === 520 && l.rows && l.stored === 'open',
+    );
   }
   await pg.close();
 }

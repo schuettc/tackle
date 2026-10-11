@@ -190,3 +190,35 @@ func TestChoicesAreAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestChoiceMany: every choice says how it reads for several items, with
+// {n} for the count word.
+func TestChoiceMany(t *testing.T) {
+	want := map[string]string{
+		"Leave it open":            "Leave {n} open",
+		"Keep it":                  "Keep {n}",
+		"Merge it":                 "Merge {n}",
+		"Close it without merging": "Close {n}",
+		"Close it":                 "Close {n}",
+		"Delete it":                "Delete {n}",
+		"Remove it":                "Remove {n}",
+		"Archive it on GitHub":     "Archive {n}",
+		"Not now":                  "Not now for {n}",
+		"Stop tracking it":         "Stop tracking {n}",
+	}
+	seen := map[string]bool{}
+	for _, k := range []Kind{KindRepo, KindPR, KindIssue, KindBranch, KindWorktree} {
+		for _, c := range Choices(k) {
+			if !strings.Contains(c.Many, "{n}") {
+				t.Errorf("%s %q: many %q has no {n}", k, c.Label, c.Many)
+			}
+			if w, ok := want[c.Label]; !ok || c.Many != w {
+				t.Errorf("%s %q: many %q, want %q", k, c.Label, c.Many, w)
+			}
+			seen[c.Label] = true
+		}
+	}
+	if len(seen) != len(want) {
+		t.Errorf("choices %v, the table has %d", seen, len(want))
+	}
+}

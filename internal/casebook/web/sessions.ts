@@ -28,6 +28,17 @@ export function sessionTitle(s: Session): string {
 }
 
 /**
+ * sessionName is what a recommendation's maker is called: the session serve
+ * named (its title), else the source's agent ("pi:abc" → "pi", "rule:x" →
+ * "rule").
+ */
+export function sessionName(s: Session | undefined, source: string): string {
+  if (s) return sessionTitle(s);
+  const i = source.indexOf(':');
+  return i === -1 ? source : source.slice(0, i);
+}
+
+/**
  * sessionMeta is the muted part after the title: "folder · harness" for a
  * named session, the harness alone when the title is already the folder.
  */

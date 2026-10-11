@@ -192,7 +192,7 @@ func TestOpenLandsOnAnItemOrAView(t *testing.T) {
 		{`{}`, 200, "?t=" + adv.Token},
 		{`{"key":"pr:schuettc/hail#3"}`, 200, "?t=" + adv.Token + "#/item/pr:schuettc%2Fhail%233"},
 		{`{"view":"proposed"}`, 200, "?t=" + adv.Token + "#/attention/proposed"},
-		{`{"view":"board"}`, 200, "#/attention/board"},
+		{`{"view":"board"}`, 400, ""},
 		{`{"key":"pr:schuettc/hail#999"}`, 404, ""},
 		{`{"key":"not a key"}`, 400, ""},
 		{`{"view":"everything"}`, 400, ""},

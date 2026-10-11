@@ -40,10 +40,11 @@ describe('parse', () => {
     });
   });
 
-  test('#/attention/board → attention / board', () => {
+  // The board is gone: an old link to it lands on waiting on you.
+  test('#/attention/board → attention / waiting', () => {
     assert.deepStrictEqual(parse('#/attention/board'), {
       section: 'attention',
-      sub: 'board',
+      sub: 'waiting',
     });
   });
 

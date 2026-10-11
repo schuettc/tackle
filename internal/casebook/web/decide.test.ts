@@ -16,9 +16,10 @@ import {
   keyWithoutKind,
   pluralize,
   leftOpenMeta,
-  leftOpenLabel,
+  navTargets,
+  shortKey,
 } from './decide-math.ts';
-import type { DecisionVocabView } from './wire.d.ts';
+import type { DecisionVocabView, GroupView } from './wire.d.ts';
 
 // ---- fixture vocab (mirrors item.Allowed for all five kinds) ----------------
 //
@@ -365,8 +366,85 @@ describe('left open', () => {
     );
     assert.equal(leftOpenMeta(undefined, now), 'left open');
   });
-  test('the group is labelled with its own count', () => {
-    assert.equal(leftOpenLabel(3), 'left open \u00b7 3');
-    assert.equal(leftOpenLabel(1), 'left open \u00b7 1');
+});
+
+// ---- « ‹ › »: the open item's place in the list ----------------------------
+
+describe('navTargets', () => {
+  const g = (id: string, label: string, total: number): GroupView => ({
+    id,
+    source: 'pi:s1',
+    disposition: id,
+    label,
+    outward: false,
+    many: '',
+    total,
+  });
+  const groups = [
+    g('close', 'Close it without merging', 27),
+    g('keep', 'Leave it open', 2),
+    g('merge', 'Merge it', 2),
+  ];
+  // The loaded rows in group order, a collapsed group's included.
+  const order = [
+    { key: 'pr:o/r#1', group: 'close' },
+    { key: 'pr:o/r#2', group: 'close' },
+    { key: 'pr:o/r#3', group: 'close' },
+    { key: 'pr:o/r#4', group: 'keep' },
+    { key: 'pr:o/r#5', group: 'keep' },
+    { key: 'pr:o/r#6', group: 'merge' },
+    { key: 'pr:o/r#7', group: 'merge' },
+  ];
+
+  test('the first item of the first group: no prev, no prevGroup, pos 1', () => {
+    const n = navTargets(order, groups, 'pr:o/r#1');
+    assert.equal(n.prev, undefined);
+    assert.equal(n.prevGroup, undefined);
+    assert.equal(n.pos, 1);
+    assert.equal(n.total, 27);
+    assert.equal(n.label, 'Close it without merging');
+    assert.equal(n.next, 'pr:o/r#2');
+    assert.equal(n.nextGroup, 'pr:o/r#4');
+  });
+
+  test("a group's last item: next is the next group's first item", () => {
+    const n = navTargets(order, groups, 'pr:o/r#5');
+    assert.equal(n.next, 'pr:o/r#6');
+    assert.equal(n.prev, 'pr:o/r#4');
+    assert.equal(n.pos, 2);
+    assert.equal(n.total, 2);
+    assert.equal(n.label, 'Leave it open');
+    // The previous group's first item, not its last.
+    assert.equal(n.prevGroup, 'pr:o/r#1');
+    assert.equal(n.nextGroup, 'pr:o/r#6');
+  });
+
+  test('the last group: no nextGroup', () => {
+    const n = navTargets(order, groups, 'pr:o/r#6');
+    assert.equal(n.nextGroup, undefined);
+    assert.equal(n.next, 'pr:o/r#7');
+    assert.equal(n.prevGroup, 'pr:o/r#4');
+    const last = navTargets(order, groups, 'pr:o/r#7');
+    assert.equal(last.next, undefined);
+    assert.equal(last.nextGroup, undefined);
+  });
+
+  test('an item not in the rows: pos 0, nothing to move to', () => {
+    const n = navTargets(order, groups, 'pr:o/r#99');
+    assert.deepEqual(n, { pos: 0, total: 0, label: '' });
+  });
+});
+
+describe('shortKey', () => {
+  test("a key without its kind and owner: what a nav button's tooltip names", () => {
+    assert.equal(
+      shortKey('pr:recreational-spreadsheeting/nfl-dk#467'),
+      'nfl-dk#467',
+    );
+    assert.equal(
+      shortKey('branch:schuettc/hail@feat/client'),
+      'hail@feat/client',
+    );
+    assert.equal(shortKey('repo:schuettc/hail'), 'hail');
   });
 });

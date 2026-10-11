@@ -15,15 +15,14 @@ import {
   choicesForKeys,
   fillLabel,
   recommendLine,
-  agreeGroups,
-  agreeText,
-  recommendedLine,
-  clearRecs,
+  countWord,
+  groupButtons,
+  discardConfirm,
   pastedKeys,
   lookIntoCard,
-  lookIntoAll,
 } from './decide-math.ts';
-import type { DecisionVocabView, NotNowForm } from './wire.d.ts';
+import { sessionName } from './sessions.ts';
+import type { DecisionVocabView, GroupView, NotNowForm } from './wire.d.ts';
 
 // The forms as serve sends them (item.NotNowForms).
 const FORMS: NotNowForm[] = [
@@ -173,7 +172,13 @@ const VOCAB: DecisionVocabView = {
   ],
   until_forms: null,
   not_now: FORMS,
-};
+  // Serve's words (decisionVocab) the helpers below fill in.
+  recommends: '{session} recommends',
+  discard_confirm:
+    'Discard {count} in {view}? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
+  discard_one: '1 recommendation',
+  discard_some: '{n} recommendations',
+} as DecisionVocabView;
 function c(
   disposition: string,
   label: string,
@@ -230,143 +235,139 @@ describe('fillLabel', () => {
   });
 });
 
-// A pending proposal on key from source.
-function pending(key: string, disposition: string, source = 'pi:s1', id = 0) {
-  return {
-    key,
-    proposal: { id, key, disposition, source, state: 'pending' },
-  };
-}
-
 describe('recommendLine', () => {
-  test("the row's line: the agent and serve's label for its kind", () => {
+  // A session serve knows, named as the rows and the recommendation box
+  // name it.
+  const by = {
+    id: 'abc',
+    harness: 'pi',
+    label: '',
+    cwd: '/home/court/tools-workspace',
+    pid: 1,
+    first_seen: '',
+    last_seen: '',
+    busy: false,
+    queued: 0,
+    name: 'tools-workspace/casebook',
+    worker: false,
+    eligible: true,
+  };
+
+  test("the session that recommends, by name, and serve's label for its kind", () => {
     assert.equal(
-      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'close'),
-      'pi recommends Close it',
+      recommendLine(VOCAB, 'issue:o/r#1', by, 'pi:abc', 'close'),
+      'tools-workspace/casebook recommends Close it',
     );
+  });
+
+  test("no session known: the source's agent", () => {
     assert.equal(
-      recommendLine(VOCAB, 'branch:o/r@x', 'rule:stale', 'delete'),
+      recommendLine(VOCAB, 'branch:o/r@x', undefined, 'rule:stale', 'delete'),
       'rule recommends Delete it',
     );
   });
 
   test('watch reads as Not now', () => {
     assert.equal(
-      recommendLine(VOCAB, 'issue:o/r#1', 'pi:abc', 'watch'),
-      'pi recommends Not now',
+      recommendLine(VOCAB, 'issue:o/r#1', by, 'pi:abc', 'watch'),
+      'tools-workspace/casebook recommends Not now',
     );
   });
+});
 
-  test('before the vocabulary loads: the disposition', () => {
+// The group buttons' words as serve sends them (the vocabulary).
+const WORDS = { one: 'it', two: 'both', all: 'all {n}', some: '{n}' };
+const GROUP_VOCAB = {
+  look_many: 'Look into {n}',
+  discard_many: 'Discard {n}',
+  count_words: WORDS,
+};
+
+describe('countWord', () => {
+  test('the whole group: it, both, all N; some ticked: N', () => {
+    assert.equal(countWord(1, 0, WORDS), 'it');
+    assert.equal(countWord(2, 0, WORDS), 'both');
+    assert.equal(countWord(27, 0, WORDS), 'all 27');
+    assert.equal(countWord(27, 3, WORDS), '3');
+  });
+
+  test('ticking every item counts as the whole group', () => {
+    assert.equal(countWord(27, 27, WORDS), 'all 27');
+  });
+});
+
+describe('groupButtons', () => {
+  const close: GroupView = {
+    id: 'pi:s1|close|Close it without merging',
+    source: 'pi:s1',
+    disposition: 'close',
+    label: 'Close it without merging',
+    outward: true,
+    many: 'Close {n}',
+    total: 27,
+  };
+  test('nothing ticked: the whole group', () => {
+    assert.deepEqual(groupButtons(close, 0, GROUP_VOCAB), {
+      act: 'Close all 27',
+      look: 'Look into all 27',
+      discard: 'Discard all 27',
+    });
+  });
+
+  test('some ticked: those', () => {
+    assert.deepEqual(groupButtons(close, 3, GROUP_VOCAB), {
+      act: 'Close 3',
+      look: 'Look into 3',
+      discard: 'Discard 3',
+    });
+  });
+
+  test("a choice's own wording around the count", () => {
+    const keep = { ...close, many: 'Leave {n} open', total: 2 };
+    assert.equal(groupButtons(keep, 0, GROUP_VOCAB).act, 'Leave both open');
+  });
+});
+
+describe('discardConfirm', () => {
+  test("serve's sentence, with the count and the view", () => {
     assert.equal(
-      recommendLine(null, 'issue:o/r#1', 'pi:abc', 'close'),
-      'pi recommends close',
+      discardConfirm(VOCAB, 31, 'waiting on you'),
+      VOCAB.discard_confirm
+        .replace('{count}', VOCAB.discard_some.replace('{n}', '31'))
+        .replace('{view}', 'waiting on you'),
+    );
+    assert.equal(
+      discardConfirm(VOCAB, 1, 'new'),
+      VOCAB.discard_confirm
+        .replace('{count}', VOCAB.discard_one)
+        .replace('{view}', 'new'),
     );
   });
 });
 
-describe('agreeGroups', () => {
-  test('two or more sharing an agent and a choice make a group, in list order', () => {
-    const items = [
-      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
-      pending('issue:o/r#2', 'close', 'pi:s1', 2),
-      pending('issue:o/r#3', 'keep', 'pi:s1', 3),
-      { key: 'issue:o/r#4' },
-      pending('issue:o/r#5', 'keep', 'pi:s2', 5),
-      pending('issue:o/r#6', 'close', 'rule:x', 6),
-    ];
-    const got = agreeGroups(VOCAB, items);
-    assert.equal(got.length, 1);
-    assert.deepEqual(got[0].ids, [1, 3, 5]);
-    assert.deepEqual(got[0].keys, [
-      'issue:o/r#1',
-      'issue:o/r#3',
-      'issue:o/r#5',
-    ]);
-    assert.equal(got[0].label, 'Leave it open');
-    assert.equal(got[0].agent, 'pi');
-    assert.equal(got[0].outward, false);
+describe('sessionName', () => {
+  const s = {
+    id: 'abc',
+    harness: 'pi',
+    label: '',
+    cwd: '/home/court/tools-workspace',
+    pid: 1,
+    first_seen: '',
+    last_seen: '',
+    busy: false,
+    queued: 0,
+    name: 'tools-workspace/casebook',
+    worker: false,
+    eligible: true,
+  };
+  test('the session serve named: its title', () => {
+    assert.equal(sessionName(s, 'pi:abc'), 'tools-workspace/casebook');
+    assert.equal(sessionName({ ...s, name: '' }, 'pi:abc'), 'tools-workspace');
   });
 
-  test('settled proposals and one-item choices make none', () => {
-    const items = [
-      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
-      {
-        key: 'issue:o/r#2',
-        proposal: {
-          id: 2,
-          key: 'issue:o/r#2',
-          disposition: 'keep',
-          source: 'pi:s1',
-          state: 'rejected',
-        },
-      },
-    ];
-    assert.deepEqual(agreeGroups(VOCAB, items), []);
-  });
-
-  test('an outward choice is marked, kinds worded differently are joined', () => {
-    const got = agreeGroups(VOCAB, [
-      pending('issue:o/r#1', 'keep', 'pi:s1', 1),
-      pending('branch:o/r@x', 'keep', 'pi:s1', 2),
-      pending('issue:o/r#3', 'close', 'pi:s1', 3),
-      pending('issue:o/r#4', 'close', 'pi:s1', 4),
-    ]);
-    assert.deepEqual(
-      got.map((g) => [g.label, g.outward, g.ids.length]),
-      [
-        ['Leave it open / Keep it', false, 2],
-        ['Close it', true, 2],
-      ],
-    );
-  });
-});
-
-describe('agreeText', () => {
-  const g = (outward: boolean) => ({
-    agent: 'pi',
-    disposition: outward ? 'close' : 'keep',
-    label: outward ? 'Close it' : 'Leave it open',
-    outward,
-    ids: [1, 2, 3],
-    keys: ['a', 'b', 'c'],
-  });
-  test('a group to agree with', () => {
-    assert.deepEqual(agreeText(g(false)), {
-      says: 'pi recommends Leave it open for 3',
-      action: 'agree with all 3',
-    });
-  });
-  test('an outward group goes to To apply', () => {
-    assert.deepEqual(agreeText(g(true)), {
-      says: 'pi recommends Close it for 3',
-      action: 'send all 3 to To apply',
-    });
-  });
-});
-
-describe('recommendedLine', () => {
-  test('the counts', () => {
-    assert.equal(recommendedLine(18, 13), '18 recommended \u00b7 13 not yet');
-    assert.equal(recommendedLine(0, 0), '0 recommended \u00b7 0 not yet');
-  });
-});
-
-describe('clearRecs', () => {
-  test('the line, the foot group and the confirm', () => {
-    assert.deepEqual(clearRecs(474, 'waiting on you'), {
-      action: 'clear 474 recommendations',
-      these: 'clear these 474',
-      confirm:
-        'Clear 474 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.',
-    });
-  });
-  test('one', () => {
-    assert.equal(clearRecs(1, 'new').action, 'clear 1 recommendation');
-    assert.match(
-      clearRecs(1, 'new').confirm,
-      /^Clear 1 recommendation in new\? /,
-    );
+  test("none named: the source's agent", () => {
+    assert.equal(sessionName(undefined, 'pi:abc'), 'pi');
+    assert.equal(sessionName(undefined, 'rule:stale'), 'rule');
   });
 });
 
@@ -507,15 +508,6 @@ describe('lookIntoCard', () => {
       label: 'Look into it',
       says: "pi \u00b7 a checks its CI and recent activity, finds what's wrong, and comes back with a recommendation. Nothing is decided yet.",
       message: 'Look into pr:o/r#1: check it.',
-    });
-  });
-});
-
-describe('lookIntoAll', () => {
-  test("one message naming every key, and the foot's action", () => {
-    assert.deepEqual(lookIntoAll(LOOK, 'pi \u00b7 a', ['a#1', 'a#2', 'a#3']), {
-      action: 'ask pi \u00b7 a to look into all 3',
-      message: 'Look into these items: a#1, a#2, a#3. For each, check it.',
     });
   });
 });

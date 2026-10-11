@@ -32,8 +32,11 @@ export function parse(hash: string): { section: string; sub: string } {
   }
   // Decode the sub so keys with /, #, @ etc. produced by url.PathEscape
   // (server) or pathEscape (client) are returned as the raw key string.
-  return {
-    section: path.slice(0, slash),
-    sub: safeDecode(path.slice(slash + 1)),
-  };
+  const section = path.slice(0, slash);
+  const sub = safeDecode(path.slice(slash + 1));
+  // The board is gone: an old link to it lands on waiting on you.
+  if (section === 'attention' && sub === 'board') {
+    return { section, sub: 'waiting' };
+  }
+  return { section, sub };
 }

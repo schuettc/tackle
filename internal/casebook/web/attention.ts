@@ -1,11 +1,11 @@
-// attention.ts — the Attention section: list, views, filters, item detail.
+// attention.ts — the Attention section: list, views, search, item detail.
 //
-// makeAttention(ctx) builds the kit list(), wires view + filter chips,
+// makeAttention(ctx) builds the kit list(), wires the view chips and search,
 // fetches items from GET /api/items, and opens items in the reading column via
 // renderItem() from item.ts.
 //
-// The shared Selection store (used by the board view in Task 4) is exported so
-// Task 4 can bind to it without creating a second store.
+// The Selection store is exported so the page's other parts bind to it
+// without creating a second store.
 
 import {
   list,
@@ -15,7 +15,6 @@ import {
   type Chip,
   type ListHandle,
   type KeyBinding,
-  type Primary,
 } from '/_kit/kit.js';
 import type {
   SummaryView,
@@ -28,39 +27,34 @@ import type {
   Committed,
   DecisionUndoResult,
   DecisionVocabView,
+  GroupView,
   Message,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
-import { wireSelection, getVocab } from './decide.ts';
+import { getVocab } from './decide.ts';
 import {
   keyWithoutKind,
   pluralize,
   nextInView,
   MORE,
   recommendLine,
-  recommendedLine,
-  clearRecs,
-  agreeGroups,
+  countWord,
+  groupButtons,
   leftOpenMeta,
-  leftOpenLabel,
   lookIntoCard,
-  type AgreeGroup,
+  navTargets,
+  shortKey,
 } from './decide-math.ts';
+import { groupKeys } from './key-layer.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
-import { makeBoard } from './board.ts';
-import { lookingLine } from './sessions.ts';
+import { lookingLine, sessionName } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
-import {
-  agreeWithAll,
-  bulkProposalActions,
-  openRejectSheet,
-  openClearSheet,
-  type BulkProposalActions,
-} from './proposals.ts';
+import { openRejectSheet, openDiscardSheet } from './proposals.ts';
 
-// RECOMMEND_THE_REST is what "ask … to recommend the rest" sends the dock's
-// session: a normal message, delivered when its turn ends.
+// RECOMMEND_THE_REST is what the not-recommended group's "Ask ‹session› to
+// recommend N" sends the dock's session: a normal message, delivered when
+// its turn ends.
 export const RECOMMEND_THE_REST =
   'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
 
@@ -68,7 +62,7 @@ export const RECOMMEND_THE_REST =
 // rendered rows; we paginate at 200 to stay safe.
 const PAGE_SIZE = 200;
 
-// Shared selection store — the board view (Task 4) imports this.
+// Shared selection store.
 export const selection: Selection = createSelection();
 
 // View chip ids map to API view= param values.
@@ -77,45 +71,26 @@ const VIEWS: Chip[] = [
   { id: 'new', label: 'new' },
   { id: 'due', label: 'due' },
   { id: 'proposed', label: 'proposed' },
-  { id: 'board', label: '▦ board' },
 ];
 
-// Filter chip ids are used as query param names.  The text filter is handled
-// separately (a noteField-style input is rendered as a filter chip with no
-// on/off toggle).
-const FILTER_CHIPS: Chip[] = [
-  { id: 'kind', label: 'kind' },
-  { id: 'repo', label: 'repo' },
-  { id: 'relation', label: 'relation' },
-  { id: 'bot', label: 'bot/human' },
-  { id: 'age', label: 'age' },
-  { id: 'rule', label: 'rule' },
-];
+// The list has no filter chips (Court, 2026-10-10: search only). serve's
+// filter parameters stay, for agents' tools.
 
-// State for the current view and active filters.
-interface Filters extends Record<string, string> {
+// State for the current view and the search text.
+interface Filters {
   view: string;
-  kind: string;
-  repo: string;
-  relation: string;
-  bot: string;
-  age: string;
-  rule: string;
   q: string;
 }
 
 function emptyFilters(): Filters {
-  return {
-    view: 'waiting',
-    kind: '',
-    repo: '',
-    relation: '',
-    bot: '',
-    age: '',
-    rule: '',
-    q: '',
-  };
+  return { view: 'waiting', q: '' };
 }
+
+// LEFT_OPEN is the left-open group's id among the groups' (collapsed).
+const LEFT_OPEN = 'left-open';
+
+// SIDEBAR is where the list's collapse is kept ('open' or 'closed').
+const SIDEBAR = 'casebook.sidebar';
 
 // ---- URL search param helpers -----------------------------------------------
 
@@ -162,12 +137,24 @@ export function makeAttention(ctx: Ctx): Section {
   let loadingMore = false;
   let loads = 0;
   let footEl: HTMLElement | null = null;
-  let propFoot: BulkProposalActions | null = null;
   let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-  let totalItemsForView = 0; // updated after every load; used by select-all
+  let totalItemsForView = 0; // updated after every load
+  // The view's groups (serve's order and counts, every page) and the ones
+  // Court collapsed (in memory only). A collapsed group's rows are not
+  // given to the list, so j and k pass over them.
+  let groups: GroupView[] = [];
+  // The left-open group starts collapsed.
+  const collapsed = new Set<string>([LEFT_OPEN]);
+  // What the page knows of each item it has seen in a group (loaded rows
+  // and a group fetched whole): its group and its pending proposal's id.
+  // A ticked item on a page not loaded is counted and acted on from here.
+  const groupOfKey = new Map<string, string>();
+  const proposalOfKey = new Map<string, number>();
+  // The groups whose button is running (their buttons wait).
+  const busyGroups = new Set<string>();
   // The view's left-open group (kept items still open: they need no
-  // decision, so the view's count and move-on leave them out). Its rows
-  // follow the items that need a decision, once every page of those is
+  // decision, so the view's count and move-on leave them out). It is the
+  // last group, once every page of the items that need a decision is
   // loaded; shown is what the list renders.
   let leftOpen: ItemView[] = [];
   let leftOpenTotal = 0;
@@ -192,13 +179,9 @@ export function makeAttention(ctx: Ctx): Section {
     prev: Decision | null;
     expect: Committed;
   } | null = null;
-  let boardHandle: ReturnType<typeof makeBoard> | null = null;
-  // serve's decision vocabulary (the rows' "pi recommends Close it" and the
-  // agree-with-all labels); null until it loads.
+  // serve's decision vocabulary (the groups' buttons, the summary, the
+  // recommendation line); null until it loads.
   let vocab: DecisionVocabView | null = null;
-  // The summary's counts of the items that need a decision: recommended
-  // and not yet (null until the summary loads).
-  let recCounts: { rec: number; notYet: number } | null = null;
   // syncingOpen: the list's open row is being moved to the open item (no
   // onOpen for it).
   let syncingOpen = false;
@@ -263,41 +246,27 @@ export function makeAttention(ctx: Ctx): Section {
   // Initialise the reading column with the empty state so it is never blank.
   showReadEmpty();
 
-  // ---- foot: show-more + selection count + select all in view ---------------
+  // ---- foot: the pinned summary ------------------------------------------
+
+  // The foot is pinned to the bottom of the list: the selection's count,
+  // the view's summary ("31 items, all recommended by ‹session›"), "discard
+  // all N" while the view has agent recommendations, and "show N more"
+  // while more pages exist.
+  const summaryEl = h('span', { class: 'cb-summary' });
+  const discardAllBtn = h('button', {
+    class: 'kit-btn cb-discard-all',
+    type: 'button',
+    hidden: true,
+    onclick() {
+      discardView();
+    },
+  }) as HTMLButtonElement;
 
   function buildFoot(): HTMLElement {
-    // Left side: selection count (shown when N>0) and select-all button
-    // (hidden once every item in view is already selected).
-    const selCount = h(
-      'span',
-      { class: 'cb-sel-count', hidden: true },
-      '0 selected',
-    );
-
-    const selAllBtn = h(
-      'button',
-      {
-        class: 'cb-sel-all',
-        onclick() {
-          void selectAllInView();
-        },
-      },
-      'select all 0 in view',
-    );
-
-    // Right side: bulk proposal buttons (proposed view only) and show-more.
-    // .cb-prop-bulk and .cb-foot-more are pushed right via margin-left:auto
-    // on .cb-foot-right (see casebook.css).
-    // Bulk proposal buttons (only visible in the 'proposed' view).
-    propFoot = bulkProposalActions(ctx, (keys: string[]) => {
-      selection.deselect(keys);
-      void reload();
-    });
-
     const footRight = h(
       'div',
       { class: 'cb-foot-right' },
-      propFoot.el,
+      discardAllBtn,
       h(
         'button',
         {
@@ -310,55 +279,8 @@ export function makeAttention(ctx: Ctx): Section {
         `show ${PAGE_SIZE} more`,
       ),
     );
-
-    footEl = h('div', { class: 'cb-foot' }, selCount, selAllBtn, footRight);
+    footEl = h('div', { class: 'cb-foot' }, summaryEl, footRight);
     return footEl;
-  }
-
-  /**
-   * updateProposalBulk recalculates which selected items have pending proposals
-   * and updates the bulk accept/reject button labels and visibility.
-   * Only shown when filters.view === 'proposed'.
-   */
-  function updateProposalBulk(selectedIds: string[]): void {
-    if (!propFoot) return;
-    if (filters.view !== 'proposed') {
-      propFoot.update([], []);
-      return;
-    }
-    const withProps = loadedItems.filter(
-      (it) =>
-        it.proposal &&
-        it.proposal.state === 'pending' &&
-        selectedIds.includes(it.key),
-    );
-    propFoot.update(
-      withProps.map((it) => it.proposal!.id),
-      withProps.map((it) => it.key),
-    );
-  }
-
-  // selectAllInView fetches every id in the current view and calls selectAll()
-  // so the selection covers the whole view, even across pages.
-  async function selectAllInView(): Promise<void> {
-    // Board mode: select all unique items across all four lanes.
-    if (boardHandle) {
-      handle.selectAll(boardHandle.allKeys());
-      return;
-    }
-    let allIds: string[] = loadedItems.map((it) => it.key);
-    if (totalItemsForView > loadedItems.length) {
-      try {
-        const data = await ctx.api.get<ItemsView>('/items', {
-          ...buildQuery(0),
-          limit: String(totalItemsForView),
-        });
-        allIds = (data.items ?? []).map((it) => it.key);
-      } catch {
-        // Non-fatal: select only what's loaded.
-      }
-    }
-    handle.selectAll(allIds);
   }
 
   // ---- list -----------------------------------------------------------------
@@ -366,7 +288,7 @@ export function makeAttention(ctx: Ctx): Section {
   const handle: ListHandle<ItemView> = list<ItemView>({
     label: 'attention',
     views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
-    filters: FILTER_CHIPS,
+    filters: [],
     selection,
     openOnMove: false,
     search: {
@@ -377,9 +299,7 @@ export function makeAttention(ctx: Ctx): Section {
           searchDebounceTimer = null;
           filters.q = text;
           setUrlQ(text);
-          // The board searches its lanes as the list searches its rows.
-          if (boardHandle) void boardHandle.refresh();
-          else void reload();
+          void reload();
         }, 200);
       },
     },
@@ -389,14 +309,11 @@ export function makeAttention(ctx: Ctx): Section {
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const left = isLeftOpen(it);
       const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf(it);
-      const proposal =
-        !left && it.proposal && it.proposal.state === 'pending'
-          ? recommendLine(
-              vocab,
-              it.key,
-              it.proposal.source,
-              it.proposal.disposition,
-            )
+      // In a recommendation's group the row gives its reason (the group's
+      // header names the choice).
+      const reason =
+        !left && it.group && it.proposal?.state === 'pending'
+          ? it.proposal.note || undefined
           : undefined;
       return {
         id: it.key,
@@ -406,9 +323,9 @@ export function makeAttention(ctx: Ctx): Section {
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         // An item new activity brought back says so ("new activity since
-        // you left it open"), before any recommendation.
+        // you left it open"), before any recommendation's reason.
         sub:
-          [it.new_activity ? it.due_reason : undefined, proposal]
+          [it.new_activity ? it.due_reason : undefined, reason]
             .filter(Boolean)
             .join(' \u00b7 ') || undefined,
         selectable: true,
@@ -416,17 +333,8 @@ export function makeAttention(ctx: Ctx): Section {
     },
     onChip(group, id) {
       if (group === 'view') {
-        if (id === 'board') {
-          // Board view is Task 4; navigate there.
-          ctx.route.go('attention', 'board');
-          return;
-        }
         filters.view = id;
         ctx.route.go('attention', id);
-        void reload();
-      } else if (group === 'filter') {
-        // Simple toggle cycle for known filter values.
-        cycleFilter(id);
         void reload();
       }
     },
@@ -436,38 +344,71 @@ export function makeAttention(ctx: Ctx): Section {
       ctx.route.go('item', it.key);
       void openDetail(it.key);
     },
-    // onSelect: wireSelection handles the primary button via selection.onChange().
     foot: buildFoot(),
   });
 
-  // ---- filter chip cycling --------------------------------------------------
+  // The groups' CSS (indented rows, one row height, the reserved
+  // scrollbar) is Attention's alone.
+  handle.el.classList.add('cb-attention');
 
-  const filterCycles: Record<string, string[]> = {
-    relation: ['', 'incoming', 'outgoing', 'own'],
-    bot: ['', 'bot', 'human'],
-  };
+  // ---- the list collapses to a rail -----------------------------------------
 
-  function cycleFilter(id: string): void {
-    const cycle = filterCycles[id];
-    if (cycle) {
-      const cur = filters[id] ?? '';
-      const i = cycle.indexOf(cur);
-      filters[id] = cycle[(i + 1) % cycle.length];
+  // « hides the list: it becomes a thin rail showing » and the view with
+  // its count, written up the rail; the rail (or ») brings it back. The
+  // choice is kept across reloads.
+  const hideBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'cb-list-hide',
+      onclick() {
+        setSidebar(false);
+      },
+    },
+    '\u00ab',
+  );
+  const showBtn = h(
+    'button',
+    { type: 'button', class: 'cb-list-show' },
+    '\u00bb',
+  );
+  const railLabel = h('span', { class: 'cb-list-rail-label' });
+  const rail = h(
+    'div',
+    {
+      class: 'cb-list-rail',
+      onclick() {
+        setSidebar(true);
+      },
+    },
+    showBtn,
+    railLabel,
+  );
+  handle.el.append(hideBtn, rail);
+  function storedSidebar(): boolean {
+    try {
+      return localStorage.getItem(SIDEBAR) !== 'closed';
+    } catch {
+      return true;
     }
-    // kind/repo/age/rule: no cycle; the chip toggles clearing (Task 4 or later).
   }
-
-  function updateFilterChips(): void {
-    handle.setChips(
-      'filter',
-      FILTER_CHIPS.map((c) => ({
-        ...c,
-        on: Boolean((filters as Record<string, string>)[c.id]),
-        label: (filters as Record<string, string>)[c.id]
-          ? `${c.label}: ${(filters as Record<string, string>)[c.id]}`
-          : c.label,
-      })),
-    );
+  function setSidebar(open: boolean): void {
+    handle.el.classList.toggle('cb-list-closed', !open);
+    try {
+      localStorage.setItem(SIDEBAR, open ? 'open' : 'closed');
+    } catch {
+      // storage refused: the choice lasts this page only
+    }
+  }
+  handle.el.classList.toggle('cb-list-closed', !storedSidebar());
+  // paintRail writes the rail's view and count, and the controls' tooltips
+  // (serve's words).
+  function paintRail(): void {
+    railLabel.textContent = `${viewLabel()} \u00b7 ${totalItemsForView}`;
+    if (vocab) {
+      hideBtn.title = vocab.hide_list;
+      showBtn.title = vocab.show_list;
+    }
   }
 
   // ---- API ------------------------------------------------------------------
@@ -478,19 +419,13 @@ export function makeAttention(ctx: Ctx): Section {
       offset: String(pageOffset),
       limit: String(PAGE_SIZE),
     };
-    if (filters.kind) p['kind'] = filters.kind;
-    if (filters.repo) p['repo'] = filters.repo;
-    if (filters.relation) p['relation'] = filters.relation;
-    if (filters.bot) p['bot'] = filters.bot;
-    if (filters.age) p['age'] = filters.age;
-    if (filters.rule) p['rule'] = filters.rule;
     if (filters.q) p['q'] = filters.q;
     return p;
   }
 
-  // reload loads the list's first page for the view, filters and search
-  // as they are when it runs. Coalesced (coalesce.ts): one load in flight
-  // and at most one queued, so a view, filter or search change made while a
+  // reload loads the list's first page for the view and search as they
+  // are when it runs. Coalesced (coalesce.ts): one load in flight and at
+  // most one queued, so a view or search change made while a
   // load is on its way runs once that load ends, never dropped (casebook
   // 0.4.7: it was, and the list kept the old view). A load whose query
   // changed while it was on its way paints nothing: the newer query's load
@@ -502,15 +437,39 @@ export function makeAttention(ctx: Ctx): Section {
     return JSON.stringify(buildQuery(0));
   }
 
+  // paintedQuery is the query the rows were last loaded for: reloading it
+  // keeps every page the list had (a nav button or "show more" may have
+  // loaded one), a new view or search starts at one page. The pages are
+  // asked for one at a time, PAGE_SIZE each (serve caps a page's limit),
+  // and the rows painted once they are all in.
+  let paintedQuery = '';
   async function reloadNow(): Promise<void> {
     reloading = true;
     loads++;
     const asked = queryKey();
+    const want =
+      asked === paintedQuery ? Math.max(offset, PAGE_SIZE) : PAGE_SIZE;
     try {
       offset = 0;
       loadedItems = [];
-      updateFilterChips();
       const data = await ctx.api.get<ItemsView>('/items', buildQuery(0));
+      const items = data.items ?? [];
+      const seen = new Set(items.map((it) => it.key));
+      // at is the offset of the next page, the rows serve sent so far.
+      let at = items.length;
+      while (at < want && at < data.total && queryKey() === asked) {
+        const q = buildQuery(at);
+        q['limit'] = String(Math.min(PAGE_SIZE, want - at));
+        const page = (await ctx.api.get<ItemsView>('/items', q)).items ?? [];
+        if (page.length === 0) break;
+        at += page.length;
+        // A row that moved down a page while they loaded is not listed twice.
+        for (const it of page) {
+          if (seen.has(it.key)) continue;
+          seen.add(it.key);
+          items.push(it);
+        }
+      }
       if (queryKey() !== asked) {
         // Every change to the query asks for a reload; this one makes sure.
         void reload();
@@ -518,17 +477,19 @@ export function makeAttention(ctx: Ctx): Section {
       }
       totalItems = data.total;
       totalItemsForView = data.total;
-      loadedItems = data.items ?? [];
+      loadedItems = items;
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
+      groups = data.groups ?? [];
+      viewRecs = data.agent_recommended ?? 0;
+      know(loadedItems);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
+      paintedQuery = asked;
       setRows();
       markOpenRow();
-      updateAgree();
       updateFoot();
       updateReadEmptyCount();
-      updateProposalBulk(selection.ids());
     } catch {
       // non-fatal; leave the list as-is
     } finally {
@@ -550,15 +511,16 @@ export function makeAttention(ctx: Ctx): Section {
       loadedItems = [...loadedItems, ...next];
       leftOpen = data.left_open ?? [];
       leftOpenTotal = data.left_open_total ?? 0;
+      groups = data.groups ?? [];
+      viewRecs = data.agent_recommended ?? 0;
+      know(next);
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       totalItems = data.total;
       totalItemsForView = data.total;
       setRows();
       markOpenRow();
-      updateAgree();
       updateFoot();
-      updateProposalBulk(selection.ids());
     } catch {
       // non-fatal
     } finally {
@@ -566,58 +528,651 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
-  // setRows renders the items that need a decision and, once every page of
-  // them is loaded, the left-open group after them: a quiet divider
-  // ("left open · N", the group's own count) and muted rows.
+  // setRows renders the items that need a decision, under their groups'
+  // headers (a collapsed group's header alone), and, once every page of
+  // them is loaded, the left-open group last: its header and (expanded)
+  // its muted rows.
   function setRows(): void {
-    const all = offset >= totalItems;
-    const group = all ? leftOpen : [];
-    shown = [...loadedItems, ...group];
+    const withLeft = offset >= totalItems && leftOpenTotal > 0;
+    const left = withLeft && !collapsed.has(LEFT_OPEN) ? leftOpen : [];
+    const open = loadedItems.filter((it) => !collapsed.has(it.group));
+    shown = [...open, ...left];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll<HTMLElement>(
       '.kit-rows > .kit-row',
     );
-    loadedItems.forEach((it, i) => {
+    open.forEach((it, i) => {
       if (it.new_activity) rowEls[i]?.classList.add('cb-new-activity');
     });
     // "‹session› is looking into it" (muted, agent colour) on the rows a
     // session is looking into.
     // It goes where the row's sub line goes: in the text column, under the
-    // title (and any recommendation line), one line.
+    // title (and any recommendation's reason), one line.
     shown.forEach((it, i) => {
+      // The kicker and the title are one line each, cut with an ellipsis:
+      // whole in their tooltips.
+      for (const sel of ['.kit-kicker', '.kit-title']) {
+        const el = rowEls[i]?.querySelector<HTMLElement>(sel);
+        if (el) el.title = el.textContent ?? '';
+      }
       const col = rowEls[i]?.querySelector('.kit-title')?.parentElement;
       if (!col) return;
       col.querySelector('.cb-row-looking')?.remove();
       const says = lookingLine(it.looking);
       if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
     });
-    if (!group.length) return;
-    for (let i = loadedItems.length; i < shown.length; i++) {
+    placeGroupHeads(open, rowEls);
+    paintRail();
+    refreshNav();
+    if (!withLeft) return;
+    for (let i = open.length; i < shown.length; i++) {
       rowEls[i]?.classList.add('cb-left-open');
     }
-    rowEls[loadedItems.length]?.before(
+    const head = leftOpenHead();
+    heads.push(head);
+    const first = rowEls[open.length];
+    if (first) first.before(head.el);
+    else handle.el.querySelector('.kit-rows')?.append(head.el);
+  }
+
+  // ---- « ‹ › »: the open item's place in the list ---------------------------
+
+  // navOrder is the list's loaded rows in group order, a collapsed group's
+  // included, the left-open group last once every page is loaded.
+  function navOrder(): { key: string; group: string }[] {
+    const rows = loadedItems.map((it) => ({ key: it.key, group: it.group }));
+    if (offset >= totalItems && leftOpenTotal > 0)
+      rows.push(...leftOpen.map((it) => ({ key: it.key, group: LEFT_OPEN })));
+    return rows;
+  }
+
+  // navGroups is the view's groups, the left-open group's with them.
+  function navGroups(): GroupView[] {
+    return [
+      ...groups,
+      {
+        id: LEFT_OPEN,
+        source: '',
+        disposition: '',
+        label: vocab?.left_open ?? '',
+        outward: false,
+        many: '',
+        total: leftOpenTotal,
+      },
+    ];
+  }
+
+  type NavWhich = 'prevGroup' | 'prev' | 'next' | 'nextGroup';
+
+  // renderNav is the open item's « ‹ › » row: its place in its group, and
+  // a button to the group before, the item before, the item after and the
+  // group after, each naming where it goes (disabled where there is
+  // none). Null when key is not in the list's rows.
+  function renderNav(key: string): HTMLElement | null {
+    if (!vocab) return null;
+    const words = vocab.nav;
+    const n = navTargets(navOrder(), navGroups(), key);
+    if (!n.pos) return null;
+    // More pages: what comes after may be on one not loaded yet.
+    const more = offset < totalItems;
+    const labelOf = (k: string): string => {
+      const g = navOrder().find((r) => r.key === k)?.group ?? '';
+      return navGroups().find((x) => x.id === g)?.label ?? '';
+    };
+    const button = (
+      which: NavWhich,
+      glyph: string,
+      tip: string,
+      target: string | undefined,
+      name: (k: string) => string,
+      later: boolean,
+    ): HTMLElement =>
       h(
-        'div',
-        { class: 'cb-left-open-head', role: 'presentation' },
-        leftOpenLabel(leftOpenTotal),
+        'button',
+        {
+          type: 'button',
+          class: 'cb-nav-b',
+          dataset: {
+            nav:
+              which === 'prevGroup'
+                ? 'prev-group'
+                : which === 'nextGroup'
+                  ? 'next-group'
+                  : which,
+          },
+          disabled: !target && !later,
+          title: tip.replaceAll(
+            '{target}',
+            target ? name(target) : later ? words.later : words.none,
+          ),
+          onclick() {
+            void navGo(which);
+          },
+        },
+        glyph,
+      );
+    const pos = words.position
+      .replaceAll('{pos}', String(n.pos))
+      .replaceAll('{total}', String(n.total))
+      .replaceAll('{group}', n.label);
+    return h(
+      'nav',
+      { class: 'cb-nav' },
+      button(
+        'prevGroup',
+        '\u00ab',
+        words.prev_group,
+        n.prevGroup,
+        labelOf,
+        false,
       ),
+      button('prev', '\u2039', words.prev_item, n.prev, shortKey, false),
+      h('span', { class: 'cb-nav-pos' }, pos),
+      button('next', '\u203a', words.next_item, n.next, shortKey, more),
+      button(
+        'nextGroup',
+        '\u00bb',
+        words.next_group,
+        n.nextGroup,
+        labelOf,
+        more,
+      ),
+    );
+  }
+
+  // refreshNav puts the open item's « ‹ › » row in place again (the list
+  // changed), or takes it away when the item is no longer in the rows.
+  function refreshNav(): void {
+    const doc = readEl.querySelector<HTMLElement>('.cb-item-doc');
+    if (!doc || !currentOpenKey || shownDetail?.item.key !== currentOpenKey)
+      return;
+    const nav = renderNav(currentOpenKey);
+    const old = doc.querySelector(':scope > .cb-nav');
+    if (old && nav) old.replaceWith(nav);
+    else if (nav) doc.prepend(nav);
+    else old?.remove();
+  }
+
+  // navGo opens which of the open item's targets: past the loaded rows,
+  // the next page loads first. A target in a collapsed group expands it.
+  async function navGo(which: NavWhich): Promise<void> {
+    const key = currentOpenKey;
+    if (!key) return;
+    let target = navTargets(navOrder(), navGroups(), key)[which];
+    const ahead = which === 'next' || which === 'nextGroup';
+    while (!target && ahead && offset < totalItems) {
+      const before = offset;
+      if (reloading) await reload();
+      else await loadMore();
+      if (currentOpenKey !== key) return;
+      target = navTargets(navOrder(), navGroups(), key)[which];
+      if (!target && offset === before && !reloading) break;
+    }
+    if (!target || currentOpenKey !== key) return;
+    const group = navOrder().find((r) => r.key === target)?.group ?? '';
+    if (collapsed.has(group)) {
+      collapsed.delete(group);
+      setRows();
+    }
+    openKey(target);
+  }
+
+  // ---- the groups ------------------------------------------------------------
+
+  // know records the group and the pending proposal of each item.
+  function know(items: ItemView[]): void {
+    for (const it of items) {
+      if (!it.group) continue;
+      groupOfKey.set(it.key, it.group);
+      if (it.proposal?.state === 'pending')
+        proposalOfKey.set(it.key, it.proposal.id);
+      else proposalOfKey.delete(it.key);
+    }
+  }
+
+  // tickedIn is the ticked items of group g (on any page).
+  function tickedIn(g: GroupView): string[] {
+    return selection.ids().filter((k) => groupOfKey.get(k) === g.id);
+  }
+
+  // heads are the shown groups' headers, painted again when the selection
+  // or the attached session changes.
+  let heads: Array<{ el: HTMLElement; paint(): void }> = [];
+
+  // placeGroupHeads puts each group with loaded rows under its header, in
+  // serve's order: before its first row, or (collapsed) where its rows
+  // would be.
+  function placeGroupHeads(
+    open: ItemView[],
+    rowEls: NodeListOf<HTMLElement>,
+  ): void {
+    const body = handle.el.querySelector<HTMLElement>('.kit-rows');
+    heads = [];
+    if (!body) return;
+    const loaded = new Set(loadedItems.map((it) => it.group));
+    let last: Element | null = null;
+    for (const g of groups) {
+      if (!loaded.has(g.id)) continue;
+      const head = groupHead(g);
+      heads.push(head);
+      const first = open.findIndex((it) => it.group === g.id);
+      if (first >= 0) {
+        rowEls[first]?.before(head.el);
+        let end = first;
+        while (end + 1 < open.length && open[end + 1].group === g.id) end++;
+        last = rowEls[end] ?? head.el;
+      } else {
+        if (last) last.after(head.el);
+        else body.prepend(head.el);
+        last = head.el;
+      }
+    }
+  }
+
+  // headShell is a group's header, sticky over its rows: the caret, the
+  // group's checkbox (box; a blank of its width without one), its label
+  // (hint under it) and its count; then the line its buttons go on, one
+  // line of one height whether or not they are there. The caret and the
+  // label collapse and expand it (id: the group's).
+  function headShell(
+    id: string,
+    label: string,
+    n: number,
+    box: HTMLElement | null,
+    hint: HTMLElement | null,
+    data: Record<string, string>,
+  ): { el: HTMLElement; acts: HTMLElement } {
+    const isOpen = !collapsed.has(id);
+    const toggleOpen = (): void => {
+      if (collapsed.has(id)) collapsed.delete(id);
+      else collapsed.add(id);
+      setRows();
+      markOpenRow();
+    };
+    const top = h(
+      'div',
+      { class: 'cb-group-top' },
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'cb-group-caret',
+          'aria-expanded': String(isOpen),
+          'aria-label': label,
+          onclick: toggleOpen,
+        },
+        isOpen ? '\u25bc' : '\u25b6',
+      ),
+      box ?? h('span', { class: 'cb-group-nobox' }),
+      h(
+        'span',
+        { class: 'cb-group-name', onclick: toggleOpen },
+        h('span', { class: 'cb-group-label' }, label),
+        hint,
+      ),
+      h('span', { class: 'cb-group-n' }, String(n)),
+    );
+    const acts = h('div', { class: 'cb-group-acts' });
+    const el = h(
+      'div',
+      {
+        class: 'cb-group' + (isOpen ? '' : ' collapsed'),
+        role: 'presentation',
+        dataset: data,
+      },
+      top,
+      acts,
+    );
+    return { el, acts };
+  }
+
+  // groupButton is one of group id's buttons: while one runs, the group's
+  // buttons wait.
+  function groupButton(
+    id: string,
+    cls: string,
+    label: string,
+    run: () => Promise<void> | void,
+    off = false,
+  ): HTMLElement {
+    return h(
+      'button',
+      {
+        type: 'button',
+        class: 'kit-btn ' + cls,
+        disabled: off || busyGroups.has(id),
+        onclick() {
+          if (busyGroups.has(id)) return;
+          busyGroups.add(id);
+          paintAll();
+          void Promise.resolve(run()).finally(() => {
+            busyGroups.delete(id);
+            paintAll();
+          });
+        },
+      },
+      label,
+    );
+  }
+
+  // groupHead is one group's header: a checkbox that ticks every item of
+  // the group (every page), an outward group's "goes to To apply first"
+  // under its label; its buttons act on the whole group or its ticked
+  // items.
+  function groupHead(g: GroupView): { el: HTMLElement; paint(): void } {
+    const box = h('span', {
+      class: 'cb-group-box',
+      role: 'checkbox',
+      'aria-checked': 'false',
+      'aria-label': g.label,
+      onclick() {
+        void tickGroup(g);
+      },
+    });
+    const hint =
+      g.outward && vocab?.to_apply_hint
+        ? h('span', { class: 'cb-group-where' }, vocab.to_apply_hint)
+        : null;
+    const { el, acts } = headShell(g.id, g.label, g.total, box, hint, {
+      group: g.id,
+      d: g.disposition,
+    });
+    const button = (
+      cls: string,
+      label: string,
+      run: () => Promise<void> | void,
+      off = false,
+    ): HTMLElement => groupButton(g.id, cls, label, run, off);
+
+    function paint(): void {
+      const ticked = tickedIn(g);
+      const n = ticked.length;
+      box.setAttribute(
+        'aria-checked',
+        n === 0 ? 'false' : n >= g.total ? 'true' : 'mixed',
+      );
+      const t = ctx.dockTarget();
+      if (!vocab) {
+        acts.replaceChildren();
+        return;
+      }
+      if (g.id === 'none') {
+        // The not recommended: only the ask, with a session attached.
+        const ask =
+          t && asked !== t.id
+            ? button(
+                'fill cb-group-ask',
+                vocab.recommend_these
+                  .replaceAll('{session}', t.name)
+                  .replaceAll('{n}', countWord(g.total, 0, vocab.count_words)),
+                askTheRest,
+              )
+            : null;
+        const note =
+          t && asked === t.id
+            ? h(
+                'span',
+                { class: 'cb-group-note' },
+                vocab.asked.replaceAll('{session}', t.name),
+              )
+            : null;
+        acts.replaceChildren(...[ask, note].filter((x) => x !== null));
+        return;
+      }
+      const w = groupButtons(g, n, vocab);
+      const scoped = n > 0 && n < g.total;
+      // Every item it would name is being looked into already.
+      const rows = loadedItems.filter((it) => it.group === g.id);
+      const looked = scoped
+        ? ticked.every((k) => rows.some((it) => it.key === k && it.looking))
+        : rows.length >= g.total && rows.every((it) => !!it.looking);
+      acts.replaceChildren(
+        ...[
+          button('fill cb-group-act', w.act, () => actGroup(g)),
+          t
+            ? button('cb-group-look', w.look, () => lookGroup(g), looked)
+            : null,
+          g.source.startsWith('rule:')
+            ? null
+            : button('cb-group-discard', w.discard, () => discardGroup(g)),
+          n > 0
+            ? h(
+                'button',
+                {
+                  type: 'button',
+                  class: 'cb-group-untick',
+                  onclick() {
+                    selection.deselect(tickedIn(g));
+                  },
+                },
+                vocab.untick,
+              )
+            : null,
+        ].filter((x) => x !== null),
+      );
+    }
+    paint();
+    return { el, paint };
+  }
+
+  // leftOpenHead is the left-open group's header (serve's label, its count
+  // across pages). Its items need no decision: no checkbox, no choice, no
+  // discard; with a session attached, Look into, naming every left-open
+  // item (every page).
+  function leftOpenHead(): { el: HTMLElement; paint(): void } {
+    const { el, acts } = headShell(
+      LEFT_OPEN,
+      vocab?.left_open ?? '',
+      leftOpenTotal,
+      null,
+      null,
+      { group: LEFT_OPEN },
+    );
+    function paint(): void {
+      if (!vocab || !ctx.dockTarget()) {
+        acts.replaceChildren();
+        return;
+      }
+      const look = vocab.look_many.replaceAll(
+        '{n}',
+        countWord(leftOpenTotal, 0, vocab.count_words),
+      );
+      const looked =
+        leftOpen.length >= leftOpenTotal &&
+        leftOpen.every((it) => !!it.looking);
+      acts.replaceChildren(
+        groupButton(LEFT_OPEN, 'cb-group-look', look, lookLeftOpen, looked),
+      );
+    }
+    paint();
+    return { el, paint };
+  }
+
+  // lookLeftOpen asks the attached session to look into every left-open
+  // item.
+  async function lookLeftOpen(): Promise<void> {
+    try {
+      await lookInto(await leftOpenKeys());
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // leftOpenKeys is every left-open item's key in the view (every page).
+  async function leftOpenKeys(): Promise<string[]> {
+    const out: string[] = [];
+    for (let total = Infinity; out.length < total;) {
+      const data = await ctx.api.get<ItemsView>('/items', {
+        ...viewFilters(),
+        limit: String(PAGE_SIZE),
+        left_offset: String(out.length),
+      });
+      const got = (data.left_open ?? []).map((it) => it.key);
+      out.push(...got);
+      total = data.left_open_total;
+      if (!got.length) break;
+    }
+    return out;
+  }
+
+  function paintAll(): void {
+    for (const head of heads) head.paint();
+  }
+
+  // groupFilters is the view and its filters as GET /api/items and
+  // /proposals/withdraw take them, narrowed to group g.
+  function groupFilters(g: GroupView): Record<string, string> {
+    return { ...viewFilters(), group: g.id };
+  }
+
+  // fetchGroup is every item of group g, every page (the filters apply).
+  async function fetchGroup(g: GroupView): Promise<ItemView[]> {
+    const out: ItemView[] = [];
+    for (let total = Infinity; out.length < total;) {
+      const data = await ctx.api.get<ItemsView>('/items', {
+        ...groupFilters(g),
+        offset: String(out.length),
+        limit: String(PAGE_SIZE),
+      });
+      const got = data.items ?? [];
+      out.push(...got);
+      total = data.total;
+      if (!got.length) break;
+    }
+    know(out);
+    return out;
+  }
+
+  // tickGroup ticks every item of g (every page), or, all ticked, unticks
+  // them. Ticking a collapsed group expands it: its buttons act on what
+  // is ticked, and its rows show what that is.
+  async function tickGroup(g: GroupView): Promise<void> {
+    const ticked = tickedIn(g);
+    if (ticked.length >= g.total) {
+      selection.deselect(ticked);
+      return;
+    }
+    try {
+      const items = await fetchGroup(g);
+      if (collapsed.delete(g.id)) {
+        setRows();
+        markOpenRow();
+      }
+      selection.all(items.map((it) => it.key));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // target is what a group's button acts on: its ticked items, or with
+  // none ticked every item of the group (every page).
+  async function target(
+    g: GroupView,
+  ): Promise<{ keys: string[]; ids: number[] }> {
+    let keys = tickedIn(g);
+    if (!keys.length) keys = (await fetchGroup(g)).map((it) => it.key);
+    const ids: number[] = [];
+    for (const k of keys) {
+      const id = proposalOfKey.get(k);
+      if (id !== undefined) ids.push(id);
+    }
+    return { keys, ids };
+  }
+
+  // actGroup accepts the recommendations of a group (or its ticked items).
+  // An outward choice only goes to To apply. When the open item was one of
+  // them, the next undecided item opens; with none open, the first
+  // undecided one does.
+  async function actGroup(g: GroupView): Promise<void> {
+    if (deciding) return;
+    const open = currentOpenKey;
+    deciding = open ?? '\u0000group';
+    try {
+      const { keys, ids } = await target(g);
+      if (!ids.length) return;
+      const order = await orderFor(open);
+      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
+        ids,
+      });
+      if (!r.accepted) {
+        showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
+        return;
+      }
+      selection.deselect(keys);
+      lastUndo = null;
+      if (!open || keys.includes(open)) {
+        await moveOn(open ?? '', order);
+      } else {
+        void reload();
+      }
+      const errs = r.errors ?? [];
+      if (errs.length) showReadError(errs.join('; '));
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      deciding = null;
+    }
+  }
+
+  // lookGroup asks the attached session to look into a group's items (or
+  // its ticked ones).
+  async function lookGroup(g: GroupView): Promise<void> {
+    try {
+      await lookInto((await target(g)).keys);
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // lookInto sends the attached session one message naming keys, all of
+  // them attached, with the look-into purpose (serve marks each while it is
+  // underway, and the rows say so). It decides nothing.
+  async function lookInto(keys: string[]): Promise<void> {
+    if (!ctx.dockTarget() || !vocab) return;
+    try {
+      if (!keys.length) return;
+      const message = vocab.look_into.message_many.replaceAll(
+        '{keys}',
+        keys.join(', '),
+      );
+      const why = await ctx.askSession(message, { keys }, 'look-into');
+      if (why) {
+        showReadError(why);
+        return;
+      }
+      await reload();
+    } catch (err) {
+      showReadError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // discardGroup confirms, then withdraws the group's agent
+  // recommendations (every page), or exactly its ticked items'.
+  function discardGroup(g: GroupView): void {
+    if (!vocab) return;
+    const ticked = tickedIn(g);
+    if (ticked.length && ticked.length < g.total) {
+      const ids = ticked
+        .map((k) => proposalOfKey.get(k))
+        .filter((id): id is number => id !== undefined);
+      openDiscardSheet(ctx, vocab, ids.length, viewLabel(), { ids }, discarded);
+      return;
+    }
+    openDiscardSheet(
+      ctx,
+      vocab,
+      g.total,
+      viewLabel(),
+      groupFilters(g),
+      discarded,
     );
   }
 
   function updateFoot(): void {
     if (!footEl) return;
 
-    // Update the select-all button text and hide it once all items are selected.
-    const selAll = footEl.querySelector<HTMLElement>('.cb-sel-all');
-    if (selAll instanceof HTMLElement) {
-      selAll.textContent = `select all ${totalItemsForView} in view`;
-      const allSelected =
-        totalItemsForView > 0 && selection.ids().length >= totalItemsForView;
-      selAll.hidden = allSelected;
-    }
-
     // Show or hide only the show-more button; the foot itself stays visible
-    // so the selection count and select-all remain accessible.
+    // so the summary remains.
     const btn = footEl.querySelector<HTMLElement>('.cb-foot-more');
     if (btn) {
       const remaining = totalItems - offset;
@@ -628,9 +1183,53 @@ export function makeAttention(ctx: Ctx): Section {
         btn.hidden = true;
       }
     }
+    renderSummary();
 
     // The foot div itself is always visible.
     footEl.hidden = false;
+  }
+
+  // renderSummary is the pinned summary: the view's items and who
+  // recommended them (serve's summary words; the session in the agent's
+  // colour), and "discard all N" while it has agent recommendations.
+  function renderSummary(): void {
+    discardAllBtn.hidden = viewRecs === 0 || !vocab;
+    if (vocab)
+      discardAllBtn.textContent = vocab.discard_all.replaceAll(
+        '{n}',
+        String(viewRecs),
+      );
+    if (!vocab) {
+      summaryEl.replaceChildren();
+      return;
+    }
+    const n = String(totalItemsForView);
+    const recs = groups.filter((g) => g.id !== 'none');
+    const r = recs.reduce((sum, g) => sum + g.total, 0);
+    const makers = new Set(recs.map((g) => g.by?.id ?? g.source));
+    const one =
+      r > 0 &&
+      r === totalItemsForView &&
+      makers.size === 1 &&
+      !recs[0].source.startsWith('rule:');
+    if (!one) {
+      summaryEl.replaceChildren(
+        vocab.summary.mixed.replaceAll('{n}', n).replaceAll('{r}', String(r)),
+      );
+      return;
+    }
+    const [before, after = ''] = vocab.summary.one_session
+      .replaceAll('{n}', n)
+      .split('{session}');
+    summaryEl.replaceChildren(
+      before,
+      h(
+        'span',
+        { class: 'cb-summary-who' },
+        sessionName(recs[0].by, recs[0].source),
+      ),
+      after,
+    );
   }
 
   // markOpenRow moves the list's open row to the item the reading column
@@ -638,7 +1237,7 @@ export function makeAttention(ctx: Ctx): Section {
   // on its row). Nothing when the row already is the open one, so a reload
   // leaves the cursor where it was.
   function markOpenRow(): void {
-    if (!currentOpenKey || boardHandle) return;
+    if (!currentOpenKey) return;
     const i = shown.findIndex((it) => it.key === currentOpenKey);
     if (i < 0) return;
     const rowEl = handle.el.querySelectorAll('.kit-rows > .kit-row')[i];
@@ -651,92 +1250,25 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
 
-  // ---- recommendations: the line at the top, agree with all at the foot ---
+  // ---- recommendations: ask, discard ----------------------------------------
 
-  // The line at the top of the list: "n recommended · m not yet", "clear
-  // N recommendations" while the view has agent recommendations, and while
-  // some aren't and the dock has a session here, the offer to ask it.
-  const recCountsEl = h('span', { class: 'cb-rec-counts' });
-  const clearBtn = h('button', {
-    class: 'kit-btn cb-rec-clear',
-    type: 'button',
-    hidden: true,
-    onclick() {
-      clearView();
-    },
-  }) as HTMLButtonElement;
-  const askBtn = h('button', {
-    class: 'kit-btn cb-rec-ask',
-    type: 'button',
-    hidden: true,
-    onclick() {
-      void askTheRest();
-    },
-  }) as HTMLButtonElement;
-  const askNote = h('span', { class: 'cb-rec-note' });
-  const recLine = h(
-    'div',
-    { class: 'cb-rec-line', hidden: true },
-    recCountsEl,
-    clearBtn,
-    askBtn,
-    askNote,
-  );
-  handle.el.querySelector('.kit-lh')?.append(recLine);
-  // asked is the session this page asked to recommend the rest: the offer
-  // gives way to "asked …" for it, so one click sends one message.
+  // asked is the session this page asked to recommend the rest: the
+  // not-recommended group's ask gives way to "asked …" for it, so one click
+  // sends one message.
   let asked = '';
-
-  function renderRecLine(): void {
-    if (!recCounts) {
-      recLine.hidden = true;
-      return;
-    }
-    recLine.hidden = false;
-    recCountsEl.textContent = recommendedLine(recCounts.rec, recCounts.notYet);
-    clearBtn.hidden = viewRecs === 0 || !!boardHandle;
-    clearBtn.textContent = clearRecs(viewRecs, viewLabel()).action;
-    // Everything recommended: a later item that needs one is offered anew.
-    if (recCounts.notYet === 0) asked = '';
-    const t = ctx.dockTarget();
-    const offer = recCounts.notYet > 0 && !!t;
-    askBtn.hidden = !offer || asked === t?.id;
-    if (t) askBtn.textContent = `ask ${t.name} to recommend the rest`;
-    askNote.textContent = offer && asked === t?.id ? `asked ${t.name}` : '';
-  }
-  ctx.onDockTarget(() => renderRecLine());
+  ctx.onDockTarget(() => paintAll());
 
   async function askTheRest(): Promise<void> {
     const t = ctx.dockTarget();
-    if (!t || askBtn.disabled) return;
-    askBtn.disabled = true;
-    try {
-      const why = await ctx.askSession(RECOMMEND_THE_REST);
-      if (why) askNote.textContent = why;
-      else asked = t.id;
-    } finally {
-      askBtn.disabled = false;
-    }
-    if (asked) renderRecLine();
+    if (!t) return;
+    const why = await ctx.askSession(RECOMMEND_THE_REST);
+    if (why) showReadError(why);
+    else asked = t.id;
   }
 
   // viewRecs is the view's agent recommendations (serve's count, every
-  // page, the filters applied): what "clear N recommendations" withdraws.
-  // refreshViewRecs reads it after the list loads; only the newest answer
-  // counts.
+  // page, the filters applied): what "discard all N" withdraws.
   let viewRecs = 0;
-  let viewRecsSeq = 0;
-  function refreshViewRecs(): void {
-    const mine = ++viewRecsSeq;
-    void ctx.api
-      .get<ItemsView>('/items', { ...buildQuery(0), limit: '1' })
-      .then((d) => {
-        if (mine !== viewRecsSeq) return;
-        viewRecs = d.agent_recommended ?? 0;
-        renderRecLine();
-      })
-      .catch(() => {});
-  }
 
   // viewFilters is the view and its filters as /proposals/withdraw takes
   // them (the list's query without its page).
@@ -747,111 +1279,36 @@ export function makeAttention(ctx: Ctx): Section {
     return p;
   }
 
-  // cleared follows a clear: the line and the list are read again, and the
-  // offer to ask the session to recommend the rest is made anew.
-  function cleared(): void {
+  // discarded follows a discard: the list is read again, and the offer to
+  // ask the session to recommend the rest is made anew.
+  function discarded(): void {
     asked = '';
     refreshSummary();
     void reload();
   }
 
-  // clearView confirms, then withdraws every agent recommendation in the
+  // discardView confirms, then withdraws every agent recommendation in the
   // view and its filters (every page, not only the loaded rows).
-  function clearView(): void {
-    if (viewRecs === 0) return;
-    openClearSheet(ctx, viewRecs, viewLabel(), viewFilters(), cleared);
+  function discardView(): void {
+    if (viewRecs === 0 || !vocab) return;
+    openDiscardSheet(
+      ctx,
+      vocab,
+      viewRecs,
+      viewLabel(),
+      viewFilters(),
+      discarded,
+    );
   }
 
-  // clearGroup confirms, then withdraws exactly a foot group's
-  // recommendations.
-  function clearGroup(g: AgreeGroup): void {
-    openClearSheet(ctx, g.ids.length, viewLabel(), { ids: g.ids }, cleared);
-  }
-
-  // refreshSummary reads serve's summary: the view chips' counts and the
-  // recommended line.
+  // refreshSummary reads serve's summary: the view chips' counts.
   function refreshSummary(): void {
     void ctx.api
       .get<SummaryView>('/summary')
       .then((sv) => {
         applyCounts(sv.counts);
-        recCounts = {
-          rec: sv.recommended ?? 0,
-          notYet: sv.not_recommended ?? 0,
-        };
-        renderRecLine();
       })
       .catch(() => {});
-  }
-
-  // The foot's agree-with-all band sits above the selection foot.
-  const agree = agreeWithAll(agreeAll, lookAll, clearGroup);
-  handle.el.querySelector('.kit-foot')?.before(agree.el);
-
-  // updateAgree renders the foot's groups; with a session attached each
-  // offers "ask ‹session› to look into all N" too.
-  function updateAgree(): void {
-    refreshViewRecs();
-    const t = ctx.dockTarget();
-    const looking = new Set(
-      loadedItems.filter((it) => !!it.looking).map((it) => it.key),
-    );
-    agree.update(
-      vocab && !boardHandle ? agreeGroups(vocab, loadedItems) : [],
-      vocab && t
-        ? {
-            session: t.name,
-            words: vocab.look_into,
-            looking: (k) => looking.has(k),
-          }
-        : null,
-    );
-  }
-  ctx.onDockTarget(() => updateAgree());
-
-  // lookAll sends the attached session one message naming a group's keys,
-  // all of them attached, with the look-into purpose (serve marks each
-  // while it is underway, and the rows say so). It decides nothing.
-  async function lookAll(g: AgreeGroup, message: string): Promise<void> {
-    if (!ctx.dockTarget()) return;
-    const why = await ctx.askSession(message, { keys: g.keys }, 'look-into');
-    if (why) {
-      showReadError(why);
-      return;
-    }
-    await reload();
-  }
-
-  // agreeAll accepts exactly a group's proposals. An outward choice only
-  // goes to To apply. When the open item was one of them, the next
-  // undecided item opens; with none open, the first undecided one does.
-  async function agreeAll(g: AgreeGroup): Promise<void> {
-    if (deciding) return;
-    const open = currentOpenKey;
-    deciding = open ?? '\u0000agree';
-    const order = await orderFor(open);
-    try {
-      const r = await ctx.api.post<AcceptResult>('/proposals/accept', {
-        ids: g.ids,
-      });
-      if (!r.accepted) {
-        showReadError((r.errors ?? []).join('; ') || 'nothing was accepted');
-        return;
-      }
-      selection.deselect(g.keys);
-      lastUndo = null;
-      if (!open || g.keys.includes(open)) {
-        await moveOn(open ?? '', order);
-      } else {
-        void reload();
-      }
-      const errs = r.errors ?? [];
-      if (errs.length) showReadError(errs.join('; '));
-    } catch (err) {
-      showReadError(err instanceof Error ? err.message : String(err));
-    } finally {
-      deciding = null;
-    }
   }
 
   async function openDetail(key: string): Promise<void> {
@@ -877,6 +1334,7 @@ export function makeAttention(ctx: Ctx): Section {
       decide: (d, until, note) => void decideOpen(key, d, until, note),
       accept: () => void acceptOpen(),
       cardsReady: () => renderAsk(),
+      nav: renderNav(key),
     });
     readEl.replaceChildren(el);
     renderAsk();
@@ -984,7 +1442,6 @@ export function makeAttention(ctx: Ctx): Section {
   // failed; a turn ended): the open item's marker and the rows' follow.
   function lookingMayHaveChanged(): void {
     if (currentOpenKey) void refreshLooking(currentOpenKey);
-    if (boardHandle) return;
     void reload();
   }
 
@@ -1028,8 +1485,14 @@ export function makeAttention(ctx: Ctx): Section {
     const says =
       why === 'evidence'
         ? 'new evidence'
-        : p && p.state === 'pending'
-          ? recommendLine(vocab, key, p.source, p.disposition)
+        : p && p.state === 'pending' && vocab
+          ? recommendLine(
+              vocab,
+              key,
+              detail.item.recommended_by,
+              p.source,
+              p.disposition,
+            )
           : 'the recommendation changed';
     const show = h(
       'button',
@@ -1285,10 +1748,8 @@ export function makeAttention(ctx: Ctx): Section {
   // payloads, so Object.assign alone would leave stale counts in place.
   function applyCounts(counts: Record<string, number> | null): void {
     if (!counts) return;
-    // Zero all API-backed views before merging ("board" is UI-only — no count).
-    for (const v of VIEWS) {
-      if (v.id !== 'board') viewCounts[v.id] = 0;
-    }
+    // Zero every view before merging.
+    for (const v of VIEWS) viewCounts[v.id] = 0;
     Object.assign(viewCounts, counts);
     handle.setChips('view', viewChips(filters.view));
   }
@@ -1303,35 +1764,10 @@ export function makeAttention(ctx: Ctx): Section {
   }
   void reload();
 
-  // Wire selection → primary button and foot count (Task 4). Its "d" key is
-  // one of this section's keys (Section.keys), live only while it is shown.
-  // The bar's primary is the active section's: wireSelection's "Decide N" is
-  // kept here and reaches the bar only while Attention is shown (app.ts asks
-  // primary() on show).
-  let decidePrimary: Primary | null = null;
-  const decideKey = wireSelection(
-    {
-      ...ctx,
-      setPrimary(p) {
-        decidePrimary = p;
-        if (active) ctx.setPrimary(p);
-      },
-    },
-    handle,
-  );
-
-  // Also update proposal bulk buttons and select-all visibility when selection changes.
-  selection.onChange((ids) => {
-    updateProposalBulk(ids);
-    // Hide "select all N in view" once every item in view is already selected.
-    if (footEl) {
-      const selAll = footEl.querySelector<HTMLElement>('.cb-sel-all');
-      if (selAll) {
-        const allSelected =
-          totalItemsForView > 0 && ids.length >= totalItemsForView;
-        selAll.hidden = allSelected;
-      }
-    }
+  // Ticked items act through their group: the groups' ticked counts and
+  // buttons follow the selection (no bar primary, no d, no foot count).
+  selection.onChange(() => {
+    paintAll();
     feedAttached();
   });
 
@@ -1345,7 +1781,7 @@ export function makeAttention(ctx: Ctx): Section {
     return p && p.state === 'pending' ? p : null;
   }
 
-  // 'a' and 'r' accept/reject the open item's proposal. Like "d", they are
+  // 'a' and 'r' accept/reject the open item's proposal. They are
   // Section.keys: app.ts registers them only while Attention is shown, so on
   // #/rules they cannot reach the open item Attention keeps while hidden, and
   // Rules and Apply are free to bind their own a/r.
@@ -1398,109 +1834,32 @@ export function makeAttention(ctx: Ctx): Section {
     },
   }));
 
+  // [ and ] open the first item of the group before or after the open
+  // item's (« and »).
+  const jumpKeys: KeyBinding[] = groupKeys((d) => {
+    if (!currentOpenKey) return;
+    void navGo(d < 0 ? 'prevGroup' : 'nextGroup');
+  });
+
   const listKeys: KeyBinding[] = [
-    decideKey,
     acceptKey,
     rejectKey,
     undoKey,
     ...choiceKeys,
+    ...jumpKeys,
   ];
-  // The board is not a list (no j/k/o/x), but it has the list's search
-  // field: / focuses it there too.
-  const searchKey: KeyBinding = {
-    keys: '/',
-    label: 'search',
-    group: 'family',
-    run() {
-      handle.focusSearch?.();
-    },
-  };
-  const boardKeys: KeyBinding[] = [decideKey, searchKey];
 
-  // Load summary for initial counts and the recommended line.
+  // Load summary for the view chips' counts.
   refreshSummary();
-  // The vocabulary words the rows' recommendations and agree with all.
+  // The vocabulary words the groups' buttons and the summary.
   void getVocab(ctx)
     .then((v) => {
       vocab = v;
       setRows();
-      updateAgree();
+      updateFoot();
       renderAsk();
     })
     .catch(() => {});
-
-  // ---- board helpers -------------------------------------------------------
-
-  // getBoardFilters returns the active filters (excluding `view`) for the board.
-  // The board overrides `view` per lane; all other filters still apply.
-  function getBoardFilters(): Record<string, string> {
-    const p: Record<string, string> = {};
-    if (filters.kind) p['kind'] = filters.kind;
-    if (filters.repo) p['repo'] = filters.repo;
-    if (filters.relation) p['relation'] = filters.relation;
-    if (filters.bot) p['bot'] = filters.bot;
-    if (filters.age) p['age'] = filters.age;
-    if (filters.rule) p['rule'] = filters.rule;
-    if (filters.q) p['q'] = filters.q;
-    return p;
-  }
-
-  // mountBoard hides the kit's rows/foot and inserts the board into the list
-  // panel.  The kit's `.kit-rows` and `.kit-foot` are internal class names
-  // stable in kit v0.11.0 (see localweb/page/assets/kit.css).
-  //
-  // It also adds `.cb-board` to the `.kit-app` grid element so the CSS can
-  // collapse the reading column and let the list panel span the full width.
-  function mountBoard(): void {
-    if (boardHandle) return;
-    // Span the list+reading columns by adding a class to the app grid element.
-    // Note: use 'cb-board-active', NOT 'cb-board' — the latter is the board
-    // container element's own class, and matching it on .kit-app would cause
-    // '.cb-board { display: flex }' to convert the grid to flexbox.
-    handle.el.closest('.kit-app')?.classList.add('cb-board-active');
-    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
-    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
-    if (kitRows) kitRows.hidden = true;
-    if (kitFoot) kitFoot.hidden = true;
-    agree.update([]);
-    clearBtn.hidden = true;
-    boardHandle = makeBoard(
-      ctx,
-      selection,
-      getBoardFilters,
-      (key, laneId) => {
-        // Record the card's lane as the active view so that when the item is
-        // opened the list reloads with that view (brief §4, item 2).
-        filters.view = laneId;
-      },
-      (total) => {
-        // After each board refresh, update the foot's "select all N in view"
-        // button so it reflects the de-duplicated count across all lanes.
-        if (!footEl) return;
-        const selAll = footEl.querySelector('.cb-sel-all');
-        if (selAll instanceof HTMLElement) {
-          selAll.textContent = `select all ${total} in view`;
-        }
-      },
-    );
-    handle.el.append(boardHandle.el);
-  }
-
-  // unmountBoard removes the board, restores the kit's rows/foot, and removes
-  // the app-level `.cb-board` class so the grid returns to normal layout.
-  function unmountBoard(): void {
-    if (!boardHandle) return;
-    // Restore normal list+reading grid layout.
-    handle.el.closest('.kit-app')?.classList.remove('cb-board-active');
-    boardHandle.destroy();
-    boardHandle.el.remove();
-    boardHandle = null;
-    const kitRows = handle.el.querySelector<HTMLElement>('.kit-rows');
-    const kitFoot = handle.el.querySelector<HTMLElement>('.kit-foot');
-    if (kitRows) kitRows.hidden = false;
-    if (kitFoot) kitFoot.hidden = false;
-    updateAgree();
-  }
 
   // ---- show(sub) -- router hook --------------------------------------------
 
@@ -1509,24 +1868,6 @@ export function makeAttention(ctx: Ctx): Section {
     const wasActive = active;
     active = true;
     feedAttached();
-    if (sub === 'board') {
-      // Restore search text from URL so getBoardFilters() picks it up.
-      const urlQ = getUrlQ();
-      if (urlQ !== filters.q) {
-        filters.q = urlQ;
-        handle.setSearch(urlQ);
-      }
-      // Activate the board view chip so it is highlighted, not the last list
-      // view chip (brief fix-round item 3).
-      filters.view = 'board';
-      handle.setChips('view', viewChips('board'));
-      mountBoard();
-      return;
-    }
-
-    // Leaving board view: unmount board and restore the kit list.
-    unmountBoard();
-
     // Restore search text from URL (?q=...) on every navigation into this section.
     const urlQ = getUrlQ();
     if (urlQ !== filters.q) {
@@ -1534,19 +1875,15 @@ export function makeAttention(ctx: Ctx): Section {
       handle.setSearch(urlQ);
     }
     const view = sub || 'waiting';
-    if (VIEWS.some((v) => v.id === view) && view !== 'board') {
+    if (VIEWS.some((v) => v.id === view)) {
       // Known view chip: switch to it.
       filters.view = view;
       handle.setChips('view', viewChips(filters.view));
-      // Reset proposal bulk foot when leaving/entering proposed view.
-      updateProposalBulk(selection.ids());
       showReadEmpty();
       void reload();
     } else if (sub) {
-      // Not a view id: treat as an item key from a direct #/item/<key> link
-      // (e.g. opened from a board card's title).  The onOpen callback in
-      // makeBoard already set filters.view to the card's lane, so reload()
-      // will use that view.  Update the chips to reflect it.
+      // Not a view id: an item key from a #/item/<key> link. The list
+      // keeps the view it shows.
       handle.setChips('view', viewChips(filters.view));
       // A row click opens its item itself, then moves the hash here: the
       // item is already open (or loading), so it isn't loaded twice. A
@@ -1566,37 +1903,26 @@ export function makeAttention(ctx: Ctx): Section {
       active = false;
     },
     // The list's keys (j k o ↵ x ⇧x, / its search) come from the kit, bound
-    // to this list while it shows. The board is not a list: it has no
-    // cursor, and its cards hide the reading column, so there only "d"
-    // (the shared selection) and "/" (the search, which filters the lanes)
-    // work.
-    listKeys: () => (boardHandle ? null : { nav: handle, selects: true }),
-    keys: () => (boardHandle ? boardKeys : listKeys),
+    // to this list while it shows.
+    listKeys: () => ({ nav: handle, selects: true }),
+    keys: () => listKeys,
     onLive(type: string, data: unknown) {
       if (type === 'gap') {
         // Events this page never heard were pruned: reload all it shows
-        // (the counts, the list or board, and the open item).
+        // (the counts, the list, and the open item).
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
         if (currentOpenKey && currentOpenKey !== deciding) {
           void openDetail(currentOpenKey);
         }
       } else if (type === 'index') {
         // One reload per index event: apply counts from the event payload and
-        // refresh the list (or the board when it is active).
+        // refresh the list.
         const s = data as { counts?: Record<string, number> };
         applyCounts(s?.counts ?? null);
         // The recommended line's counts change with the index too.
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'decided') {
         // A live decided event can originate from the CLI or another client.
         // Deselect the decided keys so the bar's "Decide N" doesn't include
@@ -1618,11 +1944,7 @@ export function makeAttention(ctx: Ctx): Section {
         }
         // Re-fetch summary so view-chip counts stay correct.
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'proposals') {
         // proposals event: an agent's or a rule's new pending proposals, or
         // proposals accepted, rejected or changed. Payload shape:
@@ -1653,11 +1975,7 @@ export function makeAttention(ctx: Ctx): Section {
 
         // Re-fetch summary to update view-chip counts (particularly 'proposed').
         refreshSummary();
-        if (boardHandle) {
-          void boardHandle.refresh();
-        } else {
-          void reload();
-        }
+        void reload();
       } else if (type === 'evidence') {
         // New evidence for the open item: shown as a recommendation is.
         const key = (data as { key?: string })?.key ?? '';
@@ -1688,7 +2006,7 @@ export function makeAttention(ctx: Ctx): Section {
       }
     },
     primary() {
-      return decidePrimary;
+      return null;
     },
   };
 }

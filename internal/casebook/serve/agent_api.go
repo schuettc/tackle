@@ -525,8 +525,8 @@ func (s *Server) agentInterrupted(w http.ResponseWriter, r *http.Request) {
 
 // agentOpen is casebook_open: open the page in Court's browser.
 // openViews are the routes casebook_open can land on besides an item: the
-// Attention views and the board (spec §3.2).
-var openViews = map[string]bool{ViewWaiting: true, ViewNew: true, ViewDue: true, ViewProposed: true, ViewAll: true, "board": true}
+// Attention views (spec §3.2).
+var openViews = map[string]bool{ViewWaiting: true, ViewNew: true, ViewDue: true, ViewProposed: true, ViewAll: true}
 
 // agentOpen is casebook_open: open the page in Court's browser, at one item
 // (key), at an Attention view (view), or at the front (neither).
@@ -570,7 +570,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		fragment = "#/item/" + url.PathEscape(k.String())
 	case in.View != "":
 		if !openViews[in.View] {
-			reply(w, nil, bad("unknown view %q (waiting, new, due, proposed, all or board)", in.View))
+			reply(w, nil, bad("unknown view %q (waiting, new, due, proposed or all)", in.View))
 			return
 		}
 		fragment = "#/attention/" + in.View

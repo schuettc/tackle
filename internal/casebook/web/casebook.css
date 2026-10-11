@@ -2,183 +2,12 @@
  *
  * The kit (/_kit/kit.css) provides all the shared tokens and components.
  * This file adds only what the kit lacks: casebook's own dock layout,
- * board lanes, the decide sheet, and needs-you cards.
+ * the decide sheet, and needs-you cards.
  *
  * Token inputs (overriding the kit's tackle-rust defaults — casebook uses
  * the same signal and agent colours as the kit's defaults, so no override
  * is needed).
  */
-
-/* ---- board-active app layout --------------------------------------------- */
-/*
- * While the board is shown, the .kit-app receives `.cb-board-active`.  We
- * redefine the columns so the list area (`.kit-list`) fills the space that
- * would normally be split between the list and the reading column.
- *
- * Before (normal): auto | minmax(320px,1fr) | auto
- *                   list    reading             rail
- * After  (board):  minmax(0,1fr) | auto
- *                   list            rail
- *
- * IMPORTANT: do NOT use `.cb-board` as the app modifier class; that selector
- * also matches the `.cb-board` flex container inside the list panel, which
- * would change the app from grid to flex and break the layout.
- */
-/* `.cb-board-active` is added to `.kit-app` (not to the `.cb-board` element
- * inside the list, which keeps the `.cb-board` name). */
-.kit-app.cb-board-active {
-  /* Two columns: the board list fills all remaining space; rail stays put.
-   * (The original 3-column auto+1fr+auto becomes 1fr+auto so the list can
-   *  expand.  The reading track is collapsed via display:none on .kit-read.) */
-  grid-template-columns: minmax(0, 1fr) auto;
-  /* Prevent the page from scrolling sideways — the board container scrolls. */
-  overflow-x: hidden;
-}
-
-.kit-app.cb-board-active > .kit-list {
-  /* Let the 1fr grid track determine the width; override the kit's 400 px. */
-  width: auto;
-}
-
-.kit-app.cb-board-active > .kit-read {
-  /* Hidden while the board is shown; no box is generated. */
-  display: none;
-}
-
-/* ---- board lanes (Attention board view) ---------------------------------- */
-
-.cb-board {
-  display: flex;
-  gap: 16px;
-  padding: 16px;
-  overflow-x: auto;
-  flex: 1;
-  min-height: 0;
-}
-
-.cb-lane {
-  /* Share the available width equally; minimum 220 px per lane.
-   * When all four lanes are narrower than their minimum, the board
-   * container (.cb-board) scrolls horizontally — not the page. */
-  flex: 1 0 220px;
-  min-width: 220px;
-  background: var(--kit-panel);
-  border: 1px solid var(--kit-line);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
-
-.cb-lane-head {
-  font: 10.5px var(--kit-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--kit-muted);
-  padding: 12px 14px 8px;
-  border-bottom: 1px solid var(--kit-line);
-}
-
-.cb-lane-rows {
-  overflow: auto;
-  flex: 1;
-  min-height: 0;
-  padding: 6px 8px;
-}
-
-.cb-lane-more {
-  font: 12px var(--kit-mono);
-  color: var(--kit-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  padding: 8px 14px;
-  width: 100%;
-  text-align: left;
-}
-
-.cb-lane-more:hover {
-  color: var(--kit-fg);
-}
-
-/* ---- board cards ---------------------------------------------------------- */
-/*
- * Cards use the kit's .kit-card (background, border, border-radius) and
- * .kit-card-head (mono uppercase kicker row).  Only board-specific overrides
- * are added here: tighter padding/margin for lane columns, the selected-edge
- * shadow, the flex head layout, and ellipsis overflow on text lines.
- */
-
-/* Tighter padding/margin than kit-card's default 14px/14px for board lanes. */
-.cb-lane .kit-card {
-  padding: 10px 12px;
-  margin: 0 0 6px;
-  cursor: pointer;
-  transition: border-color 0.1s;
-}
-
-.cb-lane .kit-card:hover {
-  border-color: var(--kit-muted);
-}
-
-/* Selected card: signal-coloured left inset shadow (kit-card.edge-signal uses
- * a left border; inset shadow avoids shifting text and is thinner visually). */
-.cb-lane .kit-card.on {
-  border-color: var(--kit-signal);
-  box-shadow: inset 3px 0 0 var(--kit-signal);
-}
-
-/* .kit-box inside board cards: same sizing as kit's row checkbox. */
-.cb-lane .kit-card .kit-box {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  margin-top: 1px;
-}
-
-.cb-lane .kit-card .kit-box.on {
-  background: var(--kit-signal);
-  border-color: var(--kit-signal);
-}
-
-/* kit-card-head is a flex row in the board (checkbox + kicker text). Override
- * the kit's display (block) and text-transform so keys show unmodified. */
-.cb-lane .kit-card-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  text-transform: none;
-  margin-bottom: 4px;
-}
-
-/* Kicker text: ellipsis on long keys. */
-.cb-card-kk {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-}
-
-/* Title line: ellipsis on long titles. */
-.cb-card-title {
-  font-size: 13.5px;
-  line-height: 1.4;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cb-card-age {
-  font: 11px var(--kit-mono);
-  color: var(--kit-muted);
-  margin-top: 4px;
-}
-
-.cb-card-prop {
-  font: 11.5px var(--kit-mono);
-  color: var(--kit-agent);
-  margin-top: 4px;
-}
 
 /* ---- decide sheet -------------------------------------------------------- */
 
@@ -258,11 +87,12 @@
   margin: 6px 0 0;
 }
 
-/* ---- selection foot controls --------------------------------------------- */
+/* ---- the pinned summary (the list's foot) -------------------------------- */
 
-/* The foot wrapper sits inside .kit-foot: selection count on the left,
- * bulk actions on the right, nothing wrapping. .cb-foot-right uses
- * margin-left:auto to push action buttons to the trailing edge. */
+/* The foot sits at the bottom of the list: the selection's count, the
+ * view's summary ("31 items, all recommended by ‹session›", the session in
+ * the agent's colour), then "discard all N" and "show N more" on the
+ * trailing edge. The summary wraps; the buttons don't. */
 .cb-foot {
   display: flex;
   align-items: center;
@@ -270,38 +100,33 @@
   gap: 8px;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
 }
 
 .cb-foot-right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
-.cb-sel-count {
-  font: 12.5px var(--kit-mono);
-  color: var(--kit-signal);
-  font-weight: 600;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.cb-sel-all {
-  font: 12.5px var(--kit-mono);
+.cb-summary {
+  font: 12.5px var(--kit-sans);
   color: var(--kit-muted);
-  background: transparent;
-  border: 0;
-  cursor: pointer;
-  padding: 0;
-  white-space: nowrap;
-  flex-shrink: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-.cb-sel-all:hover {
-  color: var(--kit-fg);
+.cb-summary-who {
+  color: var(--kit-agent);
+}
+
+.cb-discard-all {
+  white-space: nowrap;
+}
+
+.cb-discard-all[hidden] {
+  display: none;
 }
 
 .cb-foot-more {
@@ -319,89 +144,202 @@
   color: var(--kit-fg);
 }
 
-/* ---- recommendations in the list ----------------------------------------- */
+/* ---- the groups of an Attention view -------------------------------------- */
 
-/* The line at the top of Attention: "n recommended · m not yet" (mono,
- * muted), and the offer to ask the dock's session to recommend the rest. */
-.cb-rec-line {
-  display: flex;
+/* A group's header, sticky to the top of the list while its rows scroll
+ * under it: caret, a checkbox for the whole group, its label (an outward
+ * group's "goes to To apply first" under it) and its count; then its
+ * buttons. Its ground is a step darker than the list's, so it reads as a
+ * header over the rows. */
+.cb-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 6px -12px 2px;
+  padding: 8px 20px 8px;
+  background: color-mix(in srgb, var(--kit-line) 70%, var(--kit-panel));
+  border-bottom: 1px solid var(--kit-line);
+}
+
+.cb-group:first-child {
+  margin-top: 0;
+}
+
+.cb-group-top {
+  display: grid;
+  grid-template-columns: 12px 14px minmax(0, 1fr) auto;
+  gap: 6px;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-  font: 12.5px var(--kit-mono);
+}
+
+.cb-group-caret {
+  font: 10px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+/* The tri-state box: empty, some ticked (a bar), all ticked (filled), in
+ * the selection's colour. */
+.cb-group-box {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--kit-muted);
+  border-radius: 4px;
+  background: var(--kit-card);
+  cursor: pointer;
+}
+
+.cb-group-box[aria-checked='true'] {
+  background: var(--kit-signal);
+  border-color: var(--kit-signal);
+}
+
+.cb-group-box[aria-checked='mixed'] {
+  border-color: var(--kit-signal);
+  background: linear-gradient(
+    var(--kit-card) 38%,
+    var(--kit-signal) 38%,
+    var(--kit-signal) 62%,
+    var(--kit-card) 62%
+  );
+}
+
+.cb-group-name {
+  cursor: pointer;
+  min-width: 0;
+}
+
+.cb-group-label {
+  display: block;
+  font: 600 13.5px var(--kit-sans);
+  color: var(--kit-fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-group-where {
+  display: block;
+  font: 11.5px var(--kit-sans);
   color: var(--kit-muted);
 }
 
-.cb-rec-line[hidden],
-.cb-agree[hidden] {
-  display: none;
+.cb-group-n {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  min-width: 22px;
+  text-align: right;
 }
 
-.cb-rec-note {
-  color: var(--kit-agent);
-}
-
-.cb-rec-note:empty {
-  display: none;
-}
-
-/* Agree with all: one line per group above the selection foot. What is
- * recommended is the agent's (amber); the action is a plain kit button. */
-.cb-agree {
+/* The buttons, under the label (38px: caret, box and their gaps): the
+ * choice filled (the primary), then look into and discard; with some
+ * ticked, each names how many and untick ends the line. One line, one height,
+ * with buttons or none, so ticking or attaching a session moves nothing. */
+.cb-group-acts {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 20px;
-  border-top: 1px solid var(--kit-line);
-  font: 12.5px var(--kit-mono);
-}
-
-/* The says and the actions share a line when they fit; else the actions
- * (agree, then with a session attached look into all) wrap under it,
- * together. */
-.cb-agree-line {
-  display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 6px 8px;
-  min-width: 0;
+  gap: 6px;
+  height: 34px;
+  padding: 6px 0 0 38px;
 }
 
-.cb-agree-says {
-  color: var(--kit-agent);
-  flex: 1 1 14em;
+/* Too narrow a column cuts the buttons' words rather than wrap the line
+ * (at 520px every group's line fits whole). */
+.cb-group-acts .kit-btn {
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 3px 8px;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-group-acts > :not(.kit-btn) {
+  flex-shrink: 0;
+}
+
+.cb-group-untick {
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.cb-group-note {
+  font: 12px var(--kit-mono);
+  color: var(--kit-agent);
+}
+
+/* A collapsed group is one line: caret, checkbox, label, count. Its hint
+ * and its buttons come back when it is expanded. */
+.cb-group.collapsed .cb-group-acts,
+.cb-group.collapsed .cb-group-where {
+  display: none;
+}
+
+/* Attention's rows sit under their group's header, indented so a row's
+ * checkbox lines up under the header's label (the header's 8px inset plus
+ * its 38px of caret and checkbox, less the row's own 10px padding). Every
+ * row is one height: kicker, title, and two lines for the reason (cut
+ * there; the item page has it whole), or one with "‹session› is looking
+ * into it" under it. The list keeps its scrollbar's room, so rows don't
+ * move when it comes and goes. */
+.cb-attention .kit-rows {
+  scrollbar-gutter: stable;
+}
+
+.cb-attention .kit-rows > .kit-row {
+  margin-left: 36px;
+  height: 93px;
+  overflow: hidden;
+}
+
+.cb-attention .kit-row .kit-kicker {
+  line-height: 16px;
+  /* One line, as the title: a long repo name is cut (whole in its
+   * tooltip), so every row fits its height. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-attention .kit-row .kit-title {
+  line-height: 21px;
+}
+
+.cb-attention .kit-row .kit-sub,
+.cb-attention .kit-row .cb-row-looking {
+  line-height: 17px;
+}
+
+.cb-attention .kit-row .kit-sub {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
   overflow-wrap: anywhere;
 }
 
-.cb-agree-acts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  flex-shrink: 0;
-  max-width: 100%;
-}
-
-/* Bulk proposal buttons in the proposed view foot: keep on one line. */
-.cb-prop-bulk {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.cb-prop-accept,
-.cb-prop-reject {
-  white-space: nowrap;
-  flex-shrink: 0;
+.cb-attention .kit-row-main:has(.cb-row-looking) .kit-sub {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
 }
 
 /* ---- the decide step (item.ts, choices.ts) ------------------------------ */
 
-/* The question, then the recommendation, then the cards two to a row. */
+/* The question, then the cards: two to a row in a sheet, one row on the
+ * item page (below). */
 .cb-decide {
-  margin: 28px 0 0;
+  margin: 22px 0 0;
 }
 
 .cb-question {
@@ -441,10 +379,6 @@
   color: var(--kit-agent);
 }
 
-.cb-decide .cb-proposal-card {
-  margin: 0 0 16px;
-}
-
 .cb-choices {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -453,7 +387,8 @@
 
 /* A card is a kit card that is one button: the number, the label, what
    happens. Chosen: the signal border. Recommended: the number line in the
-   agent's colour. Only delete draws its label in danger. */
+   agent's colour. The number line is one line that never wraps (an
+   ellipsis instead), so choosing a card never changes its height. Only delete draws its label in danger. */
 .cb-choice.kit-card {
   display: flex;
   flex-direction: column;
@@ -476,8 +411,12 @@
 }
 
 .cb-choice-k {
-  font: 12px var(--kit-mono);
+  height: 18px;
+  overflow: hidden;
+  font: 12px/18px var(--kit-mono);
   color: var(--kit-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .cb-choice.rec .cb-choice-k {
@@ -2076,17 +2015,8 @@ textarea.cb-needs-edit:focus {
 }
 
 /* ---- the left-open group (Leave it open stays in the list) ---------------- */
-/* A quiet divider after the items that need a decision ("left open · N"),
-   then the kept items still open, muted. */
-.cb-left-open-head {
-  margin: 14px 0 4px;
-  padding: 6px 12px 4px;
-  border-top: 1px solid var(--kit-line);
-  color: var(--kit-muted);
-  font-family: var(--kit-mono);
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
+/* The last group (a header as the others', no checkbox), its rows the kept
+   items still open, muted. */
 .kit-row.cb-left-open .kit-title,
 .kit-row.cb-left-open .kit-kicker,
 .kit-row.cb-left-open .kit-meta {
@@ -2098,4 +2028,314 @@ textarea.cb-needs-edit:focus {
 /* An item new activity brought back: its reason, in the signal colour. */
 .kit-row.cb-new-activity .kit-sub {
   color: var(--kit-signal);
+}
+
+/* ---- Attention's list: wider, and it collapses to a rail ------------------ */
+/*
+ * 520px (the kit's list is 400; Rules and To apply keep it). « at its top
+ * right hides it: the list becomes a 34px rail with » and the view and its
+ * count written up it, and the reading column takes the room. The rail (or
+ * ») brings the list back.
+ */
+.kit-list.cb-attention {
+  width: 520px;
+  position: relative;
+}
+
+.cb-list-hide,
+.cb-list-show {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font: 12px var(--kit-mono);
+  color: var(--kit-muted);
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cb-list-hide {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+}
+
+.cb-list-hide:hover,
+.cb-list-show:hover {
+  color: var(--kit-fg);
+}
+
+.cb-list-rail {
+  display: none;
+}
+
+.kit-list.cb-attention.cb-list-closed {
+  width: 34px;
+}
+
+.kit-list.cb-attention.cb-list-closed > :not(.cb-list-rail) {
+  display: none;
+}
+
+.kit-list.cb-attention.cb-list-closed > .cb-list-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  padding-top: 8px;
+  cursor: pointer;
+}
+
+.cb-list-rail-label {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
+  font: 11px var(--kit-mono);
+  letter-spacing: 0.06em;
+  color: var(--kit-muted);
+  white-space: nowrap;
+}
+
+/* ---- the item page: wider, and steady -------------------------------------- */
+/*
+ * The item uses the width it has (to 1060px; the kit's document is 640).
+ * Everything above the cards keeps its size from item to item, so moving
+ * between items doesn't move them: the « ‹ › » row stays at the top of the
+ * reading column, two lines are kept for the title, two for the facts, and
+ * the description and the recommendation box share one fixed height (a
+ * long description scrolls in its box; with no recommendation the box is
+ * there, empty). The cards share one row and one height; evidence and
+ * history sit side by side.
+ */
+.kit-doc.cb-item-doc {
+  max-width: 1060px;
+  padding: 0 40px 60px;
+}
+
+.cb-item-doc > .cb-item:first-child {
+  padding-top: 30px;
+}
+
+.cb-nav {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 52px;
+  margin: 0 0 6px;
+  font: 13px var(--kit-sans);
+  color: var(--kit-muted);
+  background: var(--kit-bg);
+}
+
+.cb-nav-b {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 26px;
+  padding: 0 6px;
+  font: 14px var(--kit-sans);
+  color: var(--kit-fg);
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cb-nav-b:not(:disabled):hover {
+  border-color: var(--kit-signal);
+}
+
+.cb-nav-b:disabled {
+  color: var(--kit-muted);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.cb-nav-pos {
+  margin: 0 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-item .cb-title {
+  font-size: 26px;
+  line-height: 1.25;
+  height: 2.5em;
+  margin: 8px 0 12px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.cb-item .kit-facts {
+  line-height: 20px;
+  row-gap: 4px;
+  height: 44px;
+  overflow: hidden;
+  align-content: flex-start;
+  margin-bottom: 14px;
+}
+
+.cb-lead {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* The description: the column's width, one fixed height, scrolls inside. */
+.cb-lead > .cb-body {
+  height: 140px;
+  overflow: auto;
+  padding: 12px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.cb-lead > .cb-body p {
+  margin: 0 0 8px;
+}
+
+.cb-lead > .cb-body p:last-child {
+  margin-bottom: 0;
+}
+
+.kit-doc .cb-lead .cb-due-reason {
+  margin: 0 0 8px;
+}
+
+/* The recommendation above it: one fixed height, room for the head, the
+   label, two lines of the reason and the button row. */
+.cb-lead > .cb-proposal-card,
+.cb-lead > .cb-rec-empty {
+  height: 150px;
+  margin: 0;
+}
+
+.cb-lead > .cb-proposal-card {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+}
+
+.cb-lead > .cb-proposal-card .kit-card-head {
+  flex: none;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-lead > .cb-proposal-card .kit-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+/* accept, change… and reject at the kit's size, then the key hint: one row. */
+.cb-lead > .cb-proposal-card .kit-btns {
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.cb-lead > .cb-proposal-card .kit-btn {
+  white-space: nowrap;
+}
+
+.cb-proposal-label {
+  font-weight: 600;
+  margin: 0 0 2px;
+}
+
+.cb-lead .cb-proposal-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-lead .cb-proposal-note {
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.cb-lead .cb-keyhint {
+  margin: 0 0 0 auto;
+  white-space: nowrap;
+}
+
+.cb-rec-empty {
+  border: 1px dashed var(--kit-line);
+  border-radius: 8px;
+}
+
+/* The looking line keeps its room when nobody is looking. */
+.cb-item .cb-looking {
+  height: 19px;
+  line-height: 19px;
+  margin: -4px 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-item .cb-looking[hidden] {
+  display: block;
+  visibility: hidden;
+}
+
+/* The cards wrap rather than thin out: one row only when each card can be
+   150px or wider. A row's cards share its height (grid stretch). */
+.cb-item .cb-choices {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.cb-item .cb-choice.kit-card {
+  padding: 10px 12px;
+}
+
+.cb-item .cb-choice.kit-card.on {
+  padding: 9px 11px;
+}
+
+.cb-item .cb-choice-label {
+  font-size: 14px;
+}
+
+.cb-item .cb-choice-says {
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.cb-trail {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+  margin-top: 26px;
+}
+
+.cb-item .cb-choice.kit-card.cb-look-card {
+  padding-left: 10px;
 }

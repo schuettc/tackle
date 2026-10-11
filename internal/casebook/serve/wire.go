@@ -63,6 +63,37 @@ type ItemView struct {
 	// Looking: a session is looking into the item ("ask ‹session› to look
 	// into it", not yet settled); nil when none is.
 	Looking *Looking `json:"looking,omitempty"`
+	// Group is the item's group in an Attention view (GroupView.ID): ""
+	// in To apply, tracked and the left-open group.
+	Group string `json:"group"`
+	// RecommendedBy is the session whose pending proposal the item has
+	// (its id alone when serve doesn't know it); nil for none or a rule's.
+	RecommendedBy *deliver.Session `json:"recommended_by,omitempty"`
+}
+
+// GroupNone is the group of an Attention view's items with no pending
+// proposal, and GroupNoneLabel its name.
+const (
+	GroupNone      = "none"
+	GroupNoneLabel = "Not recommended yet"
+)
+
+// GroupView is one group of an Attention view: the items whose pending
+// proposals share a source, a disposition (watch reads as wait) and the
+// label of that choice for the item's kind. ID is
+// "<source>|<disposition>|<label>", or GroupNone for the items with no
+// pending proposal (Source, Disposition and Many empty). Many is the
+// choice's words for several items ({n}: the count word, CountWords).
+// Total counts the group over every page of the view.
+type GroupView struct {
+	ID          string           `json:"id"`
+	Source      string           `json:"source"`
+	By          *deliver.Session `json:"by,omitempty"`
+	Disposition string           `json:"disposition"`
+	Label       string           `json:"label"`
+	Outward     bool             `json:"outward"`
+	Many        string           `json:"many"`
+	Total       int              `json:"total"`
 }
 
 // newItemView is it as the page and the agent see it, with its proposal
@@ -101,6 +132,10 @@ type ItemsView struct {
 	// recommendation, a rule's aside: what "clear N recommendations"
 	// withdraws.
 	AgentRecommended int `json:"agent_recommended"`
+	// Groups are an Attention view's groups (its filters apply, a group
+	// filter aside), in the order the view lists them, the not recommended
+	// last; empty for To apply and tracked.
+	Groups []GroupView `json:"groups"`
 }
 
 // ItemDetailView is the response body of GET /api/item.
@@ -380,6 +415,75 @@ type DecisionVocabView struct {
 	// LookInto is "Look into it": the card's label and sentence, and the
 	// messages it and "look into all N" send.
 	LookInto LookIntoVocab `json:"look_into"`
+	// The group buttons beside each choice's Many, {n} the count word:
+	// look into the group, discard its recommendations, ask the attached
+	// session ({session}: its name) to recommend the not recommended.
+	LookMany       string `json:"look_many"`
+	DiscardMany    string `json:"discard_many"`
+	RecommendThese string `json:"recommend_these"`
+	// DiscardAll is the pinned summary's button ({n}: the number of
+	// items), Summary its line.
+	DiscardAll string       `json:"discard_all"`
+	Summary    SummaryVocab `json:"summary"`
+	CountWords CountWords   `json:"count_words"`
+	// ToApplyHint goes under an outward group's label; Untick ends a
+	// group's buttons while some of it is ticked.
+	ToApplyHint string `json:"to_apply_hint"`
+	Untick      string `json:"untick"`
+	// LeftOpen is the left-open group's label (its count beside it).
+	LeftOpen string `json:"left_open"`
+	// Recommends is the open item's recommendation box's kicker
+	// ({session}: who recommends).
+	Recommends string `json:"recommends"`
+	// Nav is the open item's « ‹ › » row.
+	Nav NavVocab `json:"nav"`
+	// HideList and ShowList are Attention's list's collapse control.
+	HideList string `json:"hide_list"`
+	ShowList string `json:"show_list"`
+	// The discard confirm: its title, its sentence ({count}: DiscardOne,
+	// or DiscardSome with {n} the number; {view}: the view's label) and
+	// its buttons.
+	DiscardTitle   string `json:"discard_title"`
+	DiscardConfirm string `json:"discard_confirm"`
+	DiscardOne     string `json:"discard_one"`
+	DiscardSome    string `json:"discard_some"`
+	DiscardButton  string `json:"discard_button"`
+	DiscardCancel  string `json:"discard_cancel"`
+	// Asked takes the not recommended group's ask's place once the page
+	// asked the attached session ({session}: its name).
+	Asked string `json:"asked"`
+}
+
+// NavVocab is the open item's « ‹ › » row: its place ({pos} of {total} in
+// {group}: its group's label) and each button's tooltip ({target}: the
+// item or group it goes to; None when there is none, Later when it is on a
+// page not loaded yet).
+type NavVocab struct {
+	Position  string `json:"position"`
+	PrevItem  string `json:"prev_item"`
+	NextItem  string `json:"next_item"`
+	PrevGroup string `json:"prev_group"`
+	NextGroup string `json:"next_group"`
+	None      string `json:"none"`
+	Later     string `json:"later"`
+}
+
+// SummaryVocab is the pinned summary line: OneSession when every item the
+// view lists is recommended by one session ({n}: the items, {session}: its
+// name), Mixed otherwise ({r}: how many are recommended).
+type SummaryVocab struct {
+	OneSession string `json:"one_session"`
+	Mixed      string `json:"mixed"`
+}
+
+// CountWords are the words that fill a group button's {n} (CountWord):
+// the whole group of one, of two, of more ({n}: the group's size), and
+// some of it ticked ({n}: how many).
+type CountWords struct {
+	One  string `json:"one"`
+	Two  string `json:"two"`
+	All  string `json:"all"`
+	Some string `json:"some"`
 }
 
 // KindVocab describes the valid decisions for one item kind. Allowed and
@@ -403,6 +507,8 @@ type ChoiceVocab struct {
 	Says        string `json:"says"`
 	Outward     bool   `json:"outward"`
 	NeedsUntil  bool   `json:"needs_until"`
+	// Many is the choice for several items ({n}: the count word).
+	Many string `json:"many"`
 }
 
 // NotNowForm is one Not now condition. Template is an until form with one

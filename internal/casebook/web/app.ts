@@ -124,7 +124,7 @@ export interface Section {
    */
   primary(): Primary | null;
   /**
-   * keys are the section's own keys that work now (Attention's d, a / r;
+   * keys are the section's own keys that work now (Attention's a / r;
    * Rules' a, activate; Apply's a and p). app.ts asks after every show() and
    * binds them while the section is shown, and only then: a hidden section
    * keeps its open item and selection, and a key must not reach them. It
@@ -141,7 +141,7 @@ export interface Section {
   /**
    * listKeys is the list the family's list keys drive while the section shows
    * (createKeys({list}): j/↓ k/↑ o/↵, x ⇧x when its rows select, / when it
-   * has a search field), or null when none is shown (Attention's board).
+   * has a search field), or null when the section shows none.
    * app.ts asks after every show(), like keys.
    */
   listKeys?(): { nav: ListNav; selects: boolean } | null;
@@ -606,8 +606,8 @@ function start(first: SummaryView | null): void {
     const activeSec = sections.get(sectionId);
     if (activeSec) {
       activeSec.show(r.sub);
-      // The keyboard layer follows what show() put up (Attention's board
-      // or its list): only the shown section's list and keys are bound.
+      // The keyboard layer follows what show() put up: only the shown
+      // section's list and keys are bound.
       layer.bind(activeSec);
       // The bar's primary follows the active section.
       ctx.setPrimary(activeSec.primary());

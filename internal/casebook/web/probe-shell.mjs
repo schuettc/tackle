@@ -12,8 +12,8 @@
 //   serve isn't answering …        spec §2.4 "serve dies": the banner, retry
 //   a restarted serve …            spec §2.4: the stale pill, the tab stops
 //   decisions queued offline …     spec §2.4 "offline": offline · N queued
-//   a slow push …                  the decide sheet closes on serve's answer,
-//                                  not on the push after it
+//   a slow push …                  a decide answers on serve's answer, not
+//                                  on the push after it
 //   a list load on its way …       a view or search change while the list
 //                                  loads is queued, not dropped (0.4.7)
 
@@ -146,6 +146,13 @@ function rowsOf(pg, sel = SHOWN) {
       cur: e.classList.contains('cur'),
       sel: e.classList.contains('sel'),
       id: e.dataset.key ?? '',
+      // The group the row is in: its header's (none before it: '').
+      group: (() => {
+        let p = e.previousElementSibling;
+        while (p && !p.classList.contains('cb-group'))
+          p = p.previousElementSibling;
+        return p?.getAttribute('data-group') ?? '';
+      })(),
     })),
   );
 }
@@ -177,13 +184,14 @@ const EXPECT = {
     '/',
     ...FAMILY,
     ...PAGE_KEYS,
-    'd',
     'a',
     'r',
     'u',
     ...'123456789',
+    // « and »: the group before or after the open item's.
+    '[',
+    ']',
   ],
-  board: ['/', ...FAMILY, ...PAGE_KEYS, 'd'],
   rules: [...MOVE_OPEN, ...FAMILY, ...PAGE_KEYS, 'a'],
   apply: [...MOVE_OPEN, ...SELECT, ...FAMILY, ...PAGE_KEYS, 'a', 'p'],
 };
@@ -200,7 +208,6 @@ export async function shellScenarios(shared, t) {
     ['push failed', pushFailedScenario],
     ['the stale pill from an API call', staleApiScenario],
     ['200 rows and "show more"', pageCapScenario],
-    ["the board's search", boardSearchScenario],
     ['a list load on its way', heldLoadScenario],
   ]) {
     try {
@@ -347,10 +354,11 @@ async function keyboardScenario(shared, t) {
           ),
         );
 
-        // x selects the cursor's row; ⇧x selects the range to it; d decides
-        // the selection, and it is decided on serve.
+        // x selects the cursor's row; ⇧x selects the range to it. Ticked
+        // rows act through their group (no d): serve decides them here,
+        // and they leave the list and the selection.
         rows = await rowsOf(pg);
-        const hasProposal = (r) => r.sub.includes(' recommends ');
+        const hasProposal = (r) => r.group !== '' && r.group !== 'none';
         let from = -1;
         for (let i = 0; i + 2 < rows.length; i++) {
           if (![0, 1, 2].some((d) => hasProposal(rows[i + d]))) {
@@ -367,26 +375,38 @@ async function keyboardScenario(shared, t) {
           const d = i - cur0;
           return Array(Math.abs(d)).fill(d > 0 ? 'j' : 'k');
         };
+        const picked = rows.slice(from, from + 3);
+        const pickedKeys = picked.map((r) => r.kicker.replace(/^pr · /, 'pr:'));
         await press(pg, ...moveTo(from), 'x');
         check(
-          'x selects the cursor\'s row: "Decide 1"',
+          `x selects the cursor's row ("${picked[0]?.title}")`,
           await until(
             pg,
-            () =>
-              document.querySelector('.kit-primary')?.textContent ===
-              'Decide 1',
+            (want) => {
+              const sel = [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+                ),
+              ].filter((r) => r.checkVisibility());
+              return (
+                sel.length === 1 &&
+                sel[0].querySelector('.kit-title')?.textContent === want
+              );
+            },
+            picked[0]?.title,
           ),
         );
         await press(pg, 'j', 'j', 'Shift+X');
-        const picked = rows.slice(from, from + 3);
-        const pickedKeys = picked.map((r) => r.kicker.replace(/^pr · /, 'pr:'));
         check(
-          '⇧x selects the range to the cursor: "Decide 3"',
+          '⇧x selects the range to the cursor (3 rows)',
           await until(
             pg,
             () =>
-              document.querySelector('.kit-primary')?.textContent ===
-              'Decide 3',
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+                ),
+              ].filter((r) => r.checkVisibility()).length === 3,
           ),
         );
         checkList(
@@ -394,49 +414,29 @@ async function keyboardScenario(shared, t) {
           (await rowsOf(pg)).filter((r) => r.sel).map((r) => r.title),
           picked.map((r) => r.title),
         );
-        await press(pg, 'd');
-        const sheetTitle = (await until(
-          pg,
-          () => !!document.querySelector('.kit-sheet'),
-        ))
-          ? await pg.$eval(
-              '.kit-sheet',
-              (e) =>
-                e.querySelector('.kit-sheet-head')?.textContent ??
-                e.textContent,
-            )
-          : '';
+        await agent.api('POST', '/api/decide', {
+          keys: pickedKeys,
+          disposition: 'keep',
+        });
         check(
-          `d opens decide for the selection ("${sheetTitle}")`,
-          sheetTitle.includes('decide 3 items'),
-        );
-        await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
-        await pg.click('.kit-sheet .kit-btn.fill:has-text("· 3 ")');
-        check(
-          'and deciding there decides the three on serve (keep)',
+          'serve decides the three (keep)',
           await eventually(async () => {
             const got = await Promise.all(pickedKeys.map(item));
             return got.every((v) => v?.item?.decision?.disposition === 'keep');
           }),
         );
         check(
-          'the decided rows leave the list and the selection ("Decide N" goes)',
+          'the decided rows leave the list and the selection',
           await until(
             pg,
             () =>
               document.querySelectorAll(
                 '.kit-app > .kit-list:not([hidden]) .kit-row:not(.cb-left-open)',
               ).length === 3 &&
-              !!document.querySelector('.kit-primary')?.hidden,
+              document.querySelectorAll(
+                '.kit-app > .kit-list:not([hidden]) .kit-row.sel',
+              ).length === 0,
           ),
-        );
-        // serve announces the decision (and the rebuilt index) just before
-        // it answers, so the rows can leave while the sheet, modal, is still
-        // open. Keys wait while a sheet is open: the next key waits for it
-        // to close.
-        check(
-          'the decide sheet closes when serve answers',
-          await until(pg, () => !document.querySelector('.kit-sheet')),
         );
 
         // a accepts the open item's proposal; r rejects it (its sheet).
@@ -794,17 +794,6 @@ async function keyboardScenario(shared, t) {
             back1 === 1 &&
             (await curOf(pg, '.kit-app > .kit-list.cb-apply-list')) ===
               applyCurNow,
-        );
-
-        // The board is not a list: only d (the shared selection) works there.
-        await pg.evaluate(() => {
-          location.hash = '#/attention/board';
-        });
-        await until(pg, () => !!document.querySelector('.cb-board'));
-        checkList(
-          'on the board the ? overlay lists exactly its keys (its search, d; no list keys)',
-          await overlayKeys(t, pg),
-          [...EXPECT.board].sort(),
         );
 
         // The theme is remembered across a reload.
@@ -1541,11 +1530,12 @@ async function offlineQueuedScenario(shared, t) {
 // slowPushScenario: serve answers a decide once the decision is committed
 // and the index rebuilt; the push to the casebook remote follows. Here the
 // remote (a bare repo in the temp home) holds every push in its pre-receive
-// hook until released: the decide sheet closes, and the keys come back,
-// while the push is held, and the status doesn't call it offline.
+// hook until released: a decide from the item's card moves on, and the
+// keys come back, while the push is held, and the status doesn't call it
+// offline.
 async function slowPushScenario(shared, t) {
   const { check, until, eventually } = t;
-  console.log("\nscenario: a slow push doesn't hold the decide sheet");
+  console.log("\nscenario: a slow push doesn't hold a decide");
   const SP = 'sp-probe';
   const KEY = `pr:schuettc/${SP}#71`;
   await withServe(
@@ -1590,30 +1580,29 @@ async function slowPushScenario(shared, t) {
             `two rows, the one to decide among them (row ${at})`,
             two && at >= 0,
           );
-          // Put the cursor on it and select it.
+          // Put the cursor on it and open it.
           for (let i = 0; i < 4 && (await curOf(pg)) !== at; i++) {
             const cur = await curOf(pg);
             await press(pg, cur < at ? 'j' : 'k');
           }
-          await press(pg, 'x');
+          await press(pg, 'o');
+          const card =
+            '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]';
           check(
-            'x selects it: "Decide 1"',
+            'o opens it, its cards shown',
             await until(
               pg,
-              () =>
-                document.querySelector('.kit-primary')?.textContent ===
-                'Decide 1',
+              (sel) => !!document.querySelector(sel)?.checkVisibility(),
+              card,
             ),
           );
-          await pg.click('.kit-primary');
-          await until(pg, () => !!document.querySelector('.kit-sheet'));
-          await pg.click('.kit-sheet .cb-choice[data-d="keep"]');
           const t0 = Date.now();
-          await pg.click('.kit-sheet .kit-btn.fill:has-text("· 1 ")');
-          const closed = await until(
+          await pg.click(card);
+          // Deciding it opens the next item: the row leaves the list.
+          const left = await until(
             pg,
-            () => !document.querySelector('.kit-sheet'),
-            undefined,
+            (sel) => document.querySelectorAll(`${sel} .kit-row`).length === 1,
+            SHOWN,
             3000,
           );
           const ms = Date.now() - t0;
@@ -1622,8 +1611,8 @@ async function slowPushScenario(shared, t) {
           );
           const onRemote = remoteLog().includes(`decide ${KEY}`);
           check(
-            `the decide sheet closes on serve's answer (${ms} ms) while the push is held (held ${held}, on the remote ${onRemote})`,
-            closed && held && !onRemote && ms < 3000,
+            `deciding from its card answers on serve's answer: the row leaves the list (${ms} ms) while the push is held (held ${held}, on the remote ${onRemote})`,
+            left && held && !onRemote && ms < 3000,
           );
           const v = await agent.api(
             'GET',
@@ -2067,150 +2056,6 @@ async function pageCapScenario(shared, t) {
   );
 }
 
-// ---- the board's search ----------------------------------------------------------
-
-// boardSearchScenario: on the board, the search field filters the lanes as
-// it filters the list: / focuses it, typing narrows every lane to what serve
-// finds for the text, Esc clears it and the lanes fill again, and the list
-// then shows the same search's rows.
-async function boardSearchScenario(shared, t) {
-  const { check, checkList, until } = t;
-  console.log("\nscenario: the board's search searches the board");
-  const BS = 'bs-probe';
-  await withServe(
-    {
-      seedRepos: [
-        seedRepo(BS, [
-          [71, 'rename the ledger export', 'kai'],
-          [72, 'ledger totals drift by a cent', 'kai'],
-          [73, 'bump the chart library', 'noa'],
-        ]),
-        seedRepo(`${BS}-other`, [[81, 'the ledger page is slow', 'noa']]),
-        dormant(`${BS}-dormant`),
-      ],
-    },
-    (serveHandle) =>
-      withContext(shared, async (context) => {
-        const agent = createAgent(serveHandle.base, serveHandle.token);
-        // What serve finds for a text across the board's lanes (each item
-        // once, in lane order: waiting, proposed, due, new).
-        const lanesFind = async (q) => {
-          const seen = new Set();
-          for (const v of ['waiting', 'proposed', 'due', 'new']) {
-            const r = await agent.api(
-              'GET',
-              `/api/items?view=${v}&offset=0&limit=500${q ? `&q=${encodeURIComponent(q)}` : ''}`,
-            );
-            for (const it of r.items ?? []) seen.add(it.key);
-          }
-          return [...seen].sort();
-        };
-        const pg = await context.newPage();
-        const errors = [];
-        pg.on('pageerror', (e) => errors.push(String(e)));
-        try {
-          await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(serveHandle.url + '#/attention/board', {
-            waitUntil: 'domcontentloaded',
-            timeout: 15000,
-          });
-          const cards = () =>
-            pg.$$eval('.cb-board .cb-lane .kit-card[data-id]', (els) =>
-              [...new Set(els.map((e) => e.dataset.id))].sort(),
-            );
-          const allKeys = await lanesFind('');
-          const boardIs = (want) =>
-            until(
-              pg,
-              (w) =>
-                [
-                  ...new Set(
-                    [
-                      ...document.querySelectorAll(
-                        '.cb-board .cb-lane .kit-card[data-id]',
-                      ),
-                    ].map((e) => e.dataset.id),
-                  ),
-                ]
-                  .sort()
-                  .join('|') === w,
-              want.join('|'),
-              8000,
-            );
-          check(
-            `the board shows every item in its lanes (${allKeys.length})`,
-            allKeys.length > 4 && (await boardIs(allKeys)),
-          );
-          await press(pg, '/');
-          check(
-            '/ on the board focuses the search field',
-            await until(
-              pg,
-              () =>
-                document.activeElement?.classList.contains('kit-search') &&
-                !!document.activeElement.closest('.kit-list:not([hidden])'),
-            ),
-          );
-          await pg.keyboard.type('ledger');
-          const want = await lanesFind('ledger');
-          const narrowed = await boardIs(want);
-          checkList(
-            `typing "ledger" narrows the lanes to what serve finds for it`,
-            await cards(),
-            want,
-          );
-          check(
-            `(${want.length} of ${allKeys.length}, in the URL as ?q=ledger)`,
-            narrowed &&
-              want.length === 3 &&
-              want.length < allKeys.length &&
-              (await pg.evaluate(() =>
-                new URL(location.href).searchParams.get('q'),
-              )) === 'ledger',
-          );
-          await pg.keyboard.press('Escape');
-          check(
-            'Esc clears the search, and the lanes fill again',
-            await boardIs(allKeys),
-          );
-          // The same search on the list: its rows are the waiting lane's.
-          await press(pg, '/');
-          await pg.keyboard.type('ledger');
-          await boardIs(want);
-          await pg.evaluate(() => {
-            location.hash = '#/attention/waiting';
-          });
-          const waiting = (
-            await agent.api(
-              'GET',
-              '/api/items?view=waiting&offset=0&limit=500&q=ledger',
-            )
-          ).items.map((it) => it.title);
-          const rowsNow = await until(
-            pg,
-            (w) =>
-              [
-                ...document.querySelectorAll(
-                  '.kit-app > .kit-list:not([hidden]) .kit-row .kit-title',
-                ),
-              ]
-                .map((e) => e.textContent)
-                .sort()
-                .join('|') === w,
-            [...waiting].sort().join('|'),
-          );
-          check(
-            `and the list, switched to, searches the same: ${waiting.join(', ')}`,
-            rowsNow && waiting.length === 3,
-          );
-          check(`no page errors (${errors.join(' | ')})`, errors.length === 0);
-        } finally {
-          await pg.close();
-        }
-      }),
-  );
-}
-
 // ---- a view or search change while a list load is on its way ----------------
 
 // casebook 0.4.7: reload() began `if (loading) return;`, so a view chip, a
@@ -2313,9 +2158,9 @@ async function heldLoadScenario(shared, t) {
             want.join('|'),
             8000,
           );
-        const selAll = (pg) =>
+        const summary = (pg) =>
           pg
-            .$eval(`${SHOWN} .cb-sel-all`, (e) => e.textContent ?? '')
+            .$eval(`${SHOWN} .cb-summary`, (e) => e.textContent ?? '')
             .catch(() => '');
         const painted = (pg) => pg.evaluate(() => window.__painted);
 
@@ -2339,10 +2184,10 @@ async function heldLoadScenario(shared, t) {
               await rowKeys(pg),
               fresh.keys,
             );
-            const count = await selAll(pg);
+            const count = await summary(pg);
             check(
               `and its count ("${count}")`,
-              shown && count === `select all ${fresh.total} in view`,
+              shown && count.startsWith(`${fresh.total} items, `),
             );
             const seen = await painted(pg);
             check(
@@ -2383,10 +2228,10 @@ async function heldLoadScenario(shared, t) {
               await rowKeys(pg),
               ledger.keys,
             );
-            const count = await selAll(pg);
+            const count = await summary(pg);
             check(
               `and its count ("${count}")`,
-              shown && count === `select all ${ledger.total} in view`,
+              shown && count.startsWith(`${ledger.total} items, `),
             );
             const seen = await painted(pg);
             check(

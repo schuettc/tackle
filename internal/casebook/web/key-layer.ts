@@ -11,11 +11,10 @@
 //     nothing. (The kit has no createKeys({list, select: false}), so those
 //     six are registered here, in the family group, with the kit's labels.)
 //   - its own keys (Section.keys) are bound.
-// Showing another section, or the same section with another list (Attention's
-// board has none), rebuilds the kit's registry from nothing: no binding to a
-// hidden list or a hidden section's key survives. Page-wide keys (the dock's
-// . and ⌘↵, the g a / g r / g p switches) are kept here and bound again into
-// every rebuild.
+// Showing another section, or the same section with another list (or none),
+// rebuilds the kit's registry from nothing: no binding to a hidden list or a
+// hidden section's key survives. Page-wide keys (the dock's . and ⌘↵, the
+// g a / g r / g p switches) are kept here and bound again into every rebuild.
 //
 // A key that clashes is a programming error. It is reported, loudly, and the
 // other keys bind and the section still shows: a clash must be visible, never
@@ -83,6 +82,17 @@ function navKeys(nav: NavLike): KeyLike[] {
     ks.push({ keys: '/', label: 'search', run: () => search() });
   }
   return ks.map((k) => ({ ...k, group: 'family' }));
+}
+
+/**
+ * groupKeys are Attention's [ and ]: open the first item of the group
+ * before or after the open item's (jump(-1), jump(1)).
+ */
+export function groupKeys(jump: (d: number) => void): KeyLike[] {
+  return [
+    { keys: '[', label: 'previous group', group: 'page', run: () => jump(-1) },
+    { keys: ']', label: 'next group', group: 'page', run: () => jump(1) },
+  ];
 }
 
 export function makeKeyLayer(
