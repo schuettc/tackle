@@ -4979,6 +4979,82 @@ async function navScenario(context, t, s) {
         evenRows,
     );
   }
+  // ---- choosing moves nothing: the same column, LPR(42) recommends Close ----
+  {
+    // still reads every card's top and height and the question's top.
+    const still = () =>
+      pg.evaluate((read) => {
+        const q = document.querySelector(`${read} .cb-question`);
+        return {
+          q: Math.round(q?.getBoundingClientRect().top ?? -1),
+          cards: [
+            ...document.querySelectorAll(`${read} .cb-choices .cb-choice`),
+          ].map((c) => {
+            const r = c.getBoundingClientRect();
+            return `${Math.round(r.top)}/${Math.round(r.height)}`;
+          }),
+          on: [
+            ...document.querySelectorAll(`${read} .cb-choices .cb-choice.on`),
+          ].map((c) => c.dataset.d),
+          comment: !!document
+            .querySelector(`${read} .cb-close-comment`)
+            ?.checkVisibility(),
+          notNow: !!document
+            .querySelector(`${read} .cb-notnow`)
+            ?.checkVisibility(),
+        };
+      }, READ);
+    // A fresh beat: the dock's session (and its Look into it card) outlives
+    // the steps below.
+    await beat();
+    // Scrolled as Court would to see every card (so a click never has to
+    // scroll one into view).
+    await pg.evaluate((read) => {
+      const col = document.querySelector(read);
+      const cards = col.querySelector('.cb-choices').getBoundingClientRect();
+      col.scrollTop += Math.max(0, cards.bottom - innerHeight + 40);
+    }, READ);
+    const base = await still();
+    const same = (g) =>
+      g.q === base.q &&
+      g.cards.length === base.cards.length &&
+      g.cards.every((c, i) => c === base.cards[i]);
+    const steps = [
+      [
+        'the recommended card (Close)',
+        () => pg.click(`${READ} .cb-choice[data-d="close"]`),
+        (g) => g.on.join() === 'close' && g.comment,
+      ],
+      [
+        'then Not now',
+        () => pg.click(`${READ} .cb-choice[data-d="wait"]`),
+        (g) => g.on.join() === 'wait' && g.notNow && !g.comment,
+      ],
+      [
+        'then Close again',
+        () => pg.click(`${READ} .cb-choice[data-d="close"]`),
+        (g) => g.on.join() === 'close' && g.comment && !g.notNow,
+      ],
+      [
+        'then Esc',
+        () => pg.keyboard.press('Escape'),
+        (g) => g.on.length === 0 && !g.comment,
+      ],
+    ];
+    for (const [name, act, shows] of steps) {
+      await act();
+      // Wait for the step's state, then a frame for any layout it causes.
+      let g = await still();
+      await t.eventually(async () => shows((g = await still())), 3000);
+      await pg.evaluate(() => new Promise((r) => requestAnimationFrame(r)));
+      g = await still();
+      check(
+        `choosing moves nothing: ${name} on ${LPR(42)} at 1440x900 (${g.on.join() || 'none'} chosen, comment ${g.comment}, not now ${g.notNow}): the question at ${g.q}px (${base.q}), every card top/height ${g.cards.join(' ')} (${base.cards.join(' ')})`,
+        base.cards.length >= 5 && shows(g) && same(g),
+      );
+    }
+    await beat();
+  }
   await pg.setViewportSize({ width: 1600, height: 900 });
 
   // ---- nav: into a collapsed group ---------------------------------------------

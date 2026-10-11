@@ -302,8 +302,12 @@
   padding: 11px 13px;
 }
 .cb-choice-k {
-  font: 12px var(--kit-mono);
+  height: 18px;
+  overflow: hidden;
+  font: 12px/18px var(--kit-mono);
   color: var(--kit-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .cb-choice.rec .cb-choice-k {
   color: var(--kit-agent);

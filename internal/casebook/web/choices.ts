@@ -149,7 +149,11 @@ export function renderChoices(
   });
 
   function mark(d: string | undefined): void {
-    for (const card of grid.querySelectorAll<HTMLElement>('.cb-choice')) {
+    // Only the decision cards: the Look into it card (no data-d) is never
+    // chosen, even when nothing is (d undefined).
+    for (const card of grid.querySelectorAll<HTMLElement>(
+      '.cb-choice[data-d]',
+    )) {
       const on = card.dataset.d === d;
       card.classList.toggle('on', on);
       const k = card.querySelector<HTMLElement>('.cb-choice-k');
@@ -184,7 +188,7 @@ export function renderChoices(
           }
           notNow.hidden = true;
           if (comment && c.disposition === CLOSE) {
-            comment.open();
+            comment.open(undefined, false);
             return;
           }
           comment?.close();
@@ -205,7 +209,7 @@ export function renderChoices(
   // in the field); Esc, wherever focus is, closes it and unpicks the card.
   function closeComment(): {
     el: HTMLElement;
-    open(onNote?: (note: string) => void): void;
+    open(onNote?: (note: string) => void, scroll?: boolean): void;
     close(): void;
   } {
     // Whom the buttons answer: the decide (a close card), or an accept.
@@ -257,7 +261,10 @@ export function renderChoices(
       el.hidden = true;
       document.removeEventListener('keydown', onEsc, true);
     }
-    function open(onNote?: (note: string) => void): void {
+    // A card's open doesn't scroll: the cards and what is above them stay
+    // where Court clicked. An accept (the recommendation box) scrolls the
+    // field into view.
+    function open(onNote?: (note: string) => void, scroll = true): void {
       answer = onNote ?? null;
       // A decided close starts from its comment; an accept, and anything
       // else, empty.
@@ -265,7 +272,7 @@ export function renderChoices(
       if (onNote) mark(CLOSE);
       el.hidden = false;
       document.addEventListener('keydown', onEsc, true);
-      field.focus();
+      field.focus({ preventScroll: !scroll });
     }
     return { el, open, close };
   }

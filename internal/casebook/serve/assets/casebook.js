@@ -805,7 +805,9 @@ function renderChoices(ctx, kind, opts) {
     notNow.append(...notNowPicker(vocab2.not_now ?? []));
   });
   function mark(d) {
-    for (const card6 of grid.querySelectorAll(".cb-choice")) {
+    for (const card6 of grid.querySelectorAll(
+      ".cb-choice[data-d]"
+    )) {
       const on = card6.dataset.d === d;
       card6.classList.toggle("on", on);
       const k = card6.querySelector(".cb-choice-k");
@@ -835,7 +837,7 @@ function renderChoices(ctx, kind, opts) {
           }
           notNow.hidden = true;
           if (comment && c.disposition === CLOSE) {
-            comment.open();
+            comment.open(void 0, false);
             return;
           }
           comment?.close();
@@ -895,13 +897,13 @@ function renderChoices(ctx, kind, opts) {
       el.hidden = true;
       document.removeEventListener("keydown", onEsc, true);
     }
-    function open(onNote) {
+    function open(onNote, scroll = true) {
       answer = onNote ?? null;
       field.value = !onNote && opts.chosen === CLOSE ? opts.note ?? "" : "";
       if (onNote) mark(CLOSE);
       el.hidden = false;
       document.addEventListener("keydown", onEsc, true);
-      field.focus();
+      field.focus({ preventScroll: !scroll });
     }
     return { el, open, close };
   }

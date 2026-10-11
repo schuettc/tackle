@@ -394,7 +394,8 @@
 
 /* A card is a kit card that is one button: the number, the label, what
    happens. Chosen: the signal border. Recommended: the number line in the
-   agent's colour. Only delete draws its label in danger. */
+   agent's colour. The number line is one line that never wraps (an
+   ellipsis instead), so choosing a card never changes its height. Only delete draws its label in danger. */
 .cb-choice.kit-card {
   display: flex;
   flex-direction: column;
@@ -417,8 +418,12 @@
 }
 
 .cb-choice-k {
-  font: 12px var(--kit-mono);
+  height: 18px;
+  overflow: hidden;
+  font: 12px/18px var(--kit-mono);
   color: var(--kit-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .cb-choice.rec .cb-choice-k {
