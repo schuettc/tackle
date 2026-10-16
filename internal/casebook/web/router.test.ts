@@ -8,7 +8,13 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { safeDecode, pathEscape, parse } from './router-helpers.ts';
+import {
+  safeDecode,
+  pathEscape,
+  parse,
+  attentionQuery,
+  flatFor,
+} from './router-helpers.ts';
 
 // Build an item hash the same way go('item', key) does.
 function buildItemHash(key: string): string {
@@ -19,32 +25,60 @@ function buildItemHash(key: string): string {
 
 describe('parse', () => {
   test('empty hash → attention with empty sub', () => {
-    assert.deepStrictEqual(parse(''), { section: 'attention', sub: '' });
+    assert.deepStrictEqual(parse(''), {
+      section: 'attention',
+      sub: '',
+      query: '',
+    });
   });
 
   test('#/ → attention with empty sub', () => {
-    assert.deepStrictEqual(parse('#/'), { section: 'attention', sub: '' });
+    assert.deepStrictEqual(parse('#/'), {
+      section: 'attention',
+      sub: '',
+      query: '',
+    });
   });
 
-  test('#/attention → attention with empty sub', () => {
+  test('#/attention → attention with empty sub and query', () => {
     assert.deepStrictEqual(parse('#/attention'), {
       section: 'attention',
       sub: '',
+      query: '',
     });
   });
 
-  test('#/attention/waiting → attention / waiting', () => {
-    assert.deepStrictEqual(parse('#/attention/waiting'), {
+  test('#/attention/due → attention / due', () => {
+    assert.deepStrictEqual(parse('#/attention/due'), {
       section: 'attention',
-      sub: 'waiting',
+      sub: 'due',
+      query: '',
     });
   });
 
-  // The board is gone: an old link to it lands on waiting on you.
-  test('#/attention/board → attention / waiting', () => {
-    assert.deepStrictEqual(parse('#/attention/board'), {
+  // The board and waiting on you are gone: old links to them land on due.
+  test('#/attention/board → attention / due', () => {
+    assert.strictEqual(parse('#/attention/board').sub, 'due');
+  });
+
+  test('#/attention/waiting → attention / due', () => {
+    assert.strictEqual(parse('#/attention/waiting').sub, 'due');
+  });
+
+  test('#/attention/new?flat → the query apart from the sub', () => {
+    assert.deepStrictEqual(parse('#/attention/new?flat'), {
       section: 'attention',
-      sub: 'waiting',
+      sub: 'new',
+      query: 'flat',
+    });
+  });
+
+  // A worktree key's ? is encoded (%3F): the query split never cuts it.
+  test('an item key with an encoded ? stays an item route', () => {
+    assert.deepStrictEqual(parse('#/item/worktree:m:%2Fa%3Fb'), {
+      section: 'item',
+      sub: 'worktree:m:/a?b',
+      query: '',
     });
   });
 
@@ -198,5 +232,18 @@ describe('pathEscape + parse round-trip', () => {
     // Both must decode to the same key.
     assert.strictEqual(fromServer, fromClient);
     assert.strictEqual(fromServer, 'issue:schuettc/hail#4');
+  });
+});
+
+describe('attentionQuery and flatFor', () => {
+  test('attentionQuery: flat or nothing', () => {
+    assert.strictEqual(attentionQuery({ flat: true }), 'flat');
+    assert.strictEqual(attentionQuery({ flat: false }), '');
+  });
+
+  test('flatFor: an explicit view reads the address, else the stored choice', () => {
+    assert.strictEqual(flatFor(true, 'flat', false), true);
+    assert.strictEqual(flatFor(true, '', true), false);
+    assert.strictEqual(flatFor(false, '', true), true);
   });
 });

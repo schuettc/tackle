@@ -27,11 +27,23 @@ export function stopShellServes() {
   serves = [];
 }
 
-// withServe runs fn with a serve of its own, and stops it after.
-async function withServe(opts, fn) {
+// withServe runs fn with a serve of its own, and stops it after. The seeded
+// repos' own items (new, like their pull requests) stop being tracked first,
+// so a list searched by a repo's name holds its pull requests only; the
+// dormant repos are left to the scenario. keepOwn leaves them (a scenario
+// that counts the commits waiting to be pushed).
+async function withServe({ keepOwn = false, ...opts }, fn) {
   const s = await startServe(opts);
   serves.push(s);
   try {
+    const own = (keepOwn ? [] : (opts.seedRepos ?? []))
+      .filter((r) => (r.prs ?? []).length || (r.issues ?? []).length)
+      .map((r) => `repo:${r.repo}`);
+    if (own.length)
+      await createAgent(s.base, s.token).api('POST', '/api/decide', {
+        keys: own,
+        disposition: 'ignore',
+      });
     return await fn(s);
   } finally {
     s.stop();
@@ -279,7 +291,7 @@ async function keyboardScenario(shared, t) {
       pg.on('pageerror', (e) => errors.push(String(e)));
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
-        await pg.goto(`${serveHandle.url}&q=${KB}#/attention/waiting`, {
+        await pg.goto(`${serveHandle.url}&q=${KB}#/attention/new`, {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -535,7 +547,7 @@ async function keyboardScenario(shared, t) {
         // . focuses the composer; typed there, keys are text (none fires);
         // ⌘↵ fires in the field (it is inField): the draft joins the batch.
         await pg.evaluate(() => {
-          location.hash = '#/attention/waiting';
+          location.hash = '#/attention/new';
         });
         await until(
           pg,
@@ -571,7 +583,7 @@ async function keyboardScenario(shared, t) {
         check(
           `typed in the composer, g r j x d ? are text: nothing switches, moves, selects or opens ("${inField.value}", ${inField.hash}, sheet ${inField.sheet}, ${inField.sel} selected)`,
           inField.value === typed &&
-            inField.hash === '#/attention/waiting' &&
+            inField.hash === '#/attention/new' &&
             !inField.sheet &&
             inField.sel === 0 &&
             (await curOf(pg)) === curBefore,
@@ -777,6 +789,10 @@ async function keyboardScenario(shared, t) {
                 ?.classList.contains('on'),
           ),
         );
+        // #/attention opens on due (empty here): back to new's list.
+        await pg.click(
+          '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="new"]',
+        );
         await until(
           pg,
           () =>
@@ -843,7 +859,7 @@ async function pollFallbackScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${FB}#/attention/waiting`, {
+          await pg.goto(`${serveHandle.url}&q=${FB}#/attention/new`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -999,7 +1015,7 @@ async function downScenario(shared, t) {
           if (SUMMARY.test(q.url())) summaries++;
         });
         await pg.route(SUMMARY, (r) => r.abort());
-        await pg.goto(serveHandle.url + '#/attention/waiting', {
+        await pg.goto(serveHandle.url + '#/attention/new', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1321,7 +1337,7 @@ async function staleScenario(shared, t) {
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
         await pg.clock.install();
-        await pg.goto(serveHandle.url + '#/attention/waiting', {
+        await pg.goto(serveHandle.url + '#/attention/new', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1440,6 +1456,7 @@ async function offlineQueuedScenario(shared, t) {
   const OQ = 'oq-probe';
   await withServe(
     {
+      keepOwn: true,
       seedRepos: [
         seedRepo(OQ, [
           [61, 'queue the first decision', 'sol'],
@@ -1453,7 +1470,7 @@ async function offlineQueuedScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(serveHandle.url + '#/attention/waiting', {
+          await pg.goto(serveHandle.url + '#/attention/new', {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1562,7 +1579,7 @@ async function slowPushScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${SP}#/attention/waiting`, {
+          await pg.goto(`${serveHandle.url}&q=${SP}#/attention/new`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1680,6 +1697,7 @@ async function pushFailedScenario(shared, t) {
   const PF = 'pf-probe';
   await withServe(
     {
+      keepOwn: true,
       conflictRemote: true,
       seedRepos: [
         seedRepo(PF, [
@@ -1695,7 +1713,7 @@ async function pushFailedScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${PF}#/attention/waiting`, {
+          await pg.goto(`${serveHandle.url}&q=${PF}#/attention/new`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1867,7 +1885,7 @@ async function staleApiScenario(shared, t) {
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
         await pg.clock.install();
-        await pg.goto(serveHandle.url + '#/attention/waiting', {
+        await pg.goto(serveHandle.url + '#/attention/new', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1919,7 +1937,7 @@ async function staleApiScenario(shared, t) {
         );
         const at = reqs.length;
         await pg.clock.runFor(60000);
-        await pg.click('.kit-chip[data-id="waiting"]');
+        await pg.click('.kit-chip[data-id="new"]');
         await press(pg, 'g', 'r');
         await pg.clock.runFor(60000);
         // Kept: no call may fire; a real-time window for one to go out.
@@ -1984,16 +2002,16 @@ async function pageCapScenario(shared, t) {
         const agent = createAgent(serveHandle.base, serveHandle.token);
         const all = await agent.api(
           'GET',
-          `/api/items?view=waiting&q=${BIG}&offset=0&limit=1000`,
+          `/api/items?view=new&q=${BIG}&offset=0&limit=1000`,
         );
         check(
-          `serve has ${N} items waiting in ${BIG} (${all.total})`,
+          `serve has ${N} new items in ${BIG} (${all.total})`,
           all.total === N,
         );
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${BIG}#/attention/waiting`, {
+          await pg.goto(`${serveHandle.url}&q=${BIG}#/attention/new`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -2096,13 +2114,19 @@ async function heldLoadScenario(shared, t) {
             total: r.total,
           };
         };
-        const waiting = await serveHas('waiting');
+        // A Not now whose date has passed: #92 is due, the rest new.
+        await agent.api('POST', '/api/decide', {
+          keys: [`pr:schuettc/${HL}#92`],
+          disposition: 'wait',
+          until: 'date(2026-01-01)',
+        });
+        const due = await serveHas('due');
         const fresh = await serveHas('new');
-        const ledger = await serveHas('waiting', 'ledger');
+        const ledger = await serveHas('new', 'ledger');
 
         // openHeld opens the list with its /api/items requests held, and
         // records every set of rows the list paints from then on.
-        const openHeld = async () => {
+        const openHeld = async (view) => {
           const pg = await context.newPage();
           const errors = [];
           pg.on('pageerror', (e) => errors.push(String(e)));
@@ -2132,7 +2156,7 @@ async function heldLoadScenario(shared, t) {
             }).observe(document, { childList: true, subtree: true });
           });
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(serveHandle.url + '#/attention/waiting', {
+          await pg.goto(`${serveHandle.url}#/attention/${view}`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -2166,13 +2190,13 @@ async function heldLoadScenario(shared, t) {
 
         // A view switched to while the list's load is held.
         {
-          const { pg, errors, release, isHeld } = await openHeld();
+          const { pg, errors, release, isHeld } = await openHeld('due');
           try {
             check(
-              `the waiting list's first load is held on its way (${waiting.total} waiting, ${fresh.total} new)`,
+              `the due list's first load is held on its way (${due.total} due, ${fresh.total} new)`,
               isHeld &&
-                waiting.total > 0 &&
-                fresh.total > waiting.total &&
+                due.total > 0 &&
+                fresh.total > due.total &&
                 (await rowKeys(pg)).length === 0,
             );
             await pg.click('.kit-chip[data-id="new"]');
@@ -2191,8 +2215,8 @@ async function heldLoadScenario(shared, t) {
             );
             const seen = await painted(pg);
             check(
-              `the held waiting load never painted over it (painted ${seen.length} row sets)`,
-              shown && !seen.includes(waiting.keys.join('|')),
+              `the held due load never painted over it (painted ${seen.length} row sets)`,
+              shown && !seen.includes(due.keys.join('|')),
             );
             check(
               `no page errors (${errors.join(' | ')})`,
@@ -2205,13 +2229,13 @@ async function heldLoadScenario(shared, t) {
 
         // A search typed while the list's load is held.
         {
-          const { pg, errors, release, isHeld } = await openHeld();
+          const { pg, errors, release, isHeld } = await openHeld('new');
           try {
             check(
-              `the waiting list's first load is held on its way (serve finds ${ledger.total} of ${waiting.total} for "ledger")`,
+              `the new list's first load is held on its way (serve finds ${ledger.total} of ${fresh.total} for "ledger")`,
               isHeld &&
                 ledger.total > 0 &&
-                ledger.total < waiting.total &&
+                ledger.total < fresh.total &&
                 (await rowKeys(pg)).length === 0,
             );
             await press(pg, '/');
@@ -2236,7 +2260,7 @@ async function heldLoadScenario(shared, t) {
             const seen = await painted(pg);
             check(
               `the held unsearched load never painted over it (painted ${seen.length} row sets)`,
-              shown && !seen.includes(waiting.keys.join('|')),
+              shown && !seen.includes(fresh.keys.join('|')),
             );
             check(
               `no page errors (${errors.join(' | ')})`,

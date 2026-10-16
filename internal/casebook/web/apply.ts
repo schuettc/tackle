@@ -22,7 +22,7 @@
 // serve refuses as stale shows serve's words and "sync first": serve syncs
 // (POST /api/sync), and when the live wire says the sync is done the plan is
 // asked for again. A running or finished job shows its facts, the needs-you
-// cards (rust edge; a text card's post and close · edit text · close
+// cards (signal edge; a text card's post and close · edit text · close
 // without comment · skip, a batch's confirm, a failed step's hand to the
 // agent, the agent's paused step), and the steps table (✓ verified,
 // ‖ paused, · next), with undo on a finished step serve says it can undo.
@@ -1431,7 +1431,7 @@ export interface JobHooks {
 
 /**
  * renderJob draws a running or finished job: its facts, the cards that need
- * Court (rust edge) or say the agent paused (amber), and the steps table.
+ * Court (signal edge) or say the agent paused (amber), and the steps table.
  */
 export function renderJob(_ctx: Ctx, v: JobView, hooks: JobHooks): HTMLElement {
   const j = v.job;

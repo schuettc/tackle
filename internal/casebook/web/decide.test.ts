@@ -18,8 +18,9 @@ import {
   leftOpenMeta,
   navTargets,
   shortKey,
+  rowSub,
 } from './decide-math.ts';
-import type { DecisionVocabView, GroupView } from './wire.d.ts';
+import type { DecisionVocabView, GroupView, ItemView } from './wire.d.ts';
 
 // ---- fixture vocab (mirrors item.Allowed for all five kinds) ----------------
 //
@@ -446,5 +447,73 @@ describe('shortKey', () => {
       'hail@feat/client',
     );
     assert.equal(shortKey('repo:schuettc/hail'), 'hail');
+  });
+});
+
+// ---- rowSub -----------------------------------------------------------------
+
+describe('rowSub', () => {
+  const vocab = {
+    kinds: [
+      {
+        kind: 'pr',
+        allowed: ['keep', 'close'],
+        needs_until: [],
+        question: '',
+        choices: [
+          {
+            disposition: 'keep',
+            label: 'Leave it open',
+            says: '',
+            outward: false,
+            needs_until: false,
+            many: '',
+          },
+          {
+            disposition: 'close',
+            label: 'Close it without merging',
+            says: '',
+            outward: true,
+            many: '',
+            needs_until: false,
+          },
+        ],
+      },
+    ],
+  } as unknown as DecisionVocabView;
+  const pr = (over: Partial<ItemView> = {}): ItemView =>
+    ({
+      key: 'pr:schuettc/hail#3',
+      kind: 'pr',
+      status: 'new',
+      group: 'pi:s1|close|Close it without merging',
+      proposal: { state: 'pending', disposition: 'close', note: 'stale' },
+      ...over,
+    }) as unknown as ItemView;
+
+  test('grouped: the reason alone (the head names the choice)', () => {
+    assert.equal(rowSub(vocab, pr(), false), 'stale');
+  });
+  test('flat: the choice, then the reason', () => {
+    assert.equal(
+      rowSub(vocab, pr(), true),
+      'Close it without merging \u00b7 stale',
+    );
+  });
+  test('flat with new activity: why it came back first', () => {
+    const it = pr({
+      new_activity: true,
+      due_reason: 'new activity since you left it open',
+    });
+    assert.equal(
+      rowSub(vocab, it, true),
+      'new activity since you left it open \u00b7 Close it without merging \u00b7 stale',
+    );
+  });
+  test('no proposal: no sub', () => {
+    assert.equal(rowSub(vocab, pr({ proposal: undefined }), true), undefined);
+  });
+  test('left open: no sub', () => {
+    assert.equal(rowSub(vocab, pr({ status: 'left-open' }), true), undefined);
   });
 });

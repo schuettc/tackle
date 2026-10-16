@@ -20,23 +20,33 @@ function pathEscape(s) {
   return encodeURIComponent(s).replace(/%3A/gi, ":").replace(/%40/gi, "@");
 }
 function parse(hash) {
-  const path = hash.replace(/^#\//, "");
+  const full = hash.replace(/^#\//, "");
+  const q = full.indexOf("?");
+  const path = q === -1 ? full : full.slice(0, q);
+  const query = q === -1 ? "" : full.slice(q + 1);
   const slash = path.indexOf("/");
   if (slash === -1) {
-    return { section: path || "attention", sub: "" };
+    return { section: path || "attention", sub: "", query };
   }
   const section = path.slice(0, slash);
   const sub = safeDecode(path.slice(slash + 1));
-  if (section === "attention" && sub === "board") {
-    return { section, sub: "waiting" };
+  if (section === "attention" && (sub === "board" || sub === "waiting")) {
+    return { section, sub: "due", query };
   }
-  return { section, sub };
+  return { section, sub, query };
+}
+function attentionQuery(o) {
+  return o.flat ? "flat" : "";
+}
+function flatFor(explicit, query, stored) {
+  return explicit ? new URLSearchParams(query).has("flat") : stored;
 }
 
 // router.ts
 var listeners = [];
-function go(section, sub) {
-  location.hash = sub ? `#/${section}/${pathEscape(sub)}` : `#/${section}`;
+function go(section, sub, query) {
+  const path = sub ? `#/${section}/${pathEscape(sub)}` : `#/${section}`;
+  location.hash = query ? `${path}?${query}` : path;
 }
 function onRoute(cb) {
   listeners.push(cb);
@@ -203,12 +213,12 @@ function start(first) {
     svgEl("path", {
       d: "M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z",
       fill: "none",
-      stroke: "#d98f66",
+      stroke: "#d98a9e",
       "stroke-width": "5",
       "stroke-linejoin": "round"
     }),
     // spine
-    svgEl("path", { d: "M32 18V52", stroke: "#d98f66", "stroke-width": "4.4" }),
+    svgEl("path", { d: "M32 18V52", stroke: "#d98a9e", "stroke-width": "4.4" }),
     // one neutral rule on the left page
     svgEl("path", {
       d: "M15 29H25",
@@ -220,7 +230,7 @@ function start(first) {
     svgEl("path", {
       d: "M37 33L42 38L50 26",
       fill: "none",
-      stroke: "#d98f66",
+      stroke: "#d98a9e",
       "stroke-width": "6",
       "stroke-linecap": "round",
       "stroke-linejoin": "round"
@@ -288,7 +298,7 @@ function start(first) {
   }
   const app = h("div", { class: "kit-app" });
   app.append(handle.el, banner, pushStrip);
-  let currentRoute = { section: "attention", sub: "" };
+  let currentRoute = { section: "attention", sub: "", query: "" };
   const dockHandles = [];
   let lastAttached = {};
   let lastTitle = "";
@@ -455,7 +465,7 @@ function start(first) {
     }
     const activeSec = sections.get(sectionId);
     if (activeSec) {
-      activeSec.show(r.sub);
+      activeSec.show(r.sub, r.query);
       layer.bind(activeSec);
       ctx.setPrimary(activeSec.primary());
     } else {
@@ -668,6 +678,14 @@ function choiceLabel(vocab2, key, disposition) {
 function recommendLine(vocab2, key, by, source, disposition) {
   const who = vocab2.recommends.replaceAll("{session}", sessionName(by, source));
   return `${who} ${choiceLabel(vocab2, key, disposition)}`;
+}
+function rowSub(vocab2, it, flat) {
+  const p = it.status !== "left-open" && it.proposal?.state === "pending" ? it.proposal : void 0;
+  return [
+    it.new_activity ? it.due_reason : void 0,
+    p && flat ? choiceLabel(vocab2, it.key, p.disposition) : void 0,
+    p?.note || void 0
+  ].filter(Boolean).join(" · ") || void 0;
 }
 function countWord(total, ticked, words) {
   if (ticked > 0 && ticked < total)
@@ -3180,16 +3198,29 @@ var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a reco
 var PAGE_SIZE = 200;
 var selection = createSelection();
 var VIEWS2 = [
-  { id: "waiting", label: "waiting on you" },
   { id: "new", label: "new" },
   { id: "due", label: "due" },
   { id: "proposed", label: "proposed" }
 ];
 function emptyFilters() {
-  return { view: "waiting", q: "" };
+  return { view: "due", q: "" };
 }
 var LEFT_OPEN = "left-open";
 var SIDEBAR = "casebook.sidebar";
+var GROUPING = "casebook.grouping";
+function storedFlat() {
+  try {
+    return localStorage.getItem(GROUPING) === "flat";
+  } catch {
+    return false;
+  }
+}
+function storeFlat(flat) {
+  try {
+    localStorage.setItem(GROUPING, flat ? "flat" : "grouped");
+  } catch {
+  }
+}
 function getUrlQ() {
   return new URLSearchParams(location.search).get("q") ?? "";
 }
@@ -3221,6 +3252,7 @@ function makeAttention(ctx) {
   let totalItems = 0;
   let loadedItems = [];
   const filters = emptyFilters();
+  let flat = storedFlat();
   let reloading = false;
   let loadingMore = false;
   let loads = 0;
@@ -3335,7 +3367,6 @@ function makeAttention(ctx) {
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const left = isLeftOpen(it);
       const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf(it);
-      const reason = !left && it.group && it.proposal?.state === "pending" ? it.proposal.note || void 0 : void 0;
       return {
         id: it.key,
         key: kindKey,
@@ -3344,15 +3375,16 @@ function makeAttention(ctx) {
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         // An item new activity brought back says so ("new activity since
-        // you left it open"), before any recommendation's reason.
-        sub: [it.new_activity ? it.due_reason : void 0, reason].filter(Boolean).join(" · ") || void 0,
+        // you left it open"), before any recommendation's reason; the flat
+        // list, with no group heads, names the recommendation too.
+        sub: rowSub(vocab2, it, flat),
         selectable: true
       };
     },
     onChip(group, id) {
       if (group === "view") {
         filters.view = id;
-        ctx.route.go("attention", id);
+        ctx.route.go("attention", id, attentionQuery({ flat }));
         void reload();
       }
     },
@@ -3364,6 +3396,28 @@ function makeAttention(ctx) {
     foot: buildFoot()
   });
   handle.el.classList.add("cb-attention");
+  const groupSwitch = h7(
+    "button",
+    {
+      type: "button",
+      class: "kit-chip cb-group-switch",
+      role: "switch",
+      onclick() {
+        flat = !flat;
+        storeFlat(flat);
+        paintSwitch();
+        ctx.route.go("attention", filters.view, attentionQuery({ flat }));
+        void reload();
+      }
+    },
+    "group by recommendation"
+  );
+  function paintSwitch() {
+    groupSwitch.setAttribute("aria-checked", String(!flat));
+    groupSwitch.classList.toggle("on", !flat);
+  }
+  paintSwitch();
+  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(h7("div", { class: "cb-list-tools" }, groupSwitch));
   const hideBtn = h7(
     "button",
     {
@@ -3422,6 +3476,7 @@ function makeAttention(ctx) {
       limit: String(PAGE_SIZE)
     };
     if (filters.q) p["q"] = filters.q;
+    if (flat) p["group"] = "false";
     return p;
   }
   const reload = coalesced(reloadNow);
@@ -3506,7 +3561,7 @@ function makeAttention(ctx) {
   function setRows() {
     const withLeft = offset >= totalItems && leftOpenTotal > 0;
     const left = withLeft && !collapsed.has(LEFT_OPEN) ? leftOpen : [];
-    const open = loadedItems.filter((it) => !collapsed.has(it.group));
+    const open = flat ? loadedItems : loadedItems.filter((it) => !collapsed.has(it.group));
     shown = [...open, ...left];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll(
@@ -3526,7 +3581,9 @@ function makeAttention(ctx) {
       const says = lookingLine(it.looking);
       if (says) col.append(h7("div", { class: "cb-row-looking" }, says));
     });
-    placeGroupHeads(open, rowEls);
+    handle.el.classList.toggle("cb-flat", flat);
+    if (flat) heads = [];
+    else placeGroupHeads(open, rowEls);
     paintRail();
     refreshNav();
     if (!withLeft) return;
@@ -3540,14 +3597,28 @@ function makeAttention(ctx) {
     else handle.el.querySelector(".kit-rows")?.append(head.el);
   }
   function navOrder() {
-    const rows = loadedItems.map((it) => ({ key: it.key, group: it.group }));
+    const rows = loadedItems.map((it) => ({
+      key: it.key,
+      group: flat ? "" : it.group
+    }));
     if (offset >= totalItems && leftOpenTotal > 0)
       rows.push(...leftOpen.map((it) => ({ key: it.key, group: LEFT_OPEN })));
     return rows;
   }
   function navGroups() {
+    const listed = flat ? [
+      {
+        id: "",
+        source: "",
+        disposition: "",
+        label: viewLabel(),
+        outward: false,
+        many: "",
+        total: totalItems
+      }
+    ] : groups;
     return [
-      ...groups,
+      ...listed,
       {
         id: LEFT_OPEN,
         source: "",
@@ -4478,7 +4549,7 @@ function makeAttention(ctx) {
     renderAsk();
   }).catch(() => {
   });
-  function show(sub) {
+  function show(sub, query) {
     const wasActive = active;
     active = true;
     feedAttached();
@@ -4487,8 +4558,11 @@ function makeAttention(ctx) {
       filters.q = urlQ;
       handle.setSearch(urlQ);
     }
-    const view = sub || "waiting";
+    const view = sub || "due";
     if (VIEWS2.some((v) => v.id === view)) {
+      flat = flatFor(sub !== "", query, storedFlat());
+      storeFlat(flat);
+      paintSwitch();
       filters.view = view;
       handle.setChips("view", viewChips(filters.view));
       showReadEmpty();

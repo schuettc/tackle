@@ -91,7 +91,7 @@ export interface DockTarget {
 
 export interface Router {
   current(): Route;
-  go(section: string, sub?: string): void;
+  go(section: string, sub?: string, query?: string): void;
 }
 
 export interface Section {
@@ -103,7 +103,7 @@ export interface Section {
    * composer's attached context: it calls ctx.setAttached here and whenever
    * its context changes while it is active.
    */
-  show(sub: string): void;
+  show(sub: string, query: string): void;
   /** hide tells the section it is no longer active (another one is shown). */
   hide(): void;
   /**
@@ -270,12 +270,12 @@ function start(first: SummaryView | null): void {
     svgEl('path', {
       d: 'M32 18C25 13 16 13 8 15V49C16 47 25 47 32 52C39 47 48 47 56 49V15C48 13 39 13 32 18Z',
       fill: 'none',
-      stroke: '#d98f66',
+      stroke: '#d98a9e',
       'stroke-width': '5',
       'stroke-linejoin': 'round',
     }),
     // spine
-    svgEl('path', { d: 'M32 18V52', stroke: '#d98f66', 'stroke-width': '4.4' }),
+    svgEl('path', { d: 'M32 18V52', stroke: '#d98a9e', 'stroke-width': '4.4' }),
     // one neutral rule on the left page
     svgEl('path', {
       d: 'M15 29H25',
@@ -287,7 +287,7 @@ function start(first: SummaryView | null): void {
     svgEl('path', {
       d: 'M37 33L42 38L50 26',
       fill: 'none',
-      stroke: '#d98f66',
+      stroke: '#d98a9e',
       'stroke-width': '6',
       'stroke-linecap': 'round',
       'stroke-linejoin': 'round',
@@ -380,7 +380,7 @@ function start(first: SummaryView | null): void {
   app.append(handle.el, banner, pushStrip);
 
   // Build context for section makers
-  let currentRoute: Route = { section: 'attention', sub: '' };
+  let currentRoute: Route = { section: 'attention', sub: '', query: '' };
 
   // The docks are made after the sections; a section may set what's attached
   // before then, so the latest value is kept and handed to each dock.
@@ -605,7 +605,7 @@ function start(first: SummaryView | null): void {
     }
     const activeSec = sections.get(sectionId);
     if (activeSec) {
-      activeSec.show(r.sub);
+      activeSec.show(r.sub, r.query);
       // The keyboard layer follows what show() put up: only the shown
       // section's list and keys are bound.
       layer.bind(activeSec);

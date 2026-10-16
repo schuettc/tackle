@@ -1,4 +1,37 @@
 /* casebook.css */
+:root {
+  --tool-signal-light: #a8425e;
+  --tool-signal-dark: #d98a9e;
+}
+.cb-list-tools {
+  display: flex;
+  margin-top: 8px;
+}
+.cb-group-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.cb-group-switch::before {
+  content: "";
+  width: 22px;
+  height: 12px;
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  background:
+    radial-gradient(
+      circle at 6px 50%,
+      var(--kit-muted) 3.5px,
+      transparent 4px);
+}
+.cb-group-switch[aria-checked=true]::before {
+  border-color: var(--kit-signal);
+  background:
+    radial-gradient(
+      circle at 16px 50%,
+      var(--kit-signal) 3.5px,
+      transparent 4px);
+}
 .cb-sheet {
   position: fixed;
   bottom: 0;
@@ -218,6 +251,9 @@
   margin-left: 36px;
   height: 93px;
   overflow: hidden;
+}
+.cb-attention.cb-flat .kit-rows > .kit-row:not(.cb-left-open) {
+  margin-left: 0;
 }
 .cb-attention .kit-row .kit-kicker {
   line-height: 16px;

@@ -4,10 +4,44 @@
  * This file adds only what the kit lacks: casebook's own dock layout,
  * the decide sheet, and needs-you cards.
  *
- * Token inputs (overriding the kit's tackle-rust defaults — casebook uses
- * the same signal and agent colours as the kit's defaults, so no override
- * is needed).
+ * Token inputs: casebook's own signal, rose, over the kit's rust default
+ * (kept here, in casebook's files: the kit's defaults stay the kit's). Every
+ * signal-coloured control reads it through var(--kit-signal).
  */
+
+:root {
+  --tool-signal-light: #a8425e;
+  --tool-signal-dark: #d98a9e;
+}
+
+/* ---- the list's tools: "group by recommendation" ------------------------- */
+
+.cb-list-tools {
+  display: flex;
+  margin-top: 8px;
+}
+
+.cb-group-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* The switch's track and knob: off at the left, muted; on at the right, in
+ * the signal. */
+.cb-group-switch::before {
+  content: '';
+  width: 22px;
+  height: 12px;
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  background: radial-gradient(circle at 6px 50%, var(--kit-muted) 3.5px, transparent 4px);
+}
+
+.cb-group-switch[aria-checked='true']::before {
+  border-color: var(--kit-signal);
+  background: radial-gradient(circle at 16px 50%, var(--kit-signal) 3.5px, transparent 4px);
+}
 
 /* ---- decide sheet -------------------------------------------------------- */
 
@@ -300,6 +334,12 @@
   margin-left: 36px;
   height: 93px;
   overflow: hidden;
+}
+
+/* The flat list has no group heads: its rows sit flush (the left-open
+ * group's rows keep their indent under its head). */
+.cb-attention.cb-flat .kit-rows > .kit-row:not(.cb-left-open) {
+  margin-left: 0;
 }
 
 .cb-attention .kit-row .kit-kicker {

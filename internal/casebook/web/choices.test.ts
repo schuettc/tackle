@@ -331,10 +331,10 @@ describe('groupButtons', () => {
 describe('discardConfirm', () => {
   test("serve's sentence, with the count and the view", () => {
     assert.equal(
-      discardConfirm(VOCAB, 31, 'waiting on you'),
+      discardConfirm(VOCAB, 31, 'new'),
       VOCAB.discard_confirm
         .replace('{count}', VOCAB.discard_some.replace('{n}', '31'))
-        .replace('{view}', 'waiting on you'),
+        .replace('{view}', 'new'),
     );
     assert.equal(
       discardConfirm(VOCAB, 1, 'new'),
