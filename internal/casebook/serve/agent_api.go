@@ -341,7 +341,7 @@ func (s *Server) agentPropose(w http.ResponseWriter, r *http.Request) {
 
 // nextViews is the order casebook_next works through: the items most
 // likely to need the user first.
-var nextViews = []string{ViewWaiting, ViewDue, ViewNew}
+var nextViews = []string{ViewDue, ViewNew}
 
 // needsDecision lists the items that need a decision, in nextViews order
 // and, within a view, the index's order. An item in two views is listed
@@ -398,7 +398,7 @@ func (s *Server) recommendCounts(pending map[string]propose.Proposal) (recommend
 // to answer; done when every item that needs a decision has a proposal.
 // Two sessions asking at once may get the same item (the newer proposal
 // replaces the older), but a decided item is never handed out: only the
-// waiting, due and new views are read.
+// due and new views are read.
 func (s *Server) agentNext(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if _, err := s.session(ctx, r.URL.Query().Get("session")); err != nil {
@@ -526,7 +526,7 @@ func (s *Server) agentInterrupted(w http.ResponseWriter, r *http.Request) {
 // agentOpen is casebook_open: open the page in Court's browser.
 // openViews are the routes casebook_open can land on besides an item: the
 // Attention views (spec §3.2).
-var openViews = map[string]bool{ViewWaiting: true, ViewNew: true, ViewDue: true, ViewProposed: true, ViewAll: true}
+var openViews = map[string]bool{ViewNew: true, ViewDue: true, ViewProposed: true, ViewAll: true}
 
 // agentOpen is casebook_open: open the page in Court's browser, at one item
 // (key), at an Attention view (view), or at the front (neither).
@@ -570,7 +570,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		fragment = "#/item/" + url.PathEscape(k.String())
 	case in.View != "":
 		if !openViews[in.View] {
-			reply(w, nil, bad("unknown view %q (waiting, new, due, proposed or all)", in.View))
+			reply(w, nil, bad("unknown view %q (new, due, proposed or all)", in.View))
 			return
 		}
 		fragment = "#/attention/" + in.View

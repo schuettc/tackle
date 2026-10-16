@@ -33,10 +33,13 @@ func dec(d item.Disposition, by string, at time.Time) item.Decision {
 
 func TestInitBootstrapsEmptyRemote(t *testing.T) {
 	r, remote := newStore(t)
-	for _, f := range []string{"casebook.toml", "policy.toml", "README.md"} {
+	for _, f := range []string{"casebook.toml", "README.md"} {
 		if _, err := os.Stat(filepath.Join(r.Dir, f)); err != nil {
 			t.Errorf("%s missing: %v", f, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "policy.toml")); !os.IsNotExist(err) {
+		t.Errorf("init wrote policy.toml: %v", err)
 	}
 	if got := testgit.Git(t, remote, "log", "--format=%s", "main"); !strings.Contains(got, "init casebook") {
 		t.Errorf("remote log %q", got)
@@ -46,8 +49,40 @@ func TestInitBootstrapsEmptyRemote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p, err := r2.Policy(); err != nil || p != item.DefaultPolicy() {
-		t.Fatalf("policy %+v %v", p, err)
+	if _, err := os.Stat(filepath.Join(r2.Dir, "casebook.toml")); err != nil {
+		t.Fatalf("second init: %v", err)
+	}
+}
+
+// TestTidyRemovesPolicyOnce: an older repo's policy.toml goes in its own
+// commit with the next write, holding only that path; never again.
+func TestTidyRemovesPolicyOnce(t *testing.T) {
+	r, _ := newStore(t)
+	testgit.Commit(t, r.Dir, "policy.toml", "unpushed_days = 3\n")
+	if err := os.WriteFile(filepath.Join(r.Dir, "README.md"), []byte("# stray\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	k := item.IssueKey("a/b", 1)
+	if err := r.Decide(ctx, k, dec(item.Keep, "court", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	subj := strings.Split(testgit.Git(t, r.Dir, "log", "-2", "--format=%s"), "\n")
+	if len(subj) != 2 || !strings.HasPrefix(subj[0], "decide issue:a/b#1") || !strings.HasSuffix(subj[0], " by court") ||
+		subj[1] != "remove policy.toml: casebook no longer flags by age" {
+		t.Fatalf("log %q", subj)
+	}
+	if got := testgit.Git(t, r.Dir, "show", "--name-only", "--format=", "HEAD~1"); got != "policy.toml" {
+		t.Errorf("tidy commit holds %q, want only policy.toml", got)
+	}
+	if _, err := os.Stat(filepath.Join(r.Dir, "policy.toml")); !os.IsNotExist(err) {
+		t.Errorf("policy.toml still there: %v", err)
+	}
+	before := testgit.Git(t, r.Dir, "rev-parse", "HEAD")
+	if err := r.Decide(ctx, item.IssueKey("a/b", 2), dec(item.Keep, "court", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if n := testgit.Git(t, r.Dir, "rev-list", "--count", before+"..HEAD"); n != "1" {
+		t.Errorf("second write made %s commits, want 1", n)
 	}
 }
 
@@ -144,12 +179,9 @@ func TestValidateReportsBadFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := r.WriteFile("policy.toml", []byte("unpushed_days = -1\n")); err != nil {
-		t.Fatal(err)
-	}
 	errs := r.Validate()
-	if len(errs) != 5 {
-		t.Fatalf("want 5 errors, got %d: %v", len(errs), errs)
+	if len(errs) != 4 {
+		t.Fatalf("want 4 errors, got %d: %v", len(errs), errs)
 	}
 	for _, e := range errs {
 		if !strings.Contains(e.Error(), ".toml") {

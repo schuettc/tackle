@@ -96,7 +96,7 @@ func (r *Repo) lock(ctx context.Context, exclusive bool) (unlock func(), err err
 }
 
 // Batch runs write and then commits everything with msg, all under
-// casebook-data's exclusive lock: nobody else's commit can stage what write
+// casebook-data's exclusive lock (after tidy's housekeeping commit, if any): nobody else's commit can stage what write
 // has written so far, and nobody reads the tree halfway. write may write
 // files (WriteFile, AppendFile, os calls) but must not call another locking
 // Repo method. A nil write just commits. When write fails nothing is
@@ -109,6 +109,9 @@ func (r *Repo) Batch(ctx context.Context, msg string, write func() error) (bool,
 	}
 	defer unlock()
 	if err := r.commitPending(ctx); err != nil {
+		return false, err
+	}
+	if err := r.tidy(ctx); err != nil {
 		return false, err
 	}
 	if write != nil {
@@ -144,6 +147,9 @@ func (r *Repo) BatchWithin(ctx context.Context, wait time.Duration, msg string, 
 	}
 	defer unlock()
 	if err := r.commitPending(ctx); err != nil {
+		return false, err
+	}
+	if err := r.tidy(ctx); err != nil {
 		return false, err
 	}
 	if err := os.WriteFile(r.PendingPath(), []byte(msg), 0o600); err != nil {

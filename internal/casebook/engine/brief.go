@@ -41,9 +41,7 @@ func Brief(r Result, repo string, max int) string {
 			break
 		}
 		fmt.Fprintf(&b, "- %-9s %s", it.Status, it.ID)
-		if len(it.Hits) > 0 {
-			fmt.Fprintf(&b, " · %s", it.Hits[0].Detail)
-		} else if len(it.Evidence) > 0 {
+		if len(it.Evidence) > 0 {
 			fmt.Fprintf(&b, " · %s", it.Evidence[0])
 		}
 		b.WriteString("\n")

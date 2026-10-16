@@ -2,6 +2,7 @@ package serve
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -82,7 +83,7 @@ func (r *rig) drain(t *testing.T, session string) []string {
 	return keys
 }
 
-// TestNextOrderAndDone: waiting on you first, then due, then new; left
+// TestNextOrderAndDone: due first, then new in the new view's order; left
 // counts down as recommendations land; done with no item at the end.
 func TestNextOrderAndDone(t *testing.T) {
 	r := newRig(t)
@@ -92,25 +93,33 @@ func TestNextOrderAndDone(t *testing.T) {
 	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{"repo:schuettc/hail"}, "disposition": "wait", "until": "date(2026-01-01)"}, &dec); c != 200 || dec.Decided != 1 {
 		t.Fatalf("decide %d %+v", c, dec)
 	}
+	var newView ItemsView
+	if c := r.do(t, "GET", "/api/items?view=new&limit=500", nil, &newView); c != 200 {
+		t.Fatalf("items %d", c)
+	}
+	var newKeys []string
+	for _, it := range newView.Items {
+		newKeys = append(newKeys, it.ID)
+	}
 	first := r.next(t, "s1")
 	if first.Done || first.Left != 19 {
 		t.Fatalf("first next: done %v left %d, want 19 left", first.Done, first.Left)
 	}
-	if first.Item.Item.Key != "issue:schuettc/hail#10" {
-		t.Fatalf("first item %s, want the first waiting item", first.Item.Item.Key)
+	if first.Item.Item.Key != "repo:schuettc/hail" {
+		t.Fatalf("first item %s, want the due repo", first.Item.Item.Key)
 	}
 	if first.Guide == "" || !strings.Contains(first.ProposeHow, "from_next") || len(first.NotNow) != 7 {
 		t.Fatalf("next lacks the guide, how to propose or Not now: %+v", first)
 	}
-	if len(first.Choices) == 0 || first.Choices[0].Label != "Leave it open" || first.Choices[0].Says == "" {
-		t.Fatalf("issue choices %+v", first.Choices)
+	if len(first.Choices) == 0 || first.Choices[0].Disposition != "keep" || first.Choices[0].Says == "" {
+		t.Fatalf("repo choices %+v", first.Choices)
 	}
 	keys := r.drain(t, "s1")
 	if len(keys) != 19 {
 		t.Fatalf("handed out %d items, want 19: %v", len(keys), keys)
 	}
-	if keys[16] != "pr:schuettc/hail#3" || keys[17] != "repo:schuettc/hail" || keys[18] != "branch:schuettc/hail@feat/client" {
-		t.Fatalf("order %v: want 17 waiting, then the due repo, then the new branch", keys)
+	if keys[0] != "repo:schuettc/hail" || !slices.Equal(keys[1:], newKeys) {
+		t.Fatalf("order %v: want the due repo, then the new view %v", keys, newKeys)
 	}
 	seen := map[string]bool{}
 	for _, k := range keys {

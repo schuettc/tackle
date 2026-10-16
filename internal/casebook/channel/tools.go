@@ -22,9 +22,9 @@ func Tools() []channelmcp.Tool {
 		{Name: "casebook_status", Description: "The attention counts, whether the user has the casebook page open, and what changed since you last looked: how many of your proposals the user accepted, and each one they changed or rejected with their reason.",
 			InputSchema: schema(`{"type":"object","properties":{}}`)},
 		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. The page opens attached to this session: the user's messages from it come to you. Only when they ask, or when you hand them something to review; never repeatedly.",
-			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"},"view":{"type":"string","enum":["waiting","new","due","proposed","all"],"description":"open at this Attention view"}}}`)},
-		{Name: "casebook_attention", Description: "List items needing attention. view: waiting (incoming, no reply from the user), new (undecided), due (due/drift/conflict), proposed (a proposal is pending), all.",
-			InputSchema: schema(`{"type":"object","properties":{"view":{"type":"string","enum":["waiting","new","due","proposed","all"]},"kind":{"type":"string","enum":["repo","pr","issue","branch","worktree"]},"repo":{"type":"string","description":"owner/name or owner"},"q":{"type":"string","description":"substring of key or title"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}`)},
+			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"},"view":{"type":"string","enum":["new","due","proposed","all"],"description":"open at this Attention view"}}}`)},
+		{Name: "casebook_attention", Description: "List items needing attention, newest first. view: new (undecided), due (due/drift/conflict), proposed (a proposal is pending), all.",
+			InputSchema: schema(`{"type":"object","properties":{"view":{"type":"string","enum":["new","due","proposed","all"]},"kind":{"type":"string","enum":["repo","pr","issue","branch","worktree"]},"repo":{"type":"string","description":"owner/name or owner"},"q":{"type":"string","description":"substring of key or title"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}`)},
 		{Name: "casebook_show", Description: "One item: its observation, decision, pending proposal, evidence and recent history.",
 			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}`)},
 		{Name: "casebook_history", Description: "Every journaled action and decision commit for an item.",
@@ -304,9 +304,7 @@ func line(it serve.ItemView) string {
 	if it.Title != "" {
 		s += " · " + it.Title
 	}
-	if len(it.Hits) > 0 {
-		s += " · " + it.Hits[0].Detail
-	} else if len(it.Evidence) > 0 {
+	if len(it.Evidence) > 0 {
 		s += " · " + it.Evidence[0]
 	}
 	if it.Proposal != nil {

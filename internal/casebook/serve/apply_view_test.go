@@ -53,7 +53,7 @@ func TestToApplyViewListsDecidedItems(t *testing.T) {
 	var all ItemsView
 	r.do(t, "GET", "/api/items?view=all", nil, &all)
 	for _, it := range all.Items {
-		if it.Status == "to-apply" && len(it.Hits) == 0 {
+		if it.Status == "to-apply" {
 			t.Errorf("attention's all view lists to-apply %s", it.ID)
 		}
 	}

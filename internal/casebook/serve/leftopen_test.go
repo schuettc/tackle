@@ -98,13 +98,13 @@ func (r *rig) saveAndRebuild(t *testing.T, g *observe.GitHub) {
 func TestKeepGoesToTheLeftOpenGroup(t *testing.T) {
 	r := newRig(t)
 	const key = "issue:schuettc/hail#4"
-	before := r.view(t, ViewWaiting)
-	counted := r.summary(t).Counts[ViewWaiting]
+	before := r.view(t, ViewNew)
+	counted := r.summary(t).Counts[ViewNew]
 	if !slices.Contains(before.keys(), key) || before.LeftOpenTotal != 0 {
 		t.Fatalf("before: %v left open %d", before.keys(), before.LeftOpenTotal)
 	}
 	r.decideOne(t, key, "keep")
-	after := r.view(t, ViewWaiting)
+	after := r.view(t, ViewNew)
 	if slices.Contains(after.keys(), key) || after.Total != before.Total-1 {
 		t.Fatalf("kept item still among the items: %v (total %d, was %d)", after.keys(), after.Total, before.Total)
 	}
@@ -114,26 +114,20 @@ func TestKeepGoesToTheLeftOpenGroup(t *testing.T) {
 	if lo := after.LeftOpen[0]; lo.Status != "left-open" || lo.Decision == nil || lo.Decision.DecidedAt.IsZero() {
 		t.Fatalf("left-open row %+v: want status left-open with its decision", lo)
 	}
-	if got := r.summary(t).Counts[ViewWaiting]; got != counted-1 {
-		t.Fatalf("waiting count %d, want %d: a left-open item isn't counted", got, counted-1)
+	if got := r.summary(t).Counts[ViewNew]; got != counted-1 {
+		t.Fatalf("new count %d, want %d: a left-open item isn't counted", got, counted-1)
 	}
-	// It would be new were it undecided: the new view lists it too. The due
-	// view, for items whose decision came back, doesn't.
-	if v := r.view(t, ViewNew); !slices.Contains(v.leftKeys(), key) || slices.Contains(v.keys(), key) {
-		t.Fatalf("new view: items %v left open %v", v.keys(), v.leftKeys())
-	}
+	// The due view, for items whose decision came back, has no left-open
+	// group.
 	if v := r.view(t, ViewDue); len(v.LeftOpen) != 0 {
 		t.Fatalf("due view left open %v, want none", v.leftKeys())
 	}
 	// A kept branch has no activity: it stays in the new view's left-open
-	// group, and in no waiting view.
+	// group.
 	const br = "branch:schuettc/hail@feat/client"
 	r.decideOne(t, br, "keep")
 	if v := r.view(t, ViewNew); !slices.Contains(v.leftKeys(), br) {
 		t.Fatalf("kept branch not left open in new: %v", v.leftKeys())
-	}
-	if v := r.view(t, ViewWaiting); slices.Contains(v.leftKeys(), br) {
-		t.Fatalf("kept branch in waiting's left-open group")
 	}
 	// To apply and tracked have no left-open group.
 	if v := r.view(t, ViewToApply); len(v.LeftOpen) != 0 {
@@ -153,7 +147,7 @@ func TestLeftOpenPagesWithLeftOffset(t *testing.T) {
 	page := func(q string) leftOpenItems {
 		t.Helper()
 		var v leftOpenItems
-		if c := r.do(t, "GET", "/api/items?view=waiting&limit=1"+q, nil, &v); c != 200 {
+		if c := r.do(t, "GET", "/api/items?view=new&kind=issue&limit=1"+q, nil, &v); c != 200 {
 			t.Fatalf("items %s: %d", q, c)
 		}
 		return v
@@ -180,17 +174,17 @@ func TestLeftOpenPagesWithLeftOffset(t *testing.T) {
 func TestNewActivityBringsAKeptItemBack(t *testing.T) {
 	r := newRig(t)
 	const key = "issue:schuettc/hail#4"
-	counted := r.summary(t).Counts[ViewWaiting]
+	counted := r.summary(t).Counts[ViewDue]
 	d := r.decideOne(t, key, "keep")
 
-	// Court's own reply: still left open (in new; no longer waiting on him).
+	// Court's own reply: still left open.
 	r.comment(t, "issue", 4, "schuettc", d.DecidedAt.Add(time.Minute))
 	if v := r.view(t, ViewNew); !slices.Contains(v.leftKeys(), key) {
 		t.Fatalf("Court's own comment brought it back: items %v left open %v", v.keys(), v.leftKeys())
 	}
 
 	r.comment(t, "issue", 4, "alice", d.DecidedAt.Add(2*time.Minute))
-	v := r.view(t, ViewWaiting)
+	v := r.view(t, ViewDue)
 	if len(v.Items) == 0 || v.Items[0].Key != key {
 		t.Fatalf("brought back: want %s at the top, got %v", key, v.keys())
 	}
@@ -200,11 +194,8 @@ func TestNewActivityBringsAKeptItemBack(t *testing.T) {
 	if slices.Contains(v.leftKeys(), key) {
 		t.Fatal("brought back and still left open")
 	}
-	if got := r.summary(t).Counts[ViewWaiting]; got != counted {
-		t.Fatalf("waiting count %d, want %d: a brought-back item counts", got, counted)
-	}
-	if v := r.view(t, ViewDue); !slices.Contains(v.keys(), key) {
-		t.Fatalf("due view %v lacks the brought-back item", v.keys())
+	if got := r.summary(t).Counts[ViewDue]; got != counted+1 {
+		t.Fatalf("due count %d, want %d: a brought-back item counts", got, counted+1)
 	}
 }
 
@@ -217,14 +208,14 @@ func TestNotNowComesBackOnNewActivity(t *testing.T) {
 	if c := r.do(t, "POST", "/api/decide", map[string]any{"keys": []string{key}, "disposition": "wait", "until": "date(2030-01-01)"}, &res); c != 200 || res.Decided != 1 {
 		t.Fatalf("decide %d %+v", c, res)
 	}
-	if v := r.view(t, ViewWaiting); slices.Contains(v.keys(), key) || slices.Contains(v.leftKeys(), key) {
+	if v := r.view(t, ViewDue); slices.Contains(v.keys(), key) || slices.Contains(v.leftKeys(), key) {
 		t.Fatalf("a Not now is listed: %v / %v", v.keys(), v.leftKeys())
 	}
 	d := r.decisionOf(t, key)
 	r.comment(t, "issue", 5, "carol", d.DecidedAt.Add(time.Minute))
-	v := r.view(t, ViewWaiting)
+	v := r.view(t, ViewDue)
 	if len(v.Items) == 0 || v.Items[0].Key != key || v.Items[0].DueReason != "new activity since Not now" {
-		t.Fatalf("waiting after carol's comment: %+v", v.Items)
+		t.Fatalf("due after carol's comment: %+v", v.Items)
 	}
 }
 
@@ -242,7 +233,7 @@ func TestKeptThenClosedDropsOut(t *testing.T) {
 	repo.Issues = slices.DeleteFunc(repo.Issues, func(p observe.PRObs) bool { return p.Number == 6 })
 	g.Refs[key] = observe.Ref{Exists: true, State: "CLOSED"}
 	r.saveAndRebuild(t, g)
-	for _, view := range []string{ViewWaiting, ViewNew, ViewDue, ViewAll} {
+	for _, view := range []string{ViewNew, ViewDue, ViewAll} {
 		if v := r.view(t, view); slices.Contains(v.keys(), key) || slices.Contains(v.leftKeys(), key) {
 			t.Fatalf("%s lists the closed kept issue: %v / %v", view, v.keys(), v.leftKeys())
 		}
@@ -256,7 +247,7 @@ func TestIgnoreIsNeverListed(t *testing.T) {
 	const key = "issue:schuettc/hail#7"
 	d := r.decideOne(t, key, "ignore")
 	r.comment(t, "issue", 7, "grace", d.DecidedAt.Add(time.Minute))
-	for _, view := range []string{ViewWaiting, ViewNew, ViewDue, ViewAll} {
+	for _, view := range []string{ViewNew, ViewDue, ViewAll} {
 		if v := r.view(t, view); slices.Contains(v.keys(), key) || slices.Contains(v.leftKeys(), key) {
 			t.Fatalf("%s lists the ignored issue", view)
 		}

@@ -39,7 +39,7 @@ func fixture() Input {
 		},
 		Worktrees: []observe.Worktree{{Path: "/w/hail-client", Branch: "feat/client", Dirty: true}},
 	}}}
-	return Input{Now: now, GitHub: g, Snapshots: []observe.Snapshot{snap}, Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(), Seen: map[string]time.Time{}}
+	return Input{Now: now, GitHub: g, Snapshots: []observe.Snapshot{snap}, Decisions: map[string]item.Decision{}, Seen: map[string]time.Time{}}
 }
 
 func decide(in Input, key string, d item.Disposition, until string) {
@@ -53,14 +53,6 @@ func mustFind(t *testing.T, r Result, id string) Item {
 		t.Fatalf("item %s missing", id)
 	}
 	return it
-}
-
-func hitRules(it Item) []string {
-	var r []string
-	for _, h := range it.Hits {
-		r = append(r, h.Rule)
-	}
-	return r
 }
 
 func TestBuildUniverseAndRelations(t *testing.T) {
@@ -81,25 +73,16 @@ func TestBuildUniverseAndRelations(t *testing.T) {
 		t.Error("default branch became an item")
 	}
 	br := mustFind(t, r, "branch:schuettc/hail@feat/client")
-	if !slices.Equal(br.Locations, []string{"mbp:/c/hail"}) || !slices.Equal(hitRules(br), []string{"unpushed"}) {
+	if !slices.Equal(br.Locations, []string{"mbp:/c/hail"}) || !br.Fields(now).Unpushed {
 		t.Errorf("branch %+v", br)
 	}
 	landed := mustFind(t, r, "branch:schuettc/hail@fix/landed")
-	if len(landed.Hits) != 0 || !strings.Contains(strings.Join(landed.Evidence, " "), "deleted") {
-		t.Errorf("gone-upstream branch flagged as unpushed work: %+v", landed)
+	if landed.Fields(now).Unpushed || !strings.Contains(strings.Join(landed.Evidence, " "), "deleted") {
+		t.Errorf("gone-upstream branch counted as unpushed work: %+v", landed)
 	}
 	wt := mustFind(t, r, "worktree:mbp:/w/hail-client")
-	if !wt.Observed.Exists || !slices.Equal(hitRules(wt), []string{"unpushed"}) {
+	if !wt.Observed.Exists || !wt.Fields(now).Unpushed {
 		t.Errorf("worktree %+v", wt)
-	}
-	if !slices.Equal(hitRules(mustFind(t, r, "pr:schuettc/hail#3")), []string{"incoming-no-reply"}) {
-		t.Error("incoming PR not flagged")
-	}
-	if !slices.Equal(hitRules(mustFind(t, r, "pr:elidickinson/pi-claude-bridge#97")), []string{"outgoing-stale"}) {
-		t.Error("outgoing PR not flagged")
-	}
-	if !slices.Equal(hitRules(mustFind(t, r, "repo:schuettc/old")), []string{"dormant"}) {
-		t.Error("dormant repo not flagged")
 	}
 	if w := mustFind(t, r, "repo:acme/widget"); !w.Stale {
 		t.Error("repo from a stale owner not marked stale")
@@ -137,10 +120,13 @@ func TestUntilAndIgnore(t *testing.T) {
 		t.Errorf("watch status %s", s)
 	}
 	pr := mustFind(t, r, "pr:elidickinson/pi-claude-bridge#97")
-	if pr.Status != item.StatusWaiting || len(pr.Hits) != 1 {
-		t.Errorf("wait: %+v (policies still apply to waiting items)", pr)
+	if pr.Status != item.StatusWaiting {
+		t.Errorf("wait: %+v", pr)
 	}
-	if old := mustFind(t, r, "repo:schuettc/old"); old.Status != item.StatusDone || len(old.Hits) != 0 {
+	if slices.Contains(attentionIDs(r), "pr:elidickinson/pi-claude-bridge#97") {
+		t.Error("a Not now that still waits is in attention")
+	}
+	if old := mustFind(t, r, "repo:schuettc/old"); old.Status != item.StatusDone {
 		t.Errorf("ignore: %+v", old)
 	}
 	att := r.Attention()
@@ -255,8 +241,8 @@ func TestItemsCarryAuthorTimesLabelsAndBody(t *testing.T) {
 	}}
 	in := Input{
 		Now: now, GitHub: g, Snapshots: nil,
-		Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
-		Seen: map[string]time.Time{},
+		Decisions: map[string]item.Decision{},
+		Seen:      map[string]time.Time{},
 	}
 	r := Build(in)
 
@@ -322,8 +308,8 @@ func TestLandedCombinedAcrossMachines(t *testing.T) {
 		t.Helper()
 		in := Input{
 			Now: now, GitHub: g, Snapshots: snaps,
-			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
-			Seen: map[string]time.Time{},
+			Decisions: map[string]item.Decision{},
+			Seen:      map[string]time.Time{},
 		}
 		r := Build(in)
 		it := mustFind(t, r, "branch:schuettc/hail@feat")
@@ -422,8 +408,8 @@ func TestFinishLandedCombinations(t *testing.T) {
 	build := func(snaps []observe.Snapshot) Item {
 		in := Input{
 			Now: now, GitHub: g, Snapshots: snaps,
-			Decisions: map[string]item.Decision{}, Policy: item.DefaultPolicy(),
-			Seen: map[string]time.Time{},
+			Decisions: map[string]item.Decision{},
+			Seen:      map[string]time.Time{},
 		}
 		it, _ := Build(in).Find("branch:schuettc/hail@feat")
 		return it
@@ -485,8 +471,7 @@ func attentionIDs(r Result) []string {
 }
 
 // TestKeepLeavesItOpen: a kept item still open is left open: out of the
-// attention set (it needs no decision), in the left-open set, and with the
-// flags an undecided item would have (so it stays in its views).
+// attention set (it needs no decision) and in the left-open set.
 func TestKeepLeavesItOpen(t *testing.T) {
 	in := fixture()
 	decide(in, "pr:schuettc/hail#3", item.Keep, "")
@@ -504,12 +489,6 @@ func TestKeepLeavesItOpen(t *testing.T) {
 		if !slices.Contains(leftOpenIDs(r), id) {
 			t.Errorf("%s: not in the left-open set %v", id, leftOpenIDs(r))
 		}
-	}
-	if h := hitRules(mustFind(t, r, "pr:schuettc/hail#3")); !slices.Equal(h, []string{"incoming-no-reply"}) {
-		t.Errorf("left-open incoming PR's flags %v, want incoming-no-reply (its view)", h)
-	}
-	if h := hitRules(mustFind(t, r, "repo:schuettc/old")); !slices.Equal(h, []string{"dormant"}) {
-		t.Errorf("left-open repo's flags %v, want dormant", h)
 	}
 }
 
@@ -607,8 +586,8 @@ func TestIgnoreNeverListed(t *testing.T) {
 	p := &in.GitHub.Owners["schuettc"].Repos[0].PRs[0]
 	p.LastCommentAt, p.LastCommentAuthor = now.Add(-time.Hour), "bob"
 	r := Build(in)
-	if it := mustFind(t, r, "pr:schuettc/hail#3"); it.Status != item.StatusDone || len(it.Hits) != 0 {
-		t.Errorf("ignored: %s %v", it.Status, it.Hits)
+	if it := mustFind(t, r, "pr:schuettc/hail#3"); it.Status != item.StatusDone {
+		t.Errorf("ignored: %s", it.Status)
 	}
 	if slices.Contains(attentionIDs(r), "pr:schuettc/hail#3") || slices.Contains(leftOpenIDs(r), "pr:schuettc/hail#3") {
 		t.Error("ignored item listed")

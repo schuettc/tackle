@@ -153,15 +153,14 @@ func ids(items []ItemView) []string {
 	return out
 }
 
-// waitingPR is a pull request in the waiting view (the policy flags it).
-func waitingPR(n int, newActivity bool) engine.Item {
+// newPR is a pull request in the new view.
+func newPR(n int, newActivity bool) engine.Item {
 	return engine.Item{
 		ID:          fmt.Sprintf("pr:schuettc/hail#%d", n),
 		Kind:        item.KindPR,
 		Repo:        "schuettc/hail",
 		Status:      item.StatusNew,
 		NewActivity: newActivity,
-		Hits:        []item.Hit{{Rule: "incoming-no-reply"}},
 		Observed:    item.Observed{Known: true, Exists: true, State: "OPEN"},
 	}
 }
@@ -173,7 +172,7 @@ func TestListOrdersByGroup(t *testing.T) {
 	idx := &Index{}
 	var its []engine.Item
 	for n := 1; n <= 6; n++ {
-		its = append(its, waitingPR(n, n == 6))
+		its = append(its, newPR(n, n == 6))
 	}
 	idx.set(engine.Result{Items: its}, "abc", time.Now())
 	pending := map[string]propose.Proposal{
@@ -182,7 +181,7 @@ func TestListOrdersByGroup(t *testing.T) {
 		"pr:schuettc/hail#5": {Key: "pr:schuettc/hail#5", Source: "pi:s1", Disposition: "close"},
 		"pr:schuettc/hail#6": {Key: "pr:schuettc/hail#6", Source: "pi:s1", Disposition: "close"},
 	}
-	q := Query{View: ViewWaiting}
+	q := Query{View: ViewNew}
 	items, total := idx.List(q, pending)
 	want := []string{"pr:schuettc/hail#6", "pr:schuettc/hail#4", "pr:schuettc/hail#5", "pr:schuettc/hail#3", "pr:schuettc/hail#1", "pr:schuettc/hail#2"}
 	if got := ids(items); total != 6 || !slices.Equal(got, want) {
@@ -220,16 +219,16 @@ func TestListOrdersByGroup(t *testing.T) {
 // are two groups, each with its kind's label; watch reads as wait.
 func TestGroupSplitsByKindLabel(t *testing.T) {
 	idx := &Index{}
-	issue := waitingPR(2, false)
+	issue := newPR(2, false)
 	issue.ID, issue.Kind = "issue:schuettc/hail#2", item.KindIssue
-	idx.set(engine.Result{Items: []engine.Item{waitingPR(1, false), issue, waitingPR(3, false)}}, "abc", time.Now())
+	idx.set(engine.Result{Items: []engine.Item{newPR(1, false), issue, newPR(3, false)}}, "abc", time.Now())
 	pending := map[string]propose.Proposal{
 		"pr:schuettc/hail#1":    {Key: "pr:schuettc/hail#1", Source: "pi:s1", Disposition: "close"},
 		"issue:schuettc/hail#2": {Key: "issue:schuettc/hail#2", Source: "pi:s1", Disposition: "close"},
 		"pr:schuettc/hail#3":    {Key: "pr:schuettc/hail#3", Source: "pi:s1", Disposition: "watch", Until: "inactive(90d)"},
 	}
 	var labels []string
-	for _, g := range idx.Groups(Query{View: ViewWaiting}, pending) {
+	for _, g := range idx.Groups(Query{View: ViewNew}, pending) {
 		labels = append(labels, g.Label)
 	}
 	// Equal totals: the order of the disposition in the kind's choices
@@ -237,7 +236,7 @@ func TestGroupSplitsByKindLabel(t *testing.T) {
 	if want := []string{"Close it", "Close it without merging", "Not now"}; !slices.Equal(labels, want) {
 		t.Fatalf("labels %v, want %v", labels, want)
 	}
-	items, _ := idx.List(Query{View: ViewWaiting}, pending)
+	items, _ := idx.List(Query{View: ViewNew}, pending)
 	if items[2].Group != "pi:s1|wait|Not now" {
 		t.Fatalf("watch's group %q", items[2].Group)
 	}

@@ -104,8 +104,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalCount(c.Op, f.OpenIssues, c.Value)
 	case "has-decision":
 		return evalBool(c.Op, f.HasDecision, c.Value)
-	case "policy-hit":
-		return evalMultiString(c.Op, f.PolicyHits, c.Value)
 	default:
 		return false, fmt.Errorf("unknown field %q", c.Field)
 	}
@@ -178,7 +176,7 @@ func evalCount(op string, val int, cval string) (bool, error) {
 }
 
 // evalMultiString handles is / is-not / in / not-in on a slice of strings
-// (e.g. labels, policy-hits). "is X" is true when any element equals X.
+// (e.g. labels). "is X" is true when any element equals X.
 func evalMultiString(op string, vals []string, cval string) (bool, error) {
 	switch op {
 	case "is":

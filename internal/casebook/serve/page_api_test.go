@@ -18,7 +18,7 @@ func TestItemsGroupFilterAllPages(t *testing.T) {
 	var its []engine.Item
 	var closing, merging []string
 	for n := 1; n <= 460; n++ {
-		it := waitingPR(n, false)
+		it := newPR(n, false)
 		its = append(its, it)
 		if n <= 450 {
 			closing = append(closing, it.ID)
@@ -69,7 +69,7 @@ func TestWithdrawByGroup(t *testing.T) {
 	}
 	propose([]string{"issue:schuettc/hail#4", "issue:schuettc/hail#5"}, "close")
 	propose([]string{"pr:schuettc/hail#3"}, "close")
-	if n := r.withdraw(t, map[string]any{"view": "waiting", "group": "pi:s1|close|Close it"}); n != 2 {
+	if n := r.withdraw(t, map[string]any{"view": "new", "group": "pi:s1|close|Close it"}); n != 2 {
 		t.Fatalf("withdrew %d, want the 2 issues", n)
 	}
 	pending, _ := r.s.Props.Pending(ctx)
@@ -93,7 +93,7 @@ func TestRecommendedByNamesSession(t *testing.T) {
 	if _, errs := r.s.Props.Propose(ctx, "pi:ghost", []string{"issue:schuettc/hail#5"}, "keep", "", ""); len(errs) != 0 {
 		t.Fatal(errs)
 	}
-	l := r.viewItems(t, "view=waiting")
+	l := r.viewItems(t, "view=new")
 	by := map[string]*ItemView{}
 	for i := range l.Items {
 		by[l.Items[i].ID] = &l.Items[i]

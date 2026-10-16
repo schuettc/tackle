@@ -24,13 +24,13 @@ func (r *rig) recCounts(t *testing.T) recCounts {
 	return s
 }
 
-// undecidedKeys is every item that needs a decision: the waiting, due and
-// new views, each item once.
+// undecidedKeys is every item that needs a decision: the due and new
+// views, each item once.
 func (r *rig) undecidedKeys(t *testing.T) []string {
 	t.Helper()
 	seen := map[string]bool{}
 	var keys []string
-	for _, v := range []string{"waiting", "due", "new"} {
+	for _, v := range []string{"due", "new"} {
 		var list ItemsView
 		if c := r.do(t, "GET", "/api/items?limit=500&view="+v, nil, &list); c != 200 {
 			t.Fatalf("items %s %d", v, c)
@@ -79,11 +79,11 @@ func TestRecommendedSortFirst(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
 	var before ItemsView
-	r.do(t, "GET", "/api/items?view=waiting&limit=500", nil, &before)
+	r.do(t, "GET", "/api/items?view=new&limit=500", nil, &before)
 	r.recommend(t, "s1", "issue:schuettc/hail#9")
 	r.recommend(t, "s1", "issue:schuettc/hail#12")
 	var after ItemsView
-	r.do(t, "GET", "/api/items?view=waiting&limit=500", nil, &after)
+	r.do(t, "GET", "/api/items?view=new&limit=500", nil, &after)
 	var want []string
 	for _, it := range before.Items {
 		if it.ID == "issue:schuettc/hail#12" || it.ID == "issue:schuettc/hail#9" {
@@ -100,11 +100,11 @@ func TestRecommendedSortFirst(t *testing.T) {
 		got = append(got, it.ID)
 	}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("waiting order\n got %v\nwant %v", got, want)
+		t.Fatalf("new order\n got %v\nwant %v", got, want)
 	}
 	// Paging follows the same order.
 	var page ItemsView
-	r.do(t, "GET", "/api/items?view=waiting&offset=1&limit=1", nil, &page)
+	r.do(t, "GET", "/api/items?view=new&offset=1&limit=1", nil, &page)
 	if len(page.Items) != 1 || page.Items[0].ID != want[1] {
 		t.Fatalf("second page %+v, want %s", page.Items, want[1])
 	}

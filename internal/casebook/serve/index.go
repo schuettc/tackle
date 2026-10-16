@@ -52,7 +52,7 @@ func (x *Index) Item(key string) (engine.Item, bool) {
 // InAttention reports whether key is currently in the engine's attention set.
 // Items whose earlier decision has expired and returned to attention (e.g.
 // a wait that lapsed) are included. This uses the engine's own Attention()
-// criteria: status new, due, drift, or conflict, or any policy hit.
+// criteria: status new, due, drift, or conflict.
 func (x *Index) InAttention(key string) bool {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
@@ -66,7 +66,6 @@ func (x *Index) InAttention(key string) bool {
 
 // Views of the attention list (casebook workbench spec §3.2).
 const (
-	ViewWaiting  = "waiting"  // policy: incoming, no reply from you
 	ViewNew      = "new"      // undecided
 	ViewDue      = "due"      // due, drift, conflict
 	ViewProposed = "proposed" // a proposal is pending
@@ -100,10 +99,6 @@ type Query struct {
 
 func inView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
-	case ViewWaiting:
-		// Someone else's activity newer than a Leave it open or a Not now
-		// waits on the user too.
-		return it.NewActivity || waitingHit(it)
 	case ViewNew:
 		return it.Status == item.StatusNew
 	case ViewDue:
@@ -117,24 +112,12 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	return true
 }
 
-func waitingHit(it engine.Item) bool {
-	for _, h := range it.Hits {
-		if h.Rule == "incoming-no-reply" {
-			return true
-		}
-	}
-	return false
-}
-
 // leftOpenInView reports whether an item left open belongs to an Attention
-// view's left-open group: the views it would be in undecided (new, and
-// waiting when the policy flags it), proposed when it has a proposal, and
-// all. Due is for decisions that came back; To apply and tracked have no
+// view's left-open group: the view it would be in undecided (new),
+// proposed when it has a proposal, and all. Due is for decisions that came back; To apply and tracked have no
 // left-open group.
 func leftOpenInView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
-	case ViewWaiting:
-		return waitingHit(it)
 	case ViewNew, ViewAll:
 		return true
 	case ViewProposed:
@@ -409,7 +392,7 @@ func (x *Index) Counts(pending map[string]propose.Proposal) map[string]int {
 	defer x.mu.RUnlock()
 	c := map[string]int{}
 	for _, it := range x.res.Attention() {
-		for _, v := range []string{ViewWaiting, ViewNew, ViewDue, ViewProposed, ViewAll} {
+		for _, v := range []string{ViewNew, ViewDue, ViewProposed, ViewAll} {
 			if inView(v, it, pending) {
 				c[v]++
 			}

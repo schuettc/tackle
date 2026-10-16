@@ -37,9 +37,6 @@ func TriageFile(items []engine.Item, now time.Time) []byte {
 			line += " · " + it.Title
 		}
 		b.WriteString(comment(line))
-		for _, h := range it.Hits {
-			b.WriteString(comment("# " + h.Rule + ": " + h.Detail))
-		}
 		for _, e := range it.Evidence {
 			b.WriteString(comment("# " + e))
 		}

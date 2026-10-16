@@ -14,9 +14,10 @@ never stages another process's half-written files.
 | Path | Content |
 |---|---|
 | `casebook.toml` | `format_version = 2`. A casebook binary refuses a repo with a newer version, and upgrades an older one in place with one commit (`upgrade casebook repo to format 2`). |
-| `policy.toml` | Attention thresholds in days: `outgoing_pr_stale_days` (14), `incoming_no_reply_days` (7), `unpushed_days` (3), `repo_dormant_days` (365). Unknown keys are errors. |
 | `README.md`, `CONTRIBUTIONS.md`, `MACHINES.md` | Rendered views. On a sync conflict the upstream copy wins and the next sync re-renders. |
 | `.gitignore` | Holds `.*.tmp`: the temp files casebook writes beside a file before renaming it over (`.<name>-*.tmp`) are never committed. `casebook init` writes it; a binary opening a repo without the line appends it with one commit (`ignore casebook's temp files`), keeping any other lines. On a sync conflict the upstream copy wins and the next open adds the line again if it went. |
+
+casebook from 0.6 deletes a `policy.toml` older versions wrote, with one commit (`remove policy.toml: casebook no longer flags by age`).
 
 ## Decisions: `items/`
 
@@ -189,7 +190,6 @@ The `field` in each `[[match]]` condition must be one of the following. Operator
 | `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` with a whole number, 0 or more |
 | `open-issues` | count | number of open issues; same operators and values as `open-prs` |
 | `has-decision` | bool | item has a recorded decision |
-| `policy-hit` | text | policy rule name, e.g. `outgoing-stale` |
 
 ## Restore records: `restores/`
 
@@ -223,4 +223,4 @@ So is `casebook serve`'s working state, `~/.local/state/casebook/casebook.db` (S
 ## Version history
 
 - **1** (casebook 0.1.x): decisions, journal, snapshots, views.
-- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`.
+- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`. casebook 0.6.0 drops `policy.toml` and the `policy-hit` rule field, still at format 2: an older binary reads a missing `policy.toml` as its defaults.
