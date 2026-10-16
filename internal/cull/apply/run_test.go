@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/extract"
-	"github.com/schuettc/tackle/internal/cull/verify"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
 
-	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/golang"
 )
 
 // fixtureFile writes content to root/relpath (parents created) with mode.

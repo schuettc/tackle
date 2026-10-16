@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/profile"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
 )
 
 func write(t *testing.T, body string) string {

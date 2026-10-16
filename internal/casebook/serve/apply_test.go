@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 // activeRepoRule returns a minimal active rule that matches all repo items.

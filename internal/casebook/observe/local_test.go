@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 func commitAt(t *testing.T, dir, file string, at time.Time) string {

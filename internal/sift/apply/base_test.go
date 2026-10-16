@@ -7,14 +7,14 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/audit"
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/reconcile"
-	"github.com/schuettc/tackle/internal/sift/row"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/audit"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/reconcile"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // A repo whose flow is feat → dev → main has base = "dev" in a [[repo]]:

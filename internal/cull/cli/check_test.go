@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/key"
-	"github.com/schuettc/tackle/internal/cull/verify"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
 )
 
 // checkFake answers Jev requests without a network call. boost maps a

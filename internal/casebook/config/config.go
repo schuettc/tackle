@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Tool is the family tool name used for the casebook's directories.

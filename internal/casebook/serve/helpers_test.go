@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/app"
+	"github.com/subaud-tools/tackle/internal/casebook/app"
 )
 
 func git(t *testing.T, dir string, args ...string) (string, error) {

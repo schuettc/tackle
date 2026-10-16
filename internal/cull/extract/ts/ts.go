@@ -18,8 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
 )
 
 //go:embed tsext.cjs

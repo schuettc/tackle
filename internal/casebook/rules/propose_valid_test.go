@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // rule builds a draft with conditions and a proposal, for Validate.

@@ -23,10 +23,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tools-common/channelmcp"
-	"github.com/schuettc/tools-common/harness"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tools-common/channelmcp"
+	"github.com/subaud-tools/tools-common/harness"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Instructions are the standing guidance the agent gets with the channel.

@@ -11,10 +11,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/schuettc/tackle/internal/sift/content"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/content"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // Guidance is how to write a file's recommendation. sift_next returns it

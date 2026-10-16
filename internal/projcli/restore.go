@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 // Seams for runRestore's side effects, so tests never create sessions, open

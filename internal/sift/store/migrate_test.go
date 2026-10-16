@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tools-common/sqlitedb"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 // A populated v1 database (rounds, rows, decisions, mutes, as PR 1 left

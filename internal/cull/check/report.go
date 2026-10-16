@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/extract"
-	"github.com/schuettc/tackle/internal/cull/runs"
-	"github.com/schuettc/tackle/internal/cull/speed"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/runs"
+	"github.com/subaud-tools/tackle/internal/cull/speed"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // TestResult is one judged test. Its JSON keeps the case's identifying

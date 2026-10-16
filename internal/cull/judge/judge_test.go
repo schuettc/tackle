@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
 )
 
 // fake answers every question with a noul of 0.5, tagging the response model

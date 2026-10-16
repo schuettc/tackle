@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tools-common/harness"
+	"github.com/subaud-tools/tools-common/harness"
 )
 
 // fakeAmbient builds an ambient from plain maps so a test can describe the

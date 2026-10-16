@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // A skill installed as a symlink into a repo outside every root is read at

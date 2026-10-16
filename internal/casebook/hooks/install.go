@@ -12,8 +12,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Options says where the shims and install state live and which binary they call.

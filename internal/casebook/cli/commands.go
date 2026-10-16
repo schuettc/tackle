@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/app"
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	"github.com/schuettc/tackle/internal/casebook/hooks"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/record"
-	"github.com/schuettc/tackle/internal/casebook/store"
-	"github.com/schuettc/tackle/internal/casebook/temppath"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/app"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	"github.com/subaud-tools/tackle/internal/casebook/hooks"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/record"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/temppath"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 func flags(name, usage, long string, def func(fs *flag.FlagSet)) func() *flag.FlagSet {

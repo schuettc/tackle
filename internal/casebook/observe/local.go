@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 var skipDirs = map[string]bool{".git": true, ".worktrees": true, "node_modules": true, "vendor": true, ".venv": true, "venv": true,

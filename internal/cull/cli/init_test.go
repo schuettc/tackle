@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/key"
 )
 
 const initFakeKey = "ts-fake-0000"

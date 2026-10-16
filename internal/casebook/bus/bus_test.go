@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
 )
 
 func newBus(t *testing.T) *Bus {

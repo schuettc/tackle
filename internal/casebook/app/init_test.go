@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 // scriptGh is a scripted fake Runner keyed by the first 3 args joined with spaces.

@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // Status values for a Rule.
@@ -88,7 +88,7 @@ func Decode(b []byte) (Rule, error) {
 // Encode serialises r to TOML bytes.
 func Encode(r Rule) ([]byte, error) {
 	var buf bytes.Buffer
-	buf.WriteString("# casebook standing rule. Format: internal/casebook/FORMAT.md in schuettc/tackle.\n")
+	buf.WriteString("# casebook standing rule. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\n")
 	if err := toml.NewEncoder(&buf).Encode(r); err != nil {
 		return nil, fmt.Errorf("rule encode: %w", err)
 	}

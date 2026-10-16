@@ -14,9 +14,9 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/schuettc/tackle/internal/sift/host"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/host"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Config is config.toml.

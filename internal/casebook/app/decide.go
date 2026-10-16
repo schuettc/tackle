@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/store"
-	"github.com/schuettc/tools-common/harness"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tools-common/harness"
 )
 
 // Actor names who is deciding: the harness session (by the family identity

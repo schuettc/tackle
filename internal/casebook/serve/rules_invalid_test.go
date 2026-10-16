@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 // writeRuleFile commits a rule file as a person or an older casebook might

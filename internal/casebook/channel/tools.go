@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/serve"
-	"github.com/schuettc/tools-common/channelmcp"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/serve"
+	"github.com/subaud-tools/tools-common/channelmcp"
 )
 
 func schema(s string) json.RawMessage { return json.RawMessage(s) }

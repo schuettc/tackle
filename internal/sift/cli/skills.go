@@ -12,10 +12,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	"github.com/schuettc/tackle/skills"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	"github.com/subaud-tools/tackle/skills"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var skillsFlags = flags("skills", "sift skills install [--agent NAME]…",

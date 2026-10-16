@@ -17,8 +17,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/serve"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/casebook/serve"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Client talks to the live casebook serve with the advert's token.

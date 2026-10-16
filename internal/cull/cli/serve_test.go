@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/serve"
-	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	"github.com/subaud-tools/tackle/internal/cull/store"
 )
 
 func serveRig(t *testing.T) (root string, opened *[]string, started *int) {

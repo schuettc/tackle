@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schuettc/tackle/internal/notes"
+	"github.com/subaud-tools/tackle/internal/notes"
 )
 
 const saveDebounce = 500 * time.Millisecond

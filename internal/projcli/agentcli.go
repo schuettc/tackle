@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/proj"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/proj"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // parseNewTarget splits "<project>/<work>" on the FIRST '/', slugging and

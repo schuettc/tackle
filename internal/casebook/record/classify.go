@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 // verbSpec describes one git/gh verb: which flags take a value (the value is

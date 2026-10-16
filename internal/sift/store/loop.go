@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // AddResult is what AddRows did.

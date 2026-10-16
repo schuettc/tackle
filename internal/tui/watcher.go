@@ -7,7 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/fsnotify/fsnotify"
-	"github.com/schuettc/tackle/internal/notes"
+	"github.com/subaud-tools/tackle/internal/notes"
 )
 
 // watchCmd blocks on the watcher until a relevant event for path arrives,

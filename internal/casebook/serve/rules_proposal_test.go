@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 func draftBody(id, disp, until string, match ...map[string]any) map[string]any {

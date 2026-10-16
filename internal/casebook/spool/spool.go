@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 const live = "events.jsonl"

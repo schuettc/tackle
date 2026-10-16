@@ -5,7 +5,7 @@
 // session's name, parent and end. Durable intent
 // (decisions, rules) lives in the casebook repo, never here.
 //
-// This package is a thin wrapper over github.com/schuettc/tools-common/sqlitedb,
+// This package is a thin wrapper over github.com/subaud-tools/tools-common/sqlitedb,
 // which implements the family conventions: modernc.org/sqlite, WAL, 5 s busy
 // timeout, foreign keys, one connection, files 0600, append-only migrations.
 package db
@@ -14,7 +14,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/schuettc/tools-common/sqlitedb"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 // DB is an open working-state database.

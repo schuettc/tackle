@@ -4,9 +4,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/journal"
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 // RepoForPath maps a directory on machine to the GitHub repo of the clone (or

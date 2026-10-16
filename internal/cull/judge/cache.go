@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/schuettc/tackle/internal/cull/jev"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Cache stores raw Jev responses, one file per key.

@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
 )
 
 // The words of "Look into it", serve's alone: the decision vocabulary

@@ -1,6 +1,6 @@
 package apply
 
-import "github.com/schuettc/tackle/internal/casebook/item"
+import "github.com/subaud-tools/tackle/internal/casebook/item"
 
 // Verify promotes a reported step against a fresh observation (§5.5). It
 // returns:

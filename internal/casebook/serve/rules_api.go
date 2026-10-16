@@ -8,10 +8,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/propose"
-	"github.com/schuettc/tackle/internal/casebook/rules"
-	"github.com/schuettc/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/propose"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
 )
 
 // getRules handles GET /api/rules.

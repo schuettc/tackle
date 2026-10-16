@@ -15,13 +15,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/key"
-	"github.com/schuettc/tackle/internal/cull/rubric"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 const endpoint = "https://api.typesafe.ai"

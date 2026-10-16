@@ -5,8 +5,8 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
 )
 
 // Evaluator is the Jev call; *jev.Client satisfies it.

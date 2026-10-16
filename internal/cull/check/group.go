@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/extract"
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/rubric"
-	"github.com/schuettc/tackle/internal/cull/similar"
-	"github.com/schuettc/tackle/internal/cull/verify"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/similar"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // GroupVerifyTimeout is the per-command test timeout `cull check --group`

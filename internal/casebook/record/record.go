@@ -5,10 +5,10 @@ import (
 	"io"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
-	"github.com/schuettc/tackle/internal/casebook/spool"
-	"github.com/schuettc/tackle/internal/casebook/temppath"
-	"github.com/schuettc/tools-common/harness"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/spool"
+	"github.com/subaud-tools/tackle/internal/casebook/temppath"
+	"github.com/subaud-tools/tools-common/harness"
 )
 
 type payload struct {

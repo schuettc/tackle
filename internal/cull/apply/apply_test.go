@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/check"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 func writeLastJSON(t *testing.T, root string, r check.Report) {

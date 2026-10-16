@@ -12,10 +12,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/content"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/content"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // Handler is the /api/ mux (mounted by localweb, which checks the token).

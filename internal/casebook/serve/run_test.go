@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apptest"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/casebook/apptest"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 func TestRunAdvertStopAndInterrupt(t *testing.T) {

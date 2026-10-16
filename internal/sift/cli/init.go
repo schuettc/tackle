@@ -13,10 +13,10 @@ import (
 	"strings"
 
 	"github.com/mattn/go-isatty"
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // isTerminal is a test seam: whether stdin is a terminal to ask on.

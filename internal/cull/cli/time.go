@@ -9,9 +9,9 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/timing"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/timing"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var timeFlags = flags("time", "cull time [path] [--timeout D] [--json]",

@@ -14,8 +14,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/shown"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/shown"
 )
 
 // File is one audited file as the round holds it: where it is, the hash of

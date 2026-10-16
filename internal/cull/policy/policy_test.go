@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
 )
 
 func load(t *testing.T, name string) rubric.Rubric {

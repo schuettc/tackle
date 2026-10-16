@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // retiredStore flags any pointer to a memory store that has been migrated:

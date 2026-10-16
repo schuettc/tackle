@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 // Env clears every variable sift's own git calls drop, so fixtures and

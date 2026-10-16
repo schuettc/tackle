@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 // A fork (a repo with an upstream remote) and a vendor-managed skill

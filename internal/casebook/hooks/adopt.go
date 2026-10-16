@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // AdoptResult reports what Adopt did.

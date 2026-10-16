@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/cull/store"
 )
 
 // Handler is the /api/ mux (mounted by localweb, which checks the token).

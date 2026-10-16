@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/row"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 type fixture struct {

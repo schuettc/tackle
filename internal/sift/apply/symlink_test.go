@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 const skill = "---\nname: dispatch\n---\n\n# Dispatch\n\n- waiting on the new runner\n"

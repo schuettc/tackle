@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apptest"
+	"github.com/subaud-tools/tackle/internal/casebook/apptest"
 )
 
 // TestChannelNextAndFromNext: casebook_next hands out an item with its

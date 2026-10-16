@@ -12,7 +12,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/shown"
+	"github.com/subaud-tools/tackle/internal/sift/shown"
 )
 
 // Row is one finding.

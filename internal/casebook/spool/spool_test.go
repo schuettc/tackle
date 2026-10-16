@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 func TestAppendDrainNoLoss(t *testing.T) {

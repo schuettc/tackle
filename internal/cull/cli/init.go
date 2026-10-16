@@ -10,11 +10,11 @@ import (
 	"strings"
 
 	"github.com/mattn/go-isatty"
-	"github.com/schuettc/tackle/internal/creel"
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/key"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/creel"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Test seams: whether stdin is a terminal, and the masked key prompt.

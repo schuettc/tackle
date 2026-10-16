@@ -5,8 +5,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // shownNow is what a page that loaded the round now shows unsent, as its

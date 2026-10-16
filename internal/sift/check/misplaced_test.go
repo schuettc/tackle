@@ -3,8 +3,8 @@ package check
 import (
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
 )
 
 func TestMisplaced(t *testing.T) {

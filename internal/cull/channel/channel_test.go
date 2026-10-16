@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/serve"
-	"github.com/schuettc/tackle/internal/cull/store"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	"github.com/subaud-tools/tackle/internal/cull/store"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 const fakeKey = "ts-fake-0000"

@@ -2,7 +2,7 @@ name: release
 
 # Releases fire on a PREFIXED tag: <tool>/v<semver> (e.g. scratch/v0.5.4).
 # Pushing one tag builds and releases exactly one tool; the others are never
-# touched. Built through the family release actions (schuettc/tools-actions:
+# touched. Built through the family release actions (subaud-tools/tools-actions:
 # release-version in prefixed-tag mode + go-release): signed and notarized
 # macOS binaries (Developer ID), a stamp check, the GitHub release, and the
 # family download contract at tackle.tools/dl/<tool>/<version>/ with
@@ -28,17 +28,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - id: rel
-        uses: schuettc/tools-actions/release-version@v0.10.1
+        uses: subaud-tools/tools-actions/release-version@v0.11.0
         with:
           mode: prefixed-tag
-      - uses: schuettc/tools-actions/go-release@v0.10.1
+      - uses: subaud-tools/tools-actions/go-release@v0.11.0
         with:
           binaries: ${{ steps.rel.outputs.tool }}=./cmd/${{ steps.rel.outputs.tool }}
           # One shared version package for every tool in the monorepo.
           ldflags: >-
-            -X github.com/schuettc/tackle/internal/version.version={version}
-            -X github.com/schuettc/tackle/internal/version.commit={commit}
-            -X github.com/schuettc/tackle/internal/version.date={date}
+            -X github.com/subaud-tools/tackle/internal/version.version={version}
+            -X github.com/subaud-tools/tackle/internal/version.commit={commit}
+            -X github.com/subaud-tools/tackle/internal/version.date={date}
           stamp-check: ${{ steps.rel.outputs.tool }}
           tag: ${{ steps.rel.outputs.tag }}
           version: ${{ steps.rel.outputs.version }}

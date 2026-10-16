@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
 )
 
 func TestWriteTableFormat(t *testing.T) {

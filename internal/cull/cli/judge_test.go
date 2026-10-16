@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
 )
 
 // fakeJev answers every question: the verdict gives the rubric's act option

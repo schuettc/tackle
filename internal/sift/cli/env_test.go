@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 // siftEnv gives a test its own home, config and state, hermetic git, and no

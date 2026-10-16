@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/store"
 )
 
 // presenceTTL is how long a session counts as present after its last check-in.

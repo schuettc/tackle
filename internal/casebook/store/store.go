@@ -16,10 +16,10 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/rules"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // FormatVersion is the casebook repo format this binary reads and writes
@@ -71,7 +71,7 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 	}
 	r := &Repo{Dir: dir, Version: FormatVersion}
 	for rel, b := range map[string][]byte{
-		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion),
+		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\nformat_version = %d\n", FormatVersion),
 		"README.md":     []byte(readme),
 		".gitignore":    []byte(gitignore),
 	} {
@@ -112,7 +112,7 @@ func (r *Repo) Upgrade(ctx context.Context) (bool, error) {
 	if r.Version >= FormatVersion {
 		return false, nil
 	}
-	b := fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion)
+	b := fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\nformat_version = %d\n", FormatVersion)
 	if _, err := r.Batch(ctx, fmt.Sprintf("upgrade casebook repo to format %d", FormatVersion), func() error {
 		_, err := r.WriteFile("casebook.toml", b)
 		return err

@@ -10,15 +10,15 @@ import (
 	"sort"
 	"syscall"
 
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/journal"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/spool"
-	"github.com/schuettc/tackle/internal/casebook/store"
-	"github.com/schuettc/tackle/internal/casebook/temppath"
-	"github.com/schuettc/tackle/internal/casebook/view"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/spool"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/temppath"
+	"github.com/subaud-tools/tackle/internal/casebook/view"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // ErrSyncBusy is returned by Sync when another sync is already running on this

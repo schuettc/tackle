@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // loadLimit flags a harness's chain (its global file plus every file from

@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/cull/store"
 )
 
 // clock is a settable time source for presence.

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 // DefaultRoots are the temp roots: os.TempDir(), $TMPDIR, /tmp, /private/tmp,
@@ -124,7 +124,7 @@ func (m *Matcher) path(p string) bool {
 // directory, or the working directory).
 //
 // A temp folder doing real work is not temp, whichever repo its line was
-// annotated with (a copier clone of schuettc/muda's template is still noise):
+// annotated with (a copier clone of subaud-tools/muda's template is still noise):
 //
 //  1. Its git dir, or for a linked worktree the common dir, resolves inside
 //     a configured root: a worktree of a tracked clone placed in /tmp. With

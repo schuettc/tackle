@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // ErrMissing means neither the environment nor the key file has a key.

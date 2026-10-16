@@ -6,7 +6,7 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/schuettc/tackle/internal/casebook/gitx"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
 )
 
 // tidyPolicyMsg is the commit that deletes an older version's policy.toml.

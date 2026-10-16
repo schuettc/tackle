@@ -3,7 +3,7 @@ package similar
 import (
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
 )
 
 func TestNormPython(t *testing.T) {

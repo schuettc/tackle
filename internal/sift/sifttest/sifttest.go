@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/gitenv"
+	"github.com/subaud-tools/tackle/internal/sift/gitenv"
 )
 
 // Env isolates git for the rest of the test, clearing the variables sift's

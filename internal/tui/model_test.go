@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/schuettc/tackle/internal/notes"
+	"github.com/subaud-tools/tackle/internal/notes"
 )
 
 // runCmd executes a tea.Cmd (possibly a batch) and returns the messages it

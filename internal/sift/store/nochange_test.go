@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // recQSame keeps q's one finding and leaves the file as it is: nothing to

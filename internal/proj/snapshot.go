@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // hookEvents are the tmux events after which a server's sessions are

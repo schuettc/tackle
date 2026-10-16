@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 // primary is what the primary clone's working tree and index hold, to show
