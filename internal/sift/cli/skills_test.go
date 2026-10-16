@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/skills"
+	"github.com/subaud-tools/tackle/skills"
 )
 
 // sift skills install writes the skill the binary was built with into each

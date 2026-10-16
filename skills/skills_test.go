@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/audit"
-	"github.com/schuettc/tackle/internal/sift/config"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/skills"
+	"github.com/subaud-tools/tackle/internal/sift/audit"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/skills"
 )
 
 // sift check on the sift skill, as a harness installs it, gives no

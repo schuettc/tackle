@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/config"
 )
 
 func TestDoctorWithoutConfig(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/cull/store"
 )
 
 type fixtureItem struct {

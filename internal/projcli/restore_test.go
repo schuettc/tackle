@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 type restoreCall struct{ socket, name, dir, agent, conv string }

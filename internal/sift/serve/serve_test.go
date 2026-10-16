@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/store"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 type running struct {

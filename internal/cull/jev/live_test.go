@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
 )
 
 // TestLiveSmoke calls the real TypeSafe API. Opt in with CULL_LIVE=1:

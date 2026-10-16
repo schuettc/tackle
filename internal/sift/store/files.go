@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/shown"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/shown"
 )
 
 // schemaV4: the audit round's files (content at the audit), the agent's

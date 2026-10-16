@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/deliver"
-	"github.com/schuettc/tackle/internal/casebook/serve"
-	"github.com/schuettc/tools-common/channelmcp"
-	"github.com/schuettc/tools-common/harness"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/serve"
+	"github.com/subaud-tools/tools-common/channelmcp"
+	"github.com/subaud-tools/tools-common/harness"
 )
 
 // Instructions are the standing rules the agent gets with the channel

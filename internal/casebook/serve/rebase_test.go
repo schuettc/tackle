@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/db"
-	"github.com/schuettc/tackle/internal/casebook/rules"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 // remoteAhead puts a commit on casebook-data's remote that serve's clone

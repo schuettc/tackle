@@ -7,10 +7,10 @@ package extract_test
 import (
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/extract"
-	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
-	_ "github.com/schuettc/tackle/internal/cull/extract/python"
-	_ "github.com/schuettc/tackle/internal/cull/extract/ts"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/golang"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/python"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/ts"
 )
 
 func TestRegistryOrder(t *testing.T) {

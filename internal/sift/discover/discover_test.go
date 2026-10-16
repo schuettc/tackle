@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
 )
 
 var ctx = context.Background()

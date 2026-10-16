@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apply"
-	"github.com/schuettc/tackle/internal/casebook/deliver"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/journal"
-	"github.com/schuettc/tackle/internal/casebook/propose"
-	"github.com/schuettc/tackle/internal/casebook/rules"
-	"github.com/schuettc/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/apply"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/propose"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
 )
 
 // SummaryView is the response body of GET /api/summary.

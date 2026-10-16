@@ -1,6 +1,6 @@
 // Package store is sift's database: SQLite at tools.StateDir("sift")/sift.db.
 // It holds each round's rows, the answers to them and the mutes ("keep, stop
-// flagging"). It is a thin layer over github.com/schuettc/tools-common/sqlitedb.
+// flagging"). It is a thin layer over github.com/subaud-tools/tools-common/sqlitedb.
 package store
 
 import (
@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/shown"
-	tools "github.com/schuettc/tools-common"
-	"github.com/schuettc/tools-common/sqlitedb"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/shown"
+	tools "github.com/subaud-tools/tools-common"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 // keepRounds is how many rounds are kept (decisions and mutes never are

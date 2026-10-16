@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/host"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/host"
 )
 
 type fakeHost map[host.Ref]host.State

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 // The tracked PR waits on a PR casebook doesn't track.

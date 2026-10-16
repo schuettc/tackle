@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/spool"
-	"github.com/schuettc/tackle/internal/casebook/temppath"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/spool"
+	"github.com/subaud-tools/tackle/internal/casebook/temppath"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 func TestParseClaudePayload(t *testing.T) {

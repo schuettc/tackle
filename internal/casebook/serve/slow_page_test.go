@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apptest"
-	"github.com/schuettc/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/apptest"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
 )
 
 // sessionsEvents counts the "sessions" events published after cursor.

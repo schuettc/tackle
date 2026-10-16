@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
 )
 
 func TestDuplicate(t *testing.T) {

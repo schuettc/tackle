@@ -10,14 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/apply"
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/key"
-	"github.com/schuettc/tackle/internal/cull/timing"
-	"github.com/schuettc/tools-common/channelmcp"
+	"github.com/subaud-tools/tackle/internal/cull/apply"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/timing"
+	"github.com/subaud-tools/tools-common/channelmcp"
 )
 
 func schema(s string) json.RawMessage { return json.RawMessage(s) }

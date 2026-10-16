@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // printOf is the fingerprint the page shows for a row.

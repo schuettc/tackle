@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 func (f *fixture) presence(session, label string) {

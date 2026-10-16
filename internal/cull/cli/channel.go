@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/schuettc/tackle/internal/cull/channel"
-	"github.com/schuettc/tackle/internal/cull/serve"
-	"github.com/schuettc/tackle/internal/version"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/channel"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	"github.com/subaud-tools/tackle/internal/version"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var channelFlags = flags("channel", "cull channel",

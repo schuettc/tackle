@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/serve"
-	"github.com/schuettc/tackle/internal/cull/store"
-	"github.com/schuettc/tackle/internal/version"
-	tools "github.com/schuettc/tools-common"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	"github.com/subaud-tools/tackle/internal/cull/store"
+	"github.com/subaud-tools/tackle/internal/version"
+	tools "github.com/subaud-tools/tools-common"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Test seams for the serve command.

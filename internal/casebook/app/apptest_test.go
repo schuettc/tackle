@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 var ctx = context.Background()

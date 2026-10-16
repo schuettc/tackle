@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apply"
+	"github.com/subaud-tools/tackle/internal/casebook/apply"
 )
 
 // ── Final fix round: Issue 1 – jobs reach terminal state via serve APIs ───────

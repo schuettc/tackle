@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/content"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/content"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 func mustWrite(t *testing.T, p, s string) {

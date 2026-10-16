@@ -8,9 +8,9 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/schuettc/tackle/internal/sift/clean"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/clean"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var cleanFlags = flags("clean", "sift clean [--dry-run] [--json]",

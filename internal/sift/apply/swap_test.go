@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
 )
 
 // swapAt replaces dir, once, with a symlink to to, the moment apply has

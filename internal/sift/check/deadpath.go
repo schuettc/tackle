@@ -8,9 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 var (

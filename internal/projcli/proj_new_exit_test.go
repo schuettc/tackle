@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 // A --command against an already-existing session is refused: exit 3, with the

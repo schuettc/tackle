@@ -1,8 +1,8 @@
 package apply
 
 import (
-	"github.com/schuettc/tackle/internal/cull/extract/python"
-	"github.com/schuettc/tackle/internal/cull/extract/ts"
+	"github.com/subaud-tools/tackle/internal/cull/extract/python"
+	"github.com/subaud-tools/tackle/internal/cull/extract/ts"
 )
 
 // Tidy removes now-unused imports from src, a file apply has just removed

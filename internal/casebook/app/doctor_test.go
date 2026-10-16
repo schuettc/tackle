@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/hooks"
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/hooks"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 func TestDoctor(t *testing.T) {

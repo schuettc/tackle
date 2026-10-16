@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
-	"github.com/schuettc/tackle/internal/cull/verify"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
 )
 
 // DefaultTimeout is the per-command test timeout when Options.Timeout is 0.

@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
 )
 
 // DetailDrift is the step detail recorded when a step's command "ran" but a

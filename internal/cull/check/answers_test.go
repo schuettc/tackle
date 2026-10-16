@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/store"
-	"github.com/schuettc/tools-common/sqlitedb"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/store"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 const testSrc = "package pkg\n\nfunc TestA(t *testing.T) {\n\t_ = 1\n}\n"

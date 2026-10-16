@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/notes"
+	"github.com/subaud-tools/tackle/internal/notes"
 )
 
 // isolate points the pad store at a temp directory and clears the ambient

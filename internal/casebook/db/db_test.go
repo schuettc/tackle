@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tools-common/sqlitedb"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 var ctx = context.Background()

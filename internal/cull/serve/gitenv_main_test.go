@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/gitenv"
+	"github.com/subaud-tools/tackle/internal/sift/gitenv"
 )
 
 // TestMain clears the variables that point git at another repository. A git

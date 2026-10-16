@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/schuettc/tackle/internal/casebook/app"
+	"github.com/subaud-tools/tackle/internal/casebook/app"
 )
 
 // Sync states, as the "sync" live event and SyncView say them.

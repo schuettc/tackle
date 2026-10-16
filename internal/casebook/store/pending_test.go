@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 // TestCrashedBatchHelper is the process TestACrashedBatchIsCommittedUnderItsOwnMessage

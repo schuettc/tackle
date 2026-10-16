@@ -20,7 +20,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 // refreshInterval is how often the live-refresh tick re-runs discovery. A var

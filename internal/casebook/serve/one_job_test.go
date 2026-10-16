@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apply"
+	"github.com/subaud-tools/tackle/internal/casebook/apply"
 )
 
 // decideTwo decides the rig's PR and issue (close), so both are to apply.

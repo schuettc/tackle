@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
 )
 
 // Event is one entry in the log.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 // newRuleRig is newRig plus a ready-to-use rule written to the repo.

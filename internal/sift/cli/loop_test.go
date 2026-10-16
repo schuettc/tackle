@@ -12,13 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/serve"
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/internal/sift/store"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/serve"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // ---- serve ------------------------------------------------------------------

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Path resolution — which pad file this invocation uses — lives in

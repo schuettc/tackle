@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/row"
 )
 
 // prints is each row's fingerprint as the page shows it.

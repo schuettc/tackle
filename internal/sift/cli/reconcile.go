@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/schuettc/tackle/internal/sift/reconcile"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/reconcile"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var reconcileFlags = flags("reconcile", "sift reconcile [--round N] [--json]",

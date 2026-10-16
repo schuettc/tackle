@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/app"
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/app"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // committed is a decision as decide and accept report committing it, and

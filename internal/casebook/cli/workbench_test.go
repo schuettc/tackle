@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apptest"
-	"github.com/schuettc/tackle/internal/casebook/channel"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/serve"
+	"github.com/subaud-tools/tackle/internal/casebook/apptest"
+	"github.com/subaud-tools/tackle/internal/casebook/channel"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/serve"
 )
 
 func wbSetup(t *testing.T) (*apptest.Rig, *[]string) {

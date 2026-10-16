@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 // startSandboxServer starts a throwaway tmux server whose panes run /bin/sh

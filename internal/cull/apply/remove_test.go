@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
 )
 
 // TestRemoveSpansBottomUpExact removes two spans (styled the way the Go

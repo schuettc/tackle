@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/spool"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/spool"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 var ctx = context.Background()

@@ -18,9 +18,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // Options says how to clean.

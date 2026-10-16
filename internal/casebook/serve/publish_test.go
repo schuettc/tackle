@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/bus"
-	"github.com/schuettc/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/bus"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
 )
 
 // TestPublishFailureDoesNotFailRequest verifies that a Bus.Publish failure

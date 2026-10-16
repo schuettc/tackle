@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // ghRunner is a test seam: how gh is run.

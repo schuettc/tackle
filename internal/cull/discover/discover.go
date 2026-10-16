@@ -17,7 +17,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
 )
 
 // skipDirs are directory names Suite never descends into.

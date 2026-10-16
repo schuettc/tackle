@@ -9,7 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/schuettc/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/proj"
 )
 
 // savedFixture is a, b, c across one layout window and the unplaced group:

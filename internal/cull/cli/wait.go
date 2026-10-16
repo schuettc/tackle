@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/channel"
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/serve"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/channel"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 const (

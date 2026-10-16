@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 // epoch is a fixed clock used by all tests.

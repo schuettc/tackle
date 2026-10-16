@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/propose"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/propose"
 )
 
 // EvaluateActive proposes decisions for all items that every rule in active

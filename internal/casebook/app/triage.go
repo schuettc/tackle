@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // TriageEntry is one filled-in (or skipped) triage decision.

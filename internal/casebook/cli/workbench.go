@@ -18,13 +18,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/channel"
-	"github.com/schuettc/tackle/internal/casebook/deliver"
-	"github.com/schuettc/tackle/internal/casebook/serve"
-	"github.com/schuettc/tackle/internal/version"
-	tools "github.com/schuettc/tools-common"
-	"github.com/schuettc/tools-common/harness"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/casebook/channel"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/serve"
+	"github.com/subaud-tools/tackle/internal/version"
+	tools "github.com/subaud-tools/tools-common"
+	"github.com/subaud-tools/tools-common/harness"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Test seams for the workbench commands.

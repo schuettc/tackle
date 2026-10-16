@@ -5,10 +5,10 @@ import (
 	"io"
 	"os"
 
-	"github.com/schuettc/tackle/internal/notes"
-	"github.com/schuettc/tackle/internal/tui"
-	"github.com/schuettc/tackle/internal/version"
-	"github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/notes"
+	"github.com/subaud-tools/tackle/internal/tui"
+	"github.com/subaud-tools/tackle/internal/version"
+	"github.com/subaud-tools/tools-common"
 )
 
 func run(cwd string, args []string, stdout io.Writer) int {

@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/db"
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // Proposal states.

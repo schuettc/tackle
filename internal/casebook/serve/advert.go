@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/config"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // Advert is how a running serve is found: StateDir/live/serve.json (0600,

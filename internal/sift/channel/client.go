@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/serve"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/sift/serve"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Client talks to the live sift serve with the advert's token.

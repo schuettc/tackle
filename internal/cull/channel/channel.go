@@ -22,10 +22,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tools-common/channelmcp"
-	"github.com/schuettc/tools-common/harness"
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tools-common/channelmcp"
+	"github.com/subaud-tools/tools-common/harness"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Instructions are the standing rules the agent gets with the channel.

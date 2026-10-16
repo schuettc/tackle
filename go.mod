@@ -1,4 +1,4 @@
-module github.com/schuettc/tackle
+module github.com/subaud-tools/tackle
 
 go 1.26.4
 
@@ -10,8 +10,8 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.6
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/mattn/go-isatty v0.0.24
-	github.com/schuettc/tools-common v0.11.0
-	github.com/schuettc/tools-common/sqlitedb v0.1.0
+	github.com/subaud-tools/tools-common v0.12.0
+	github.com/subaud-tools/tools-common/sqlitedb v0.2.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

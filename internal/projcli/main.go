@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/schuettc/tackle/internal/proj"
-	"github.com/schuettc/tackle/internal/projtui"
-	"github.com/schuettc/tackle/internal/version"
-	"github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/proj"
+	"github.com/subaud-tools/tackle/internal/projtui"
+	"github.com/subaud-tools/tackle/internal/version"
+	"github.com/subaud-tools/tools-common"
 )
 
 // Dispatch parses args and runs the proj CLI, writing top-level output to

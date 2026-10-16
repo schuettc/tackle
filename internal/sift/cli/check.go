@@ -10,8 +10,8 @@ import (
 	"os/signal"
 	"sort"
 
-	"github.com/schuettc/tackle/internal/sift/audit"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/audit"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // lookPath is a test seam: finding gh.

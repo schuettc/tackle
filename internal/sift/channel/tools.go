@@ -8,14 +8,14 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/apply"
-	"github.com/schuettc/tackle/internal/sift/audit"
-	"github.com/schuettc/tackle/internal/sift/clean"
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/recommend"
-	"github.com/schuettc/tackle/internal/sift/store"
-	"github.com/schuettc/tools-common/channelmcp"
+	"github.com/subaud-tools/tackle/internal/sift/apply"
+	"github.com/subaud-tools/tackle/internal/sift/audit"
+	"github.com/subaud-tools/tackle/internal/sift/clean"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/recommend"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	"github.com/subaud-tools/tools-common/channelmcp"
 )
 
 func schema(s string) json.RawMessage { return json.RawMessage(s) }

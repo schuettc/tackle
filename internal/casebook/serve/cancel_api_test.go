@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/apply"
+	"github.com/subaud-tools/tackle/internal/casebook/apply"
 )
 
 // TestCancelDiscardsAnUnapprovedPlan: POST /api/apply/cancel {plan_id}

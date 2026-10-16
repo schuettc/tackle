@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/journal"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/temppath"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/temppath"
 )
 
 // PruneOptions controls PruneTemp.

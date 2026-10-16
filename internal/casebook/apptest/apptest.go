@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/app"
-	"github.com/schuettc/tackle/internal/casebook/observe"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/app"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 // FakeGh serves a tiny GitHub: user schuettc, no orgs, one repo schuettc/hail

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apptest"
-	"github.com/schuettc/tackle/internal/casebook/db"
-	"github.com/schuettc/tackle/internal/casebook/deliver"
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/apptest"
+	"github.com/subaud-tools/tackle/internal/casebook/db"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 // countMessages is how many messages (drafts included) a thread holds.

@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // The record is proj's memory across reboots: every work session it has seen,

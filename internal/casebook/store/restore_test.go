@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/gitx"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/gitx"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 func TestAppendRestoreWritesHeaderAndCommits(t *testing.T) {

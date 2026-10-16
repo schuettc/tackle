@@ -9,14 +9,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/discover"
-	ts "github.com/schuettc/tackle/internal/cull/extract/ts"
-	"github.com/schuettc/tackle/internal/cull/key"
-	"github.com/schuettc/tackle/internal/cull/runs"
-	"github.com/schuettc/tackle/internal/cull/serve"
-	"github.com/schuettc/tackle/internal/cull/verify"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	ts "github.com/subaud-tools/tackle/internal/cull/extract/ts"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/runs"
+	"github.com/subaud-tools/tackle/internal/cull/serve"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var doctorFlags = flags("doctor", "cull doctor [path]",

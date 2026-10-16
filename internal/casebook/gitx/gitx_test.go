@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 func TestRunMarksInternalAndReportsErrors(t *testing.T) {

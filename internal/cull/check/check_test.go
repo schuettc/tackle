@@ -15,14 +15,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/rubric"
-	"github.com/schuettc/tackle/internal/sift/gitenv"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/sift/gitenv"
 
-	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
-	_ "github.com/schuettc/tackle/internal/cull/extract/python"
-	_ "github.com/schuettc/tackle/internal/cull/extract/ts"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/golang"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/python"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/ts"
 )
 
 // fakeEval answers every Jev question without a network call. A test named

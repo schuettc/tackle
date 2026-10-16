@@ -13,9 +13,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/sift/channel"
-	"github.com/schuettc/tackle/internal/sift/serve"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/channel"
+	"github.com/subaud-tools/tackle/internal/sift/serve"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 const (

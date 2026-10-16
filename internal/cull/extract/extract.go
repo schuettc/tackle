@@ -2,7 +2,7 @@
 // files into cull TestCases plus any files that could not be parsed.
 package extract
 
-import "github.com/schuettc/tackle/internal/cull/cases"
+import "github.com/subaud-tools/tackle/internal/cull/cases"
 
 // Skipped is a file an Extractor could not process, and why.
 type Skipped struct {

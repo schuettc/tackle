@@ -3,7 +3,7 @@ package cli
 import (
 	"io"
 
-	tools "github.com/schuettc/tools-common"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 func commands(stdin io.Reader) []tools.Command {

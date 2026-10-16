@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
-	"github.com/schuettc/tackle/internal/sift/store"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 // The seeded round reproduces the fixture: every row, its source pointing at

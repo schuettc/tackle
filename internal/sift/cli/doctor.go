@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/profile"
-	"github.com/schuettc/tackle/internal/sift/serve"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
+	"github.com/subaud-tools/tackle/internal/sift/serve"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // ghAuth is a test seam: whether gh is logged in.

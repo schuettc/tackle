@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	st "github.com/schuettc/tackle/internal/sift/sifttest"
-	"github.com/schuettc/tackle/internal/sift/store"
+	st "github.com/subaud-tools/tackle/internal/sift/sifttest"
+	"github.com/subaud-tools/tackle/internal/sift/store"
 )
 
 var ctx = context.Background()

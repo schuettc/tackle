@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
 )
 
 func TestDeadPath(t *testing.T) {

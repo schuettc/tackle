@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/rules"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 func ruleDetail(t *testing.T, r *rig, id string) RuleDetailView {

@@ -20,14 +20,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/extract"
-	_ "github.com/schuettc/tackle/internal/cull/extract/golang" // registers the Go extractor
-	_ "github.com/schuettc/tackle/internal/cull/extract/python" // registers the Python extractor
-	_ "github.com/schuettc/tackle/internal/cull/extract/ts"     // registers the TypeScript extractor
-	"github.com/schuettc/tackle/internal/cull/runs"
-	"github.com/schuettc/tackle/internal/cull/speed"
-	"github.com/schuettc/tackle/internal/cull/verify"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/golang" // registers the Go extractor
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/python" // registers the Python extractor
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/ts"     // registers the TypeScript extractor
+	"github.com/subaud-tools/tackle/internal/cull/runs"
+	"github.com/subaud-tools/tackle/internal/cull/speed"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
 )
 
 // DefaultTimeout is how long one check may run.

@@ -1,8 +1,38 @@
 # Changelog
 
-All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are documented here (proj, casebook, cull and sift entries are headed with the tool's name; older proj and casebook releases have none). The format follows
+All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull` and `sift` are documented here (proj, creel, casebook, cull and sift entries are headed with the tool's name; older proj and casebook releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [0.6.0] — 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
+
+## [proj 0.7.0] - 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
+
+## [creel 0.4.0] - 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
+
+## [casebook 0.7.0] - 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
+
+## [cull 0.3.0] - 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
+
+## [sift 0.2.0] - 2026-10-16
+
+### Changed
+- Module path is now github.com/subaud-tools/tackle; the source lives at github.com/subaud-tools/tackle.
 
 ## [casebook 0.6.0] - 2026-10-16
 

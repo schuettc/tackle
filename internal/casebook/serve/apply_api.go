@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/apply"
-	"github.com/schuettc/tackle/internal/casebook/config"
-	"github.com/schuettc/tackle/internal/casebook/deliver"
-	"github.com/schuettc/tackle/internal/casebook/engine"
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/observe"
+	"github.com/subaud-tools/tackle/internal/casebook/apply"
+	"github.com/subaud-tools/tackle/internal/casebook/config"
+	"github.com/subaud-tools/tackle/internal/casebook/deliver"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/observe"
 )
 
 // syncInterval is the default observation staleness threshold; it matches the

@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/apply"
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/discover"
-	"github.com/schuettc/tackle/internal/cull/verify"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/apply"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/discover"
+	"github.com/subaud-tools/tackle/internal/cull/verify"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 // idList is a repeatable string flag: each --ids adds one id, verbatim

@@ -10,10 +10,10 @@ import (
 	"io"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/rec"
-	"github.com/schuettc/tackle/internal/sift/recommend"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/rec"
+	"github.com/subaud-tools/tackle/internal/sift/recommend"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var nextFlags = flags("next", "sift next [--round N] [--json]",

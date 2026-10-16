@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schuettc/tools-common/localweb"
+	"github.com/subaud-tools/tools-common/localweb"
 )
 
 // Stop asks the live serve to exit and waits for its advert to go.

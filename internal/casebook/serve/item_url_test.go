@@ -4,7 +4,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // TestItemURLPerKind: serve builds an item's GitHub page from its key, for

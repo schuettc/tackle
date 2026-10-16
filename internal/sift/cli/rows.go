@@ -12,9 +12,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/row"
-	"github.com/schuettc/tackle/internal/sift/store"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/sift/row"
+	"github.com/subaud-tools/tackle/internal/sift/store"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var rowsFlags = flags("rows", "sift rows add [--round N] < rows.jsonl",

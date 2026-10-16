@@ -4,7 +4,7 @@
 // runs share one place with real transactions. last.json stays the report;
 // this database sits beside it.
 //
-// It is a thin layer over github.com/schuettc/tools-common/sqlitedb.
+// It is a thin layer over github.com/subaud-tools/tools-common/sqlitedb.
 package store
 
 import (
@@ -17,8 +17,8 @@ import (
 	"sort"
 	"time"
 
-	tools "github.com/schuettc/tools-common"
-	"github.com/schuettc/tools-common/sqlitedb"
+	tools "github.com/subaud-tools/tools-common"
+	"github.com/subaud-tools/tools-common/sqlitedb"
 )
 
 // SchemaVersion is the schema version this binary targets.

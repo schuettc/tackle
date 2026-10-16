@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schuettc/tackle/internal/cull/apply"
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/extract"
+	"github.com/subaud-tools/tackle/internal/cull/apply"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/extract"
 )
 
 const applyCalc = "package calc\n\nfunc Add(a, b int) int { return a + b }\n"

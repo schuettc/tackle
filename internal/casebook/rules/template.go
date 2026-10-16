@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schuettc/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
 )
 
 // NoteToken is one placeholder a rule's note may use, and what it stands for.

@@ -3,7 +3,7 @@ package check
 import (
 	"testing"
 
-	"github.com/schuettc/tackle/internal/sift/discover"
+	"github.com/subaud-tools/tackle/internal/sift/discover"
 )
 
 func TestSize(t *testing.T) {

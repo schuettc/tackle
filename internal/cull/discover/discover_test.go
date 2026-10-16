@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	_ "github.com/schuettc/tackle/internal/cull/extract/golang"
-	_ "github.com/schuettc/tackle/internal/cull/extract/python"
-	_ "github.com/schuettc/tackle/internal/cull/extract/ts"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/golang"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/python"
+	_ "github.com/subaud-tools/tackle/internal/cull/extract/ts"
 )
 
 // newGitRepo creates a temp git repo with a private global git config so

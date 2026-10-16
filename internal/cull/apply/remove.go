@@ -3,7 +3,7 @@ package apply
 import (
 	"sort"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
 )
 
 // RemoveSpans deletes each span from src and returns the result. It works

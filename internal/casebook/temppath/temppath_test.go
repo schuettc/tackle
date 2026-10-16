@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/journal"
+	"github.com/subaud-tools/tackle/internal/casebook/journal"
 )
 
 func TestDefaultRootsCoverTheSystemTempFolders(t *testing.T) {

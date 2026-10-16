@@ -26,9 +26,9 @@ Prebuilt binaries are published per tool on each GitHub release
 
 Dev/fallback (requires a Go toolchain):
 
-    go install github.com/schuettc/tackle/cmd/scratch@main
-    go install github.com/schuettc/tackle/cmd/proj@main
-    go install github.com/schuettc/tackle/cmd/creel@main
+    go install github.com/subaud-tools/tackle/cmd/scratch@main
+    go install github.com/subaud-tools/tackle/cmd/proj@main
+    go install github.com/subaud-tools/tackle/cmd/creel@main
 
 ## proj
 
@@ -181,7 +181,7 @@ which is why this runbook is a distinct, manual step.
 **Step 1 — Install the binary**
 
 ```zsh
-go install github.com/schuettc/tackle/cmd/proj@main
+go install github.com/subaud-tools/tackle/cmd/proj@main
 ```
 
 Verify: `which proj` should print something under `~/go/bin` (or your `$GOPATH/bin`).

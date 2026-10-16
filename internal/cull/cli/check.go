@@ -11,12 +11,12 @@ import (
 	"os/signal"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/cull/check"
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/judge"
-	"github.com/schuettc/tackle/internal/cull/key"
-	"github.com/schuettc/tackle/internal/cull/speed"
-	tools "github.com/schuettc/tools-common"
+	"github.com/subaud-tools/tackle/internal/cull/check"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/judge"
+	"github.com/subaud-tools/tackle/internal/cull/key"
+	"github.com/subaud-tools/tackle/internal/cull/speed"
+	tools "github.com/subaud-tools/tools-common"
 )
 
 var checkFlags = flags("check", "cull check [path] [--diff base] [--json] [--dry-run] [--refresh]",

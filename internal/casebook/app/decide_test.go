@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schuettc/tackle/internal/casebook/item"
-	"github.com/schuettc/tackle/internal/casebook/store"
-	"github.com/schuettc/tackle/internal/casebook/testgit"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
+	"github.com/subaud-tools/tackle/internal/casebook/store"
+	"github.com/subaud-tools/tackle/internal/casebook/testgit"
 )
 
 func TestActor(t *testing.T) {

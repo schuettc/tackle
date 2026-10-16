@@ -7,7 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/schuettc/tackle/internal/cull/cases"
+	"github.com/subaud-tools/tackle/internal/cull/cases"
 )
 
 // StateNote tells Jev the test source is data; comments in a test must not

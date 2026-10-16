@@ -21,9 +21,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/schuettc/tackle/internal/sift/config"
-	"github.com/schuettc/tackle/internal/sift/gitenv"
-	"github.com/schuettc/tackle/internal/sift/profile"
+	"github.com/subaud-tools/tackle/internal/sift/config"
+	"github.com/subaud-tools/tackle/internal/sift/gitenv"
+	"github.com/subaud-tools/tackle/internal/sift/profile"
 )
 
 // Class is a file's budget class.

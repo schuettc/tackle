@@ -6,8 +6,8 @@ package policy
 import (
 	"fmt"
 
-	"github.com/schuettc/tackle/internal/cull/jev"
-	"github.com/schuettc/tackle/internal/cull/rubric"
+	"github.com/subaud-tools/tackle/internal/cull/jev"
+	"github.com/subaud-tools/tackle/internal/cull/rubric"
 )
 
 // Verdict is a judgment on one test or one group.

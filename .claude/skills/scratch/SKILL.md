@@ -105,7 +105,7 @@ go build ./...            # compile
 go test ./...             # unit tests (notes = pure logic; tui = drives Update())
 go vet ./...              # keep clean before committing
 go run ./cmd/scratch      # run the TUI on this session's pad (see `scratch path`)
-go install github.com/schuettc/tackle/cmd/scratch@main   # install the published binary
+go install github.com/subaud-tools/tackle/cmd/scratch@main   # install the published binary
 ```
 
 The TUI can't be asserted headlessly by unit tests alone; the `tui` tests drive
@@ -119,7 +119,7 @@ scratch/v0.16.0`). That tag triggers `.github/workflows/release.yml`, which buil
 only scratch (darwin/linux × arm64/amd64) and publishes
 `scratch_<os>_<arch>.tar.gz` + `.sha256` assets. Update `CHANGELOG.md`. The dotfiles
 reference installs scratch via the tackle module path
-(`go install github.com/schuettc/tackle/cmd/scratch@main`). Keep every numeric
+(`go install github.com/subaud-tools/tackle/cmd/scratch@main`). Keep every numeric
 default a knob and every release note explaining *what changed and why*.
 
 ## Where to change things
