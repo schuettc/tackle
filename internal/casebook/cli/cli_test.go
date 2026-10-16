@@ -308,3 +308,28 @@ func TestPruneTempRefusedPush(t *testing.T) {
 		t.Errorf("error lacks what happened:\n%s", errw)
 	}
 }
+
+// TestAttentionNewestFirst: casebook attention lists the newest first,
+// printed and in --json: the repo pushed 2026-09-20 before the branch
+// whose tip is 2026-09-01, though the branch's key sorts first.
+func TestAttentionNewestFirst(t *testing.T) {
+	e := setup(t)
+	t.Setenv("GIT_COMMITTER_DATE", "2026-09-01T00:00:00Z")
+	testgit.Git(t, e.clone, "commit", "-q", "--amend", "--no-edit")
+	e.ok("init", e.remote, "--machine", "mbp", "--user", "schuettc", "--root", e.root)
+	e.ok("sync")
+	want := []string{"repo:schuettc/hail", "branch:schuettc/hail@feat/client"}
+	var att struct {
+		Items []struct {
+			Key string `json:"key"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(e.ok("attention", "--json")), &att); err != nil || len(att.Items) != 2 ||
+		att.Items[0].Key != want[0] || att.Items[1].Key != want[1] {
+		t.Fatalf("attention --json %+v %v, want %v", att, err, want)
+	}
+	out := e.ok("attention")
+	if i, j := strings.Index(out, want[0]), strings.Index(out, want[1]); i < 0 || j < 0 || i > j {
+		t.Fatalf("attention prints\n%s\nwant %s before %s", out, want[0], want[1])
+	}
+}

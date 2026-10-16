@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -112,6 +113,7 @@ func commands(stdin io.Reader) []tools.Command {
 					return err
 				}
 				items := filter(res.Attention(), fs)
+				sort.SliceStable(items, func(i, j int) bool { return engine.NewerFirst(items[i], items[j]) })
 				if boolFlag(fs, "json") {
 					return tools.PrintJSON(out, map[string]any{"items": nonNil(items), "notices": res.Notices})
 				}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,41 +166,84 @@ func newPR(n int, newActivity bool) engine.Item {
 	}
 }
 
-// TestListOrdersByGroup: an Attention view lists its items group by group
-// (the biggest group first, the not recommended last), new activity first
-// within a group, and returns the groups with their counts.
-func TestListOrdersByGroup(t *testing.T) {
-	idx := &Index{}
-	var its []engine.Item
-	for n := 1; n <= 6; n++ {
-		its = append(its, newPR(n, n == 6))
+// prAt is newPR(n) last updated at at (zero: no time known).
+func prAt(n int, at time.Time) engine.Item {
+	it := newPR(n, false)
+	it.UpdatedAt = at
+	return it
+}
+
+// TestListNewestFirst: newest first, no time last, ties by key; the
+// left-open group too.
+func TestListNewestFirst(t *testing.T) {
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	h := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Hour) }
+	its := []engine.Item{prAt(1, h(1)), prAt(2, h(3)), prAt(3, time.Time{}), prAt(4, h(2)), prAt(5, time.Time{})}
+	for n, at := range map[int]time.Time{6: h(1), 7: h(5)} {
+		it := prAt(n, at)
+		it.Status = item.StatusLeftOpen
+		its = append(its, it)
 	}
+	slices.SortFunc(its, func(a, b engine.Item) int { return strings.Compare(a.ID, b.ID) })
+	idx := &Index{}
 	idx.set(engine.Result{Items: its}, "abc", time.Now())
-	pending := map[string]propose.Proposal{
+	items, _ := idx.List(Query{View: ViewNew}, nil)
+	if got, want := ids(items), []string{"pr:schuettc/hail#2", "pr:schuettc/hail#4", "pr:schuettc/hail#1", "pr:schuettc/hail#3", "pr:schuettc/hail#5"}; !slices.Equal(got, want) {
+		t.Fatalf("list %v, want %v", got, want)
+	}
+	left, _ := idx.LeftOpen(Query{View: ViewNew}, nil)
+	if got, want := ids(left), []string{"pr:schuettc/hail#7", "pr:schuettc/hail#6"}; !slices.Equal(got, want) {
+		t.Fatalf("left open %v, want %v", got, want)
+	}
+}
+
+// groupedFixture is six new PRs, two not recommended and four recommended
+// by pi:s1 (one merge, three close), each updated at its own hour.
+func groupedFixture() (*Index, map[string]propose.Proposal) {
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	var its []engine.Item
+	for n, hours := range []int{6, 1, 2, 3, 5, 4} {
+		its = append(its, prAt(n+1, t0.Add(time.Duration(hours)*time.Hour)))
+	}
+	idx := &Index{}
+	idx.set(engine.Result{Items: its}, "abc", time.Now())
+	return idx, map[string]propose.Proposal{
 		"pr:schuettc/hail#3": {Key: "pr:schuettc/hail#3", Source: "pi:s1", Disposition: "merge"},
 		"pr:schuettc/hail#4": {Key: "pr:schuettc/hail#4", Source: "pi:s1", Disposition: "close"},
 		"pr:schuettc/hail#5": {Key: "pr:schuettc/hail#5", Source: "pi:s1", Disposition: "close"},
 		"pr:schuettc/hail#6": {Key: "pr:schuettc/hail#6", Source: "pi:s1", Disposition: "close"},
 	}
+}
+
+const (
+	closeID = "pi:s1|close|Close it without merging"
+	mergeID = "pi:s1|merge|Merge it"
+)
+
+var groupedWant = []GroupView{
+	{ID: "none", Label: "Not recommended yet", Total: 2},
+	{ID: closeID, Source: "pi:s1", Disposition: "close", Label: "Close it without merging", Outward: true, Many: "Close {n}", Total: 3},
+	{ID: mergeID, Source: "pi:s1", Disposition: "merge", Label: "Merge it", Outward: true, Many: "Merge {n}", Total: 1},
+}
+
+// TestGroupsOrderByNewestItem: groups by their newest item (a fresh item
+// with no recommendation lifts "Not recommended yet" to the top), newest
+// first inside each.
+func TestGroupsOrderByNewestItem(t *testing.T) {
+	idx, pending := groupedFixture()
 	q := Query{View: ViewNew}
 	items, total := idx.List(q, pending)
-	want := []string{"pr:schuettc/hail#6", "pr:schuettc/hail#4", "pr:schuettc/hail#5", "pr:schuettc/hail#3", "pr:schuettc/hail#1", "pr:schuettc/hail#2"}
+	want := []string{"pr:schuettc/hail#1", "pr:schuettc/hail#2", "pr:schuettc/hail#5", "pr:schuettc/hail#6", "pr:schuettc/hail#4", "pr:schuettc/hail#3"}
 	if got := ids(items); total != 6 || !slices.Equal(got, want) {
 		t.Fatalf("list %v (total %d), want %v", got, total, want)
 	}
-	closeID, mergeID := "pi:s1|close|Close it without merging", "pi:s1|merge|Merge it"
-	for i, g := range []string{closeID, closeID, closeID, mergeID, "none", "none"} {
+	for i, g := range []string{"none", "none", closeID, closeID, closeID, mergeID} {
 		if items[i].Group != g {
 			t.Errorf("%s is in group %q, want %q", items[i].ID, items[i].Group, g)
 		}
 	}
-	wantGroups := []GroupView{
-		{ID: closeID, Source: "pi:s1", Disposition: "close", Label: "Close it without merging", Outward: true, Many: "Close {n}", Total: 3},
-		{ID: mergeID, Source: "pi:s1", Disposition: "merge", Label: "Merge it", Outward: true, Many: "Merge {n}", Total: 1},
-		{ID: "none", Label: "Not recommended yet", Total: 2},
-	}
-	if got := idx.Groups(q, pending); !reflect.DeepEqual(got, wantGroups) {
-		t.Fatalf("groups\n %+v\nwant\n %+v", got, wantGroups)
+	if got := idx.Groups(q, pending); !reflect.DeepEqual(got, groupedWant) {
+		t.Fatalf("groups\n %+v\nwant\n %+v", got, groupedWant)
 	}
 	// A group filter lists only that group.
 	q.Group = mergeID
@@ -212,6 +256,24 @@ func TestListOrdersByGroup(t *testing.T) {
 	}
 	if items, _ := idx.List(Query{View: ViewTracked}, pending); !slices.IsSorted(ids(items)) {
 		t.Fatalf("tracked not in key order: %v", ids(items))
+	}
+}
+
+// TestFlatListsNewestFirstAcrossGroups: Flat orders across groups; items
+// keep their Group; Groups still count, in the grouped order.
+func TestFlatListsNewestFirstAcrossGroups(t *testing.T) {
+	idx, pending := groupedFixture()
+	q := Query{View: ViewNew, Flat: true}
+	items, _ := idx.List(q, pending)
+	want := []string{"pr:schuettc/hail#1", "pr:schuettc/hail#5", "pr:schuettc/hail#6", "pr:schuettc/hail#4", "pr:schuettc/hail#3", "pr:schuettc/hail#2"}
+	if got := ids(items); !slices.Equal(got, want) {
+		t.Fatalf("flat list %v, want %v", got, want)
+	}
+	if items[1].Group != closeID {
+		t.Errorf("%s lost its group: %q", items[1].ID, items[1].Group)
+	}
+	if got := idx.Groups(q, pending); !reflect.DeepEqual(got, groupedWant) {
+		t.Fatalf("flat groups\n %+v\nwant\n %+v", got, groupedWant)
 	}
 }
 

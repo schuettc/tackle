@@ -140,7 +140,8 @@ func TestKeepGoesToTheLeftOpenGroup(t *testing.T) {
 // the items that need a decision.
 func TestLeftOpenPagesWithLeftOffset(t *testing.T) {
 	r := newRig(t)
-	keys := []string{"issue:schuettc/hail#4", "issue:schuettc/hail#5"}
+	// Newest first: #5 was updated after #4.
+	keys := []string{"issue:schuettc/hail#5", "issue:schuettc/hail#4"}
 	for _, k := range keys {
 		r.decideOne(t, k, "keep")
 	}

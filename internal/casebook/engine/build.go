@@ -90,6 +90,18 @@ func (r Result) Attention() []Item {
 	return out
 }
 
+// NewerFirst orders items by UpdatedAt, newest first, an item with no time
+// after every item with one, then by key: the Attention lists' order.
+func NewerFirst(a, b Item) bool {
+	switch {
+	case a.UpdatedAt.IsZero() != b.UpdatedAt.IsZero():
+		return b.UpdatedAt.IsZero()
+	case !a.UpdatedAt.Equal(b.UpdatedAt):
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.ID < b.ID
+}
+
 // machineLanded records the per-machine landed verdict for one branch item.
 type machineLanded struct {
 	Machine     string

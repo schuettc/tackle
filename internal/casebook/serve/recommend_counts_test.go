@@ -2,10 +2,12 @@ package serve
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/schuettc/tackle/internal/casebook/engine"
 	"github.com/schuettc/tackle/internal/casebook/item"
 	"github.com/schuettc/tackle/internal/casebook/observe"
 )
@@ -73,25 +75,41 @@ func TestSummaryCountsRecommended(t *testing.T) {
 	}
 }
 
-// TestRecommendedSortFirst: in an Attention view, the items with a pending
-// proposal come first, each group in the view's own order.
-func TestRecommendedSortFirst(t *testing.T) {
+// TestGroupsFollowTheirNewestItem: in an Attention view the groups go by
+// their newest item, and the items read group by group, newest first in
+// each; paging follows the same order.
+func TestGroupsFollowTheirNewestItem(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
-	var before ItemsView
-	r.do(t, "GET", "/api/items?view=new&limit=500", nil, &before)
 	r.recommend(t, "s1", "issue:schuettc/hail#9")
 	r.recommend(t, "s1", "issue:schuettc/hail#12")
 	var after ItemsView
 	r.do(t, "GET", "/api/items?view=new&limit=500", nil, &after)
-	var want []string
-	for _, it := range before.Items {
-		if it.ID == "issue:schuettc/hail#12" || it.ID == "issue:schuettc/hail#9" {
-			want = append(want, it.ID)
-		}
+	if len(after.Groups) != 2 || after.Groups[0].ID != GroupNone {
+		t.Fatalf("groups %+v: want not recommended first (its newest item is newer than #12)", after.Groups)
 	}
-	for _, it := range before.Items {
-		if it.ID != "issue:schuettc/hail#12" && it.ID != "issue:schuettc/hail#9" {
+	order := map[string]int{}
+	for i, g := range after.Groups {
+		order[g.ID] = i
+	}
+	var want []string
+	for _, g := range after.Groups {
+		var in []ItemView
+		for _, it := range after.Items {
+			if it.Group == g.ID {
+				in = append(in, it)
+			}
+		}
+		slices.SortStableFunc(in, func(a, b ItemView) int {
+			if engine.NewerFirst(a.Item, b.Item) {
+				return -1
+			}
+			if engine.NewerFirst(b.Item, a.Item) {
+				return 1
+			}
+			return 0
+		})
+		for _, it := range in {
 			want = append(want, it.ID)
 		}
 	}
@@ -101,6 +119,9 @@ func TestRecommendedSortFirst(t *testing.T) {
 	}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("new order\n got %v\nwant %v", got, want)
+	}
+	if n := len(got); got[n-2] != "issue:schuettc/hail#12" || got[n-1] != "issue:schuettc/hail#9" {
+		t.Fatalf("recommended group %v, want #12 then #9 at the end", got[n-2:])
 	}
 	// Paging follows the same order.
 	var page ItemsView

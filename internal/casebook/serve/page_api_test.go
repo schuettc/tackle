@@ -246,3 +246,67 @@ func TestVocabularyDiscardAndAskedWords(t *testing.T) {
 		}
 	}
 }
+
+// proposeFor has session s1 recommend d for keys.
+func (r *rig) proposeFor(t *testing.T, keys []string, d string) {
+	t.Helper()
+	var out proposeOut
+	if c := r.do(t, "POST", "/api/agent/propose", map[string]any{"session": "s1", "keys": keys, "disposition": d, "note": "why"}, &out); c != 200 || out.Proposed != len(keys) {
+		t.Fatalf("propose %v: %d %+v", keys, c, out)
+	}
+}
+
+// TestItemsGroupFalseIsFlat: group=false lists the view newest first
+// across its groups: a recommended old issue keeps its date's place.
+func TestItemsGroupFalseIsFlat(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+	const key = "issue:schuettc/hail#4"
+	r.proposeFor(t, []string{key}, "close")
+	l := r.viewItems(t, "view=new&group=false")
+	at := -1
+	for i, it := range l.Items {
+		if it.ID == key {
+			at = i
+		}
+		if i > 0 && it.UpdatedAt.After(l.Items[i-1].UpdatedAt) && !l.Items[i-1].UpdatedAt.IsZero() {
+			t.Fatalf("%s (%s) after %s (%s): not newest first", it.ID, it.UpdatedAt, l.Items[i-1].ID, l.Items[i-1].UpdatedAt)
+		}
+		if i > 0 && l.Items[i-1].UpdatedAt.IsZero() && !it.UpdatedAt.IsZero() {
+			t.Fatalf("%s has a time but follows %s, which has none", it.ID, l.Items[i-1].ID)
+		}
+	}
+	if at <= 0 {
+		t.Fatalf("%s at %d in %v: want it in its date's place, not first", key, at, l.Items)
+	}
+	g := r.viewItems(t, "view=new&group="+url.QueryEscape("pi:s1|close|Close it"))
+	if len(g.Items) != 1 || g.Items[0].ID != key {
+		t.Fatalf("close group lists %+v, want only %s", g.Items, key)
+	}
+}
+
+// TestNewActivityPutsIssueOnTop: a fresh comment puts its issue first in
+// new; a fresher one on another issue puts that one first.
+func TestNewActivityPutsIssueOnTop(t *testing.T) {
+	r := newRig(t)
+	r.comment(t, "issue", 5, "github-actions", time.Now().Add(time.Hour))
+	if l := r.viewItems(t, "view=new"); len(l.Items) == 0 || l.Items[0].ID != "issue:schuettc/hail#5" {
+		t.Fatalf("new starts with %v, want issue #5", l.Items)
+	}
+	r.comment(t, "issue", 4, "github-actions", time.Now().Add(2*time.Hour))
+	if l := r.viewItems(t, "view=new"); len(l.Items) == 0 || l.Items[0].ID != "issue:schuettc/hail#4" {
+		t.Fatalf("new starts with %v, want issue #4", l.Items)
+	}
+}
+
+// TestWithdrawFlatIsTheWholeView: withdrawing the flat list (group=false)
+// withdraws the whole view's agent recommendations, not none.
+func TestWithdrawFlatIsTheWholeView(t *testing.T) {
+	r := newRig(t)
+	r.attach(t, "s1")
+	r.proposeFor(t, []string{"issue:schuettc/hail#4"}, "close")
+	r.proposeFor(t, []string{"issue:schuettc/hail#5"}, "keep")
+	if n := r.withdraw(t, map[string]any{"view": "new", "group": "false"}); n != 2 {
+		t.Fatalf("withdrew %d from the flat list, want 2", n)
+	}
+}

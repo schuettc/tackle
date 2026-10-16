@@ -133,8 +133,8 @@ type ItemsView struct {
 	// withdraws.
 	AgentRecommended int `json:"agent_recommended"`
 	// Groups are an Attention view's groups (its filters apply, a group
-	// filter aside), in the order the view lists them, the not recommended
-	// last; empty for To apply and tracked.
+	// filter aside), in the order the view lists them, by their newest
+	// item; empty for To apply and tracked.
 	Groups []GroupView `json:"groups"`
 }
 
