@@ -41,9 +41,8 @@ type Fields struct {
 	OpenPRs    int
 	OpenIssues int
 
-	// Decision / policy
+	// Decision
 	HasDecision bool
-	PolicyHits  []string // names of policy rules that fired (for "policy-hit" field)
 }
 
 // Fields computes the rule-matching field set for it at time now.
@@ -91,12 +90,6 @@ func (it Item) Fields(now time.Time) Fields {
 		tip = it.LandedTips[machines[0]]
 	}
 
-	// Policy hit rule names from the computed hits slice.
-	var policyHits []string
-	for _, h := range it.Hits {
-		policyHits = append(policyHits, h.Rule)
-	}
-
 	return Fields{
 		Kind:         string(it.Kind),
 		Repo:         it.Repo,
@@ -115,7 +108,7 @@ func (it Item) Fields(now time.Time) Fields {
 		LandedHow:    it.LandedVia,
 		Tip:          tip,
 		GoneUpstream: it.goneUpstream,
-		Unpushed:     !it.signals.OldestUnpushed.IsZero(),
+		Unpushed:     !it.oldestUnpushed.IsZero(),
 		Dirty:        dirty,
 		Worktree:     worktree,
 		Archived:     it.Observed.Archived,
@@ -123,6 +116,5 @@ func (it Item) Fields(now time.Time) Fields {
 		OpenPRs:      it.openPRs,
 		OpenIssues:   it.openIssues,
 		HasDecision:  it.Decision != nil,
-		PolicyHits:   policyHits,
 	}
 }

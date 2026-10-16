@@ -75,7 +75,8 @@ type itemsFilter struct {
 }
 
 // query is f's Query (every page: no offset or limit), with a rule
-// filter's matches worked out.
+// filter's matches worked out. group=false is the flat list (Flat), not a
+// group.
 func (s *Server) query(f itemsFilter) Query {
 	view := f.View
 	if view == "" {
@@ -92,6 +93,9 @@ func (s *Server) query(f itemsFilter) Query {
 		Rule:     f.Rule,
 		Group:    f.Group,
 		Now:      s.Now(),
+	}
+	if f.Group == "false" {
+		query.Group, query.Flat = "", true
 	}
 	// Precompute rule match set if requested.
 	if query.Rule != "" {

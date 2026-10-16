@@ -16,7 +16,7 @@ func result() engine.Result {
 	return engine.Result{
 		Notices: []string{"owner Acme unreachable: SAML SSO"},
 		Items: []engine.Item{
-			{ID: "branch:schuettc/hail@feat/client", Kind: item.KindBranch, Status: item.StatusNew, Hits: []item.Hit{{Rule: "unpushed", Detail: "local-only commits for 10d on mbp:/c/hail"}}},
+			{ID: "branch:schuettc/hail@feat/client", Kind: item.KindBranch, Status: item.StatusNew, Evidence: []string{"2 unpushed on mbp:/c/hail"}},
 			{ID: "pr:elidickinson/pi-claude-bridge#97", Kind: item.KindPR, Relation: "outgoing", Status: item.StatusWaiting, Title: "side | request\n<b>x</b>",
 				URL:      "https://github.com/elidickinson/pi-claude-bridge/pull/97",
 				Decision: &item.Decision{Disposition: item.Wait, Until: "date(2026-12-01)", DecidedBy: "court", DecidedAt: now.Add(-48 * time.Hour)}},
@@ -35,7 +35,7 @@ func TestRender(t *testing.T) {
 	out := Render(result(), snaps)
 	readme := string(out["README.md"])
 	for _, want := range []string{"## Conflict", "repo:schuettc/old", "archive by b", "## New", "branch:schuettc/hail@feat/client",
-		"local-only commits", "## Waiting", "owner Acme unreachable", "1 done"} {
+		"2 unpushed on mbp:/c/hail", "## Waiting", "owner Acme unreachable", "1 done"} {
 		if !strings.Contains(readme, want) {
 			t.Errorf("README lacks %q:\n%s", want, readme)
 		}
@@ -62,18 +62,14 @@ func TestRender(t *testing.T) {
 }
 
 // TestReadmeLeftOpen: a kept item still open is in a Left open lane at the
-// end, counted on its own, never Flagged, whatever its flags.
+// end, counted on its own.
 func TestReadmeLeftOpen(t *testing.T) {
 	r := result()
 	r.Items = append(r.Items, engine.Item{ID: "pr:schuettc/hail#3", Kind: item.KindPR, Status: item.StatusLeftOpen,
-		Hits:     []item.Hit{{Rule: "incoming-no-reply", Detail: "waiting on you for 9d (> 7d)"}},
 		Decision: &item.Decision{Disposition: item.Keep, DecidedBy: "court", DecidedAt: now}})
 	readme := string(Render(r, nil)["README.md"])
 	if !strings.Contains(readme, "1 left open") || !strings.Contains(readme, "## Left open (1)") {
 		t.Fatalf("README lacks the left-open lane or count:\n%s", readme)
-	}
-	if strings.Contains(readme, "## Flagged") {
-		t.Errorf("a left-open item is flagged:\n%s", readme)
 	}
 	if strings.Index(readme, "## Left open") < strings.Index(readme, "## Waiting") {
 		t.Error("left open must come last")

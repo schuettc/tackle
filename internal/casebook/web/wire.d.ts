@@ -316,7 +316,6 @@ export interface ItemView {
   due_reason?: string;
   new_activity?: boolean;
   decision?: Decision;
-  hits?: Hit[];
   observed: Observed;
   stale?: boolean;
   locations?: string[];
@@ -613,11 +612,6 @@ export interface Decision {
   proposed_by?: string;
   rule?: string;
   conflict?: Conflict;
-}
-
-export interface Hit {
-  rule: string;
-  detail: string;
 }
 
 export interface Observed {

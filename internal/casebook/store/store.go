@@ -1,6 +1,6 @@
 // Package store is the casebook data repository: a git repo that holds decisions
 // (items/), journals (journal/), machine snapshots (machines/), views and
-// shared policy. The casebook binary is its only writer; history is linear.
+// standing rules. The casebook binary is its only writer; history is linear.
 package store
 
 import (
@@ -51,7 +51,7 @@ type meta struct {
 }
 
 // Init prepares dir as a casebook clone of remote. An existing clone at dir is
-// opened. An empty remote is bootstrapped (casebook.toml, policy.toml, README.md)
+// opened. An empty remote is bootstrapped (casebook.toml, README.md, .gitignore)
 // and pushed.
 func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
@@ -70,13 +70,8 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 		return nil, err
 	}
 	r := &Repo{Dir: dir, Version: FormatVersion}
-	pol, err := item.EncodePolicy(item.DefaultPolicy())
-	if err != nil {
-		return nil, err
-	}
 	for rel, b := range map[string][]byte{
 		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in schuettc/tackle.\nformat_version = %d\n", FormatVersion),
-		"policy.toml":   pol,
 		"README.md":     []byte(readme),
 		".gitignore":    []byte(gitignore),
 	} {
@@ -239,18 +234,6 @@ func (r *Repo) Decisions() (map[string]item.Decision, []error) {
 	return out, errs
 }
 
-// Policy reads policy.toml.
-func (r *Repo) Policy() (item.Policy, error) {
-	b, err := r.ReadFile("policy.toml")
-	if errors.Is(err, fs.ErrNotExist) {
-		return item.DefaultPolicy(), nil
-	}
-	if err != nil {
-		return item.Policy{}, err
-	}
-	return item.DecodePolicy(b)
-}
-
 // Decide validates d, writes k's decision file and commits it. It does not
 // push; call Sync.
 func (r *Repo) Decide(ctx context.Context, k item.Key, d item.Decision) error {
@@ -302,7 +285,7 @@ func (r *Repo) Log(ctx context.Context, rel string) ([]LogEntry, error) {
 	return log, nil
 }
 
-// Validate checks every decision file and policy.toml.
+// Validate checks every decision file.
 func (r *Repo) Validate() []error {
 	var errs []error
 	root := r.abs("items")
@@ -327,9 +310,6 @@ func (r *Repo) Validate() []error {
 		}
 		return nil
 	})
-	if _, err := r.Policy(); err != nil {
-		errs = append(errs, err)
-	}
 	return errs
 }
 

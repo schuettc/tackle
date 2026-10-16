@@ -45,7 +45,9 @@ import {
   lookIntoCard,
   navTargets,
   shortKey,
+  rowSub,
 } from './decide-math.ts';
+import { attentionQuery, flatFor } from './router-helpers.ts';
 import { groupKeys } from './key-layer.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { lookingLine, sessionName } from './sessions.ts';
@@ -67,7 +69,6 @@ export const selection: Selection = createSelection();
 
 // View chip ids map to API view= param values.
 const VIEWS: Chip[] = [
-  { id: 'waiting', label: 'waiting on you' },
   { id: 'new', label: 'new' },
   { id: 'due', label: 'due' },
   { id: 'proposed', label: 'proposed' },
@@ -83,7 +84,7 @@ interface Filters {
 }
 
 function emptyFilters(): Filters {
-  return { view: 'waiting', q: '' };
+  return { view: 'due', q: '' };
 }
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
@@ -91,6 +92,26 @@ const LEFT_OPEN = 'left-open';
 
 // SIDEBAR is where the list's collapse is kept ('open' or 'closed').
 const SIDEBAR = 'casebook.sidebar';
+
+// GROUPING is where the list's "group by recommendation" switch is kept
+// ('flat' or 'grouped'); the list starts grouped.
+const GROUPING = 'casebook.grouping';
+
+function storedFlat(): boolean {
+  try {
+    return localStorage.getItem(GROUPING) === 'flat';
+  } catch {
+    return false;
+  }
+}
+
+function storeFlat(flat: boolean): void {
+  try {
+    localStorage.setItem(GROUPING, flat ? 'flat' : 'grouped');
+  } catch {
+    // storage refused: the address still keeps the choice
+  }
+}
 
 // ---- URL search param helpers -----------------------------------------------
 
@@ -130,6 +151,9 @@ export function makeAttention(ctx: Ctx): Section {
   let totalItems = 0;
   let loadedItems: ItemView[] = [];
   const filters = emptyFilters();
+  // flat: the list is one list, newest first, with no group heads
+  // ("group by recommendation" off). The address and the page keep it.
+  let flat = storedFlat();
   // reloading: a first-page load is on its way; loadingMore: a next page
   // is. loads counts the first-page loads started, so a next page asked
   // for before one started is not added to the rows it replaced.
@@ -309,12 +333,6 @@ export function makeAttention(ctx: Ctx): Section {
       const kindKey = it.kind ? `${it.kind} · ${displayKey}` : displayKey;
       const left = isLeftOpen(it);
       const age = left ? leftOpenMeta(it.decision?.decided_at) : ageOf(it);
-      // In a recommendation's group the row gives its reason (the group's
-      // header names the choice).
-      const reason =
-        !left && it.group && it.proposal?.state === 'pending'
-          ? it.proposal.note || undefined
-          : undefined;
       return {
         id: it.key,
         key: kindKey,
@@ -323,18 +341,16 @@ export function makeAttention(ctx: Ctx): Section {
         title: it.title ?? keyWithoutKind(it.key),
         meta: age,
         // An item new activity brought back says so ("new activity since
-        // you left it open"), before any recommendation's reason.
-        sub:
-          [it.new_activity ? it.due_reason : undefined, reason]
-            .filter(Boolean)
-            .join(' \u00b7 ') || undefined,
+        // you left it open"), before any recommendation's reason; the flat
+        // list, with no group heads, names the recommendation too.
+        sub: rowSub(vocab, it, flat),
         selectable: true,
       };
     },
     onChip(group, id) {
       if (group === 'view') {
         filters.view = id;
-        ctx.route.go('attention', id);
+        ctx.route.go('attention', id, attentionQuery({ flat }));
         void reload();
       }
     },
@@ -350,6 +366,34 @@ export function makeAttention(ctx: Ctx): Section {
   // The groups' CSS (indented rows, one row height, the reserved
   // scrollbar) is Attention's alone.
   handle.el.classList.add('cb-attention');
+
+  // "group by recommendation": on, the list's groups with their heads and
+  // buttons; off, one list newest first, each row naming its
+  // recommendation. It sits under the view chips; the address keeps it.
+  const groupSwitch = h(
+    'button',
+    {
+      type: 'button',
+      class: 'kit-chip cb-group-switch',
+      role: 'switch',
+      onclick() {
+        flat = !flat;
+        storeFlat(flat);
+        paintSwitch();
+        ctx.route.go('attention', filters.view, attentionQuery({ flat }));
+        void reload();
+      },
+    },
+    'group by recommendation',
+  );
+  function paintSwitch(): void {
+    groupSwitch.setAttribute('aria-checked', String(!flat));
+    groupSwitch.classList.toggle('on', !flat);
+  }
+  paintSwitch();
+  handle.el
+    .querySelector('.kit-chips[data-group="view"]')
+    ?.after(h('div', { class: 'cb-list-tools' }, groupSwitch));
 
   // ---- the list collapses to a rail -----------------------------------------
 
@@ -420,6 +464,7 @@ export function makeAttention(ctx: Ctx): Section {
       limit: String(PAGE_SIZE),
     };
     if (filters.q) p['q'] = filters.q;
+    if (flat) p['group'] = 'false';
     return p;
   }
 
@@ -529,13 +574,15 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // setRows renders the items that need a decision, under their groups'
-  // headers (a collapsed group's header alone), and, once every page of
-  // them is loaded, the left-open group last: its header and (expanded)
-  // its muted rows.
+  // headers (a collapsed group's header alone; flat, every loaded row and
+  // no group heads), and, once every page of them is loaded, the
+  // left-open group last: its header and (expanded) its muted rows.
   function setRows(): void {
     const withLeft = offset >= totalItems && leftOpenTotal > 0;
     const left = withLeft && !collapsed.has(LEFT_OPEN) ? leftOpen : [];
-    const open = loadedItems.filter((it) => !collapsed.has(it.group));
+    const open = flat
+      ? loadedItems
+      : loadedItems.filter((it) => !collapsed.has(it.group));
     shown = [...open, ...left];
     handle.setItems(shown);
     const rowEls = handle.el.querySelectorAll<HTMLElement>(
@@ -561,7 +608,9 @@ export function makeAttention(ctx: Ctx): Section {
       const says = lookingLine(it.looking);
       if (says) col.append(h('div', { class: 'cb-row-looking' }, says));
     });
-    placeGroupHeads(open, rowEls);
+    handle.el.classList.toggle('cb-flat', flat);
+    if (flat) heads = [];
+    else placeGroupHeads(open, rowEls);
     paintRail();
     refreshNav();
     if (!withLeft) return;
@@ -578,18 +627,36 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- « ‹ › »: the open item's place in the list ---------------------------
 
   // navOrder is the list's loaded rows in group order, a collapsed group's
-  // included, the left-open group last once every page is loaded.
+  // included, the left-open group last once every page is loaded. Flat,
+  // the rows are one group (the view).
   function navOrder(): { key: string; group: string }[] {
-    const rows = loadedItems.map((it) => ({ key: it.key, group: it.group }));
+    const rows = loadedItems.map((it) => ({
+      key: it.key,
+      group: flat ? '' : it.group,
+    }));
     if (offset >= totalItems && leftOpenTotal > 0)
       rows.push(...leftOpen.map((it) => ({ key: it.key, group: LEFT_OPEN })));
     return rows;
   }
 
-  // navGroups is the view's groups, the left-open group's with them.
+  // navGroups is the view's groups, the left-open group's with them. Flat,
+  // the view is one group.
   function navGroups(): GroupView[] {
+    const listed: GroupView[] = flat
+      ? [
+          {
+            id: '',
+            source: '',
+            disposition: '',
+            label: viewLabel(),
+            outward: false,
+            many: '',
+            total: totalItems,
+          },
+        ]
+      : groups;
     return [
-      ...groups,
+      ...listed,
       {
         id: LEFT_OPEN,
         source: '',
@@ -1517,7 +1584,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- the decide step: decide, move on, undo ------------------------------
 
-  // viewLabel is the view's name in the summary ("waiting on you").
+  // viewLabel is the view's name in the summary ("due").
   function viewLabel(): string {
     return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
   }
@@ -1861,9 +1928,9 @@ export function makeAttention(ctx: Ctx): Section {
     })
     .catch(() => {});
 
-  // ---- show(sub) -- router hook --------------------------------------------
+  // ---- show(sub, query) -- router hook -------------------------------------
 
-  function show(sub: string): void {
+  function show(sub: string, query: string): void {
     // Becoming active: the composer shows Attention's selection or open item.
     const wasActive = active;
     active = true;
@@ -1874,9 +1941,13 @@ export function makeAttention(ctx: Ctx): Section {
       filters.q = urlQ;
       handle.setSearch(urlQ);
     }
-    const view = sub || 'waiting';
+    const view = sub || 'due';
     if (VIEWS.some((v) => v.id === view)) {
-      // Known view chip: switch to it.
+      // Known view chip: switch to it. An address naming the view says
+      // whether the list is flat; #/attention keeps the stored choice.
+      flat = flatFor(sub !== '', query, storedFlat());
+      storeFlat(flat);
+      paintSwitch();
       filters.view = view;
       handle.setChips('view', viewChips(filters.view));
       showReadEmpty();

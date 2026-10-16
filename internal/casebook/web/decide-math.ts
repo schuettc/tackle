@@ -11,6 +11,7 @@ import type {
   CountWords,
   DecisionVocabView,
   GroupView,
+  ItemView,
   LookIntoVocab,
   NotNowForm,
   Session,
@@ -280,6 +281,32 @@ export function recommendLine(
 ): string {
   const who = vocab.recommends.replaceAll('{session}', sessionName(by, source));
   return `${who} ${choiceLabel(vocab, key, disposition)}`;
+}
+
+/**
+ * rowSub is an Attention row's second line: why new activity brought it
+ * back, then its pending recommendation's reason. The flat list has no
+ * group heads, so there the reason follows the choice ("Close it · stale").
+ * A left-open row has none.
+ */
+export function rowSub(
+  vocab: DecisionVocabView | null,
+  it: ItemView,
+  flat: boolean,
+): string | undefined {
+  const p =
+    it.status !== 'left-open' && it.proposal?.state === 'pending'
+      ? it.proposal
+      : undefined;
+  return (
+    [
+      it.new_activity ? it.due_reason : undefined,
+      p && flat ? choiceLabel(vocab, it.key, p.disposition) : undefined,
+      p?.note || undefined,
+    ]
+      .filter(Boolean)
+      .join(' \u00b7 ') || undefined
+  );
 }
 
 // ---- the groups of an Attention view ----------------------------------------

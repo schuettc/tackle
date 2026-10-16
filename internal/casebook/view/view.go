@@ -42,9 +42,6 @@ func decisionText(d *item.Decision) string {
 
 func why(it engine.Item) string {
 	var parts []string
-	for _, h := range it.Hits {
-		parts = append(parts, h.Rule+": "+h.Detail)
-	}
 	if it.Decision != nil && it.Decision.Conflict != nil {
 		c := it.Decision.Conflict
 		parts = append(parts, fmt.Sprintf("raced with %s by %s", c.Disposition, c.DecidedBy))
@@ -78,12 +75,9 @@ func readme(r engine.Result) []byte {
 		{"Conflict", func(it engine.Item) bool { return it.Status == item.StatusConflict }},
 		{"Drift", func(it engine.Item) bool { return it.Status == item.StatusDrift }},
 		{"Due", func(it engine.Item) bool { return it.Status == item.StatusDue }},
-		{"Flagged", func(it engine.Item) bool {
-			return len(it.Hits) > 0 && it.Status != item.StatusNew && it.Status != item.StatusConflict && it.Status != item.StatusDrift && it.Status != item.StatusDue && it.Status != item.StatusLeftOpen
-		}},
 		{"New", func(it engine.Item) bool { return it.Status == item.StatusNew }},
-		{"Waiting", func(it engine.Item) bool { return it.Status == item.StatusWaiting && len(it.Hits) == 0 }},
-		{"To apply", func(it engine.Item) bool { return it.Status == item.StatusToApply && len(it.Hits) == 0 }},
+		{"Waiting", func(it engine.Item) bool { return it.Status == item.StatusWaiting }},
+		{"To apply", func(it engine.Item) bool { return it.Status == item.StatusToApply }},
 		// Kept and still open: no decision needed, listed last.
 		{"Left open", func(it engine.Item) bool { return it.Status == item.StatusLeftOpen }},
 	}

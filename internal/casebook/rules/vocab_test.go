@@ -1,14 +1,15 @@
 package rules
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestVocabularyHasEveryFieldWithOps(t *testing.T) {
 	fields := Vocabulary()
-	// §4.1 lists 25 fields; each must have at least one operator.
-	if len(fields) != 25 {
-		t.Errorf("got %d fields, want at least 24 (spec §4.1)", len(fields))
+	// 24 fields; each must have at least one operator.
+	if len(fields) != 24 {
+		t.Errorf("got %d fields, want 24", len(fields))
 	}
 	names := make(map[string]bool, len(fields))
 	for _, f := range fields {
@@ -21,7 +22,7 @@ func TestVocabularyHasEveryFieldWithOps(t *testing.T) {
 		}
 	}
 	// spot-check that core fields are present
-	for _, want := range []string{"kind", "landed", "title", "age", "policy-hit"} {
+	for _, want := range []string{"kind", "landed", "title", "age"} {
 		if !names[want] {
 			t.Errorf("field %q missing from vocabulary", want)
 		}
@@ -118,5 +119,13 @@ func TestCountAndBoolFieldsValidateValue(t *testing.T) {
 		if err := ValidateCondition(c); err != nil {
 			t.Errorf("%s %s %q: unexpected error %v", c.Field, c.Op, c.Value, err)
 		}
+	}
+}
+
+// TestPolicyHitIsGone: the age flags are gone, and the field that read them.
+func TestPolicyHitIsGone(t *testing.T) {
+	err := ValidateCondition(Condition{Field: "policy-hit", Op: "is", Value: "dormant"})
+	if err == nil || !strings.Contains(err.Error(), `unknown field "policy-hit"`) {
+		t.Fatalf("got %v", err)
 	}
 }

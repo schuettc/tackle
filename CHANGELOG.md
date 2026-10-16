@@ -4,6 +4,18 @@ All notable changes to `scratch`, `proj`, `casebook`, `cull` and `sift` are docu
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.6.0] - 2026-10-16
+
+### Changed
+- Every Attention list shows the most recently active items first: a pull request's or issue's last update on GitHub (a comment counts), a repo's last push, a branch's last commit. An issue a bot comments on every day comes back to the top each time.
+- Groups are ordered by their newest item, not their size, and items are newest first in each group. Left open stays last and collapsed.
+- "group by recommendation" switches the list between groups and one flat list, newest first, each row naming its recommendation, with no group buttons. The page remembers the choice and the address keeps it (`#/attention/new?flat`), so a bookmark opens either list. `GET /api/items` takes `group=false` for the flat order.
+- The page opens on due; old links to the board or to waiting on you land on due. `casebook_next` goes through due, then new.
+
+### Removed
+- Age flags: the four policy rules (outgoing PR stale, incoming with no reply, unpushed commits, dormant repo), `policy.toml` and the `policy-hit` rule condition. The next write to casebook-data deletes `policy.toml` in one commit; an older casebook reads a missing file as its defaults. casebook-data's README loses its Flagged lane.
+- The "waiting on you" view, its count, and `waiting` in `casebook_open` and `casebook_attention`. "Waiting" now means only a Not now decision.
+
 ## [casebook 0.5.0] - 2026-10-11
 
 ### Changed

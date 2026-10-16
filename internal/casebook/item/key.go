@@ -1,5 +1,5 @@
 // Package item is the casebook's pure data model: item keys, decisions, until
-// conditions, statuses and policies. It does no I/O.
+// conditions and statuses. It does no I/O.
 package item
 
 import (

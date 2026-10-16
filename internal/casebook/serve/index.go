@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -52,7 +53,7 @@ func (x *Index) Item(key string) (engine.Item, bool) {
 // InAttention reports whether key is currently in the engine's attention set.
 // Items whose earlier decision has expired and returned to attention (e.g.
 // a wait that lapsed) are included. This uses the engine's own Attention()
-// criteria: status new, due, drift, or conflict, or any policy hit.
+// criteria: status new, due, drift, or conflict.
 func (x *Index) InAttention(key string) bool {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
@@ -66,7 +67,6 @@ func (x *Index) InAttention(key string) bool {
 
 // Views of the attention list (casebook workbench spec §3.2).
 const (
-	ViewWaiting  = "waiting"  // policy: incoming, no reply from you
 	ViewNew      = "new"      // undecided
 	ViewDue      = "due"      // due, drift, conflict
 	ViewProposed = "proposed" // a proposal is pending
@@ -91,8 +91,9 @@ type Query struct {
 	Bot      string          // "bot" or "human"
 	Age      string          // casebook duration (<n>h, <n>d, <n>w); matches items older than the duration
 	Rule     string          // rule id whose matched keys are in MatchSet
-	MatchSet map[string]bool // precomputed by getItems when Rule != ""
+	MatchSet map[string]bool // the keys a rule matched (Rule != ""): only those items; nil: no such filter
 	Group    string          // a group's ID (GroupView.ID): only its items
+	Flat     bool            // group=false: one list, newest first; items keep their Group and Groups still count
 	Now      time.Time       // clock for the age filter; zero falls back to time.Now()
 	Offset   int
 	Limit    int
@@ -100,10 +101,6 @@ type Query struct {
 
 func inView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
-	case ViewWaiting:
-		// Someone else's activity newer than a Leave it open or a Not now
-		// waits on the user too.
-		return it.NewActivity || waitingHit(it)
 	case ViewNew:
 		return it.Status == item.StatusNew
 	case ViewDue:
@@ -117,24 +114,12 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	return true
 }
 
-func waitingHit(it engine.Item) bool {
-	for _, h := range it.Hits {
-		if h.Rule == "incoming-no-reply" {
-			return true
-		}
-	}
-	return false
-}
-
 // leftOpenInView reports whether an item left open belongs to an Attention
-// view's left-open group: the views it would be in undecided (new, and
-// waiting when the policy flags it), proposed when it has a proposal, and
-// all. Due is for decisions that came back; To apply and tracked have no
+// view's left-open group: the view it would be in undecided (new),
+// proposed when it has a proposal, and all. Due is for decisions that came back; To apply and tracked have no
 // left-open group.
 func leftOpenInView(view string, it engine.Item, pending map[string]propose.Proposal) bool {
 	switch view {
-	case ViewWaiting:
-		return waitingHit(it)
 	case ViewNew, ViewAll:
 		return true
 	case ViewProposed:
@@ -250,18 +235,18 @@ func matches(q Query, it engine.Item, group string) bool {
 }
 
 // listed is every item q's view lists (every page), each with its group,
-// in key order, and the view's groups in the order it lists them: the
-// biggest first, ties by the disposition's place among the kind's choices
-// (the earliest a kind offers it), then by label; the not recommended
-// last. The caller holds x.mu.
+// and the view's groups in the order it lists them. An Attention view's
+// items are newest first (engine.NewerFirst) and its groups go by their
+// newest item; To apply and tracked keep key order. The caller holds x.mu.
 func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView, []GroupView) {
-	src := x.res.Attention()
-	if !grouped(q.View) {
-		src = x.res.Items
+	src := x.res.Items
+	if grouped(q.View) {
+		src = slices.Clone(x.res.Attention())
+		sort.SliceStable(src, func(i, j int) bool { return engine.NewerFirst(src[i], src[j]) })
 	}
 	var out []ItemView
 	groups := map[string]*GroupView{}
-	place := map[string]int{}
+	var gs []string
 	for _, it := range src {
 		if !inView(q.View, it, pending) {
 			continue
@@ -282,54 +267,31 @@ func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView
 		}
 		if groups[g.ID] == nil {
 			groups[g.ID] = &g
-			place[g.ID] = len(item.Choices(it.Kind))
+			gs = append(gs, g.ID)
 		}
 		groups[g.ID].Total++
-		if _, i := choiceOf(it.Kind, item.Disposition(g.Disposition)); i >= 0 && i < place[g.ID] {
-			place[g.ID] = i
-		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	gs := make([]GroupView, 0, len(groups))
-	for _, g := range groups {
-		gs = append(gs, *g)
+	views := make([]GroupView, 0, len(gs))
+	for _, id := range gs {
+		views = append(views, *groups[id])
 	}
-	sort.Slice(gs, func(i, j int) bool {
-		a, b := gs[i], gs[j]
-		switch {
-		case (a.ID == GroupNone) != (b.ID == GroupNone):
-			return b.ID == GroupNone
-		case a.Total != b.Total:
-			return a.Total > b.Total
-		case place[a.ID] != place[b.ID]:
-			return place[a.ID] < place[b.ID]
-		case a.Label != b.Label:
-			return a.Label < b.Label
-		}
-		return a.ID < b.ID
-	})
-	return out, gs
+	return out, views
 }
 
 // List returns the page of items in a view and the view's total. An
-// Attention view lists its items group by group (Groups' order), the items
-// new activity brought back first in each group, then key order. To apply
-// and tracked keep key order.
+// Attention view lists its items group by group (Groups' order), newest
+// first in each; with q.Flat, newest first across its groups. To apply and
+// tracked keep key order.
 func (x *Index) List(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	out, gs := x.listed(q, pending)
-	if grouped(q.View) {
+	if grouped(q.View) && !q.Flat {
 		order := make(map[string]int, len(gs))
 		for i, g := range gs {
 			order[g.ID] = i
 		}
-		sort.SliceStable(out, func(i, j int) bool {
-			if a, b := order[out[i].Group], order[out[j].Group]; a != b {
-				return a < b
-			}
-			return out[i].NewActivity && !out[j].NewActivity
-		})
+		sort.SliceStable(out, func(i, j int) bool { return order[out[i].Group] < order[out[j].Group] })
 	}
 	return pageOf(out, q)
 }
@@ -366,7 +328,7 @@ func (x *Index) Keys(q Query, pending map[string]propose.Proposal) []string {
 
 // LeftOpen returns the page of an Attention view's left-open group (q's
 // filters apply; its Offset and Limit page the group) and the group's
-// total: the kept items still open that the view would list, in key order.
+// total: the kept items still open that the view would list, newest first.
 // They need no decision, so List and Counts leave them out.
 func (x *Index) LeftOpen(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
 	if q.View == ViewToApply || q.View == ViewTracked {
@@ -386,7 +348,7 @@ func (x *Index) LeftOpen(q Query, pending map[string]propose.Proposal) ([]ItemVi
 		}
 		out = append(out, newItemView(it, prop))
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	sort.SliceStable(out, func(i, j int) bool { return engine.NewerFirst(out[i].Item, out[j].Item) })
 	return pageOf(out, q)
 }
 
@@ -409,7 +371,7 @@ func (x *Index) Counts(pending map[string]propose.Proposal) map[string]int {
 	defer x.mu.RUnlock()
 	c := map[string]int{}
 	for _, it := range x.res.Attention() {
-		for _, v := range []string{ViewWaiting, ViewNew, ViewDue, ViewProposed, ViewAll} {
+		for _, v := range []string{ViewNew, ViewDue, ViewProposed, ViewAll} {
 			if inView(v, it, pending) {
 				c[v]++
 			}

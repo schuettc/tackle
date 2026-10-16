@@ -1175,15 +1175,14 @@ func TestAgentProposeRefusesUnknownKey(t *testing.T) {
 // ---- fix round 2: issue 4 — lapsed waits return to attention ---------------
 
 // TestLapsedWaitReturnedToAttention verifies that an item decided "wait until
-// <past>" returns to the "waiting on you" view (incoming-no-reply policy hit)
-// and that agentPropose accepts a proposal on it.
+// <past>" returns to the due view and that agentPropose accepts a proposal
+// on it.
 func TestLapsedWaitReturnedToAttention(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
 
-	// issue:schuettc/hail#5 is an open incoming issue by carol (2026-08-03),
-	// with no reply from the user. Decide it with a wait until a past date so
-	// it lapses immediately. The engine's "now" is 2026-09-27 (from apptest).
+	// issue:schuettc/hail#5 is an open incoming issue by carol (2026-08-03).
+	// Decide it with a wait until a past date so it lapses immediately. The engine's "now" is 2026-09-27 (from apptest).
 	var dec map[string]any
 	if c := r.do(t, "POST", "/api/decide", map[string]any{
 		"keys":        []string{"issue:schuettc/hail#5"},
@@ -1194,38 +1193,25 @@ func TestLapsedWaitReturnedToAttention(t *testing.T) {
 	}
 
 	// After the synchronous index rebuild, issue#5's until condition is met
-	// (2026-01-01 < 2026-09-27), so its status is StatusDue. With the lapsed-
-	// wait Undecided fix, signals.Undecided is true and incoming-no-reply fires.
-	// The item must appear in the "waiting on you" view.
+	// (2026-01-01 < 2026-09-27), so its status is StatusDue: it is in the due
+	// view.
 	var items struct {
 		Items []struct {
-			Key  string `json:"key"`
-			Hits []struct {
-				Rule string `json:"rule"`
-			} `json:"hits"`
+			Key string `json:"key"`
 		} `json:"items"`
 		Total int `json:"total"`
 	}
-	if c := r.do(t, "GET", "/api/items?view=waiting", nil, &items); c != 200 {
+	if c := r.do(t, "GET", "/api/items?view=due", nil, &items); c != 200 {
 		t.Fatalf("items: %d", c)
 	}
 	var foundItem bool
-	var hasHit bool
 	for _, it := range items.Items {
 		if it.Key == "issue:schuettc/hail#5" {
 			foundItem = true
-			for _, h := range it.Hits {
-				if h.Rule == "incoming-no-reply" {
-					hasHit = true
-				}
-			}
 		}
 	}
 	if !foundItem {
-		t.Errorf("lapsed-wait issue#5 not in 'waiting on you' view (total=%d)", items.Total)
-	}
-	if foundItem && !hasHit {
-		t.Errorf("lapsed-wait issue#5 missing incoming-no-reply policy hit")
+		t.Errorf("lapsed-wait issue#5 not in the due view (total=%d)", items.Total)
 	}
 
 	// agentPropose must accept a proposal on the lapsed-wait item (it is in

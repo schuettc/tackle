@@ -4,8 +4,8 @@
 //
 // One serve of its own (serve.mjs: --no-open, CASEBOOK_NO_BROWSER=1, the
 // hermetic git guard, the fake gh) with a repo of its own: issues and a pull
-// request by other people, so they wait on Court. The fixture's own waiting
-// items are decided first, so "waiting on you" holds this repo's items only.
+// request by other people, so they wait on Court. The fixture's own new
+// items are decided first, so "new" holds this repo's items only.
 //
 //   the question, from serve, per kind
 //   the recommendation card above the choice cards; a accepts it
@@ -67,6 +67,16 @@
 //
 // And a group bigger than a page: "Close all 250" posts all 250 ids.
 //
+// And "group by recommendation" (casebook 0.6), on a serve and repo of their
+// own, issues updated in number order (newest last):
+//
+//   the switch shows under the view chips, on; the first group is serve's
+//     first, the not recommended (its newest item is the newest)
+//   off: the address says ?flat, no group heads, the rows serve's flat
+//     order (group=false), a recommended row naming its choice
+//   a reload keeps it off; #/attention keeps the stored choice;
+//     #/attention/new is grouped again; #/attention/waiting lands on due
+//
 // And a new recommendation on the open item (casebook 0.4.5), on a serve
 // and repo of their own:
 //
@@ -102,7 +112,7 @@
 // item recommended:
 //
 //   the summary: "5 items, all recommended by ‹session›" and "discard all
-//     5"; its confirm, "Discard 5 recommendations in waiting on you? …",
+//     5"; its confirm, "Discard 5 recommendations in new? …",
 //     with discard and cancel; cancel changes nothing
 //   discard: the rows lose their reasons, one group is left (the not
 //     recommended), nothing is decided, and casebook_next hands the items
@@ -322,24 +332,99 @@ function opened(t, pg, key) {
   );
 }
 
+// newestInKeyOrder gives a seed's issues and pull requests updated_at times
+// that fall in key order (the first key the newest, a minute apart), so a
+// list newest first reads in key order, as these scenarios walk it; the
+// keys in first come before the rest, in first's order. The list's order is
+// serve's (newest first); flatSeed's times rise with the number, so the
+// flat scenario sees an order key order isn't.
+function newestInKeyOrder(seeded, first = []) {
+  const all = [];
+  for (const r of seeded.seedRepos ?? []) {
+    for (const [kind, list] of [
+      ['pr', r.prs ?? []],
+      ['issue', r.issues ?? []],
+    ])
+      for (const it of list)
+        all.push({ key: `${kind}:${it.repo}#${it.number}`, it });
+  }
+  const rank = (k) => (first.includes(k) ? first.indexOf(k) : first.length);
+  all.sort(
+    (a, b) =>
+      rank(a.key) - rank(b.key) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  );
+  const top = Date.parse('2026-09-28T00:00:00Z');
+  all.forEach(({ it }, i) => {
+    it.updated_at = new Date(top - i * 60_000).toISOString();
+  });
+  return seeded;
+}
+
 export async function decideScenarios(shared, t) {
   for (const [name, scenario, seeded] of [
-    ['the decide step', decideScenario, seed()],
-    ['the groups', groupsScenario, groupsSeed()],
-    ['a group bigger than a page', manyScenario, manySeed()],
-    ['move-on past the first page', pagesScenario, pagesSeed()],
+    ['the decide step', decideScenario, newestInKeyOrder(seed())],
+    [
+      'the groups',
+      groupsScenario,
+      // The groups newest first: Close it (#10 newest), Leave it open,
+      // Merge it, then the not recommended.
+      newestInKeyOrder(groupsSeed(), [
+        ...[10, 11, 12, 9].map(GPR),
+        ...[2, 4, 6].map(GISSUE),
+        GPR(13),
+      ]),
+    ],
+    ['a group bigger than a page', manyScenario, newestInKeyOrder(manySeed())],
+    [
+      'move-on past the first page',
+      pagesScenario,
+      newestInKeyOrder(pagesSeed()),
+    ],
     [
       'the closing comment and the GitHub link',
       closeCommentScenario,
-      closeSeed(),
+      newestInKeyOrder(closeSeed()),
     ],
-    ['Leave it open stays in the list', leftOpenScenario, leftOpenSeed()],
-    ['a new recommendation on the open item', openRecScenario, openRecSeed()],
-    ['ask the session to look into it', lookIntoScenario, lookIntoSeed()],
-    ['discard recommendations', discardScenario, discardSeed()],
-    ['the steady list', steadyScenario, steadySeed()],
-    ['the item page and its navigation', navScenario, navSeed()],
-    ['reload keeps 600 rows', reloadPagesScenario, reloadPagesSeed()],
+    [
+      'Leave it open stays in the list',
+      leftOpenScenario,
+      newestInKeyOrder(leftOpenSeed()),
+    ],
+    [
+      'a new recommendation on the open item',
+      openRecScenario,
+      newestInKeyOrder(openRecSeed()),
+    ],
+    [
+      'ask the session to look into it',
+      lookIntoScenario,
+      newestInKeyOrder(lookIntoSeed()),
+    ],
+    [
+      'discard recommendations',
+      discardScenario,
+      newestInKeyOrder(discardSeed()),
+    ],
+    ['the steady list', steadyScenario, newestInKeyOrder(steadySeed())],
+    [
+      'the item page and its navigation',
+      navScenario,
+      // The groups newest first in their size order (Stop tracking it,
+      // Close, Leave it open, Merge, the not recommended), key order in
+      // each.
+      newestInKeyOrder(navSeed(), [
+        ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(NISSUE).sort(),
+        ...[...[21, 22, 23, 24, 25].map(NPR), LPR(42)].sort(),
+        ...[13, 14, 15].map(NISSUE).sort(),
+        ...[26, 27].map(NPR),
+      ]),
+    ],
+    [
+      'reload keeps 600 rows',
+      reloadPagesScenario,
+      newestInKeyOrder(reloadPagesSeed()),
+    ],
+    ['group by recommendation, or one list', flatScenario, flatSeed()],
   ]) {
     const context = await shared.browser().newContext({
       viewport: { width: 1600, height: 900 },
@@ -371,18 +456,18 @@ async function decideScenario(context, t, s) {
 
   // Only this repo's items wait on Court: the fixture's stop being tracked
   // first (kept, they would stay in the list's left-open group).
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${REPO}`));
+    .filter((k) => !k.includes(`/${REPO}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
-  const waiting = (
-    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+  const listed = (
+    (await api('GET', '/api/items?view=new&limit=500')).items ?? []
   ).map((it) => it.key);
   checkList(
-    'waiting on you holds the seeded issues and pull request, in key order',
-    waiting,
+    'new holds the seeded issues and pull request, newest first',
+    listed,
     [1, 2, 3, 4, 5, 6, 8, 9].map(ISSUE).concat([PR(7)]),
   );
 
@@ -412,7 +497,7 @@ async function decideScenario(context, t, s) {
     }).observe(document.documentElement, { childList: true, subtree: true });
   });
   const sheets = () => pg.evaluate(() => window.__sheets);
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -926,13 +1011,13 @@ async function decideScenario(context, t, s) {
     '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]',
   );
   check(
-    'deciding the last item shows "Nothing left in waiting on you."',
+    'deciding the last item shows "Nothing left in new."',
     await until(
       pg,
       () =>
         document.querySelector(
           '.kit-app > .kit-read:not([hidden]) .cb-read-done',
-        )?.textContent === 'Nothing left in waiting on you.',
+        )?.textContent === 'Nothing left in new.',
       undefined,
       8000,
     ),
@@ -966,6 +1051,10 @@ async function decideScenario(context, t, s) {
       `a sync found ${GONE} doesn't exist: issue #4 is due ("${it.status}", "${it.due_reason ?? ''}")`,
       it.status === 'due' && it.due_reason === WHY,
     );
+    // Due now, it is in the due view (not in new).
+    await pg.evaluate(() => {
+      location.hash = '#/attention/due';
+    });
     await row(pg, ISSUE(4)).waitFor({ timeout: 8000 });
     await row(pg, ISSUE(4)).click();
     await opened(t, pg, ISSUE(4));
@@ -1160,8 +1249,8 @@ async function groupsScenario(context, t, s) {
   const ALL = [...CLOSE, GPR(13), ...KEEP, ...NONE];
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
     .filter((k) => !ALL.includes(k));
   if (others.length)
@@ -1183,17 +1272,17 @@ async function groupsScenario(context, t, s) {
   await agent.propose(A, KEEP, 'keep', 'active');
   await agent.propose(A, [GPR(13)], 'merge', 'green and reviewed');
   const idOf = {};
-  for (const it of (await api('GET', '/api/items?view=waiting&limit=500'))
-    .items ?? [])
+  for (const it of (await api('GET', '/api/items?view=new&limit=500')).items ??
+    [])
     if (it.proposal) idOf[it.key] = it.proposal.id;
   const serveHeads = async () =>
-    ((await api('GET', '/api/items?view=waiting&limit=1')).groups ?? []).map(
+    ((await api('GET', '/api/items?view=new&limit=1')).groups ?? []).map(
       (g) =>
         `${g.label} | ${g.outward ? 'goes to To apply first' : ''} | ${g.total}`,
     );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -1227,7 +1316,7 @@ async function groupsScenario(context, t, s) {
       await listSequence(pg, ALL),
       [
         'H:Close it without merging',
-        ...[...CLOSE].sort(), // serve's key order: #10 before #9
+        ...[...CLOSE].sort(), // newest first: #10 before #9
         'H:Leave it open',
         ...KEEP,
         'H:Merge it',
@@ -1500,9 +1589,14 @@ async function groupsScenario(context, t, s) {
   {
     const ok = await until(
       pg,
+      // Settled: PR #13 decided (not back among the not recommended while
+      // serve's index catches up with the accept).
       (list) =>
         !document.querySelector(`${list} .cb-group[data-d="merge"]`) &&
-        document.querySelectorAll(`${list} .cb-group`).length === 3,
+        document.querySelectorAll(`${list} .cb-group`).length === 3 &&
+        document.querySelector(
+          `${list} .cb-group[data-group="none"] .cb-group-n`,
+        )?.textContent === '3',
       LIST,
       8000,
     );
@@ -1512,9 +1606,10 @@ async function groupsScenario(context, t, s) {
       got,
       await serveHeads(),
     );
+    // Close's one left (#12) is newer than Leave it open's newest (#2).
     checkList('and serve agrees', got, [
-      'Leave it open |  | 3',
       'Close it without merging | goes to To apply first | 1',
+      'Leave it open |  | 3',
       'Not recommended yet |  | 3',
     ]);
   }
@@ -1551,8 +1646,8 @@ async function groupsScenario(context, t, s) {
       `with ${aName} attached, the not recommended offer the ask and the others Look into`,
       heads.map((g) => `${g.label}: ${g.acts.join(' / ')}`),
       [
-        'Leave it open: Leave all 3 open / Look into all 3 / Discard all 3',
         'Close it without merging: Close it / Look into it / Discard it',
+        'Leave it open: Leave all 3 open / Look into all 3 / Discard all 3',
         `Not recommended yet: Ask ${aName} to recommend all 3`,
       ],
     );
@@ -1647,9 +1742,9 @@ async function discardScenario(context, t, s) {
   const ALL = [...ISSUES, ...PRS];
 
   // Only this repo's issues and PRs need a decision: every other
-  // undecided item (waiting, due, new; the repo itself too) stops being
+  // undecided item (due, new; the repo itself too) stops being
   // tracked, so the summary's counts are theirs.
-  for (const v of ['waiting', 'due', 'new']) {
+  for (const v of ['due', 'new']) {
     const l = await api('GET', `/api/items?view=${v}&limit=500`);
     const others = (l.items ?? [])
       .map((it) => it.key)
@@ -1668,7 +1763,7 @@ async function discardScenario(context, t, s) {
   await recommendAll();
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -1746,7 +1841,7 @@ async function discardScenario(context, t, s) {
 
   // ---- cancel changes nothing ---------------------------------------------
   const CONFIRM5 =
-    'Discard 5 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
+    'Discard 5 recommendations in new? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
   await pg.click(`${LIST} .cb-discard-all`);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
   {
@@ -1868,7 +1963,7 @@ async function discardScenario(context, t, s) {
     check(
       `groups: discard confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
       sh?.says ===
-        'Discard 2 recommendations in waiting on you? Their items go back to the agent to recommend again. Nothing is decided or rejected.' &&
+        'Discard 2 recommendations in new? Their items go back to the agent to recommend again. Nothing is decided or rejected.' &&
         JSON.stringify(sh.btns) === JSON.stringify(['discard', 'cancel']),
     );
   }
@@ -2196,16 +2291,16 @@ async function pagesScenario(context, t, s) {
       .decision ?? null;
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${PAGES}`));
+    .filter((k) => !k.includes(`/${PAGES}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
-  const view = await api('GET', '/api/items?view=waiting&limit=500');
+  const view = await api('GET', '/api/items?view=new&limit=500');
   const keys = (view.items ?? []).map((it) => it.key);
   check(
-    `waiting on you holds all ${PAGES_N} issues, more than a page (${view.total})`,
+    `new holds all ${PAGES_N} issues, more than a page (${view.total})`,
     view.total === PAGES_N && keys.length === PAGES_N,
   );
   // Page two starts at 200: decide its sixth row; its seventh opens.
@@ -2213,7 +2308,7 @@ async function pagesScenario(context, t, s) {
   const expected = keys[206];
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2259,13 +2354,18 @@ async function pagesScenario(context, t, s) {
   // The last row of page one: › points past the loaded rows, so the next
   // page loads first and its first row opens, with its place in the group.
   const fresh = (
-    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+    (await api('GET', '/api/items?view=new&limit=500')).items ?? []
   ).map((it) => it.key);
   const READ = '.kit-app > .kit-read:not([hidden])';
   const pg2 = await context.newPage();
-  await pg2.goto(`${s.url}#/item/${encodeURIComponent(fresh[199])}`, {
+  // The list opens on due: show new's list first, then the item.
+  await pg2.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
+  await pg2.waitForSelector('.kit-row', { timeout: 8000 });
+  await pg2.evaluate((k) => {
+    location.hash = '#/item/' + encodeURIComponent(k);
+  }, fresh[199]);
   await opened(t, pg2, fresh[199]);
   await until(pg2, (read) => !!document.querySelector(`${read} .cb-nav`), READ);
   const navNow = () =>
@@ -2385,15 +2485,15 @@ async function closeCommentScenario(context, t, s) {
   const FIELD = `${READ} .cb-close-comment`;
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${CC}`));
+    .filter((k) => !k.includes(`/${CC}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2804,14 +2904,14 @@ function loCounts(t, pg, n) {
 
 // listState reads the shown list: each row's key (its kicker), whether it is
 // in the left-open group, its meta and sub; the group's header ("label ·
-// count", and how many rows come before it); and the waiting chip's count.
+// count", and how many rows come before it); and the new chip's count.
 function listState(pg) {
   return pg.evaluate(() => {
     const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
     const body = list?.querySelector('.kit-rows');
     const kids = [...(body?.children ?? [])];
     const head = list?.querySelector('.cb-group[data-group="left-open"]');
-    const chip = list?.querySelector('.kit-chip[data-id="waiting"] .kit-n');
+    const chip = list?.querySelector('.kit-chip[data-id="new"] .kit-n');
     return {
       rows: kids
         .filter((el) => el.classList.contains('kit-row'))
@@ -2854,16 +2954,16 @@ async function leftOpenScenario(context, t, s) {
 
   // Only this repo's items wait on Court: the fixture's stop being tracked
   // (kept, they would stay in the list, left open).
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${LO}`));
+    .filter((k) => !k.includes(`/${LO}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
 
   const pg = await context.newPage();
   const load = async () => {
-    await pg.goto(`${s.url}#/attention/waiting`, {
+    await pg.goto(`${s.url}#/attention/new`, {
       waitUntil: 'domcontentloaded',
     });
     await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2873,12 +2973,12 @@ async function leftOpenScenario(context, t, s) {
   {
     const st = await listState(pg);
     checkList(
-      'waiting on you holds the five seeded issues, with no left-open group',
+      'new holds the five seeded issues, with no left-open group',
       st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
       [1, 2, 3, 4, 5].map(LISSUE),
     );
     check(
-      `the waiting chip counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
+      `the new chip counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
       st.count === 5 && st.head === '',
     );
   }
@@ -2939,7 +3039,7 @@ async function leftOpenScenario(context, t, s) {
       `the left-open row is muted (${lo?.color} = --kit-muted ${muted}; a live row ${live?.color})`,
       lo?.color === muted && live?.color !== muted,
     );
-    check(`the waiting chip's count drops to 4 (${st.count})`, st.count === 4);
+    check(`the new chip's count drops to 4 (${st.count})`, st.count === 4);
   }
 
   // Move-on never opens a left-open row: deciding the view's last item
@@ -3016,8 +3116,13 @@ async function leftOpenScenario(context, t, s) {
   await s.restart();
   agent = createAgent(s.base, s.token);
   await load();
+  // Brought back, issue #1 needs a decision again: it is due (the view for
+  // decisions that came back), at the top as the newest.
+  await pg.evaluate(() => {
+    location.hash = '#/attention/due';
+  });
   check(
-    'after the restart, the list settles with issue #1 at the top',
+    'after the restart, the due list settles with issue #1 at the top',
     await until(
       pg,
       (k) =>
@@ -3028,29 +3133,37 @@ async function leftOpenScenario(context, t, s) {
       8000,
     ),
   );
-  // The waiting chip's count comes from its own fetch, after the list's.
+  // The due chip's count comes from its own fetch, after the list's.
+  const dueN = () =>
+    pg.evaluate(
+      () =>
+        document.querySelector(
+          '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="due"] .kit-n',
+        )?.textContent ?? '',
+    );
   await until(
     pg,
     () =>
       document.querySelector(
-        '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="waiting"] .kit-n',
-      )?.textContent === '4',
+        '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="due"] .kit-n',
+      )?.textContent === '1',
   );
   {
     const st = await listState(pg);
     checkList(
-      "alice's newer comment moves issue #1 back to the top, needing a decision",
+      "alice's newer comment brings issue #1 back, needing a decision",
       st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
-      [1, 2, 3, 4].map(LISSUE),
+      [LISSUE(1)],
     );
     const back = st.rows[0];
     check(
       `the brought-back row is flagged "${back?.sub}"`,
       back?.back && back.sub === 'new activity since you left it open',
     );
-    check(`the waiting chip counts it again: 4 (${st.count})`, st.count === 4);
+    const n = await dueN();
+    check(`the due chip counts it: 1 (${n})`, n === '1');
     // Court's own newer comment on issue #5 doesn't bring it back: it is
-    // still left open (in new; with Court's reply it no longer waits on him).
+    // still left open, in new.
     const nv = await api('GET', '/api/items?view=new&limit=500');
     check(
       "Court's own newer comment leaves issue #5 left open",
@@ -3114,17 +3227,17 @@ async function openRecScenario(context, t, s) {
   const LINE = `${READ} .cb-rec-fresh`;
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${OR}`));
+    .filter((k) => !k.includes(`/${OR}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
   const A = 'probe-openrec';
   await agent.presence(A, 'pi \u00b7 openrec', '/home/court/openrec', 'pi');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -3440,10 +3553,10 @@ async function lookIntoScenario(context, t, s) {
   const GROUP = [3, 4, 5].map(KISSUE);
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
-    .filter((k) => !k.includes(`/${LK}`));
+    .filter((k) => !k.includes(`/${LK}#`));
   if (others.length)
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
   // Two sessions, so the dock attaches to neither on its own; B has a
@@ -3457,7 +3570,7 @@ async function lookIntoScenario(context, t, s) {
   await agent.propose(B, GROUP, 'ignore', 'spam');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4107,8 +4220,8 @@ async function steadyScenario(context, t, s) {
   const leftSel = `${LIST} .cb-group[data-group="left-open"]`;
 
   // Only this repo's items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
     .filter((k) => !ALL.includes(k));
   if (others.length)
@@ -4127,7 +4240,7 @@ async function steadyScenario(context, t, s) {
   await agent.propose(A, [1, 2].map(SISSUE), 'keep', 'active');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4156,7 +4269,7 @@ async function steadyScenario(context, t, s) {
     }, LIST);
     check(
       `no filter chips: Attention shows ${got.chips} filter chips (row shown ${got.shown}), its ${got.views} view chips still show`,
-      got.chips === 0 && !got.shown && got.views === 4,
+      got.chips === 0 && !got.shown && got.views === 3,
     );
   }
 
@@ -4486,8 +4599,8 @@ async function navScenario(context, t, s) {
   const ALL = [...STOP, ...CLOSE, ...KEEP, ...MERGE, ...NONE];
 
   // Only these repos' items wait on Court.
-  const waiting0 = await api('GET', '/api/items?view=waiting&limit=500');
-  const others = (waiting0.items ?? [])
+  const new0 = await api('GET', '/api/items?view=new&limit=500');
+  const others = (new0.items ?? [])
     .map((it) => it.key)
     .filter((k) => !ALL.includes(k));
   if (others.length)
@@ -4513,7 +4626,7 @@ async function navScenario(context, t, s) {
 
   // The view's order: group by group, key order in each (#1, #10, …).
   const order = (
-    (await api('GET', '/api/items?view=waiting&limit=500')).items ?? []
+    (await api('GET', '/api/items?view=new&limit=500')).items ?? []
   ).map((it) => it.key);
   const inOrder = (keys) => order.filter((k) => keys.includes(k));
   const [S1, S2] = inOrder(STOP);
@@ -4522,7 +4635,7 @@ async function navScenario(context, t, s) {
   const M1 = inOrder(MERGE)[0];
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/waiting`, {
+  await pg.goto(`${s.url}#/attention/new`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4536,6 +4649,13 @@ async function navScenario(context, t, s) {
     const heads = await groupHeads(pg);
     checkList(
       'the groups, in serve order',
+      heads.map((g) => `${g.d || g.id} ${g.n}`),
+      ((await api('GET', '/api/items?view=new&limit=1')).groups ?? []).map(
+        (g) => `${g.disposition || g.id} ${g.total}`,
+      ),
+    );
+    checkList(
+      "and that is the seed's: by their newest item",
       heads.map((g) => `${g.d || g.id} ${g.n}`),
       ['ignore 12', 'close 6', 'keep 3', 'merge 2', 'none 1'],
     );
@@ -5347,7 +5467,7 @@ async function navScenario(context, t, s) {
     check(
       `sidebar collapse: the list is a ${l.w}px rail reading "${l.label}" (${l.mode}), no rows shown (${l.rows}); the reading column fills the rest (${l.right} → ${l.readLeft}, ${l.readRight} → ${l.dockLeft}); stored ${l.stored}`,
       l.w === 34 &&
-        l.label === 'waiting on you \u00b7 24' &&
+        l.label === 'new \u00b7 24' &&
         l.mode.startsWith('vertical') &&
         !l.rows &&
         l.readLeft === l.right &&
@@ -5389,7 +5509,11 @@ async function navScenario(context, t, s) {
   }
   await pg.setViewportSize({ width: 1600, height: 900 });
 
-  // The collapse survives a reload; » brings the list back.
+  // The collapse survives a reload; » brings the list back. (On new's list:
+  // an item's address opens the list on due, empty here.)
+  await pg.evaluate(() => {
+    location.hash = '#/attention/new';
+  });
   await pg.reload({ waitUntil: 'domcontentloaded' });
   await pg.waitForSelector('.kit-row', { state: 'attached', timeout: 8000 });
   await until(pg, () => !!document.querySelector('.cb-list-show'));
@@ -5414,6 +5538,225 @@ async function navScenario(context, t, s) {
       `» brings the list back (${l.w}px, rows ${l.rows}, stored ${l.stored})`,
       l.w === 520 && l.rows && l.stored === 'open',
     );
+  }
+  await pg.close();
+}
+
+// ---- group by recommendation, or one list --------------------------------
+
+const FLT = 'rd-flat';
+const FISSUE = (n) => `issue:schuettc/${FLT}#${n}`;
+
+// flatSeed is six issues by others, updated in number order (#6 newest).
+function flatSeed() {
+  const item = ([number, title, author], i) => ({
+    repo: `schuettc/${FLT}`,
+    number,
+    title,
+    author,
+    state: 'OPEN',
+    created_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+    updated_at: `2026-09-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+  });
+  return {
+    seedRepos: [
+      {
+        repo: `schuettc/${FLT}`,
+        pushed_at: '2026-09-20T00:00:00Z',
+        default_branch: 'main',
+        prs: [],
+        issues: [
+          [1, 'Region question', 'alice'],
+          [2, 'README typo', 'carol'],
+          [3, 'A second region', 'dave'],
+          [4, 'Flag docs', 'erin'],
+          [5, 'Tags question', 'frank'],
+          [6, 'Thanks for the tool', 'grace'],
+        ].map(item),
+      },
+    ],
+  };
+}
+
+async function flatScenario(context, t, s) {
+  const { check, checkList, until } = t;
+  console.log('\nscenario: group by recommendation, or one list');
+  const agent = createAgent(s.base, s.token);
+  const api = (m, p, b) => agent.api(m, p, b);
+  const ALL = [1, 2, 3, 4, 5, 6].map(FISSUE);
+
+  // Only this repo's issues need a decision.
+  for (const v of ['due', 'new']) {
+    const l = await api('GET', `/api/items?view=${v}&limit=500`);
+    const others = (l.items ?? [])
+      .map((it) => it.key)
+      .filter((k) => !ALL.includes(k));
+    if (others.length)
+      await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
+  }
+  const sid = 'probe-rd-flat';
+  await agent.presence(sid, 'pi \u00b7 flat', '/home/court/flat', 'pi');
+  await agent.propose(sid, [FISSUE(1), FISSUE(2)], 'close', 'answered');
+  await agent.propose(sid, [FISSUE(3)], 'keep', 'active');
+
+  const sw = `${LIST} .cb-group-switch`;
+  const state = () =>
+    pg.evaluate(
+      ({ list, sw }) => {
+        const el = document.querySelector(sw);
+        const r = el?.getBoundingClientRect();
+        const lr = document.querySelector(list)?.getBoundingClientRect();
+        return {
+          hash: location.hash,
+          checked: el?.getAttribute('aria-checked') ?? '',
+          role: el?.getAttribute('role') ?? '',
+          shown:
+            !!r &&
+            !!lr &&
+            r.height > 0 &&
+            r.left >= lr.left - 1 &&
+            r.right <= lr.right + 1 &&
+            r.top >= lr.top - 1,
+          heads: [...document.querySelectorAll(`${list} .cb-group`)].map(
+            (g) => g.querySelector('.cb-group-label')?.textContent ?? '',
+          ),
+          on:
+            document
+              .querySelector(
+                `${list} .kit-chips[data-group="view"] .kit-chip.on`,
+              )
+              ?.getAttribute('data-id') ?? '',
+        };
+      },
+      { list: LIST, sw },
+    );
+
+  const pg = await context.newPage();
+  await pg.goto(`${s.url}#/attention/new`, { waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector(sw, { timeout: 8000 });
+  await until(
+    pg,
+    (list) => document.querySelectorAll(`${list} .cb-group`).length > 0,
+    LIST,
+    8000,
+  );
+
+  // 1. Grouped: the switch on, the not recommended first (serve's first).
+  const serveGroups =
+    (await api('GET', '/api/items?view=new&limit=1')).groups ?? [];
+  {
+    const st = await state();
+    check(
+      `the switch shows in the list, on (aria-checked ${st.checked}, role ${st.role}); the first head is serve's first ("${st.heads[0]}")`,
+      st.shown &&
+        st.role === 'switch' &&
+        st.checked === 'true' &&
+        st.heads[0] === serveGroups[0]?.label &&
+        st.heads[0] === 'Not recommended yet',
+    );
+  }
+
+  // 2. Off: one list, serve's flat order, no heads; a row names its choice.
+  await pg.click(sw);
+  const flatKeys = (
+    (await api('GET', '/api/items?view=new&group=false&limit=500')).items ?? []
+  ).map((it) => it.key);
+  await until(
+    pg,
+    (list) =>
+      location.hash === '#/attention/new?flat' &&
+      document.querySelectorAll(`${list} .cb-group`).length === 0,
+    LIST,
+    8000,
+  );
+  {
+    const st = await state();
+    check(
+      `off: the address is ${st.hash}, aria-checked ${st.checked}, no group heads (${st.heads.length})`,
+      st.hash === '#/attention/new?flat' &&
+        st.checked === 'false' &&
+        st.heads.length === 0,
+    );
+    checkList(
+      "off: the rows are serve's flat order (group=false), newest first",
+      await listSequence(pg, ALL),
+      flatKeys,
+    );
+    checkList(
+      "and that is the seed's newest first",
+      flatKeys,
+      [6, 5, 4, 3, 2, 1].map(FISSUE),
+    );
+    const sub =
+      (await row(pg, FISSUE(1))
+        .locator('.kit-sub')
+        .textContent({ timeout: 5000 })
+        .catch(() => '')) ?? '';
+    check(
+      `off: issue #1's row names its recommendation ("${sub}")`,
+      sub.startsWith('Close it'),
+    );
+  }
+
+  // 3. A reload keeps it off.
+  await pg.reload({ waitUntil: 'domcontentloaded' });
+  await pg.waitForSelector(sw, { timeout: 8000 });
+  await pg.waitForSelector(`${LIST} .kit-row`, { timeout: 8000 });
+  {
+    const st = await state();
+    check(
+      `after a reload it is still one list (aria-checked ${st.checked}, ${st.heads.length} heads)`,
+      st.checked === 'false' && st.heads.length === 0,
+    );
+  }
+
+  // 4. #/attention keeps the stored choice.
+  await pg.evaluate(() => {
+    location.hash = '#/attention';
+  });
+  await pg.waitForFunction(() => location.hash === '#/attention');
+  {
+    const ok = await until(
+      pg,
+      (sw) =>
+        document.querySelector(sw)?.getAttribute('aria-checked') === 'false',
+      sw,
+      5000,
+    );
+    check('#/attention keeps the list flat (remembered)', ok);
+  }
+
+  // 5. #/attention/new is grouped.
+  await pg.evaluate(() => {
+    location.hash = '#/attention/new';
+  });
+  {
+    const ok = await until(
+      pg,
+      ({ list, sw }) =>
+        document.querySelector(sw)?.getAttribute('aria-checked') === 'true' &&
+        document.querySelectorAll(`${list} .cb-group`).length > 0,
+      { list: LIST, sw },
+      8000,
+    );
+    check('#/attention/new is grouped, with its heads', ok);
+  }
+
+  // 6. An old #/attention/waiting link lands on due.
+  await pg.evaluate(() => {
+    location.hash = '#/attention/waiting';
+  });
+  {
+    const ok = await until(
+      pg,
+      (list) =>
+        document
+          .querySelector(`${list} .kit-chips[data-group="view"] .kit-chip.on`)
+          ?.getAttribute('data-id') === 'due',
+      LIST,
+      5000,
+    );
+    check('#/attention/waiting leaves the due chip on', ok);
   }
   await pg.close();
 }

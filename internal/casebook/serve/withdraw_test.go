@@ -45,21 +45,21 @@ func TestWithdrawByView(t *testing.T) {
 	if _, errs := r.s.Props.Propose(ctx, "rule:stale", []string{"issue:schuettc/hail#6"}, "keep", "", ""); len(errs) != 0 {
 		t.Fatal(errs)
 	}
-	if n := r.viewItems(t, "view=waiting").AgentRecommended; n != 3 {
-		t.Fatalf("waiting has %d agent recommendations, want 3 (the rule's isn't one)", n)
+	if n := r.viewItems(t, "view=new&relation=incoming").AgentRecommended; n != 3 {
+		t.Fatalf("new incoming has %d agent recommendations, want 3 (the rule's isn't one)", n)
 	}
-	if n := r.viewItems(t, "view=waiting&kind=pr").AgentRecommended; n != 1 {
-		t.Fatalf("waiting pr has %d agent recommendations, want 1", n)
+	if n := r.viewItems(t, "view=new&relation=incoming&kind=pr").AgentRecommended; n != 1 {
+		t.Fatalf("new incoming pr has %d agent recommendations, want 1", n)
 	}
 
 	// The filter narrows it: only the PR.
-	if n := r.withdraw(t, map[string]any{"view": "waiting", "kind": "pr"}); n != 1 {
-		t.Fatalf("withdrew %d by waiting+pr, want 1", n)
+	if n := r.withdraw(t, map[string]any{"view": "new", "relation": "incoming", "kind": "pr"}); n != 1 {
+		t.Fatalf("withdrew %d by new incoming pr, want 1", n)
 	}
 	head, _ := r.s.Bus.Head(ctx)
 	// Every page: limit and offset are not part of it.
-	if n := r.withdraw(t, map[string]any{"view": "waiting"}); n != 2 {
-		t.Fatalf("withdrew %d by waiting, want 2", n)
+	if n := r.withdraw(t, map[string]any{"view": "new", "relation": "incoming"}); n != 2 {
+		t.Fatalf("withdrew %d by new incoming, want 2", n)
 	}
 	ev := r.lastProposals(t, head, "withdrawn")
 	if !slices.Equal(ev.Keys, []string{"issue:schuettc/hail#4", "issue:schuettc/hail#5"}) || len(ev.IDs) != 2 {
@@ -76,17 +76,17 @@ func TestWithdrawByView(t *testing.T) {
 	}
 	for _, k := range []string{"branch:schuettc/hail@feat/client", "repo:schuettc/hail"} {
 		if p := pending[k]; p.Source != "pi:s1" {
-			t.Fatalf("%s (not in waiting) lost its recommendation: %+v", k, pending)
+			t.Fatalf("%s (not in new incoming) lost its recommendation: %+v", k, pending)
 		}
 	}
-	if n := r.viewItems(t, "view=waiting").AgentRecommended; n != 0 {
-		t.Fatalf("waiting still counts %d agent recommendations", n)
+	if n := r.viewItems(t, "view=new&relation=incoming").AgentRecommended; n != 0 {
+		t.Fatalf("new incoming still counts %d agent recommendations", n)
 	}
 	if n := r.viewItems(t, "view=new").AgentRecommended; n != 2 {
 		t.Fatalf("new counts %d agent recommendations, want 2", n)
 	}
 	// Nothing left: nothing withdrawn.
-	if n := r.withdraw(t, map[string]any{"view": "waiting"}); n != 0 {
+	if n := r.withdraw(t, map[string]any{"view": "new", "relation": "incoming"}); n != 0 {
 		t.Fatalf("withdrew %d again", n)
 	}
 	// Neither ids nor a view: a bad request.
@@ -106,12 +106,12 @@ func TestWithdrawnComeBackFromNext(t *testing.T) {
 	if v := r.next(t, "s1"); !v.Done {
 		t.Fatalf("not done after the drain: %+v", v)
 	}
-	waiting := r.viewItems(t, "view=waiting")
-	if n := r.withdraw(t, map[string]any{"view": "waiting"}); n != waiting.Total {
-		t.Fatalf("withdrew %d, want the %d waiting", n, waiting.Total)
+	incoming := r.viewItems(t, "view=new&relation=incoming")
+	if n := r.withdraw(t, map[string]any{"view": "new", "relation": "incoming"}); n != incoming.Total {
+		t.Fatalf("withdrew %d, want the %d new incoming", n, incoming.Total)
 	}
 	var want []string
-	for _, it := range waiting.Items {
+	for _, it := range incoming.Items {
 		want = append(want, it.ID)
 	}
 	got := r.drain(t, "s1")

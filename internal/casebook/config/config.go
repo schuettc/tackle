@@ -1,6 +1,6 @@
 // Package config is the per-machine casebook configuration, stored at
 // tools.ConfigDir("casebook")/config.toml. Settings shared by every machine
-// (policy) live in the casebook repo instead.
+// (rules) live in the casebook repo instead.
 package config
 
 import (

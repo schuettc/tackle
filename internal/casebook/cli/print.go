@@ -46,10 +46,7 @@ func printItems(out io.Writer, items []engine.Item, notices []string) {
 	_, _ = fmt.Fprintln(tw, "STATUS\tITEM\tWHY")
 	for _, it := range items {
 		why := ""
-		switch {
-		case len(it.Hits) > 0:
-			why = it.Hits[0].Rule + ": " + it.Hits[0].Detail
-		case len(it.Evidence) > 0:
+		if len(it.Evidence) > 0 {
 			why = it.Evidence[0]
 		}
 		if it.Stale {
@@ -98,9 +95,6 @@ func printItem(out io.Writer, it engine.Item, hist []journal.Event) {
 		obs += " (stale)"
 	}
 	_, _ = fmt.Fprintf(out, "  observed: %s\n", obs)
-	for _, h := range it.Hits {
-		_, _ = fmt.Fprintf(out, "  flag: %s: %s\n", h.Rule, h.Detail)
-	}
 	for _, e := range it.Evidence {
 		_, _ = fmt.Fprintf(out, "  evidence: %s\n", e)
 	}

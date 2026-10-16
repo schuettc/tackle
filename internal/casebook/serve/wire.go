@@ -44,7 +44,7 @@ type SummaryView struct {
 	// Syncing: a sync POST /api/sync started is running.
 	Syncing bool `json:"syncing"`
 	// Recommended and NotRecommended count the items that need a decision
-	// (the waiting, due and new views, each item once): those with a
+	// (the due and new views, each item once): those with a
 	// pending proposal, and those casebook_next still has to hand out.
 	Recommended    int `json:"recommended"`
 	NotRecommended int `json:"not_recommended"`
@@ -133,8 +133,8 @@ type ItemsView struct {
 	// withdraws.
 	AgentRecommended int `json:"agent_recommended"`
 	// Groups are an Attention view's groups (its filters apply, a group
-	// filter aside), in the order the view lists them, the not recommended
-	// last; empty for To apply and tracked.
+	// filter aside), in the order the view lists them, by their newest
+	// item; empty for To apply and tracked.
 	Groups []GroupView `json:"groups"`
 }
 

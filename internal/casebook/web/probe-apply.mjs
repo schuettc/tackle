@@ -889,7 +889,7 @@ async function applyScenariosOn(context, t, serveHandle) {
 
       // The batch card: confirm.
       check(
-        'a batch card needs Court (rust edge): confirm · skip batch',
+        'a batch card needs Court (signal edge): confirm · skip batch',
         (await until(
           pg,
           () => !!document.querySelector('.cb-needs-card[data-kind="batch"]'),
@@ -1082,7 +1082,7 @@ async function applyScenariosOn(context, t, serveHandle) {
         }),
       );
       check(
-        `the card has a rust edge (${textCard.edge}, ${textCard.edgeW}) and quotes the exact text`,
+        `the card has a signal edge (${textCard.edge}, ${textCard.edgeW}) and quotes the exact text`,
         textCard.edge === signal &&
           textCard.edgeW === '3px' &&
           textCard.quote === draft &&
@@ -1331,7 +1331,7 @@ async function applyScenariosOn(context, t, serveHandle) {
           `job #${jobId} \u00b7 ${planTitle.toLowerCase()}`,
       );
       await pg.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
       await until(
         pg,
@@ -1502,7 +1502,7 @@ async function applyScenariosOn(context, t, serveHandle) {
         () => document.querySelector('.kit-primary')?.textContent === 'Approve',
       );
       await pg.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
       await until(
         pg,

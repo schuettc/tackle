@@ -103,7 +103,7 @@ process.on('exit', () => {
 // chipCountsMatchLists checks that every attention view chip count shown in
 // the DOM matches the API total for that view. Runs with the page settled.
 async function chipCountsMatchLists(pg, base, token, label) {
-  const views = ['waiting', 'new', 'due', 'proposed'];
+  const views = ['new', 'due', 'proposed'];
   let allMatch = true;
   // Read until the page has settled after the last action (the counts
   // agree), or the wait runs out and the last mismatches are reported.
@@ -318,8 +318,8 @@ function checkList(label, got, want) {
 
 // The Task 7 serve's own Attention items: repos added to the fixture's GitHub
 // cache (serve.mjs seedRepos), so the attached-line scenarios select and
-// decide items no other scenario touches. Human authors and no reply from
-// Court put them in "waiting on you", like the fixture's hail items.
+// decide items no other scenario touches. Human authors put them in new,
+// like the fixture's hail items.
 function seedRepo(name, prs, issues) {
   const item = ([number, title, author], i) => ({
     repo: `schuettc/${name}`,
@@ -442,6 +442,17 @@ async function composerScenarios(context) {
   const serveHandle = await startServe({ seedRepos: T7_SEED });
   _composerServe = serveHandle;
   try {
+    // The seeded repos' own items are new too, and a search by a repo's
+    // name finds them: they stop being tracked, so those lists hold the
+    // seeded pull requests and issues only.
+    await createAgent(serveHandle.base, serveHandle.token).api(
+      'POST',
+      '/api/decide',
+      {
+        keys: T7_SEED.map((r) => `repo:${r.repo}`),
+        disposition: 'ignore',
+      },
+    );
     await composerScenariosOn(context, serveHandle);
   } finally {
     serveHandle.stop();
@@ -1510,7 +1521,7 @@ async function composerScenariosOn(context, serveHandle) {
     const fx = await dockFixture(serveHandle, 'attached');
     const pg = await openDock(context, serveHandle, fx, {
       search: '&q=t7-attached',
-      hash: '#/attention/waiting',
+      hash: '#/attention/new',
     });
     const value = () =>
       pg.$eval('[data-testid="composer-attached"]', (e) => ({
@@ -1527,7 +1538,7 @@ async function composerScenariosOn(context, serveHandle) {
     };
     try {
       const resp = await fetch(
-        `${serveHandle.base}/api/items?view=waiting&q=t7-attached&limit=200`,
+        `${serveHandle.base}/api/items?view=new&q=t7-attached&limit=200`,
         { headers: { 'X-Local-Token': serveHandle.token } },
       );
       const items = (await resp.json()).items ?? [];
@@ -1815,7 +1826,7 @@ async function composerScenariosOn(context, serveHandle) {
     );
     await agent.progress(sid, 'checking CI on #671', 2, 4);
     const pg = await openDock(context, serveHandle, fx, {
-      hash: '#/attention/waiting',
+      hash: '#/attention/new',
     });
     try {
       await pg.waitForSelector('.kit-row .kit-box');
@@ -1882,13 +1893,13 @@ async function composerScenariosOn(context, serveHandle) {
     const fx = await dockFixture(serveHandle, 'hidden');
     const pg = await openDock(context, serveHandle, fx, {
       search: '&q=t7-hidden',
-      hash: '#/attention/waiting',
+      hash: '#/attention/new',
     });
     const attached = () =>
       pg.$eval('[data-testid="composer-attached"]', (e) => e.textContent);
     try {
       const resp = await fetch(
-        `${serveHandle.base}/api/items?view=waiting&q=t7-hidden&limit=200`,
+        `${serveHandle.base}/api/items?view=new&q=t7-hidden&limit=200`,
         { headers: { 'X-Local-Token': serveHandle.token } },
       );
       const keys = ((await resp.json()).items ?? []).map((it) => it.key);
@@ -1960,7 +1971,7 @@ async function composerScenariosOn(context, serveHandle) {
 
       // Back to Attention: it re-feeds what is still selected.
       await pg.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
       const rest = keys[1].slice(keys[1].indexOf(':') + 1);
       check(
@@ -2164,7 +2175,7 @@ async function keyScopeScenariosOn(context, serveHandle) {
       }),
     );
     await pg.evaluate(() => {
-      location.hash = '#/attention/waiting';
+      location.hash = '#/attention/new';
     });
     await until(
       pg,
@@ -5073,7 +5084,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 957;
+const MIN_CHECKS = 967;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5356,11 +5367,11 @@ async function run() {
     // ---- scenario: attention list and detail --------------------------------
     console.log('\nscenario: attention list and detail');
 
-    // Navigate to attention / waiting view.
+    // Navigate to attention / new view.
     await page.evaluate(() => {
-      location.hash = '#/attention/waiting';
+      location.hash = '#/attention/new';
     });
-    await page.waitForFunction(() => location.hash === '#/attention/waiting');
+    await page.waitForFunction(() => location.hash === '#/attention/new');
 
     // Wait for the attention list panel.
     await page.waitForSelector('.kit-list', { timeout: 5000 }).catch(() => {});
@@ -5368,50 +5379,50 @@ async function run() {
     // Wait for rows to appear (the API call may take a moment).
     await page.waitForSelector('.kit-row', { timeout: 8000 }).catch(() => {});
 
-    // Check: seeded items appear in the waiting view.
+    // Check: seeded items appear in the new view.
     {
       const rowCount = await page.$$eval('.kit-row', (rows) => rows.length);
-      check('seeded items appear in the waiting view', rowCount > 0);
+      check('seeded items appear in the new view', rowCount > 0);
     }
 
     // Check: clicking a view chip narrows the list.
     {
       const beforeCount = await page.$$eval('.kit-row', (rows) => rows.length);
 
-      // Click the 'new' view chip.
-      const newChip = await page.$('[data-id="new"]');
-      if (newChip) {
-        await newChip.click();
+      // Click the 'due' view chip.
+      const dueChip = await page.$('[data-id="due"]');
+      if (dueChip) {
+        await dueChip.click();
         // Wait for the list to update.
-        await listShows(page, 'new');
+        await listShows(page, 'due');
       }
       const afterCount = await page.$$eval('.kit-row', (rows) => rows.length);
-      // The 'new' view may have 0 rows in the fixture (all are 'waiting'),
-      // so we just verify the chip click did not error (afterCount is a number).
+      // The 'due' view may have 0 rows in the fixture (all are new), so we
+      // just verify the chip click did not error (afterCount is a number).
       check(
         'clicking a view chip changes the row set',
         (typeof afterCount === 'number' && afterCount !== beforeCount) ||
           afterCount === 0,
       );
 
-      // Return to waiting view.
+      // Return to the new view.
       await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      await listShows(page, 'new');
     }
 
     // ---- scenario: search the Attention list (kit v0.11.0) -----------------
     console.log('\nscenario: search the Attention list (kit v0.11.0)');
 
     {
-      // Navigate to waiting view and count the full row set.
+      // Navigate to the new view and count the full row set.
       await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      await listShows(page, 'new');
 
       const fullCount = await page.$$eval('.kit-row', (rows) => rows.length);
 
@@ -5422,7 +5433,7 @@ async function run() {
           await searchField.click();
           await searchField.fill('nudge');
           // Wait for 200ms debounce + network round-trip.
-          await listShows(page, 'waiting', 'nudge');
+          await listShows(page, 'new', 'nudge');
           const narrowCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5450,7 +5461,7 @@ async function run() {
         if (searchField) {
           await searchField.press('Escape');
           // Wait for 200ms debounce + reload.
-          await listShows(page, 'waiting');
+          await listShows(page, 'new');
           const afterEscCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5497,10 +5508,10 @@ async function run() {
       {
         const reloadPage = await context.newPage();
         try {
-          // Navigate to /?q=nudge#/attention/waiting. The context's cookie
+          // Navigate to /?q=nudge#/attention/new. The context's cookie
           // provides auth; no ?t= needed.
           const baseUrl = serveHandle.base.replace(/\/$/, '');
-          await reloadPage.goto(baseUrl + '/?q=nudge#/attention/waiting', {
+          await reloadPage.goto(baseUrl + '/?q=nudge#/attention/new', {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -5708,7 +5719,7 @@ async function run() {
     }
     // ---- scenario: no board ------------------------------------------------
     // The board is gone: no board chip among the views, no .cb-board, and an
-    // old link to it (#/attention/board) lands on waiting on you's list.
+    // old link to it (#/attention/board) lands on due's list.
     console.log('\nscenario: no board');
 
     {
@@ -5724,19 +5735,19 @@ async function run() {
       const boards = await page.$$eval('.cb-board', (els) => els.length);
       check(
         `no board: no board chip and no .cb-board (views: ${views.join(', ')}; .cb-board: ${boards})`,
-        onNew && views.join(',') === 'waiting,new,due,proposed' && boards === 0,
+        onNew && views.join(',') === 'new,due,proposed' && boards === 0,
       );
 
       await page.evaluate(() => {
         location.hash = '#/attention/board';
       });
       await page.waitForFunction(() => location.hash === '#/attention/board');
-      const landed = await listShows(page, 'waiting');
-      const waitingOn = await until(
+      const landed = await listShows(page, 'due');
+      const dueOn = await until(
         page,
         () =>
           !!document.querySelector(
-            '.kit-chips[data-group="view"] .kit-chip.on[data-id="waiting"]',
+            '.kit-chips[data-group="view"] .kit-chip.on[data-id="due"]',
           ),
       );
       // The list is shown and wide, its rows visible (not a blank panel).
@@ -5752,21 +5763,28 @@ async function run() {
           board: !!document.querySelector('.cb-board'),
         };
       });
+      // Due's rows, when it has any, are visible (not a blank panel).
+      const dueTotal = (
+        await (
+          await fetch(`${_serveHandle.base}/api/items?view=due&limit=1`, {
+            headers: { 'X-Local-Token': _serveHandle.token },
+          })
+        ).json()
+      ).total;
       check(
-        `no board: #/attention/board lands on waiting on you's list (list ${Math.round(geo.listW)}px, row ${Math.round(geo.rowH)}px)`,
+        `no board: #/attention/board lands on due's list (list ${Math.round(geo.listW)}px, row ${Math.round(geo.rowH)}px, ${dueTotal} due)`,
         landed &&
-          waitingOn &&
+          dueOn &&
           geo.listW >= 280 &&
-          geo.rowH > 0 &&
-          geo.rowShown &&
+          (dueTotal === 0 || (geo.rowH > 0 && geo.rowShown)) &&
           !geo.board,
       );
 
       await page.evaluate(() => {
-        location.hash = '#/attention/waiting';
+        location.hash = '#/attention/new';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/waiting');
-      await listShows(page, 'waiting');
+      await page.waitForFunction(() => location.hash === '#/attention/new');
+      await listShows(page, 'new');
     }
 
     // ---- fix-round-2: encoded item URL opens correctly ------------------
@@ -5824,12 +5842,12 @@ async function run() {
         });
         await emptyReadPage.waitForSelector('.kit-bar', { timeout: 8000 });
 
-        // Navigate to waiting view (no item open).
+        // Navigate to the new view (no item open).
         await emptyReadPage.evaluate(() => {
-          location.hash = '#/attention/waiting';
+          location.hash = '#/attention/new';
         });
         await emptyReadPage.waitForFunction(
-          () => location.hash === '#/attention/waiting',
+          () => location.hash === '#/attention/new',
         );
         await emptyReadPage
           .waitForSelector('.kit-row', { timeout: 8000 })
@@ -6609,7 +6627,7 @@ async function run() {
           // The first row recommends something: it is the row opened next.
           // (Not listShows: a view change while the page is reloading the
           // list is dropped (attention.ts reload), and the list can stay the
-          // waiting view's, whose first row here has the proposal too.)
+          // new view's, whose first row here has the proposal too.)
           await until(keyPage, () => {
             const rows = document.querySelector(
               '.kit-app > .kit-list:not([hidden]) .kit-rows',
@@ -6719,7 +6737,7 @@ async function run() {
           // The first row recommends something: it is the row opened next.
           // (Not listShows: a view change while the page is reloading the
           // list is dropped (attention.ts reload), and the list can stay the
-          // waiting view's, whose first row here has the proposal too.)
+          // new view's, whose first row here has the proposal too.)
           await until(keyPage, () => {
             const rows = document.querySelector(
               '.kit-app > .kit-list:not([hidden]) .kit-rows',
@@ -7161,7 +7179,7 @@ async function run() {
           check('message cards are inside the rail and visible', inside);
         }
 
-        // 6. YOU card has rust (signal) left edge; agent card has amber edge.
+        // 6. YOU card has signal left edge; agent card has amber edge.
         //    The agent replies with attached items so we get a PI card with links.
         {
           // First let the agent pick up the delivery.
@@ -7205,7 +7223,7 @@ async function run() {
 
           const youCards = edges.filter((e) => e.isYou);
           const agentCards = edges.filter((e) => e.isAgent);
-          check('YOU card has rust (signal) left edge', youCards.length > 0);
+          check('YOU card has signal left edge', youCards.length > 0);
           // PI card must now be present (we waited for it above).
           check(
             'YOU and PI edge colours differ',
@@ -8030,12 +8048,12 @@ async function run() {
         });
         await chipInvPage.waitForSelector('.kit-bar', { timeout: 8000 });
         await chipInvPage.evaluate(() => {
-          location.hash = '#/attention/waiting';
+          location.hash = '#/attention/new';
         });
         await chipInvPage.waitForFunction(() =>
           location.hash.includes('#/attention'),
         );
-        await listShows(chipInvPage, 'waiting');
+        await listShows(chipInvPage, 'new');
         await chipCountsMatchLists(
           chipInvPage,
           serveHandle.base,
@@ -8494,12 +8512,12 @@ async function run() {
         await invPage.waitForSelector('.kit-bar', { timeout: 8000 });
         // Navigate to attention to ensure chips are rendered.
         await invPage.evaluate(() => {
-          location.hash = '#/attention/waiting';
+          location.hash = '#/attention/new';
         });
         await invPage.waitForFunction(() =>
           location.hash.includes('#/attention'),
         );
-        await listShows(invPage, 'waiting');
+        await listShows(invPage, 'new');
         await chipCountsMatchLists(
           invPage,
           serveHandle.base,

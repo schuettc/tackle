@@ -12,7 +12,7 @@
 //      picker; the chooser below it when no session is attached or the
 //      attached one left
 //   2. Thread chips    — one per thread + "+"  (active chip filled)
-//   3. Message cards   — rust edge for you, amber for the agent;
+//   3. Message cards   — signal edge for you, amber for the agent;
 //                        mono header YOU/PI with age on right;
 //                        Court's cards carry the delivery-state footer;
 //                        agent cards link items/rules/jobs (underlined, open the route)

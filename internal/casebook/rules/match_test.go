@@ -81,11 +81,6 @@ func TestEveryOperatorOnEveryFieldType(t *testing.T) {
 	checkEval(t, "label in miss", Condition{Field: "label", Op: "in", Value: "enhancement, question"}, fl, false)
 	checkEval(t, "label not-in hit", Condition{Field: "label", Op: "not-in", Value: "enhancement, question"}, fl, true)
 	checkEval(t, "label not-in miss", Condition{Field: "label", Op: "not-in", Value: "bug, enhancement"}, fl, false)
-
-	// policy-hit multi-value
-	fp := engine.Fields{Kind: "repo", PolicyHits: []string{"dormant"}}
-	checkEval(t, "policy-hit is hit", Condition{Field: "policy-hit", Op: "is", Value: "dormant"}, fp, true)
-	checkEval(t, "policy-hit is miss", Condition{Field: "policy-hit", Op: "is", Value: "unpushed"}, fp, false)
 }
 
 func checkEval(t *testing.T, name string, c Condition, f engine.Fields, want bool) {

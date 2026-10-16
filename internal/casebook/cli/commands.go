@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -96,7 +97,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "attention", Group: "observe", Summary: "what needs you: new, due, drift, conflict and policy flags",
+			Name: "attention", Group: "observe", Summary: "what needs you: new, due, drift and conflict",
 			NewFlags: filterFlags("attention"),
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := filterFlags("attention")()
@@ -112,6 +113,7 @@ func commands(stdin io.Reader) []tools.Command {
 					return err
 				}
 				items := filter(res.Attention(), fs)
+				sort.SliceStable(items, func(i, j int) bool { return engine.NewerFirst(items[i], items[j]) })
 				if boolFlag(fs, "json") {
 					return tools.PrintJSON(out, map[string]any{"items": nonNil(items), "notices": res.Notices})
 				}
@@ -120,7 +122,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "show", Group: "observe", Synopsis: "show <key>", Summary: "one item: decision, observation, flags and recent history",
+			Name: "show", Group: "observe", Synopsis: "show <key>", Summary: "one item: decision, observation and recent history",
 			NewFlags: jsonFlags("show"),
 			Run: func(args []string, out, errw io.Writer) error {
 				fs := jsonFlags("show")()
@@ -266,7 +268,7 @@ func commands(stdin io.Reader) []tools.Command {
 			},
 		},
 		{
-			Name: "validate", Group: "decide", Summary: "check every decision file and policy.toml",
+			Name: "validate", Group: "decide", Summary: "check every decision file",
 			Run: func(args []string, out, errw io.Writer) error {
 				a, err := open()
 				if err != nil {
@@ -280,7 +282,7 @@ func commands(stdin io.Reader) []tools.Command {
 					return tools.Exitf(1, "%d problem(s)", len(errs))
 				}
 				ds, _ := a.Repo.Decisions()
-				_, _ = fmt.Fprintf(out, "ok: %d decision(s), policy valid\n", len(ds))
+				_, _ = fmt.Fprintf(out, "ok: %d decision(s)\n", len(ds))
 				return nil
 			},
 		},

@@ -80,9 +80,8 @@ var vocab = []Field{
 	{Name: "open-prs", Type: FieldTypeCount, Ops: countOps},
 	{Name: "open-issues", Type: FieldTypeCount, Ops: countOps},
 
-	// Decision / policy fields
+	// Decision fields
 	{Name: "has-decision", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "policy-hit", Type: FieldTypeText, Ops: textOps},
 }
 
 // vocabIndex maps field names to their Field for O(1) lookup.

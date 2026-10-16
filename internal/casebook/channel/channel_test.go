@@ -186,7 +186,7 @@ func TestChannelEndToEnd(t *testing.T) {
 		t.Fatalf("notification %v", params)
 	}
 
-	if out, isErr := m.tool("casebook_attention", map[string]any{"view": "waiting"}); isErr || !strings.Contains(out, "pr:schuettc/hail#3") {
+	if out, isErr := m.tool("casebook_attention", map[string]any{"view": "new"}); isErr || !strings.Contains(out, "pr:schuettc/hail#3") {
 		t.Fatalf("attention %q %v", out, isErr)
 	}
 	if out, isErr := m.tool("casebook_propose", map[string]any{"keys": []string{"pr:schuettc/hail#3"}, "disposition": "keep", "note": "active work"}); isErr || !strings.Contains(out, `"proposed": 1`) {

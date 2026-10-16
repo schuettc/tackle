@@ -1,5 +1,5 @@
-// Package engine combines decisions, observations and policy into items with
-// a computed status: the casebook's view of the world. It is pure: no I/O.
+// Package engine combines decisions and observations into items with a
+// computed status: the casebook's view of the world. It is pure: no I/O.
 package engine
 
 import (
@@ -18,7 +18,6 @@ type Input struct {
 	GitHub    *observe.GitHub
 	Snapshots []observe.Snapshot
 	Decisions map[string]item.Decision
-	Policy    item.Policy
 	Seen      map[string]time.Time // item key → decided_at of a decision observed done
 }
 
@@ -37,7 +36,6 @@ type Item struct {
 	// newer than its keep, wait or watch decision. It waits on the user.
 	NewActivity bool              `json:"new_activity,omitempty"`
 	Decision    *item.Decision    `json:"decision,omitempty"`
-	Hits        []item.Hit        `json:"hits,omitempty"`
 	Observed    item.Observed     `json:"observed"`
 	Stale       bool              `json:"stale,omitempty"`
 	Locations   []string          `json:"locations,omitempty"`
@@ -53,14 +51,14 @@ type Item struct {
 	LandedVia   []string          `json:"landed_via,omitempty"`  // machine codes: "default-branch", "merged-pr" (multi-valued)
 	LandedTips  map[string]string `json:"landed_tips,omitempty"` // machine → tip checked
 
-	fresh         bool      // observed from a fresh owner listing
-	othersAt      time.Time // pr/issue: latest activity by anyone but the user (zero: none known)
-	signals       item.Signals
-	goneUpstream  bool   // branch: remote upstream was deleted
-	worktreeState string // branch: "dirty", "clean", or "" (none)
-	dirty         bool   // worktree: has uncommitted changes
-	openPRs       int    // repo: number of open PRs
-	openIssues    int    // repo: number of open issues
+	fresh          bool      // observed from a fresh owner listing
+	othersAt       time.Time // pr/issue: latest activity by anyone but the user (zero: none known)
+	oldestUnpushed time.Time // branch/worktree: oldest local-only commit; zero: none
+	goneUpstream   bool      // branch: remote upstream was deleted
+	worktreeState  string    // branch: "dirty", "clean", or "" (none)
+	dirty          bool      // worktree: has uncommitted changes
+	openPRs        int       // repo: number of open PRs
+	openIssues     int       // repo: number of open issues
 }
 
 // Result is a build.
@@ -78,19 +76,30 @@ func (r Result) Find(id string) (Item, bool) {
 	return Item{}, false
 }
 
-// Attention returns items that are new, due, drifted, conflicted, or have
-// policy hits: the items that need a decision. An item left open is not one,
-// whatever its flags (LeftOpen lists those).
+// Attention returns items that are new, due, drifted or conflicted: the
+// items that need a decision. An item left open is not one (LeftOpen lists
+// those).
 func (r Result) Attention() []Item {
 	var out []Item
 	for _, it := range r.Items {
-		switch {
-		case it.Status == item.StatusLeftOpen:
-		case it.Status == item.StatusNew, it.Status == item.StatusDue, it.Status == item.StatusDrift, it.Status == item.StatusConflict, len(it.Hits) > 0:
+		switch it.Status {
+		case item.StatusNew, item.StatusDue, item.StatusDrift, item.StatusConflict:
 			out = append(out, it)
 		}
 	}
 	return out
+}
+
+// NewerFirst orders items by UpdatedAt, newest first, an item with no time
+// after every item with one, then by key: the Attention lists' order.
+func NewerFirst(a, b Item) bool {
+	switch {
+	case a.UpdatedAt.IsZero() != b.UpdatedAt.IsZero():
+		return b.UpdatedAt.IsZero()
+	case !a.UpdatedAt.Equal(b.UpdatedAt):
+		return a.UpdatedAt.After(b.UpdatedAt)
+	}
+	return a.ID < b.ID
 }
 
 // machineLanded records the per-machine landed verdict for one branch item.
@@ -120,7 +129,6 @@ func (b *builder) get(k item.Key) *Item {
 	it := b.items[id]
 	if it == nil {
 		it = &Item{Key: k, ID: id, Kind: k.Kind, Repo: k.Repo()}
-		it.signals.Kind = k.Kind
 		b.items[id] = it
 	}
 	return it
@@ -194,7 +202,6 @@ func (b *builder) owners(res *Result) {
 			default:
 				it.Relation = "owned"
 			}
-			it.signals.UpdatedAt, it.signals.Archived = r.PushedAt, r.Archived
 			it.UpdatedAt = r.PushedAt
 			if !r.PushedAt.IsZero() {
 				it.Evidence = append(it.Evidence, "pushed "+r.PushedAt.Format("2006-01-02"))
@@ -244,21 +251,12 @@ func (b *builder) pr(k item.Key, p observe.PRObs, dir string, fresh bool) {
 	it.fresh, it.Stale = fresh, !fresh
 	it.Title, it.URL, it.Relation = p.Title, p.URL, dir
 	it.Author, it.AuthorIsBot, it.CreatedAt, it.UpdatedAt, it.Labels, it.Body = p.Author, p.AuthorIsBot, p.CreatedAt, p.UpdatedAt, p.Labels, p.Body
-	last := p.CreatedAt
-	if p.LastCommentAt.After(last) {
-		last = p.LastCommentAt
-	}
-	s := &it.signals
-	s.Direction, s.Open, s.UpdatedAt, s.CreatedAt, s.LastActivity = dir, p.State == "OPEN", p.UpdatedAt, p.CreatedAt, last
-	if strings.EqualFold(p.LastCommentAuthor, b.user) {
-		s.LastReplyByMe = p.LastCommentAt
-	}
 	// Someone else's latest activity: the cache holds each PR's and issue's
 	// last comment (author and time) and its creation, nothing about
-	// commits or reviews, and its updated_at names no actor. So this is
-	// LastActivity when it isn't the user's: the last comment when someone
-	// else wrote it, or, with no comments, the creation when someone else
-	// opened it.
+	// commits or reviews, and its updated_at names no actor. So this is the
+	// latest comment or creation when it isn't the user's: the last comment
+	// when someone else wrote it, or, with no comments, the creation when
+	// someone else opened it.
 	switch {
 	case !p.LastCommentAt.IsZero() && !strings.EqualFold(p.LastCommentAuthor, b.user):
 		it.othersAt = p.LastCommentAt
@@ -289,7 +287,7 @@ func (b *builder) snapshots() {
 				}
 				if br, ok := branches[w.Branch]; ok {
 					if br.Unpushed > 0 && !br.Gone {
-						it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, snap.Machine+":"+w.Path
+						it.oldestUnpushed = br.OldestUnpushed
 					}
 					if !br.TipAt.IsZero() {
 						it.UpdatedAt = br.TipAt
@@ -349,8 +347,8 @@ func (b *builder) snapshots() {
 				}
 				if br.Unpushed > 0 {
 					it.Evidence = append(it.Evidence, fmt.Sprintf("%d unpushed on %s", br.Unpushed, where))
-					if it.signals.OldestUnpushed.IsZero() || br.OldestUnpushed.Before(it.signals.OldestUnpushed) {
-						it.signals.OldestUnpushed, it.signals.UnpushedWhere = br.OldestUnpushed, where
+					if it.oldestUnpushed.IsZero() || br.OldestUnpushed.Before(it.oldestUnpushed) {
+						it.oldestUnpushed = br.OldestUnpushed
 					}
 				}
 			}
@@ -464,21 +462,7 @@ func (b *builder) finish(it *Item) {
 	seen := it.Decision != nil && b.in.Seen[it.ID].Equal(it.Decision.DecidedAt) && !it.Decision.DecidedAt.IsZero()
 	it.Status = item.Compute(it.Key, it.Decision, it.Observed, b.f, b.in.Now, seen)
 	it.DueReason = item.DueReason(it.Key, it.Decision, it.Observed, b.f, b.in.Now)
-	// Undecided is true when the item has no decision at all, OR when a
-	// keep, wait or watch decision has come back (its until condition is met,
-	// or someone else's activity is newer than it): the item has returned to
-	// attention and Court needs to decide again. A wait that still waits
-	// (StatusWaiting) is NOT undecided, and an item left open is LeftOpen.
-	it.signals.Undecided = it.Decision == nil ||
-		((it.Decision.Disposition == item.Wait || it.Decision.Disposition == item.Watch) &&
-			it.Status != item.StatusWaiting) ||
-		(it.Decision.Disposition == item.Keep && it.Status == item.StatusDue)
-	it.signals.LeftOpen = it.Status == item.StatusLeftOpen
 	it.NewActivity = it.Status == item.StatusDue && item.NewActivity(it.Key, it.Decision, b.f)
-	ignored := it.Decision != nil && it.Decision.Disposition == item.Ignore
-	if it.Observed.Known && it.Observed.Exists {
-		it.Hits = b.in.Policy.Evaluate(it.signals, ignored, b.in.Now)
-	}
 	sort.Strings(it.Locations)
 	// Set worktreeState on branch items from the worktree tracking map.
 	if it.Kind == item.KindBranch {

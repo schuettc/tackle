@@ -201,11 +201,7 @@ func (a *App) input(g *observe.GitHub, snaps []observe.Snapshot) (engine.Input, 
 	if len(errs) > 0 {
 		return engine.Input{}, fmt.Errorf("unreadable decision files (run `casebook validate`): %w", errors.Join(errs...))
 	}
-	pol, err := a.Repo.Policy()
-	if err != nil {
-		return engine.Input{}, err
-	}
-	return engine.Input{Now: a.Now(), GitHub: g, Snapshots: snaps, Decisions: decisions, Policy: pol, Seen: loadSeen()}, nil
+	return engine.Input{Now: a.Now(), GitHub: g, Snapshots: snaps, Decisions: decisions, Seen: loadSeen()}, nil
 }
 
 // Build computes items from what is already known: the GitHub cache, the
