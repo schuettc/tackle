@@ -136,7 +136,7 @@ function renderHistory(
 
 // ---- the decide step ---------------------------------------------------------
 
-/** What the decide step does with a pick and an accept (attention.ts). */
+/** What the decide step does with a pick and an accept (decide-list.ts). */
 export interface ItemHooks {
   /** Re-render after a reject or a change from the recommendation card. */
   onRefresh?: () => void;

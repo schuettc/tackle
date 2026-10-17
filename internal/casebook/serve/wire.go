@@ -463,8 +463,8 @@ type DecisionVocabView struct {
 	LookMany       string `json:"look_many"`
 	DiscardMany    string `json:"discard_many"`
 	RecommendThese string `json:"recommend_these"`
-	// DiscardAll is the pinned summary's button ({n}: the number of
-	// items), Summary its line.
+	// DiscardAll is the summary's button ({n}: the number of items),
+	// Summary its lines.
 	DiscardAll string       `json:"discard_all"`
 	Summary    SummaryVocab `json:"summary"`
 	CountWords CountWords   `json:"count_words"`
@@ -474,6 +474,9 @@ type DecisionVocabView struct {
 	Untick      string `json:"untick"`
 	// LeftOpen is the left-open group's label (its count beside it).
 	LeftOpen string `json:"left_open"`
+	// CameBack says why an item in the "Came back" group came back, by
+	// its status, when the item gives no reason of its own (due_reason).
+	CameBack map[string]string `json:"came_back"`
 	// Recommends is the open item's recommendation box's kicker
 	// ({session}: who recommends).
 	Recommends string `json:"recommends"`
@@ -510,12 +513,16 @@ type NavVocab struct {
 	Later     string `json:"later"`
 }
 
-// SummaryVocab is the pinned summary line: OneSession when every item the
-// view lists is recommended by one session ({n}: the items, {session}: its
-// name), Mixed otherwise ({r}: how many are recommended).
+// SummaryVocab is decide's summary, in the middle pane with nothing open:
+// ToDecide ({n}: everything to decide), CameBack ({n}: the items that came
+// back), Group, one line per rule's or agent's recommendations ({who}: the
+// rule's name or the session's, {decision}: the group's label, {n}: its
+// size), and NotRecommended ({n}: the rest).
 type SummaryVocab struct {
-	OneSession string `json:"one_session"`
-	Mixed      string `json:"mixed"`
+	ToDecide       string `json:"to_decide"`
+	CameBack       string `json:"came_back"`
+	Group          string `json:"group"`
+	NotRecommended string `json:"not_recommended"`
 }
 
 // CountWords are the words that fill a group button's {n} (CountWord):

@@ -139,13 +139,10 @@ async function loadScenario(context, t, s, agent, ids) {
     // Opened by its session (as casebook_open does): the dock attaches. On
     // new's list (the page opens on due, empty here).
     const tLoad = Date.now();
-    await pg.goto(
-      `${s.url}&session=${encodeURIComponent(ids[0])}#/attention/new`,
-      {
-        waitUntil: 'load',
-        timeout: 15000,
-      },
-    );
+    await pg.goto(`${s.url}&session=${encodeURIComponent(ids[0])}#/decide`, {
+      waitUntil: 'load',
+      timeout: 15000,
+    });
     const rows = pg.locator(
       '.kit-app > .kit-list:not([hidden]) .kit-rows > .kit-row',
     );

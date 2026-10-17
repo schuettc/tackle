@@ -14,7 +14,7 @@
 // item's question, the same cards the open item shows (choices.ts), a note
 // field, and a filled "<choice> · <n> <kind>s" button that POSTs to
 // /api/decide. Ticked items act through their group's buttons
-// (attention.ts), not through a sheet.
+// (decide-list.ts), not through a sheet.
 
 import { sheet, h, noteField, type SheetHandle } from '/_kit/kit.js';
 import type { DecideResult, DecisionVocabView } from './wire.d.ts';

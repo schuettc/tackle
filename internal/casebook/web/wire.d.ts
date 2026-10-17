@@ -239,6 +239,7 @@ export interface DecisionVocabView {
   to_apply_hint: string;
   untick: string;
   left_open: string;
+  came_back: Record<string, string> | null;
   recommends: string;
   nav: NavVocab;
   hide_list: string;
@@ -571,8 +572,10 @@ export interface LookIntoVocab {
 }
 
 export interface SummaryVocab {
-  one_session: string;
-  mixed: string;
+  to_decide: string;
+  came_back: string;
+  group: string;
+  not_recommended: string;
 }
 
 export interface CountWords {

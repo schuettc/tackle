@@ -10,13 +10,6 @@ import {
   reasonSummary,
   matchesHeading,
   conditionErrorIndex,
-  viewCounts,
-  sameConditions,
-  sameRule,
-  rowKicker,
-  hasKindCondition,
-  kindHint,
-  refusedDisposition,
   slug,
   fieldLabel,
   opLabel,
@@ -31,54 +24,57 @@ import {
 } from './rules-text.ts';
 
 describe('trackRecord', () => {
+  test('a recommendation decided another way counts against the rule', () => {
+    assert.equal(
+      trackRecord({
+        accepted: 1,
+        decided_differently: 1,
+        rejected: 0,
+        pending: 2,
+      }),
+      '1 accepted · 1 decided differently · 2 pending',
+    );
+  });
   test('the spec’s form: accepted · rejected · pending', () => {
     assert.equal(
-      trackRecord({ accepted: 87, rejected: 4, pending: 3 }),
+      trackRecord({
+        accepted: 87,
+        decided_differently: 0,
+        rejected: 4,
+        pending: 3,
+      }),
       '87 accepted · 4 rejected · 3 pending',
     );
   });
   test('zero parts are left out', () => {
     assert.equal(
-      trackRecord({ accepted: 89, rejected: 0, pending: 0 }),
+      trackRecord({
+        accepted: 89,
+        decided_differently: 0,
+        rejected: 0,
+        pending: 0,
+      }),
       '89 accepted',
     );
     assert.equal(
-      trackRecord({ accepted: 0, rejected: 0, pending: 3 }),
+      trackRecord({
+        accepted: 0,
+        decided_differently: 0,
+        rejected: 0,
+        pending: 3,
+      }),
       '3 pending',
     );
   });
   test('a rule with no record yet has none to show', () => {
-    assert.equal(trackRecord({ accepted: 0, rejected: 0, pending: 0 }), '');
-  });
-});
-
-describe('rowKicker', () => {
-  const none = { accepted: 0, rejected: 0, pending: 0 };
-  test('the mock\'s "849 match · 2 excluded"', () => {
     assert.equal(
-      rowKicker({ matches: 849, excluded: 2, record: none }),
-      '849 match \u00b7 2 excluded',
-    );
-  });
-  test('then the record', () => {
-    assert.equal(
-      rowKicker({
-        matches: 3,
-        excluded: 0,
-        record: { accepted: 87, rejected: 4, pending: 3 },
+      trackRecord({
+        accepted: 0,
+        decided_differently: 0,
+        rejected: 0,
+        pending: 0,
       }),
-      '3 match \u00b7 0 excluded \u00b7 87 accepted \u00b7 4 rejected \u00b7 3 pending',
-    );
-  });
-  test('an invalid rule says so instead of counting', () => {
-    assert.equal(
-      rowKicker({
-        matches: 0,
-        excluded: 1,
-        record: none,
-        invalid: 'condition 1: x',
-      }),
-      'not valid',
+      '',
     );
   });
 });
@@ -135,131 +131,6 @@ describe('conditionErrorIndex', () => {
       -1,
     );
     assert.equal(conditionErrorIndex('propose: wait needs an until'), -1);
-  });
-});
-
-describe('viewCounts', () => {
-  test('all, active and drafts', () => {
-    assert.deepEqual(
-      viewCounts([
-        { status: 'draft' },
-        { status: 'active' },
-        { status: 'draft' },
-      ]),
-      { all: 3, active: 1, drafts: 2 },
-    );
-  });
-});
-
-describe('sameConditions', () => {
-  test('compares field, op and value in order', () => {
-    const a = [{ field: 'kind', op: 'is', value: 'branch' }];
-    assert.equal(
-      sameConditions(a, [{ field: 'kind', op: 'is', value: 'branch' }]),
-      true,
-    );
-    assert.equal(
-      sameConditions(a, [{ field: 'kind', op: 'is', value: 'pr' }]),
-      false,
-    );
-    assert.equal(sameConditions(a, []), false);
-  });
-});
-
-describe('sameRule', () => {
-  const rule = {
-    id: 'r',
-    name: 'R',
-    status: 'draft',
-    created_by: 'court',
-    created_at: '2026-09-27T10:00:00Z',
-    edited_at: '2026-09-27T10:00:00Z',
-    match: [{ field: 'kind', op: 'is', value: 'branch' }],
-    propose: { disposition: 'delete' },
-    exclude: [{ key: 'branch:o/r@x', reason: 'keep', by: 'court', at: 't' }],
-  };
-  test('the same rule, whatever its key order', () => {
-    const { exclude, ...rest } = rule;
-    assert.equal(sameRule(rule, { exclude, ...rest }), true);
-  });
-  test('a status, an exclusion or its reason, or an edit differs', () => {
-    assert.equal(sameRule(rule, { ...rule, status: 'active' }), false);
-    assert.equal(sameRule(rule, { ...rule, exclude: [] }), false);
-    assert.equal(
-      sameRule(rule, {
-        ...rule,
-        exclude: [{ ...rule.exclude[0], reason: 'other' }],
-      }),
-      false,
-    );
-    assert.equal(sameRule(rule, { ...rule, edited_at: 'later' }), false);
-    assert.equal(
-      sameRule(rule, { ...rule, propose: { disposition: 'keep' } }),
-      false,
-    );
-  });
-});
-
-describe('the proposal without a kind condition (P1)', () => {
-  const all = [
-    'keep',
-    'archive',
-    'delete',
-    'wait',
-    'watch',
-    'ignore',
-    'close',
-    'merge',
-  ];
-  const noKind = ['keep', 'wait', 'ignore'];
-  test('hasKindCondition reads only kind conditions', () => {
-    assert.equal(hasKindCondition([]), false);
-    assert.equal(
-      hasKindCondition([{ field: 'landed', op: 'is', value: 'all-machines' }]),
-      false,
-    );
-    assert.equal(
-      hasKindCondition([{ field: 'kind', op: 'is-not', value: 'repo' }]),
-      true,
-    );
-  });
-  test('the picker says what a kind condition would add', () => {
-    assert.equal(
-      kindHint([], noKind, all),
-      'add a kind condition to propose archive, close, delete, merge or watch',
-    );
-  });
-  test('no hint once the rule has a kind condition, or nothing is missing', () => {
-    assert.equal(
-      kindHint([{ field: 'kind', op: 'is', value: 'branch' }], noKind, all),
-      '',
-    );
-    assert.equal(kindHint([], all, all), '');
-    assert.equal(kindHint([], [], all), '');
-  });
-  test('a lone missing disposition reads without a list', () => {
-    assert.equal(
-      kindHint(
-        [],
-        ['keep', 'wait', 'ignore', 'merge'],
-        ['keep', 'wait', 'ignore', 'merge', 'close'],
-      ),
-      'add a kind condition to propose close',
-    );
-  });
-  test("a refused disposition names the cause in serve's words", () => {
-    assert.equal(
-      refusedDisposition('archive', [], noKind),
-      'archive can\u2019t be proposed for every kind of item (the rule has no kind condition) (allowed: keep, wait, ignore)',
-    );
-    assert.equal(
-      refusedDisposition(
-        'archive',
-        [{ field: 'kind', op: 'is', value: 'branch' }],
-        ['keep', 'delete'],
-      ),
-      'archive can\u2019t be proposed for what this rule matches (allowed: keep, delete)',
-    );
   });
 });
 

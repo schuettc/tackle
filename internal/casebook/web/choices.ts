@@ -51,7 +51,7 @@ export interface ChoicesOpts {
   note?: string;
   onPick(d: string, until?: string, note?: string): void;
   /** The decision cards are in the grid (once): the open item's "Look
-   * into it" card goes after them (attention.ts). */
+   * into it" card goes after them (decide-list.ts). */
   onCards?(grid: HTMLElement): void;
 }
 

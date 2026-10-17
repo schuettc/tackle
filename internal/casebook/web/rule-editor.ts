@@ -1,11 +1,10 @@
-// rule-editor.ts — rules on the Attention list, beside the saved filters
-// (Court, 2026-10-17: a rule is a filter that recommends; both live with the
-// items, one editor, one preview).
+// rule-editor.ts — rules on decide's list (Court, 2026-10-17: a rule is a
+// filter that recommends; both live with the items, one editor, one
+// preview).
 //
-// makeRuleBar(ctx, hooks) draws one chip per rule (serve's GET /api/rules),
-// its name and how many items it matches, with a ⋯ menu (edit, turn off or
-// on), then `+ rule`. One rule is selected at a time; selecting is the
-// caller's (the list then shows the rule's matches).
+// makeRuleRow(ctx, hooks) is the row under the filters: "+ rule" and
+// "rules N". ruleMenu(row, hooks) is a rule's ⋯ (edit, turn off or on), on
+// its group's header and in the rule list.
 //
 // ruleEditor(ctx, row, seed, hooks) is the filter editor with one more line:
 // what the rule proposes (a decision, and a note). Saving turns the rule on
@@ -53,25 +52,105 @@ export function dispositionLabel(
   return best || d;
 }
 
-export interface RuleBar {
-  el: HTMLElement;
-  paint(rows: RuleRow[], selected: string | null): void;
-  setError(message: string | null): void;
+/**
+ * ruleMenu is a rule's ⋯ and its menu: edit, turn off (or on). It goes on
+ * a rule group's header and on each row of the rule list.
+ */
+export function ruleMenu(
+  row: RuleRow,
+  hooks: { onEdit(): void; onToggle(): void },
+): HTMLElement {
+  const id = row.rule.id;
+  const off = row.rule.status !== 'active';
+  const more = h('button', {
+    type: 'button',
+    class: 'cb-filter-more cb-rule-more',
+    'aria-label': `${row.rule.name || id}: edit, turn ${off ? 'on' : 'off'}`,
+    'aria-haspopup': 'menu',
+    'aria-expanded': 'false',
+    onclick(e: Event) {
+      e.stopPropagation();
+      setMenu(menu.hidden);
+    },
+  });
+  more.textContent = '\u22ef';
+  const item = (label: string, run: () => void): HTMLElement =>
+    h(
+      'button',
+      {
+        type: 'button',
+        class: 'cb-filter-menu-item',
+        role: 'menuitem',
+        'data-act': label,
+        onclick(e: Event) {
+          e.stopPropagation();
+          setMenu(false);
+          run();
+        },
+      },
+      label,
+    );
+  const menu = h(
+    'div',
+    { class: 'cb-filter-menu', role: 'menu', hidden: true },
+    item('edit', () => hooks.onEdit()),
+    item(off ? 'turn on' : 'turn off', () => hooks.onToggle()),
+  );
+  const onEsc = (e: KeyboardEvent) => {
+    if (e.key !== 'Escape' || e.isComposing) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu(false);
+    more.focus();
+  };
+  // A click anywhere else closes it.
+  const onAway = (e: MouseEvent) => {
+    if (!wrap.contains(e.target as Node)) setMenu(false);
+  };
+  function setMenu(open: boolean): void {
+    menu.hidden = !open;
+    more.setAttribute('aria-expanded', String(open));
+    if (open) {
+      document.addEventListener('keydown', onEsc, true);
+      document.addEventListener('mousedown', onAway, true);
+      menu.querySelector<HTMLElement>('.cb-filter-menu-item')?.focus();
+    } else {
+      document.removeEventListener('keydown', onEsc, true);
+      document.removeEventListener('mousedown', onAway, true);
+    }
+  }
+  menuNav(menu, '.cb-filter-menu-item', more, () => setMenu(false));
+  const wrap = h(
+    'span',
+    { class: 'cb-filter-item cb-rule-menu', 'data-id': id },
+    more,
+    menu,
+  );
+  return wrap;
 }
 
-export function makeRuleBar(
-  ctx: Ctx,
-  hooks: {
-    onSelect(id: string | null): void;
-    onEdit(row: RuleRow | null): void;
-    onChanged(): void;
-  },
-): RuleBar {
-  let selected: string | null = null;
-  const chipsEl = h('div', {
-    class: 'kit-chips cb-filter-chips cb-rule-chips',
-    'data-group': 'rules',
+/** toggleRule turns row's rule on when it is off, off when it is on. */
+export async function toggleRule(ctx: Ctx, row: RuleRow): Promise<void> {
+  const off = row.rule.status !== 'active';
+  await ctx.api.post(off ? '/rules/activate' : '/rules/deactivate', {
+    id: row.rule.id,
   });
+}
+
+export interface RuleRowBar {
+  el: HTMLElement;
+  paint(rows: RuleRow[]): void;
+}
+
+/**
+ * makeRuleRow is the row under the filters: "+ rule" (a new rule, in the
+ * editor beside the list) and "rules N" (every rule, off ones too, in the
+ * middle pane).
+ */
+export function makeRuleRow(
+  _ctx: Ctx,
+  hooks: { onNew(): void; onList(): void },
+): RuleRowBar {
   const addBtn = h(
     'button',
     {
@@ -79,126 +158,35 @@ export function makeRuleBar(
       class: 'kit-chip cb-filter-add',
       'data-testid': 'new-rule',
       onclick() {
-        hooks.onEdit(null);
+        hooks.onNew();
       },
     },
     '+ rule',
   );
-  const errEl = h('p', { class: 'cb-filter-err', hidden: true });
+  const listBtn = h(
+    'button',
+    {
+      type: 'button',
+      class: 'kit-chip cb-rules-n',
+      'data-testid': 'rules-n',
+      onclick() {
+        hooks.onList();
+      },
+    },
+    'rules 0',
+  );
   const el = h(
     'div',
-    { class: 'cb-filters cb-rules-bar', 'aria-label': 'rules' },
-    h('span', { class: 'cb-bar-label' }, 'rules'),
-    chipsEl,
-    errEl,
+    { class: 'kit-chips cb-rule-row', 'aria-label': 'rules' },
+    addBtn,
+    listBtn,
   );
-  let closeMenu: (() => void) | null = null;
-
-  function chip(row: RuleRow): HTMLElement {
-    const id = row.rule.id;
-    const on = selected === id;
-    const off = row.rule.status !== 'active';
-    const b = h(
-      'button',
-      {
-        type: 'button',
-        class:
-          'kit-chip cb-filter cb-rule' +
-          (on ? ' on' : '') +
-          (off ? ' cb-rule-off' : ''),
-        'data-id': id,
-        'aria-pressed': String(on),
-        title: off ? 'off: it recommends nothing until you turn it on' : '',
-        onclick() {
-          hooks.onSelect(on ? null : id);
-        },
-      },
-      `${row.rule.name || id} \u00b7 ${row.invalid ? 'not valid' : row.matches}`,
-    );
-    if (row.invalid) {
-      b.setAttribute('data-invalid', '');
-      b.title = row.invalid;
-    }
-    const more = h('button', {
-      type: 'button',
-      class: 'cb-filter-more',
-      'aria-label': `${row.rule.name || id}: edit, turn ${off ? 'on' : 'off'}`,
-      'aria-haspopup': 'menu',
-      'aria-expanded': 'false',
-      onclick() {
-        setMenu(menu.hidden);
-      },
-    });
-    more.textContent = '\u22ef';
-    const item = (label: string, run: () => void): HTMLElement =>
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'cb-filter-menu-item',
-          role: 'menuitem',
-          'data-act': label,
-          onclick() {
-            setMenu(false);
-            run();
-          },
-        },
-        label,
-      );
-    const menu = h(
-      'div',
-      { class: 'cb-filter-menu', role: 'menu', hidden: true },
-      item('edit', () => hooks.onEdit(row)),
-      item(off ? 'turn on' : 'turn off', () => void toggle(row)),
-    );
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setMenu(false);
-      more.focus();
-    };
-    function setMenu(open: boolean): void {
-      if (open) closeMenu?.();
-      menu.hidden = !open;
-      more.setAttribute('aria-expanded', String(open));
-      if (open) {
-        closeMenu = () => setMenu(false);
-        document.addEventListener('keydown', onEsc, true);
-        menu.querySelector<HTMLElement>('.cb-filter-menu-item')?.focus();
-      } else {
-        if (closeMenu) closeMenu = null;
-        document.removeEventListener('keydown', onEsc, true);
-      }
-    }
-    menuNav(menu, '.cb-filter-menu-item', more, () => setMenu(false));
-    return h('span', { class: 'cb-filter-item', 'data-id': id }, b, more, menu);
-  }
-
-  async function toggle(row: RuleRow): Promise<void> {
-    const off = row.rule.status !== 'active';
-    try {
-      await ctx.api.post(off ? '/rules/activate' : '/rules/deactivate', {
-        id: row.rule.id,
-      });
-      setError(null);
-      hooks.onChanged();
-    } catch (err) {
-      setError(message(err));
-    }
-  }
-
-  function paint(rows: RuleRow[], sel: string | null): void {
-    selected = sel;
-    closeMenu?.();
-    chipsEl.replaceChildren(...rows.map(chip), addBtn);
-  }
-  function setError(msg: string | null): void {
-    errEl.hidden = msg === null;
-    errEl.textContent = msg ?? '';
-  }
-  paint([], null);
-  return { el, paint, setError };
+  return {
+    el,
+    paint(rows) {
+      listBtn.textContent = `rules ${rows.length}`;
+    },
+  };
 }
 
 export interface RuleEditor {

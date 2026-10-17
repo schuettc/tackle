@@ -1,621 +1,166 @@
-// rules.ts — the Rules section (spec §4.3): the list of standing rules and a
-// rule as a document in the reading column.
+// rules.ts — a rule in decide's middle pane, read only, and the list of
+// every rule ("rules N").
 //
-// The list (kit list) shows every rule with what it matches and excludes now
-// and its track record ("849 match · 2 excluded · 3 pending"), and its status
-// pill (draft, active, or not valid); views all / active / drafts. Its foot
-// makes a new draft (`new rule`: an id and a name) or asks the agent to draft
-// one (the composer, with `attached: section rules`). #/rules/<id> opens a rule:
-// kicker, title, facts (status, matches, excluded, author), what a draft or
-// an active rule does, the conditions table with `+ condition`
-// (conditions.ts), the proposal, and the live matches: "matches now · N ·
-// <by reason>", paginated, groupable by repo. Unticking a match adds an
-// exclusion (with an optional reason); ticking an excluded one includes it.
+// renderRule(ctx, detail, hooks) draws one rule as a document: kicker,
+// title, facts (on or off, matches, excluded, author, record), what it does,
+// its conditions (conditions.ts, read only), what it recommends, and its
+// live matches: "matches now · N · <by reason>", paginated, groupable by
+// repo. Unticking a match excludes it (with an optional reason); ticking an
+// excluded one includes it again. edit opens the rule editor beside the
+// list (hooks.onEdit); turn on / turn off is hooks.onToggle.
 //
-// A draft's conditions and proposal are editable. Editing the conditions
-// re-previews them against the live index, debounced by 300 ms (POST
-// /api/rules/preview; nothing is saved). serve validates: a condition it
-// refuses shows serve's message under it, and the matches wait for a valid
-// rule rather than showing a preview of a broken one. A rule serve holds as
-// invalid (a hand-written file, an older value, a draft not finished) says
-// so, in the list and in its document; an active one says casebook skips it,
-// and Court fixes it (and saves it, as a draft) or deactivates it.
-//
-// What Court activates is what the page shows: activate and save carry the
-// rule's version, and serve refuses (409) a copy that changed. A live change
-// that arrives while Court has unsaved edits doesn't replace them silently:
-// the document shows the change, who made it and serve's copy, and Activate
-// waits until he reloads theirs or keeps his own over it.
-//
-// While Rules is the active section it feeds the composer {rule: <id>} for
-// the open rule (once it has loaded), {section: 'rules'} when he asks the
-// agent from the foot, and {} otherwise; hidden, it never touches the
-// attached line or the bar's primary, though it keeps itself current from
-// live events.
+// renderRuleList(ctx, rows, hooks) is every rule, off ones too: its name,
+// on, off or not valid, what it recommends and how many items it matches,
+// with ⋯ (edit, turn on / off). A row opens the rule (hooks.onOpen).
 
-import {
-  h,
-  facts,
-  buttons,
-  card,
-  sheet,
-  ApiError,
-  type Button,
-  type Primary,
-} from '/_kit/kit.js';
+import { h, facts, buttons, card, sheet, type Button } from '/_kit/kit.js';
 import type {
-  Condition,
   Exclusion,
   MatchPreview,
   MatchRow,
-  ProposeResult,
-  Rule,
-  RuleAction,
   RuleDetailView,
+  RuleRow,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import {
-  conditionEditor,
-  noteTokens,
-  setConditionError,
-} from './conditions.ts';
+import { conditionEditor } from './conditions.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { DANGER_DISPS, getVocab } from './decide.ts';
-import { menuNav } from './menu-nav.ts';
-import { dispositionLabel } from './rule-editor.ts';
+import { dispositionLabel, ruleMenu } from './rule-editor.ts';
 import {
   authorOf,
-  conditionErrorIndex,
-  kindHint,
   matchesHeading,
-  refusedDisposition,
   reasonSummary,
-  sameAction,
-  sameConditions,
-  sameRule,
+  trackRecord,
 } from './rules-text.ts';
-
-// Between the items of a proposal hint: the dot stays with the item before.
-const HINT_SEP = '\u00a0\u00b7 ';
 
 /** The re-preview debounce (spec §4.3). */
 export const PREVIEW_DEBOUNCE_MS = 300;
 
-// Matches are fetched 200 at a time, like the Attention list (serve's cap).
+// Matches are fetched 200 at a time, like decide's list (serve's cap).
 const PAGE = 200;
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-const isConflict = (err: unknown) =>
-  err instanceof ApiError && err.status === 409;
-
-// ---- the rule document -----------------------------------------------------
-
-/** What the section needs from an open rule's document. */
-export interface RuleDoc {
-  el: HTMLElement;
-  id: string;
-  /** Unsaved edits to the conditions or the proposal. */
-  dirty(): boolean;
-  /** The bar's primary for this rule: Activate or Deactivate. */
-  primary(): Primary | null;
-  /** serve's current rule (a live change), and who changed it if known. */
-  update(detail: RuleDetailView, by: string): void;
-  /** The index changed: preview again (debounced), keeping the depth shown. */
-  refresh(): void;
-}
-
 export interface RuleHooks {
-  /** The primary changed (status, edits, a conflict). */
-  primaryChanged(): void;
-  /** serve saved something (edit, exclusion, lifecycle): refresh the list. */
-  saved(): void;
+  /** Open the rule in the editor beside the list. */
+  onEdit(): void;
+  /** Turn the rule on (true) or off (false). */
+  onToggle(on: boolean): Promise<void>;
+  /** An exclusion or an inclusion was saved: the list may change. */
+  onChanged?(): void;
 }
 
 /**
- * renderRule draws a rule as a document and keeps it live: edits
- * re-preview, exclusions and lifecycle post to serve.
+ * renderRule draws a rule as a read-only document; its matches post
+ * exclusions and inclusions to serve.
  */
 export function renderRule(
   ctx: Ctx,
   detail: RuleDetailView,
   hooks: RuleHooks,
-  // embedded: the rule on the Attention list (Court, 2026-10-17): read only
-  // here, edited in the editor beside the list (onEdit); on or off, not
-  // draft or active.
-  embedded?: { onEdit(): void; onToggle(on: boolean): Promise<void> },
-): RuleDoc {
-  const id = detail.rule.id;
-  let saved: RuleDetailView = detail; // serve's copy, as shown
-  let base: Rule = detail.rule;
-  let work: Condition[] = [...(base.match ?? [])]; // Court's edits
-  let workPropose: RuleAction = { ...base.propose };
-  let exclude: Exclusion[] = base.exclude ?? [];
+): HTMLElement {
+  const rule = detail.rule;
+  const id = rule.id;
+  const off = rule.status !== 'active';
+  let exclude: Exclusion[] = rule.exclude ?? [];
   let preview: MatchPreview = detail.matches;
-  // What serve says the rule may propose, for its conditions (with each
-  // preview; kept while the conditions are refused).
-  let dispositions: string[] = detail.matches.dispositions ?? [];
   let shown: MatchRow[] = preview.page ?? [];
-  let invalid: string | null = null; // the conditions, as serve judged them
-  let conflict: { detail: RuleDetailView; by: string } | null = null;
   let grouped = false;
   let seq = 0;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  // How many rows Court has asked to see: "show more" raises it, an edit
-  // starts again at a page, and so does serve's copy of the rule changing
-  // (draw, applyExclusions). A preview in flight reads it as it pages, so a
-  // re-preview landing while "show more" loads still brings what he asked
-  // for; loadMore's own answer is then dropped (older, or its rows already
-  // shown).
-  let opened = PAGE;
-  // One request at a time (Activate, Deactivate, propose once), in the order
-  // Court asked. serve announces a change before it replies, so the page can
-  // show the next primary while a request is still in flight; a click on it
-  // then waits for the reply and runs after it. No click is dropped.
-  let queue: Promise<void> = Promise.resolve();
-  const inTurn = (task: () => Promise<void>): Promise<void> => {
-    const run = queue.then(task);
-    queue = run.catch(() => {});
-    return run;
-  };
 
-  const doc = h('article', { class: 'cb-rule', 'data-rule': id });
+  const doc = h('article', {
+    class: 'cb-rule',
+    'data-rule': id,
+    'data-status': rule.status,
+  });
+  doc.toggleAttribute('data-invalid', !!detail.invalid);
   const el = h('div', { class: 'kit-doc' }, doc);
 
-  const dirty = () =>
-    !sameConditions(work, base.match ?? []) ||
-    !sameAction(workPropose, base.propose);
-  const isDraft = () => base.status !== 'active';
-  // An active rule is edited only while serve holds it invalid (to fix it).
-  const editable = () => !embedded && (isDraft() || !!saved.invalid);
-  const body = (): Rule => ({
-    ...base,
-    match: work,
-    propose: workPropose,
-    exclude,
-  });
-
-  // ---- parts that update in place ----
-
   let factsEl = h('div');
-  let editor = h('div');
-  const titleEl = h('h1', { class: 'kit-h1' });
-  const kickEl = h('p', { class: 'kit-kick' });
-  const proseEl = h('p');
-  const invalidEl = h('div', { 'data-testid': 'rule-invalid' });
-  const conflictEl = h('div', { 'data-testid': 'rule-conflict' });
-  const proposeEl = h('div');
-  const proposeErrEl = h('p', {
-    class: 'cb-cond-err cb-propose-err',
-    'data-testid': 'propose-err',
-    hidden: true,
-  });
   const heading = h('h3', { class: 'kit-label cb-matches-label' });
   const groupChips = h('span', { class: 'cb-matches-view' });
   const matchesEl = h('div', {
     class: 'kit-table cb-matches',
     'data-testid': 'matches',
   });
-  const actionsEl = h('div', { class: 'cb-rule-actions' });
   const note = h('p', { class: 'cb-rule-note', role: 'status' });
 
   function drawFacts(): void {
-    const who = authorOf(base.created_by);
+    const who = authorOf(rule.created_by);
     const byEl = h('b', who.agent ? { class: 'cb-by-agent' } : null, who.name);
-    const next = facts([
+    const rows: Array<[string, string | Node]> = [
       [
         'status',
-        embedded
-          ? `${isDraft() ? 'off' : 'on'}${saved.invalid ? ' · not valid' : ''}`
-          : saved.invalid
-            ? `${base.status} · not valid`
-            : base.status,
+        `${off ? 'off' : 'on'}${detail.invalid ? ' · not valid' : ''}`,
       ],
-      ['matches', invalid ? '\u2014' : String(preview.total)],
+      ['matches', String(preview.total)],
       ['excluded', String(exclude.length)],
       ['by', byEl],
-    ]);
+    ];
+    const rec = trackRecord(detail.record);
+    if (rec) rows.push(['record', rec]);
+    const next = facts(rows);
     factsEl.replaceWith(next);
     factsEl = next;
   }
 
-  function drawProse(): void {
-    if (embedded) {
-      proseEl.replaceChildren(
-        isDraft()
-          ? 'Off: it recommends nothing until you turn it on.'
-          : 'On: undecided items that match get this recommendation, now and after every sync. Nothing is decided until you accept it.',
-      );
-      return;
-    }
-    const who = authorOf(base.created_by);
-    const lifecycle =
-      'Once active, casebook proposes new matches after every sync, and never overrides an item that\u2019s already decided.';
-    if (!isDraft()) {
-      proseEl.replaceChildren(
-        'Active: casebook proposes new matches after every sync, and never overrides an item that\u2019s already decided.',
-      );
-    } else if (who.agent) {
-      proseEl.replaceChildren(
-        h('span', { class: 'cb-by-agent' }, who.name),
-        ' drafted this rule. It proposes nothing until you activate it, and only you can. ',
-        lifecycle,
-      );
-    } else {
-      proseEl.replaceChildren(
-        'A draft proposes nothing until you activate it. ',
-        lifecycle,
-      );
-    }
-  }
-
-  // The card for a rule serve holds as invalid: its message, and for an
-  // active rule that casebook skips it (rebuild does, with a notice).
-  function drawInvalid(): void {
-    if (!saved.invalid) {
-      invalidEl.replaceChildren();
-      return;
-    }
-    const skipped = base.status === 'active';
-    invalidEl.replaceChildren(
-      card({
+  // The card for a rule serve holds as invalid: its message.
+  const invalidEl = detail.invalid
+    ? card({
         edge: 'signal',
-        head: skipped
-          ? 'not valid \u00b7 active, but skipped at every sync'
-          : 'not valid',
+        head: 'not valid',
         body: h(
           'div',
           null,
-          h('p', { class: 'cb-invalid-msg' }, saved.invalid),
+          h('p', { class: 'cb-invalid-msg' }, detail.invalid),
           h(
             'p',
             { class: 'cb-invalid-help' },
-            skipped
-              ? 'casebook proposes nothing from this rule until it is valid. Fix it and save it (it becomes a draft), or deactivate it.'
-              : 'It can\u2019t be activated or propose anything until it is valid.',
+            'casebook recommends nothing from this rule until it is valid. Edit it to fix it.',
           ),
         ),
-      }),
-    );
-  }
-
-  // The proposal: a draft's is editable (disposition, until, note).
-  //
-  // A draft's picker is built once and kept across redraws (a live preview,
-  // or serve's copy of the rule drawn again): an open disposition menu
-  // stays open with its chips, and Court's focus, where they were, so a
-  // click on a chip never lands on one a redraw has just replaced.
-  function drawPropose(): void {
-    const p = workPropose;
-    if (editable() && refreshPropose) {
-      refreshPropose();
-      return;
-    }
-    refreshPropose = null;
-    const tr = (label: string, value: Node) =>
-      h(
-        'div',
-        { class: 'kit-tr' },
-        h('span', { class: 'cb-cond-f' }, label),
-        h('span'),
-        value,
-      );
-    if (!editable()) {
-      drawChoices = () => {};
-      proposeEl.replaceChildren(
-        h(
-          'div',
-          { class: 'kit-table cb-propose', 'data-testid': 'propose' },
-          tr(
-            'disposition',
-            h(
-              'span',
-              {
-                class:
-                  'cb-cond-v cb-disp-ro' +
-                  (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
-                'data-value': p.disposition,
-              },
-              p.disposition,
-            ),
-          ),
-          p.until
-            ? tr('until', h('span', { class: 'cb-cond-v' }, p.until))
-            : null,
-          p.note ? tr('note', h('span', { class: 'cb-cond-v' }, p.note)) : null,
-        ),
-      );
-      // The decision as it reads for the types the rule matches ("Stop
-      // tracking it"), once the vocabulary is in.
-      void getVocab(ctx).then((vocab) => {
-        const el = proposeEl.querySelector<HTMLElement>('.cb-disp-ro');
-        if (el)
-          el.textContent = dispositionLabel(
-            vocab,
-            preview.kinds ?? null,
-            p.disposition,
-          );
-      });
-      return;
-    }
-    // The disposition: a picker of what serve says this rule may propose
-    // (the dispositions every kind it can match allows; it follows the
-    // conditions with each preview), open in the table when chosen.
-    const pick = h('button', {
-      type: 'button',
-      class: 'cb-cond-v cb-disp',
-      'aria-label': 'disposition',
-      'aria-haspopup': 'menu',
-      'aria-expanded': 'false',
-      onclick() {
-        setMenu(menu.hidden);
-      },
-    });
-    const menu = h('div', {
-      class: 'cb-disp-menu',
-      role: 'menu',
-      'aria-label': 'dispositions',
-      hidden: true,
-    });
-    const menuChips = h('span', { class: 'cb-disp-opts' });
-    // Why only some are offered: a rule with no kind condition may propose
-    // only what every kind of item allows (serve's rule).
-    const whyEl = h('span', {
-      class: 'cb-disp-why',
-      'data-testid': 'disp-why',
-    });
-    menu.append(
-      h('span'),
-      h('span'),
-      h('span', { class: 'cb-disp-col' }, menuChips, whyEl),
-    );
-    // A chip moved or dropped by a redraw loses focus as it leaves the
-    // document; that is no leaving the menu (redrawing says so).
-    menuNav(menu, '.cb-disp-opt', pick, () => {
-      if (!redrawing) setMenu(false);
-    });
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.isComposing) return;
-      if (!menu.isConnected) {
-        document.removeEventListener('keydown', onEsc, true);
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      setMenu(false);
-      pick.focus();
-    };
-    function setMenu(open: boolean): void {
-      menu.hidden = !open;
-      pick.setAttribute('aria-expanded', String(open));
-      if (open) {
-        document.addEventListener('keydown', onEsc, true);
-        (
-          menu.querySelector<HTMLElement>('.cb-disp-opt.on') ??
-          menu.querySelector<HTMLElement>('.cb-disp-opt')
-        )?.focus();
-      } else {
-        document.removeEventListener('keydown', onEsc, true);
-      }
-    }
-    // until is for the dispositions that wait (wait, watch): its row shows
-    // for those, or when the rule already has one.
-    const needsUntil = () =>
-      !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
-    const choose = (d: string) => {
-      workPropose = { ...workPropose, disposition: d };
-      setMenu(false);
-      drawChoices();
-      untilRow.hidden = untilHint.hidden = !needsUntil();
-      edited();
-      pick.focus();
-    };
-    // The chips drawn. A preview offering another list (a kind condition
-    // added) keeps the chip of each disposition still offered, the same
-    // element, in place: only the ones it drops leave and the new ones
-    // join. A chip with Court's focus that leaves hands it to the chosen
-    // one (or the first), so an open menu stays open.
-    let chipsFor = '';
-    drawChoices = () => {
-      const cur = workPropose.disposition;
-      pick.textContent = cur || 'choose\u2026';
-      pick.dataset.value = cur;
-      pick.classList.toggle('cb-danger', DANGER_DISPS.has(cur));
-      whyEl.textContent = kindHint(work, dispositions, allDispositions);
-      drawProposeErr();
-      const sig = `${cur}\n${dispositions.join(' ')}`;
-      if (sig === chipsFor) return;
-      chipsFor = sig;
-      const have = new Map(
-        [...menuChips.querySelectorAll<HTMLElement>('.cb-disp-opt')].map(
-          (e) => [e.dataset.disp ?? '', e],
-        ),
-      );
-      const chips = dispositions.map((d) => {
-        const chip =
-          have.get(d) ??
-          h(
-            'button',
-            {
-              type: 'button',
-              role: 'menuitemradio',
-              'data-disp': d,
-              onclick() {
-                choose(d);
-              },
-            },
-            d,
-          );
-        chip.setAttribute('aria-checked', String(d === cur));
-        chip.className =
-          'kit-chip cb-disp-opt' +
-          (d === cur ? ' on' : '') +
-          (DANGER_DISPS.has(d) ? ' cb-danger' : '');
-        return chip;
-      });
-      const focused = document.activeElement;
-      if (
-        focused instanceof HTMLElement &&
-        menuChips.contains(focused) &&
-        !chips.includes(focused)
-      ) {
-        (
-          chips.find((c) => c.classList.contains('on')) ??
-          chips[0] ??
-          pick
-        ).focus();
-      }
-      keepFocus(() => {
-        for (const [d, chip] of have) {
-          if (!chips.includes(chip)) {
-            have.delete(d);
-            chip.remove();
-          }
-        }
-        // In order: a kept chip already in place is never moved.
-        chips.forEach((chip, i) => {
-          const at = menuChips.children[i];
-          if (at !== chip) menuChips.insertBefore(chip, at ?? null);
-        });
-      });
-    };
-    const text = (field: 'until' | 'note', placeholder: string) => {
-      const input = h('input', {
-        class: 'cb-cond-v',
-        type: 'text',
-        value: p[field] ?? '',
-        placeholder,
-        spellcheck: false,
-        'aria-label': field,
-      }) as HTMLInputElement;
-      input.addEventListener('input', () => {
-        const v = input.value;
-        workPropose = { ...workPropose, [field]: v || undefined };
-        drawProposeErr();
-        edited();
-      });
-      return input;
-    };
-    // A hint under a row, in the value's column; it wraps, never truncates.
-    const hint = (testid: string) =>
-      h(
-        'div',
-        { class: 'cb-prop-hint', 'data-testid': testid },
-        h('span'),
-        h('span'),
-        h('span', { class: 'cb-prop-hint-t' }),
-      );
-    const untilIn = text('until', '');
-    const untilRow = tr('until', untilIn);
-    const untilHint = hint('until-hint');
-    untilRow.hidden = untilHint.hidden = !needsUntil();
-    const noteIn = text('note', 'optional');
-    const noteHint = hint('note-hint');
-    // serve's words for both: the until forms it parses, the note's tokens.
-    // Each item stays whole on a line; the list wraps between them.
-    const items = (el: HTMLElement, lead: string, words: string[]) => {
-      const out: Array<Node | string> = [];
-      words.forEach((w, i) => {
-        if (i) out.push(HINT_SEP);
-        out.push(h('span', { class: 'cb-prop-hint-i' }, w));
-      });
-      el.lastElementChild!.replaceChildren(
-        ...(words.length ? [lead, ...out] : []),
-      );
-    };
-    void getVocab(ctx)
-      .then((v) => {
-        allDispositions = (v.kinds ?? []).flatMap((k) => k.allowed ?? []);
-        drawChoices();
-        const forms = v.until_forms ?? [];
-        if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
-        items(
-          untilHint,
-          '',
-          forms.map((f) => f.syntax),
-        );
       })
-      .catch(() => {});
-    void noteTokens(ctx)
-      .then((ts) => {
-        items(
-          noteHint,
-          'may use ',
-          ts.map((t) => `${t.token} ${t.meaning}`),
-        );
-      })
-      .catch(() => {});
-    refreshPropose = () => {
-      untilIn.value = workPropose.until ?? '';
-      noteIn.value = workPropose.note ?? '';
-      untilRow.hidden = untilHint.hidden = !needsUntil();
-      drawChoices();
-    };
-    proposeEl.replaceChildren(
-      h(
-        'div',
-        { class: 'kit-table cb-propose', 'data-testid': 'propose' },
-        tr('disposition', pick),
-        menu,
-        untilRow,
-        untilHint,
-        tr('note', noteIn),
-        noteHint,
-      ),
-      proposeErrEl,
+    : h('div');
+
+  // What it recommends, as it reads for the types the rule matches
+  // ("Delete it"), once the vocabulary is in.
+  const p = rule.propose;
+  const tr = (label: string, value: Node) =>
+    h(
+      'div',
+      { class: 'kit-tr' },
+      h('span', { class: 'cb-cond-f' }, label),
+      h('span'),
+      value,
     );
-    drawChoices();
-  }
-
-  // drawChoices redraws the disposition picker (a new list from serve).
-  let drawChoices: () => void = () => {};
-  // refreshPropose shows the proposal in a draft's picker already built.
-  let refreshPropose: (() => void) | null = null;
-  // redrawing: elements are being moved in the document, not left by Court.
-  let redrawing = false;
-
-  // keepFocus runs a redraw that moves elements (a focused one loses focus
-  // as it leaves the document, if only to be put back) and gives the focus
-  // back to the element that had it, if it is still in the document.
-  function keepFocus(redraw: () => void): void {
-    const focused = document.activeElement;
-    redrawing = true;
-    try {
-      redraw();
-    } finally {
-      redrawing = false;
-    }
-    if (
-      focused instanceof HTMLElement &&
-      focused !== document.activeElement &&
-      focused.isConnected
-    ) {
-      focused.focus();
-    }
-  }
-  // Every disposition some kind of item allows (the decision vocabulary).
-  let allDispositions: string[] = [];
-
-  // drawProposeErr says why the proposal isn't valid: serve's message for
-  // the copy it holds, or, once Court changes the disposition, whether
-  // this rule may propose it.
-  function drawProposeErr(): void {
-    let msg = '';
-    const d = workPropose.disposition;
-    if (
-      saved.invalid?.startsWith('propose:') &&
-      sameAction(workPropose, base.propose) &&
-      sameConditions(work, base.match ?? [])
-    ) {
-      msg = saved.invalid;
-    } else if (d && dispositions.length && !dispositions.includes(d)) {
-      msg = refusedDisposition(d, work, dispositions);
-    }
-    proposeErrEl.textContent = msg;
-    proposeErrEl.hidden = !msg;
-  }
+  const dispEl = h(
+    'span',
+    {
+      class:
+        'cb-cond-v cb-disp-ro' +
+        (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+      'data-value': p.disposition,
+    },
+    p.disposition,
+  );
+  void getVocab(ctx)
+    .then((vocab) => {
+      dispEl.textContent = dispositionLabel(
+        vocab,
+        preview.kinds ?? null,
+        p.disposition,
+      );
+    })
+    .catch(() => {});
+  const proposeEl = h(
+    'div',
+    { class: 'kit-table cb-propose', 'data-testid': 'propose' },
+    tr('decision', dispEl),
+    p.until ? tr('until', h('span', { class: 'cb-cond-v' }, p.until)) : null,
+    p.note ? tr('note', h('span', { class: 'cb-cond-v' }, p.note)) : null,
+  );
 
   // ---- matches ----
 
@@ -676,20 +221,7 @@ export function renderRule(
   }
 
   function drawMatches(): void {
-    matchesEl.removeAttribute('data-invalid');
-    if (invalid) {
-      // serve's message is under the condition it names; this line doesn't
-      // repeat (or renumber) it.
-      heading.textContent = 'matches now';
-      matchesEl.setAttribute('data-invalid', '');
-      matchesEl.replaceChildren(
-        waitRow('not previewed: the conditions aren\u2019t valid'),
-      );
-      groupChips.hidden = true;
-      return;
-    }
     heading.textContent = matchesHeading(preview.total, preview.by_reason);
-    groupChips.hidden = false;
     const out: HTMLElement[] = [];
     if (grouped) {
       const rest = [...shown];
@@ -764,78 +296,14 @@ export function renderRule(
     );
   }
 
-  // setPreview takes fresh matches (their pages so far).
-  function setPreview(p: MatchPreview): void {
-    invalid = null;
-    setConditionError(editor, -1, null);
-    preview = p;
-    shown = p.page ?? [];
-    if (p.dispositions) dispositions = p.dispositions;
-    drawChoices();
-    drawMatches();
-    drawFacts();
-  }
-
-  function setInvalid(msg: string): void {
-    invalid = msg;
-    setConditionError(editor, conditionErrorIndex(msg), msg);
-    drawMatches();
-    drawFacts();
-  }
-
-  // ---- re-preview ----
-
-  // previewNow previews the rule as edited. depth keeps that many rows (a
-  // live refresh keeps a "show more" Court opened); an edit starts again.
-  async function previewNow(depth = PAGE): Promise<void> {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const mine = ++seq;
-    opened = depth;
-    try {
-      const b = body();
-      const p = await ctx.api.post<MatchPreview>('/rules/preview', b);
-      let rows = p.page ?? [];
-      while (rows.length < Math.min(Math.max(depth, opened), p.total)) {
-        const next = await ctx.api.post<MatchPreview>(
-          `/rules/preview?offset=${rows.length}&limit=${PAGE}`,
-          b,
-        );
-        if (mine !== seq || !(next.page ?? []).length) break;
-        rows = [...rows, ...(next.page ?? [])];
-      }
-      if (mine === seq) setPreview({ ...p, page: rows });
-    } catch (err) {
-      if (mine !== seq) return;
-      if (err instanceof ApiError && err.status === 400)
-        setInvalid(err.message);
-      else note.textContent = `preview failed: ${message(err)}`;
-    }
-  }
-
-  // schedule previews after the debounce. keepDepth (a live refresh) keeps
-  // as many rows as are shown when it fires; an edit starts from page one.
-  function schedule(keepDepth = false): void {
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      void previewNow(keepDepth ? Math.max(PAGE, opened, shown.length) : PAGE);
-    }, PREVIEW_DEBOUNCE_MS);
-  }
-
   async function loadMore(): Promise<void> {
     const from = shown.length;
-    const q = `?offset=${from}&limit=${PAGE}`;
-    opened = Math.max(opened, from + PAGE);
     const mine = seq;
     try {
-      const p = await ctx.api.post<MatchPreview>(`/rules/preview${q}`, body());
-      // Dropped when a newer preview started (it pages to what Court
-      // opened), or when the rows shown changed since this asked: a
-      // re-preview already in flight at the click read the raised `opened`
-      // and brought these rows itself.
+      const p = await ctx.api.post<MatchPreview>(
+        `/rules/preview?offset=${from}&limit=${PAGE}`,
+        { ...rule, exclude },
+      );
       if (mine !== seq || shown.length !== from) return;
       shown = [...shown, ...(p.page ?? [])];
       preview = { ...p, page: shown };
@@ -848,19 +316,15 @@ export function renderRule(
   // ---- exclusions ----
 
   // applyExclusions takes serve's rule after an exclusion or an inclusion:
-  // the exclusions are serve's; so are the matches, unless Court has
-  // unsaved edits, which are previewed again with the new exclusions.
+  // its exclusions and its matches (page one).
   function applyExclusions(d: RuleDetailView): void {
+    seq++;
     exclude = d.rule.exclude ?? [];
-    base = { ...base, exclude };
-    if (dirty() || invalid) {
-      void previewNow(Math.max(PAGE, opened, shown.length));
-    } else {
-      seq++; // a preview in flight is older than this
-      opened = PAGE; // serve's matches: page one, as shown
-      setPreview(d.matches);
-    }
+    preview = d.matches;
+    shown = preview.page ?? [];
+    drawMatches();
     drawFacts();
+    hooks.onChanged?.();
   }
 
   function untick(key: string): void {
@@ -883,7 +347,6 @@ export function renderRule(
         });
         sh.close();
         applyExclusions(d);
-        hooks.saved();
       } catch (e) {
         err.textContent = message(e);
         err.hidden = false;
@@ -930,439 +393,150 @@ export function renderRule(
         key,
       });
       applyExclusions(d);
-      hooks.saved();
     } catch (err) {
       note.textContent = `not included: ${message(err)}`;
     }
   }
 
-  // ---- a change underneath Court's edits ----
+  const bs: Button[] = [
+    { label: 'edit', run: () => hooks.onEdit() },
+    {
+      label: off ? 'turn on' : 'turn off',
+      run: () => {
+        note.textContent = '';
+        void hooks.onToggle(off).catch((err: unknown) => {
+          note.textContent = message(err);
+        });
+      },
+    },
+  ];
+  const actionsEl = h('div', { class: 'cb-rule-actions' }, buttons(bs), note);
 
-  function drawConflict(): void {
-    if (!conflict) {
-      conflictEl.replaceChildren();
-      return;
-    }
-    const theirs = conflict.detail.rule;
-    const who = conflict.by ? authorOf(conflict.by).name : '';
-    const p = theirs.propose;
-    const theirsBody = h(
-      'div',
+  doc.replaceChildren(
+    h('p', { class: 'kit-kick' }, `rule \u00b7 ${off ? 'off' : 'on'}`),
+    h('h1', { class: 'kit-h1' }, rule.name || id),
+    factsEl,
+    h(
+      'p',
       null,
+      off
+        ? 'Off: it recommends nothing until you turn it on.'
+        : 'On: undecided items that match get this recommendation, now and after every sync. Nothing is decided until you accept it.',
+    ),
+    invalidEl,
+    h('h3', { class: 'kit-label' }, 'when an undecided item matches all of'),
+    conditionEditor(
+      ctx,
+      { match: rule.match, status: rule.status, editable: false },
+      () => {},
+    ),
+    h('h3', { class: 'kit-label' }, 'recommend'),
+    proposeEl,
+    h('div', { class: 'cb-matches-head' }, heading, groupChips),
+    matchesEl,
+    actionsEl,
+  );
+  drawFacts();
+  drawGroupChips();
+  drawMatches();
+  return el;
+}
+
+export interface RuleListHooks {
+  onOpen(row: RuleRow): void;
+  onEdit(row: RuleRow): void;
+  onToggle(row: RuleRow): Promise<void>;
+}
+
+/**
+ * renderRuleList is every rule, off ones too, in the middle pane: each
+ * row its name, on / off / not valid, its decision and how many items it
+ * matches, and ⋯ (edit, turn on / off). A row opens the rule.
+ */
+export function renderRuleList(
+  ctx: Ctx,
+  rows: RuleRow[],
+  hooks: RuleListHooks,
+): HTMLElement {
+  const note = h('p', { class: 'cb-rule-note', role: 'status' });
+  const decision = (row: RuleRow) =>
+    h('span', { class: 'cb-rules-row-d' }, row.rule.propose.disposition);
+  const decisions: Array<[RuleRow, HTMLElement]> = [];
+  const line = (row: RuleRow): HTMLElement => {
+    const off = row.rule.status !== 'active';
+    const d = decision(row);
+    decisions.push([row, d]);
+    const state = row.invalid ? 'not valid' : off ? 'off' : 'on';
+    return h(
+      'li',
+      {
+        class: 'cb-rules-row' + (off ? ' cb-rule-off' : ''),
+        'data-id': row.rule.id,
+      },
       h(
-        'p',
-        { class: 'cb-conflict-help' },
-        'Your edits are kept below and not saved. Serve\u2019s copy now:',
-      ),
-      theirs.name !== base.name
-        ? h('p', { class: 'cb-conflict-name' }, theirs.name)
-        : null,
-      conditionEditor(
-        ctx,
-        { match: theirs.match, status: 'active', editable: false },
-        () => {},
-      ),
-      h(
-        'div',
-        { class: 'kit-table cb-propose' },
+        'button',
+        {
+          type: 'button',
+          class: 'cb-rules-row-open',
+          title: row.invalid ?? '',
+          onclick() {
+            hooks.onOpen(row);
+          },
+        },
+        h('span', { class: 'cb-rules-row-name' }, row.rule.name || row.rule.id),
         h(
-          'div',
-          { class: 'kit-tr' },
-          h('span', { class: 'cb-cond-f' }, 'disposition'),
-          h('span'),
-          h(
-            'span',
-            {
-              class:
-                'cb-cond-v' +
-                (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
-              'data-testid': 'conflict-disposition',
-            },
-            p.disposition,
-          ),
+          'span',
+          {
+            class: 'cb-rules-row-state',
+            'data-state': state,
+          },
+          state,
         ),
-        p.until
-          ? h(
-              'div',
-              { class: 'kit-tr' },
-              h('span', { class: 'cb-cond-f' }, 'until'),
-              h('span'),
-              h('span', { class: 'cb-cond-v' }, p.until),
-            )
-          : null,
-        p.note
-          ? h(
-              'div',
-              { class: 'kit-tr' },
-              h('span', { class: 'cb-cond-f' }, 'note'),
-              h('span'),
-              h('span', { class: 'cb-cond-v' }, p.note),
-            )
-          : null,
-      ),
-      h('p', { class: 'cb-conflict-note', role: 'status' }),
-    );
-    conflictEl.replaceChildren(
-      card({
-        edge: 'signal',
-        head: who
-          ? `changed while you were editing \u00b7 by ${who}`
-          : 'changed while you were editing',
-        body: theirsBody,
-        actions: [
-          {
-            label: 'reload theirs',
-            run() {
-              const d = conflict!.detail;
-              conflict = null;
-              draw(d);
-            },
-          },
-          {
-            label: 'keep mine',
-            run() {
-              const d = conflict!.detail;
-              conflict = null;
-              draw(d, { match: work, propose: workPropose });
-            },
-          },
-        ],
-      }),
-    );
-  }
-
-  // refuseActivate: Activate waits for Court to settle a conflict.
-  function refuseActivate(): void {
-    const n = conflictEl.querySelector<HTMLElement>('.cb-conflict-note');
-    if (n) {
-      n.textContent =
-        'Activate waits: reload their copy, or keep yours over it, first.';
-    }
-    conflictEl.scrollIntoView?.({ block: 'nearest' });
-  }
-
-  // refuseInvalid: Activate waits for a valid rule. The card above says
-  // why (serve's message is shown there, and at the field), so the note
-  // only points to it.
-  function refuseInvalid(): void {
-    note.textContent = 'not activated: fix what\u2019s marked above';
-    invalidEl.scrollIntoView?.({ block: 'nearest' });
-  }
-
-  // enterConflict fetches serve's copy after a 409 (a change the page hadn't
-  // heard of yet) and shows it: as a conflict when Court has edits, else by
-  // drawing it with a note that nothing was done.
-  async function afterConflict(what: string): Promise<void> {
-    try {
-      const d = await ctx.api.get<RuleDetailView>('/rule', { id });
-      if (dirty()) {
-        conflict = { detail: d, by: '' };
-        drawConflict();
-        drawActions();
-        hooks.primaryChanged();
-      } else {
-        draw(d);
-        note.textContent = `It changed before you ${what} it; nothing was ${what}. Here is serve\u2019s copy.`;
-      }
-    } catch (err) {
-      note.textContent = message(err);
-    }
-  }
-
-  // saysWhatHeEdited: a copy of serve's whose conditions and proposal are
-  // Court's unsaved edits.
-  function saysWhatHeEdited(r: Rule): boolean {
-    return (
-      sameConditions(r.match ?? [], work) && sameAction(r.propose, workPropose)
-    );
-  }
-
-  // settle ends a conflict that no longer holds: with serve's copy drawn
-  // (it is newer than what the page shows), or just dropped.
-  function settle(d: RuleDetailView | null): void {
-    conflict = null;
-    if (d) {
-      draw(d);
-      return;
-    }
-    drawConflict();
-    drawActions();
-    hooks.primaryChanged();
-  }
-
-  // ---- saving and lifecycle ----
-
-  // save posts Court's edits over the version shown; false (with serve's
-  // message, or the conflict, shown) on refusal.
-  async function save(): Promise<boolean> {
-    if (conflict) {
-      refuseActivate();
-      return false;
-    }
-    // What this save sends. An edit Court makes while it is in flight is
-    // newer than serve's reply: it is kept over the copy saved.
-    const sentMatch = work.map((c) => ({ ...c }));
-    const sentPropose = { ...workPropose };
-    try {
-      const d = await ctx.api.post<RuleDetailView>(
-        `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        { ...body(), match: sentMatch, propose: sentPropose },
-      );
-      const later =
-        !sameConditions(work, sentMatch) ||
-        !sameAction(workPropose, sentPropose);
-      // drops a conflict that was this save, heard live first
-      draw(d, later ? { match: work, propose: workPropose } : undefined);
-      hooks.saved();
-      if (conflict) {
-        // A change that landed after his save (serve took the save
-        // against the version shown, so the copy heard live is newer).
-        const { detail: newer, by } = conflict;
-        settle(newer);
-        const who = by ? authorOf(by).name : 'someone';
-        note.textContent = `Saved; then ${who} changed it. Here is serve\u2019s copy; nothing else was done.`;
-        return false;
-      }
-      return true;
-    } catch (err) {
-      if (isConflict(err)) void afterConflict('saved');
-      else if (err instanceof ApiError && err.status === 400) {
-        if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
-        else note.textContent = err.message;
-      } else note.textContent = `not saved: ${message(err)}`;
-      return false;
-    }
-  }
-
-  function lifecycle(verb: 'activate' | 'deactivate'): Promise<void> {
-    return inTurn(() => lifecycleNow(verb));
-  }
-
-  async function lifecycleNow(verb: 'activate' | 'deactivate'): Promise<void> {
-    // A click queued behind a request that already did what it asks (a
-    // double click on Activate) has nothing left to do.
-    if (verb === 'deactivate' && isDraft()) return;
-    if (verb === 'activate' && !isDraft() && !dirty()) return;
-    if (verb === 'activate' && conflict) {
-      refuseActivate();
-      return;
-    }
-    if (verb === 'activate' && saved.invalid && !dirty()) {
-      refuseInvalid();
-      return;
-    }
-    try {
-      if (verb === 'activate' && dirty() && !(await save())) return;
-      // A saved copy serve holds as invalid can't be activated: the card
-      // says why, once; nothing is posted that is sure to be refused.
-      if (verb === 'activate' && saved.invalid) {
-        refuseInvalid();
-        return;
-      }
-      // Activate names the copy shown; serve refuses (409) one that changed.
-      const d = await ctx.api.post<RuleDetailView>(
-        `/rules/${verb}`,
-        verb === 'activate' ? { id, version: saved.version } : { id },
-      );
-      draw(d);
-      hooks.saved();
-    } catch (err) {
-      if (isConflict(err)) void afterConflict(`${verb}d`);
-      else note.textContent = `not ${verb}d: ${message(err)}`;
-    }
-  }
-
-  function proposeOnce(): Promise<void> {
-    return inTurn(proposeOnceNow);
-  }
-
-  async function proposeOnceNow(): Promise<void> {
-    try {
-      if (dirty() && !(await save())) return;
-      const r = await ctx.api.post<ProposeResult>('/rules/propose-once', {
-        id,
-      });
-      note.replaceChildren(
-        `${pluralize(r.proposed, 'match', 'matches')} proposed \u00b7 `,
+        d,
         h(
-          'button',
-          {
-            type: 'button',
-            class: 'cb-link',
-            onclick() {
-              ctx.route.go('attention', 'proposed');
-            },
-          },
-          'see them in attention',
+          'span',
+          { class: 'cb-rules-row-n' },
+          row.invalid ? '' : pluralize(row.matches, 'match', 'matches'),
         ),
-      );
-      hooks.saved();
-    } catch (err) {
-      note.textContent = `not proposed: ${message(err)}`;
-    }
-  }
-
-  function drawActions(): void {
-    const bs: Button[] = [];
-    if (embedded) {
-      bs.push({ label: 'edit', run: () => embedded.onEdit() });
-      bs.push({
-        label: isDraft() ? 'turn on' : 'turn off',
-        run: () => {
+      ),
+      ruleMenu(row, {
+        onEdit: () => hooks.onEdit(row),
+        onToggle: () => {
           note.textContent = '';
-          void embedded.onToggle(isDraft()).catch((err: unknown) => {
+          void hooks.onToggle(row).catch((err: unknown) => {
             note.textContent = message(err);
           });
         },
-      });
-      actionsEl.replaceChildren(buttons(bs), note);
-      return;
-    }
-    if (editable() && dirty()) {
-      bs.push({
-        label: isDraft() ? 'save draft' : 'save as draft',
-        run: () => void save(),
-      });
-    }
-    if (isDraft() && !saved.invalid) {
-      bs.push({ label: 'propose once', run: () => void proposeOnce() });
-    }
-    actionsEl.replaceChildren(bs.length ? buttons(bs) : '', note);
-  }
-
-  // edited follows any edit: the proposal or the conditions.
-  function edited(): void {
-    note.textContent = '';
-    // Court undid his edits, or made them say what serve's copy says: the
-    // conflict no longer holds; serve's copy is drawn.
-    if (conflict && (!dirty() || saysWhatHeEdited(conflict.detail.rule))) {
-      settle(conflict.detail);
-      return;
-    }
-    drawActions();
-    hooks.primaryChanged();
-  }
-
-  function onEdit(m: Condition[]): void {
-    work = m;
-    schedule();
-    edited();
-  }
-
-  // draw lays the whole document out from serve's copy (keep: Court's edits,
-  // kept over it).
-  function draw(
-    d: RuleDetailView,
-    keep?: { match: Condition[]; propose: RuleAction },
-  ): void {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-    seq++;
-    opened = PAGE; // serve's copy of the rule changed: page one again
-    saved = d;
-    base = d.rule;
-    // A conflict over this very copy no longer holds.
-    if (conflict && conflict.detail.version === d.version) conflict = null;
-    work = keep ? keep.match : [...(base.match ?? [])];
-    workPropose = keep ? keep.propose : { ...base.propose };
-    exclude = base.exclude ?? [];
-    preview = d.matches;
-    shown = preview.page ?? [];
-    dispositions = d.matches.dispositions ?? [];
-    // Conditions serve refuses (or a file it can't read) aren't previewed.
-    invalid =
-      d.invalid &&
-      !keep &&
-      (conditionErrorIndex(d.invalid) >= 0 || d.invalid.startsWith('rules/'))
-        ? d.invalid
-        : null;
-    doc.dataset.status = base.status;
-    doc.toggleAttribute('data-invalid', !!d.invalid);
-    kickEl.textContent = embedded
-      ? `rule \u00b7 ${isDraft() ? 'off' : 'on'}`
-      : `rule \u00b7 ${base.status} \u00b7 rules/${id}.toml`;
-    titleEl.textContent = base.name || id;
-    editor = conditionEditor(
-      ctx,
-      { match: work, status: base.status, editable: editable() },
-      onEdit,
+      }),
     );
-    factsEl = h('div');
-    keepFocus(() =>
-      doc.replaceChildren(
-        kickEl,
-        titleEl,
-        factsEl,
-        proseEl,
-        invalidEl,
-        conflictEl,
-        h(
-          'h3',
-          { class: 'kit-label' },
-          'when an undecided item matches all of',
-        ),
-        editor,
-        h('h3', { class: 'kit-label' }, 'propose'),
-        proposeEl,
-        h('div', { class: 'cb-matches-head' }, heading, groupChips),
-        matchesEl,
-        actionsEl,
-      ),
-    );
-    note.textContent = '';
-    drawProse();
-    drawInvalid();
-    drawConflict();
-    drawPropose();
-    drawFacts();
-    drawGroupChips();
-    drawMatches();
-    if (invalid) setInvalid(invalid);
-    drawActions();
-    if (keep) schedule();
-    hooks.primaryChanged();
-  }
-
-  draw(detail);
-
-  return {
-    el,
-    id,
-    dirty,
-    primary() {
-      if (!isDraft()) {
-        return { label: 'Deactivate', run: () => void lifecycle('deactivate') };
-      }
-      return { label: 'Activate', run: () => void lifecycle('activate') };
-    },
-    update(d, by) {
-      if (d.version === saved.version) {
-        // serve is back at the copy his edits are on: a change shown as a
-        // conflict no longer holds.
-        if (conflict) settle(null);
-        // The same rule; its exclusions (or record) may have moved.
-        const was = (saved.rule.exclude ?? []).map((x) => x.key).join('\n');
-        const now = (d.rule.exclude ?? []).map((x) => x.key).join('\n');
-        saved = { ...saved, record: d.record, invalid: d.invalid };
-        if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
-        return;
-      }
-      // No edits to keep, or serve's copy already says what his edits say
-      // (his own save, heard live before its reply): not a conflict.
-      if (!dirty() || saysWhatHeEdited(d.rule)) {
-        conflict = null;
-        draw(d);
-        return;
-      }
-      // Court is editing: his edits stay, and the change shows, with who
-      // made it; Activate waits until he settles it.
-      conflict = { detail: d, by };
-      drawConflict();
-      drawActions();
-      hooks.primaryChanged();
-    },
-    refresh() {
-      if (!invalid || dirty()) schedule(true);
-    },
   };
+  const el = h(
+    'div',
+    { class: 'kit-doc' },
+    h(
+      'article',
+      { class: 'cb-rules-doc', 'data-testid': 'rule-list' },
+      h('h1', { class: 'kit-h1' }, pluralize(rows.length, 'rule')),
+      h(
+        'p',
+        null,
+        'A rule recommends a decision for the undecided items it matches. Its recommendations are a group in the list, accepted in one go.',
+      ),
+      rows.length
+        ? h('ul', { class: 'cb-rules-rows' }, ...rows.map(line))
+        : h('p', { class: 'cb-read-empty-prompt' }, 'No rules yet.'),
+      note,
+    ),
+  );
+  void getVocab(ctx)
+    .then((vocab) => {
+      for (const [row, d] of decisions)
+        d.textContent = dispositionLabel(
+          vocab,
+          null,
+          row.rule.propose.disposition,
+        );
+    })
+    .catch(() => {});
+  return el;
 }

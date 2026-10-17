@@ -767,8 +767,8 @@ async function applyScenariosOn(context, t, serveHandle) {
           Math.abs(geo.doc.x - (geo.read.x + (geo.read.w - 640) / 2)) <= 1,
       );
       check(
-        `the other sections' lists are not displayed (${geo.others.join(',')})`,
-        geo.others.length === 2 && geo.others.every((d) => d === 'none'),
+        `decide's list is not displayed (${geo.others.join(',')})`,
+        geo.others.length === 1 && geo.others.every((d) => d === 'none'),
       );
 
       // The casebook lane runs, for real, in the probe's clone.
@@ -1331,19 +1331,19 @@ async function applyScenariosOn(context, t, serveHandle) {
           `job #${jobId} \u00b7 ${planTitle.toLowerCase()}`,
       );
       await pg.evaluate(() => {
-        location.hash = '#/attention/new';
+        location.hash = '#/decide';
       });
       await until(
         pg,
         () =>
           document
-            .querySelector('.kit-ctl[data-id="attention"]')
+            .querySelector('.kit-ctl[data-id="decide"]')
             ?.classList.contains('on') ?? false,
       );
       const onAttention = await read.attached(pg);
       const primaryAttention = await read.primary(pg);
       check(
-        `on Attention the bar's primary is Attention's, not "Pause job" ("${primaryAttention}")`,
+        `on decide the bar's primary is decide's, not "Pause job" ("${primaryAttention}")`,
         primaryAttention !== 'Pause job' && primaryAttention !== 'Resume',
       );
       // A live event under the hidden section: the job pauses.
@@ -1360,7 +1360,7 @@ async function applyScenariosOn(context, t, serveHandle) {
       await pressWithFocus(pg, 'p');
       await pg.waitForTimeout(500); // kept: "p" must resume nothing; a window for it
       check(
-        'on Attention, "p" does not resume the hidden job',
+        'on decide, "p" does not resume the hidden job',
         (await job(jobId)).job.paused === true,
       );
       await pg.evaluate((id) => {
@@ -1390,11 +1390,10 @@ async function applyScenariosOn(context, t, serveHandle) {
       };
       const onApply = await overlay();
       check(
-        `on To apply the overlay lists its keys, not Attention's or Rules' (${onApply.join(', ')})`,
+        `on apply the overlay lists its keys, not decide's (${onApply.join(', ')})`,
         onApply.includes('approve the open plan') &&
           onApply.includes('pause or resume the open job') &&
-          !onApply.includes('accept proposal') &&
-          !onApply.includes('activate the open draft'),
+          !onApply.includes('accept proposal'),
       );
       await pressWithFocus(pg, 'p');
       check(
@@ -1402,17 +1401,17 @@ async function applyScenariosOn(context, t, serveHandle) {
         await eventually(async () => (await job(jobId)).job.paused === false),
       );
       await pg.evaluate(() => {
-        location.hash = '#/rules';
+        location.hash = '#/decide';
       });
       await until(
         pg,
         () =>
           document
-            .querySelector('.kit-ctl[data-id="rules"]')
+            .querySelector('.kit-ctl[data-id="decide"]')
             ?.classList.contains('on') ?? false,
       );
       check(
-        "on Rules the primary isn't To apply's",
+        "on decide the primary isn't apply's",
         !['Pause job', 'Resume', 'Approve'].includes(await read.primary(pg)),
       );
 
@@ -1502,19 +1501,19 @@ async function applyScenariosOn(context, t, serveHandle) {
         () => document.querySelector('.kit-primary')?.textContent === 'Approve',
       );
       await pg.evaluate(() => {
-        location.hash = '#/attention/new';
+        location.hash = '#/decide';
       });
       await until(
         pg,
         () =>
           document
-            .querySelector('.kit-ctl[data-id="attention"]')
+            .querySelector('.kit-ctl[data-id="decide"]')
             ?.classList.contains('on') ?? false,
       );
       await pressWithFocus(pg, 'a');
       await pg.waitForTimeout(600); // kept: "a" must approve nothing; a window for it
       check(
-        'on Attention, "a" does not approve the hidden open plan',
+        'on decide, "a" does not approve the hidden open plan',
         (await job(second.job.id)).job.state === 'planned',
       );
 

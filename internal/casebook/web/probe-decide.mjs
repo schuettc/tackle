@@ -58,7 +58,7 @@
 //   each group's buttons: its choice (the primary), Discard; Look into with
 //     a session attached; the not recommended only "Ask ‹session› to
 //     recommend N"
-//   summary pinned: its bottom edge is the sidebar's
+//   the summary in the middle pane: N to decide, a line per group, discard all
 //   the group's checkbox ticks all of it; untick; collapse and expand
 //   groups: ticks scope per group: 3 ticked in Close and Merge's one give
 //     "Close 3" and "Merge it", each accepting exactly its own
@@ -70,12 +70,13 @@
 // And "group by recommendation" (casebook 0.6), on a serve and repo of their
 // own, issues updated in number order (newest last):
 //
-//   the switch shows under the view chips, on; the first group is serve's
-//     first, the not recommended (its newest item is the newest)
+//   the switch shows in the list, on; the first group is serve's first,
+//     the not recommended (its newest item is the newest)
 //   off: the address says ?flat, no group heads, the rows serve's flat
 //     order (group=false), a recommended row naming its choice
-//   a reload keeps it off; #/attention keeps the stored choice;
-//     #/attention/new is grouped again; #/attention/waiting lands on due
+//   a reload keeps it off; an old #/attention lands on #/decide keeping the
+//     stored choice; the switch groups it again; #/attention/waiting lands
+//     on #/decide
 //
 // And a new recommendation on the open item (casebook 0.4.5), on a serve
 // and repo of their own:
@@ -111,8 +112,8 @@
 // And discarding recommendations, on a serve and repo of their own, every
 // item recommended:
 //
-//   the summary: "5 items, all recommended by ‹session›" and "discard all
-//     5"; its confirm, "Discard 5 recommendations in new? …",
+//   the summary: "5 to decide" and a line per group of the session's, and
+//     "discard all 5"; its confirm, "Discard 5 recommendations in the list? …",
 //     with discard and cancel; cancel changes nothing
 //   discard: the rows lose their reasons, one group is left (the not
 //     recommended), nothing is decided, and casebook_next hands the items
@@ -497,7 +498,7 @@ async function decideScenario(context, t, s) {
     }).observe(document.documentElement, { childList: true, subtree: true });
   });
   const sheets = () => pg.evaluate(() => window.__sheets);
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -1011,13 +1012,13 @@ async function decideScenario(context, t, s) {
     '.kit-app > .kit-read:not([hidden]) .cb-choice[data-d="keep"]',
   );
   check(
-    'deciding the last item shows "Nothing left in new."',
+    'deciding the last item shows "Nothing left to decide."',
     await until(
       pg,
       () =>
         document.querySelector(
           '.kit-app > .kit-read:not([hidden]) .cb-read-done',
-        )?.textContent === 'Nothing left in new.',
+        )?.textContent === 'Nothing left to decide.',
       undefined,
       8000,
     ),
@@ -1051,11 +1052,32 @@ async function decideScenario(context, t, s) {
       `a sync found ${GONE} doesn't exist: issue #4 is due ("${it.status}", "${it.due_reason ?? ''}")`,
       it.status === 'due' && it.due_reason === WHY,
     );
-    // Due now, it is in the due view (not in new).
+    // Due now, it came back: "Came back" is the list's first group, and its
+    // row reads why.
     await pg.evaluate(() => {
-      location.hash = '#/attention/due';
+      location.hash = '#/decide';
     });
     await row(pg, ISSUE(4)).waitFor({ timeout: 8000 });
+    {
+      const ok = await until(
+        pg,
+        ({ list, why }) => {
+          const g = document.querySelector(`${list} .cb-group`);
+          const r = document.querySelector(`${list} .kit-rows > .kit-row`);
+          return (
+            g?.dataset.group === 'came-back' &&
+            g.querySelector('.cb-group-label')?.textContent === 'Came back' &&
+            r?.querySelector('.kit-sub')?.textContent === why
+          );
+        },
+        { list: LIST, why: WHY },
+        8000,
+      );
+      check(
+        `"Came back" is the first group, and issue #4's row reads why ("${WHY}")`,
+        ok,
+      );
+    }
     await row(pg, ISSUE(4)).click();
     await opened(t, pg, ISSUE(4));
     const shown = await pg.evaluate(
@@ -1134,6 +1156,8 @@ async function decideScenario(context, t, s) {
 // ---- the groups -----------------------------------------------------------------
 
 const LIST = '.kit-app > .kit-list:not([hidden])';
+// PANE is decide's middle pane (its summary with nothing open).
+const PANE = '.kit-app > .kit-read:not([hidden])';
 const RECOMMEND_THE_REST =
   'Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.';
 
@@ -1278,11 +1302,11 @@ async function groupsScenario(context, t, s) {
   const serveHeads = async () =>
     ((await api('GET', '/api/items?view=new&limit=1')).groups ?? []).map(
       (g) =>
-        `${g.label} | ${g.outward ? 'goes to To apply first' : ''} | ${g.total}`,
+        `${g.label} | ${g.outward ? 'goes to apply first' : ''} | ${g.total}`,
     );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -1306,9 +1330,9 @@ async function groupsScenario(context, t, s) {
       want,
     );
     checkList("and they are serve's groups for this seed", want, [
-      'Close it without merging | goes to To apply first | 4',
+      'Close it without merging | goes to apply first | 4',
       'Leave it open |  | 3',
-      'Merge it | goes to To apply first | 1',
+      'Merge it | goes to apply first | 1',
       'Not recommended yet |  | 3',
     ]);
     checkList(
@@ -1401,37 +1425,33 @@ async function groupsScenario(context, t, s) {
     );
   }
 
-  // ---- summary pinned ---------------------------------------------------------
+  // ---- the summary: the middle pane with nothing open ---------------------
   {
     const ok = await until(
       pg,
-      (list) =>
-        document.querySelector(`${list} .cb-discard-all`)?.checkVisibility() ===
+      (pane) =>
+        document.querySelector(`${pane} .cb-discard-all`)?.checkVisibility() ===
         true,
-      LIST,
+      PANE,
     );
-    const got = await pg.evaluate((list) => {
-      const l = document.querySelector(list).getBoundingClientRect();
-      const foot = document.querySelector(`${list} .kit-foot`);
-      const f = foot.getBoundingClientRect();
-      const sum = document.querySelector(`${list} .cb-summary`);
-      return {
-        text: sum?.textContent ?? '',
-        discard: document.querySelector(`${list} .cb-discard-all`)?.textContent,
-        shown: !!sum?.checkVisibility() && foot.checkVisibility(),
-        footBottom: Math.round(f.bottom),
-        listBottom: Math.round(l.bottom),
-        inView: f.bottom <= window.innerHeight + 1 && f.height > 0,
-      };
-    }, LIST);
+    const got = await pg.evaluate(
+      (pane) => ({
+        head: document.querySelector(`${pane} .cb-read-empty-count`)
+          ?.textContent,
+        lines: [
+          ...document.querySelectorAll(`${pane} .cb-summary-lines li`),
+        ].map((e) => e.textContent),
+        discard: document.querySelector(`${pane} .cb-discard-all`)?.textContent,
+      }),
+      PANE,
+    );
     check(
-      `summary pinned: "${got.text}" with "${got.discard}", its bottom edge (${got.footBottom}) the sidebar's (${got.listBottom})`,
+      `the summary: "${got.head}", ${JSON.stringify(got.lines)}, with "${got.discard}"`,
       ok &&
-        got.text === '11 items, 8 recommended' &&
-        got.discard === 'discard all 8' &&
-        got.shown &&
-        got.inView &&
-        Math.abs(got.footBottom - got.listBottom) <= 1,
+        got.head === '11 to decide' &&
+        got.lines.at(-1) === '3 not recommended yet' &&
+        got.lines.length === 4 &&
+        got.discard === 'discard all 8',
     );
   }
 
@@ -1608,7 +1628,7 @@ async function groupsScenario(context, t, s) {
     );
     // Close's one left (#12) is newer than Leave it open's newest (#2).
     checkList('and serve agrees', got, [
-      'Close it without merging | goes to To apply first | 1',
+      'Close it without merging | goes to apply first | 1',
       'Leave it open |  | 3',
       'Not recommended yet |  | 3',
     ]);
@@ -1763,7 +1783,7 @@ async function discardScenario(context, t, s) {
   await recommendAll();
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -1791,17 +1811,21 @@ async function discardScenario(context, t, s) {
       },
       { list: LIST, keys: ALL },
     );
+  // summary is the middle pane's summary: its lines, and "discard all N"
+  // while it shows.
   const summary = () =>
-    pg.evaluate((list) => {
-      const b = document.querySelector(`${list} .cb-discard-all`);
-      const who = document.querySelector(`${list} .cb-summary-who`);
+    pg.evaluate((pane) => {
+      const b = document.querySelector(`${pane} .cb-discard-all`);
       return {
-        text: document.querySelector(`${list} .cb-summary`)?.textContent ?? '',
-        who: who?.textContent ?? '',
-        whoColor: who ? getComputedStyle(who).color : '',
+        text: [
+          document.querySelector(`${pane} .cb-read-empty-count`)?.textContent,
+          ...[...document.querySelectorAll(`${pane} .cb-summary-lines li`)].map(
+            (e) => e.textContent,
+          ),
+        ].join(' | '),
         discard: b?.checkVisibility() ? (b.textContent ?? '') : '',
       };
-    }, LIST);
+    }, PANE);
   const pendingKeys = async () =>
     ((await api('GET', '/api/items?view=proposed&limit=500')).items ?? [])
       .map((it) => it.key)
@@ -1819,30 +1843,33 @@ async function discardScenario(context, t, s) {
         : null;
     });
 
-  // ---- the summary: one session recommended them all ---------------------
+  // ---- the summary: what the session recommends --------------------------
   {
     const ok = await until(
       pg,
-      (list) => !!document.querySelector(`${list} .cb-summary-who`),
-      LIST,
+      (pane) =>
+        document.querySelector(`${pane} .cb-discard-all`)?.checkVisibility() ===
+        true,
+      PANE,
       8000,
     );
     const got = await summary();
-    const agentC = await cssColor(pg, 'var(--kit-agent)');
     check(
-      `the summary reads "${got.text}", the session in the agent's colour (${got.whoColor}), with "${got.discard}"`,
+      `the summary reads "${got.text}", each of the session's groups by name, with "${got.discard}"`,
       ok &&
-        got.text === `5 items, all recommended by ${aName}` &&
-        got.who === aName &&
-        got.whoColor === agentC &&
+        got.text.startsWith('5 to decide | ') &&
+        got.text
+          .split(' | ')
+          .slice(1)
+          .every((l) => l.startsWith(`${aName} · `)) &&
         got.discard === 'discard all 5',
     );
   }
 
   // ---- cancel changes nothing ---------------------------------------------
   const CONFIRM5 =
-    'Discard 5 recommendations in new? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
-  await pg.click(`${LIST} .cb-discard-all`);
+    'Discard 5 recommendations in the list? Their items go back to the agent to recommend again. Nothing is decided or rejected.';
+  await pg.click(`${PANE} .cb-discard-all`);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
   {
     const sh = await sheetText();
@@ -1871,7 +1898,7 @@ async function discardScenario(context, t, s) {
   }
 
   // ---- discard all: every recommendation in the view goes -----------------
-  await pg.click(`${LIST} .cb-discard-all`);
+  await pg.click(`${PANE} .cb-discard-all`);
   await until(pg, () => !!document.querySelector('.kit-sheet'));
   // PROBE_SHOTS=/tmp/discard writes /tmp/discard-confirm.png.
   if (SHOTS) await pg.screenshot({ path: `${SHOTS}-confirm.png` });
@@ -1904,7 +1931,7 @@ async function discardScenario(context, t, s) {
         heads.length === 1 &&
         headLine(heads[0]) === 'Not recommended yet |  | 5' &&
         heads[0].acts.join(' / ') === `Ask ${aName} to recommend all 5` &&
-        got.text === '5 items, 0 recommended' &&
+        got.text === '5 to decide | 5 not recommended yet' &&
         got.discard === '',
     );
   }
@@ -1963,7 +1990,7 @@ async function discardScenario(context, t, s) {
     check(
       `groups: discard confirm: "${sh?.says}" with ${JSON.stringify(sh?.btns)}`,
       sh?.says ===
-        'Discard 2 recommendations in new? Their items go back to the agent to recommend again. Nothing is decided or rejected.' &&
+        'Discard 2 recommendations in the list? Their items go back to the agent to recommend again. Nothing is decided or rejected.' &&
         JSON.stringify(sh.btns) === JSON.stringify(['discard', 'cancel']),
     );
   }
@@ -2052,7 +2079,7 @@ async function manyScenario(context, t, s) {
   );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/proposed`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   const HEAD = `${LIST} .cb-group[data-d="close"]`;
@@ -2164,7 +2191,7 @@ async function reloadPagesScenario(context, t, s) {
   );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/proposed`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   const rowCount = () =>
@@ -2308,7 +2335,7 @@ async function pagesScenario(context, t, s) {
   const expected = keys[206];
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2359,7 +2386,7 @@ async function pagesScenario(context, t, s) {
   const READ = '.kit-app > .kit-read:not([hidden])';
   const pg2 = await context.newPage();
   // The list opens on due: show new's list first, then the item.
-  await pg2.goto(`${s.url}#/attention/new`, {
+  await pg2.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg2.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2493,7 +2520,7 @@ async function closeCommentScenario(context, t, s) {
     await api('POST', '/api/decide', { keys: others, disposition: 'ignore' });
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2904,14 +2931,14 @@ function loCounts(t, pg, n) {
 
 // listState reads the shown list: each row's key (its kicker), whether it is
 // in the left-open group, its meta and sub; the group's header ("label ·
-// count", and how many rows come before it); and the new chip's count.
+// count", and how many rows come before it); and the bar's decide count.
 function listState(pg) {
   return pg.evaluate(() => {
     const list = document.querySelector('.kit-app > .kit-list:not([hidden])');
     const body = list?.querySelector('.kit-rows');
     const kids = [...(body?.children ?? [])];
     const head = list?.querySelector('.cb-group[data-group="left-open"]');
-    const chip = list?.querySelector('.kit-chip[data-id="new"] .kit-n');
+    const chip = document.querySelector('.kit-ctl[data-id="decide"] .kit-n');
     return {
       rows: kids
         .filter((el) => el.classList.contains('kit-row'))
@@ -2963,7 +2990,7 @@ async function leftOpenScenario(context, t, s) {
 
   const pg = await context.newPage();
   const load = async () => {
-    await pg.goto(`${s.url}#/attention/new`, {
+    await pg.goto(`${s.url}#/decide`, {
       waitUntil: 'domcontentloaded',
     });
     await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -2978,7 +3005,7 @@ async function leftOpenScenario(context, t, s) {
       [1, 2, 3, 4, 5].map(LISSUE),
     );
     check(
-      `the new chip counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
+      `decide counts 5 (${st.count}), and there is no left-open group ("${st.head}")`,
       st.count === 5 && st.head === '',
     );
   }
@@ -3039,7 +3066,7 @@ async function leftOpenScenario(context, t, s) {
       `the left-open row is muted (${lo?.color} = --kit-muted ${muted}; a live row ${live?.color})`,
       lo?.color === muted && live?.color !== muted,
     );
-    check(`the new chip's count drops to 4 (${st.count})`, st.count === 4);
+    check(`decide's count drops to 4 (${st.count})`, st.count === 4);
   }
 
   // Move-on never opens a left-open row: deciding the view's last item
@@ -3116,13 +3143,13 @@ async function leftOpenScenario(context, t, s) {
   await s.restart();
   agent = createAgent(s.base, s.token);
   await load();
-  // Brought back, issue #1 needs a decision again: it is due (the view for
-  // decisions that came back), at the top as the newest.
+  // Brought back, issue #1 needs a decision again: it came back, so it
+  // leads the list, in "Came back".
   await pg.evaluate(() => {
-    location.hash = '#/attention/due';
+    location.hash = '#/decide';
   });
   check(
-    'after the restart, the due list settles with issue #1 at the top',
+    'after the restart, the list settles with issue #1 at the top',
     await until(
       pg,
       (k) =>
@@ -3133,35 +3160,41 @@ async function leftOpenScenario(context, t, s) {
       8000,
     ),
   );
-  // The due chip's count comes from its own fetch, after the list's.
-  const dueN = () =>
-    pg.evaluate(
-      () =>
-        document.querySelector(
-          '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="due"] .kit-n',
-        )?.textContent ?? '',
-    );
+  // The "Came back" group's header counts it.
+  const backHead = () =>
+    pg.evaluate(() => {
+      const g = document.querySelector(
+        '.kit-app > .kit-list:not([hidden]) .cb-group[data-group="came-back"]',
+      );
+      return g
+        ? `${g.querySelector('.cb-group-label')?.textContent} · ${g.querySelector('.cb-group-n')?.textContent}`
+        : '';
+    });
   await until(
     pg,
     () =>
       document.querySelector(
-        '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="due"] .kit-n',
+        '.kit-app > .kit-list:not([hidden]) .cb-group[data-group="came-back"] .cb-group-n',
       )?.textContent === '1',
   );
   {
     const st = await listState(pg);
+    const back = (
+      (await api('GET', '/api/items?view=all&group=came-back&limit=500'))
+        .items ?? []
+    ).map((it) => it.key);
     checkList(
-      "alice's newer comment brings issue #1 back, needing a decision",
-      st.rows.map((r) => r.key + (r.left ? ' (left open)' : '')),
-      [LISSUE(1)],
+      "alice's newer comment brings issue #1 back, needing a decision: it leads the list, alone in Came back",
+      [st.rows[0]?.key, ...back],
+      [LISSUE(1), LISSUE(1)],
     );
-    const back = st.rows[0];
+    const first = st.rows[0];
     check(
-      `the brought-back row is flagged "${back?.sub}"`,
-      back?.back && back.sub === 'new activity since you left it open',
+      `the brought-back row is flagged "${first?.sub}"`,
+      first?.back && first.sub === 'new activity since you left it open',
     );
-    const n = await dueN();
-    check(`the due chip counts it: 1 (${n})`, n === '1');
+    const head = await backHead();
+    check(`"Came back" counts it: 1 (${head})`, head === 'Came back · 1');
     // Court's own newer comment on issue #5 doesn't bring it back: it is
     // still left open, in new.
     const nv = await api('GET', '/api/items?view=new&limit=500');
@@ -3237,7 +3270,7 @@ async function openRecScenario(context, t, s) {
   await agent.presence(A, 'pi \u00b7 openrec', '/home/court/openrec', 'pi');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -3570,7 +3603,7 @@ async function lookIntoScenario(context, t, s) {
   await agent.propose(B, GROUP, 'ignore', 'spam');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4240,7 +4273,7 @@ async function steadyScenario(context, t, s) {
   await agent.propose(A, [1, 2].map(SISSUE), 'keep', 'active');
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4268,8 +4301,8 @@ async function steadyScenario(context, t, s) {
       };
     }, LIST);
     check(
-      `no filter chips: Attention shows ${got.chips} filter chips (row shown ${got.shown}), its ${got.views} view chips still show`,
-      got.chips === 0 && !got.shown && got.views === 3,
+      `no filter chips: decide shows ${got.chips} filter chips (row shown ${got.shown}), and no view chips (${got.views})`,
+      got.chips === 0 && !got.shown && got.views === 0,
     );
   }
 
@@ -4635,7 +4668,7 @@ async function navScenario(context, t, s) {
   const M1 = inOrder(MERGE)[0];
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, {
+  await pg.goto(`${s.url}#/decide`, {
     waitUntil: 'domcontentloaded',
   });
   await pg.waitForSelector('.kit-row', { timeout: 8000 });
@@ -4794,7 +4827,12 @@ async function navScenario(context, t, s) {
     const bar = await pg.evaluate(
       (list) => ({
         decide: [...document.querySelectorAll('button')]
-          .filter((b) => b.checkVisibility() && !b.closest('.cb-group'))
+          .filter(
+            (b) =>
+              b.checkVisibility() &&
+              !b.closest('.cb-group') &&
+              !b.closest('.kit-bar'),
+          )
           .map((b) => b.textContent ?? '')
           .filter((x) => /decide/i.test(x)),
         primary: (() => {
@@ -5467,7 +5505,7 @@ async function navScenario(context, t, s) {
     check(
       `sidebar collapse: the list is a ${l.w}px rail reading "${l.label}" (${l.mode}), no rows shown (${l.rows}); the reading column fills the rest (${l.right} → ${l.readLeft}, ${l.readRight} → ${l.dockLeft}); stored ${l.stored}`,
       l.w === 34 &&
-        l.label === 'new \u00b7 24' &&
+        l.label === 'to decide \u00b7 24' &&
         l.mode.startsWith('vertical') &&
         !l.rows &&
         l.readLeft === l.right &&
@@ -5512,7 +5550,7 @@ async function navScenario(context, t, s) {
   // The collapse survives a reload; » brings the list back. (On new's list:
   // an item's address opens the list on due, empty here.)
   await pg.evaluate(() => {
-    location.hash = '#/attention/new';
+    location.hash = '#/decide';
   });
   await pg.reload({ waitUntil: 'domcontentloaded' });
   await pg.waitForSelector('.kit-row', { state: 'attached', timeout: 8000 });
@@ -5632,7 +5670,7 @@ async function flatScenario(context, t, s) {
     );
 
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/new`, { waitUntil: 'domcontentloaded' });
+  await pg.goto(`${s.url}#/decide`, { waitUntil: 'domcontentloaded' });
   await pg.waitForSelector(sw, { timeout: 8000 });
   await until(
     pg,
@@ -5643,7 +5681,7 @@ async function flatScenario(context, t, s) {
 
   // 1. Grouped: the switch on, the not recommended first (serve's first).
   const serveGroups =
-    (await api('GET', '/api/items?view=new&limit=1')).groups ?? [];
+    (await api('GET', '/api/items?view=all&limit=1')).groups ?? [];
   {
     const st = await state();
     check(
@@ -5659,12 +5697,12 @@ async function flatScenario(context, t, s) {
   // 2. Off: one list, serve's flat order, no heads; a row names its choice.
   await pg.click(sw);
   const flatKeys = (
-    (await api('GET', '/api/items?view=new&group=false&limit=500')).items ?? []
+    (await api('GET', '/api/items?view=all&group=false&limit=500')).items ?? []
   ).map((it) => it.key);
   await until(
     pg,
     (list) =>
-      location.hash === '#/attention/new?flat' &&
+      location.hash === '#/decide?flat' &&
       document.querySelectorAll(`${list} .cb-group`).length === 0,
     LIST,
     8000,
@@ -5673,7 +5711,7 @@ async function flatScenario(context, t, s) {
     const st = await state();
     check(
       `off: the address is ${st.hash}, aria-checked ${st.checked}, no group heads (${st.heads.length})`,
-      st.hash === '#/attention/new?flat' &&
+      st.hash === '#/decide?flat' &&
         st.checked === 'false' &&
         st.heads.length === 0,
     );
@@ -5710,39 +5748,42 @@ async function flatScenario(context, t, s) {
     );
   }
 
-  // 4. #/attention keeps the stored choice.
+  // 4. An old #/attention address lands on #/decide, keeping the stored
+  // choice.
   await pg.evaluate(() => {
     location.hash = '#/attention';
   });
-  await pg.waitForFunction(() => location.hash === '#/attention');
   {
     const ok = await until(
       pg,
       (sw) =>
+        location.hash === '#/decide' &&
         document.querySelector(sw)?.getAttribute('aria-checked') === 'false',
       sw,
       5000,
     );
-    check('#/attention keeps the list flat (remembered)', ok);
+    check(
+      '#/attention lands on #/decide and keeps the list flat (remembered)',
+      ok,
+    );
   }
 
-  // 5. #/attention/new is grouped.
-  await pg.evaluate(() => {
-    location.hash = '#/attention/new';
-  });
+  // 5. The switch groups it again: #/decide, with its heads.
+  await pg.click(sw);
   {
     const ok = await until(
       pg,
       ({ list, sw }) =>
+        location.hash === '#/decide' &&
         document.querySelector(sw)?.getAttribute('aria-checked') === 'true' &&
         document.querySelectorAll(`${list} .cb-group`).length > 0,
       { list: LIST, sw },
       8000,
     );
-    check('#/attention/new is grouped, with its heads', ok);
+    check('the switch groups it again: #/decide, with its heads', ok);
   }
 
-  // 6. An old #/attention/waiting link lands on due.
+  // 6. An old #/attention/waiting link lands on decide: no view chips.
   await pg.evaluate(() => {
     location.hash = '#/attention/waiting';
   });
@@ -5750,13 +5791,14 @@ async function flatScenario(context, t, s) {
     const ok = await until(
       pg,
       (list) =>
-        document
-          .querySelector(`${list} .kit-chips[data-group="view"] .kit-chip.on`)
-          ?.getAttribute('data-id') === 'due',
+        location.hash === '#/decide' &&
+        document.querySelectorAll(
+          `${list} .kit-chips[data-group="view"] .kit-chip`,
+        ).length === 0,
       LIST,
       5000,
     );
-    check('#/attention/waiting leaves the due chip on', ok);
+    check('#/attention/waiting lands on #/decide, with no view chips', ok);
   }
   await pg.close();
 }

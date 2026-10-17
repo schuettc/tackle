@@ -4,6 +4,23 @@ All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull`, `sift` an
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.9.0] - 2026-10-17
+
+### Added
+- Two places, named once: the bar reads `decide · N` and `apply · N` (`g d` and `g a`). decide is one list of everything to decide: no view chips. Items that came back (due, drift, conflict) lead it in a "Came back" group, each row saying why, whether grouped or flat.
+- Rules live in decide's list. Each rule's recommendations are a group headed by the rule: its name, "rule", its decision, its count and ⋯ (edit, turn off), with one button for the lot ("Delete all 30"). Under the filters, "+ rule" opens the rule editor beside the list (the list previews it; saving turns the rule on), and "rules N" lists every rule, off ones too, in the middle pane; a rule opens there read only, and the list narrows to it (`#/decide?rule=<id>`).
+- With nothing open, the middle pane is a summary: how many to decide, how many came back, what each rule and agent recommends, how many are not recommended yet, and "discard all N" while agents recommend.
+- Example rules arrive with the next write: Landed branches, Bot PRs quiet for 30 days, Repos not pushed in a year. Agents save rules on (`casebook_rule_save`).
+
+### Changed
+- Turning a rule off, editing it or deleting it withdraws the recommendations it no longer makes, at once, not on the next sync; an edited rule recommends anew in the same save.
+- A recommendation decided another way counts against its rule as "decided differently", not as accepted.
+- Old addresses still work: `#/attention…` and `#/rules/<id>` land on decide with the same filters, rule or flat choice.
+- `casebook_open` opens an item or the front; it no longer takes `view`.
+
+### Removed
+- The Rules tab, the view chips (new, due, proposed) and the list's foot summary.
+
 ## [imprint 0.1.1] - 2026-10-17
 
 ### Added

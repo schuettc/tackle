@@ -1,8 +1,12 @@
-// attention.ts — the Attention section: list, views, search, item detail.
+// decide-list.ts — decide: one list of everything to decide, search, the
+// filters, rules as groups, and the item, rule or summary in the middle
+// pane.
 //
-// makeAttention(ctx) builds the kit list(), wires the view chips and search,
-// fetches items from GET /api/items, and opens items in the reading column via
-// renderItem() from item.ts.
+// makeDecide(ctx) builds the kit list(), wires the filters, the rule row
+// ("+ rule", "rules N") and search, fetches items from GET /api/items
+// (view=all), and opens items in the reading column via renderItem() from
+// item.ts. Each rule's recommendations are a group whose header is the rule
+// (its name, "rule", its decision, its count, ⋯); "Came back" leads.
 //
 // The Selection store is exported so the page's other parts bind to it
 // without creating a second store.
@@ -13,13 +17,11 @@ import {
   type Selection,
   h,
   ApiError,
-  type Chip,
   type ListHandle,
   type KeyBinding,
 } from '/_kit/kit.js';
 import type {
   Condition,
-  SummaryView,
   ItemsView,
   ItemView,
   ItemDetailView,
@@ -53,16 +55,23 @@ import {
   navTargets,
   shortKey,
   rowSub,
+  decideSummary,
+  CAME_BACK,
 } from './decide-math.ts';
 import { decideQuery, flatFor } from './router-helpers.ts';
 import { groupKeys } from './key-layer.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
-import { lookingLine, sessionName } from './sessions.ts';
+import { lookingLine } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
 import { openRejectSheet, openDiscardSheet } from './proposals.ts';
 import { makeFilterBar, filterEditor, type FilterEditor } from './filters.ts';
-import { makeRuleBar, ruleEditor } from './rule-editor.ts';
-import { PREVIEW_DEBOUNCE_MS, renderRule } from './rules.ts';
+import {
+  makeRuleRow,
+  ruleEditor,
+  ruleMenu,
+  toggleRule,
+} from './rule-editor.ts';
+import { PREVIEW_DEBOUNCE_MS, renderRule, renderRuleList } from './rules.ts';
 import { parseFilterIds, filterLabel } from './filters-text.ts';
 
 // RECOMMEND_THE_REST is what the not-recommended group's "Ask ‹session› to
@@ -78,19 +87,15 @@ const PAGE_SIZE = 200;
 // Shared selection store.
 export const selection: Selection = createSelection();
 
-// View chip ids map to API view= param values.
-// decide is one list: no view chips (the list always asks view=all).
-const VIEWS: Chip[] = [];
-
 // The list has no field filter chips (Court, 2026-10-10: search only);
 // serve's filter parameters stay, for agents' tools. Saved filters
-// (filters.ts) are the chip row under the views.
+// (filters.ts) are the chip row at the top; there are no view chips: decide
+// is one list (view=all).
 
-// State for the current view, the selected saved filters and the search
-// text. With filters selected the list is every item matching all of them,
-// whatever its status: no view is selected.
+// State for the selected saved filters or rule and the search text. With
+// filters selected the list is every item matching all of them, whatever
+// its status.
 interface Filters {
-  view: string;
   filters: string[];
   // rule is the selected rule (the list shows its matches), or null.
   rule: string | null;
@@ -98,7 +103,7 @@ interface Filters {
 }
 
 function emptyFilters(): Filters {
-  return { view: 'all', filters: [], rule: null, q: '' };
+  return { filters: [], rule: null, q: '' };
 }
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
@@ -159,7 +164,7 @@ function isLeftOpen(it: ItemView): boolean {
   return it.status === 'left-open';
 }
 
-export function makeAttention(ctx: Ctx): Section {
+export function makeDecide(ctx: Ctx): Section {
   const readEl = h('div', { class: 'kit-read' });
   let offset = 0;
   let totalItems = 0;
@@ -202,7 +207,6 @@ export function makeAttention(ctx: Ctx): Section {
   let currentOpenKey: string | null = null;
   // The detail the reading column shows (its item is currentOpenKey).
   let shownDetail: ItemDetailView | null = null;
-  const viewCounts: Record<string, number> = {}; // last known counts per view chip id
   // lastOrder is the view's keys as the list last loaded them: the order the
   // next undecided item is found in after a decision (reload() empties
   // loadedItems while it waits, so a decision mid-reload reads this).
@@ -224,38 +228,68 @@ export function makeAttention(ctx: Ctx): Section {
   // onOpen for it).
   let syncingOpen = false;
 
-  // ---- empty reading-column state ------------------------------------------
+  // ---- the summary: the middle pane with nothing open ---------------------
 
-  // Render the empty state for the reading column (no item open).
-  // Shows the section name, current view count, and a prompt.
+  // renderReadEmpty is the summary that orients (serve's words): how many to
+  // decide, how many came back, what each rule and agent recommends, and
+  // how many are not recommended yet; "discard all N" while agents
+  // recommend.
+  //
+  // Until the vocabulary is in, only the prompt: the summary's words are
+  // serve's (and the list's state it counts is set up after this first
+  // paint).
+  const discardAllBtn = h('button', {
+    class: 'kit-btn cb-discard-all',
+    type: 'button',
+    hidden: true,
+    onclick() {
+      discardView();
+    },
+  }) as HTMLButtonElement;
   function renderReadEmpty(): HTMLElement {
-    // Use .kit-label for the eyebrow (uppercase mono label, matches the
-    // reading-column section headers in item.ts and the kit's own eyebrow
-    // style).
-    const nameEl = h(
-      'p',
-      { class: 'cb-read-empty-section kit-label' },
-      'attention',
-    );
-    const countEl = h(
-      'p',
-      { class: 'cb-read-empty-count' },
-      pluralize(totalItemsForView, 'item'),
-    );
-    const promptEl = h(
+    const prompt = h(
       'p',
       { class: 'cb-read-empty-prompt' },
       'Select an item to see it here.',
     );
-    return h('div', { class: 'cb-read-empty' }, nameEl, countEl, promptEl);
+    if (!vocab)
+      return h(
+        'div',
+        { class: 'cb-read-empty', 'data-testid': 'decide-summary' },
+        prompt,
+      );
+    const [head, ...rest] = decideSummary(
+      groups,
+      totalItemsForView,
+      ruleRows,
+      vocab,
+    );
+    discardAllBtn.hidden = viewRecs === 0 || !vocab || draft !== null;
+    if (vocab)
+      discardAllBtn.textContent = vocab.discard_all.replaceAll(
+        '{n}',
+        String(viewRecs),
+      );
+    return h(
+      'div',
+      { class: 'cb-read-empty', 'data-testid': 'decide-summary' },
+      h('p', { class: 'cb-read-empty-count' }, head ?? ''),
+      h(
+        'ul',
+        { class: 'cb-summary-lines' },
+        ...rest.map((l) => h('li', null, l)),
+      ),
+      discardAllBtn,
+      prompt,
+    );
   }
 
-  // Update the count shown in the reading-column empty state (if it is showing).
+  // Update the summary (if it is showing).
   function updateReadEmptyCount(): void {
-    const countEl = readEl.querySelector<HTMLElement>('.cb-read-empty-count');
-    if (countEl) {
-      countEl.textContent = pluralize(totalItemsForView, 'item');
-    }
+    const old = readEl.querySelector<HTMLElement>(
+      ':scope > [data-testid="decide-summary"]',
+    );
+    if (old) old.replaceWith(renderReadEmpty());
   }
 
   // feedAttached tells the composer what goes with the next message: the
@@ -277,6 +311,7 @@ export function makeAttention(ctx: Ctx): Section {
   function showReadEmpty(): void {
     currentOpenKey = null;
     shownDetail = null;
+    listShown = false;
     // A selected rule shows in the middle pane until an item is opened.
     const rr =
       filters.rule && draft === null
@@ -287,8 +322,8 @@ export function makeAttention(ctx: Ctx): Section {
     feedAttached();
   }
 
-  // showRuleDoc puts the selected rule in the middle pane: the Rules page's
-  // view of it, read only, with edit and turn on / off.
+  // showRuleDoc puts the selected rule in the middle pane, read only, with
+  // edit and turn on / off.
   let ruleDocSeq = 0;
   async function showRuleDoc(rr: RuleRow): Promise<void> {
     const mine = ++ruleDocSeq;
@@ -301,56 +336,68 @@ export function makeAttention(ctx: Ctx): Section {
     if (mine !== ruleDocSeq || filters.rule !== rr.rule.id || draft !== null)
       return;
     if (currentOpenKey) return;
-    const doc = renderRule(
-      ctx,
-      d,
-      {
-        primaryChanged() {},
-        saved() {
-          void loadRules().then(() => void reload());
-        },
-      },
-      {
+    readEl.replaceChildren(
+      renderRule(ctx, d, {
         onEdit() {
           openRuleEditor(rr, null);
         },
-        async onToggle(on: boolean) {
-          await ctx.api.post(on ? '/rules/activate' : '/rules/deactivate', {
-            id: rr.rule.id,
-          });
+        async onToggle() {
+          await toggleRule(ctx, rr);
           await loadRules();
           showReadEmpty();
           void reload();
         },
-      },
+        onChanged() {
+          void loadRules().then(() => void reload());
+        },
+      }),
     );
-    readEl.replaceChildren(doc.el);
   }
+
+  // showRuleList puts every rule, off ones too, in the middle pane ("rules
+  // N"): a row opens its rule and narrows the list to it.
+  function showRuleList(): void {
+    if (draft !== null) closeFilterEditor(true);
+    if (currentOpenKey) goList();
+    currentOpenKey = null;
+    shownDetail = null;
+    listShown = true;
+    paintRuleList();
+    feedAttached();
+  }
+  function paintRuleList(): void {
+    readEl.replaceChildren(
+      renderRuleList(ctx, ruleRows, {
+        onOpen(row) {
+          listShown = false;
+          selectRule(row.rule.id);
+        },
+        onEdit(row) {
+          listShown = false;
+          openRuleEditor(row, null);
+        },
+        async onToggle(row) {
+          await toggleRule(ctx, row);
+          await loadRules();
+          void reload();
+        },
+      }),
+    );
+  }
+  // listShown: the middle pane shows the rule list (it follows the rules).
+  let listShown = false;
 
   // Initialise the reading column with the empty state so it is never blank.
   showReadEmpty();
 
-  // ---- foot: the pinned summary ------------------------------------------
+  // ---- foot -----------------------------------------------------------------
 
-  // The foot is pinned to the bottom of the list: the selection's count,
-  // the view's summary ("31 items, all recommended by ‹session›"), "discard
-  // all N" while the view has agent recommendations, and "show N more"
-  // while more pages exist.
-  const summaryEl = h('span', { class: 'cb-summary' });
-  const discardAllBtn = h('button', {
-    class: 'kit-btn cb-discard-all',
-    type: 'button',
-    hidden: true,
-    onclick() {
-      discardView();
-    },
-  }) as HTMLButtonElement;
-
+  // The foot is pinned to the bottom of the list: "show N more" while more
+  // pages exist.
   function buildFoot(): HTMLElement {
     const footRight = h(
       'div',
       { class: 'cb-foot-right' },
-      discardAllBtn,
       h(
         'button',
         {
@@ -363,15 +410,14 @@ export function makeAttention(ctx: Ctx): Section {
         `show ${PAGE_SIZE} more`,
       ),
     );
-    footEl = h('div', { class: 'cb-foot' }, summaryEl, footRight);
+    footEl = h('div', { class: 'cb-foot' }, footRight);
     return footEl;
   }
 
   // ---- list -----------------------------------------------------------------
 
   const handle: ListHandle<ItemView> = list<ItemView>({
-    label: 'attention',
-    views: VIEWS.map((v) => ({ ...v, on: v.id === filters.view })),
+    label: '',
     filters: [],
     selection,
     openOnMove: false,
@@ -408,20 +454,6 @@ export function makeAttention(ctx: Ctx): Section {
         selectable: draft === null,
       };
     },
-    onChip(group, id) {
-      if (group === 'view') {
-        // A view clears the saved filters.
-        filters.view = id;
-        filters.filters = [];
-        filters.rule = null;
-        filterBar.setError(null);
-        paintFilters();
-        showReadEmpty();
-        handle.setChips('view', viewChips(id));
-        ctx.route.go('decide', '', decideQuery({ flat, filters: [] }));
-        void reload();
-      }
-    },
     onOpen(it: ItemView) {
       if (syncingOpen || draft !== null) return;
       // Navigate to the item's hash URL and load the detail.
@@ -432,8 +464,8 @@ export function makeAttention(ctx: Ctx): Section {
   });
 
   // The groups' CSS (indented rows, one row height, the reserved
-  // scrollbar) is Attention's alone.
-  handle.el.classList.add('cb-attention');
+  // scrollbar) is decide's alone.
+  handle.el.classList.add('cb-decide-list');
 
   // "group by recommendation": on, the list's groups with their heads and
   // buttons; off, one list newest first, each row naming its
@@ -492,21 +524,17 @@ export function makeAttention(ctx: Ctx): Section {
     },
   });
 
-  // ---- rules, beside the filters --------------------------------------------
+  // ---- rules: "+ rule" and "rules N" under the filters ----------------------
 
+  // ruleRows are serve's rules (GET /api/rules), off ones too: their names
+  // head their groups, and "rules N" lists them.
   let ruleRows: RuleRow[] = [];
-  const ruleBar = makeRuleBar(ctx, {
-    onSelect(id) {
-      selectRule(id);
+  const ruleRow = makeRuleRow(ctx, {
+    onNew() {
+      openRuleEditor(null, null);
     },
-    onEdit(row) {
-      openRuleEditor(row, null);
-    },
-    onChanged() {
-      void loadRules().then(() => {
-        if (filters.rule) void reload();
-        showReadEmpty();
-      });
+    onList() {
+      showRuleList();
     },
   });
   async function loadRules(): Promise<void> {
@@ -519,9 +547,12 @@ export function makeAttention(ctx: Ctx): Section {
     }
   }
   function paintRules(): void {
-    ruleBar.paint(ruleRows, draft !== null ? null : filters.rule);
+    ruleRow.paint(ruleRows);
+    // The groups' headers name their rules.
+    paintAll();
+    if (listShown && draft === null && !currentOpenKey) paintRuleList();
   }
-  // selectRule makes id the selection (null: back to the view): the list
+  // selectRule makes id the selection (null: back to everything): the list
   // shows the rule's matches, the middle pane the rule.
   function selectRule(id: string | null): void {
     filters.rule = id;
@@ -529,7 +560,6 @@ export function makeAttention(ctx: Ctx): Section {
     filterBar.setError(null);
     paintFilters();
     paintRules();
-    handle.setChips('view', viewChips(activeView()));
     showReadEmpty();
     goList();
     void reload();
@@ -548,7 +578,6 @@ export function makeAttention(ctx: Ctx): Section {
   let draftHash = ''; // the address while the editor is open
   let draftTimer: ReturnType<typeof setTimeout> | null = null;
   let before: {
-    view: string;
     filters: string[];
     rule: string | null;
     scroll: number;
@@ -594,7 +623,6 @@ export function makeAttention(ctx: Ctx): Section {
         filters.filters = [id];
         filters.rule = null;
         void loadFilters();
-        handle.setChips('view', viewChips(''));
         goList();
         void reload();
       },
@@ -621,7 +649,6 @@ export function makeAttention(ctx: Ctx): Section {
     if (draftTimer !== null) clearTimeout(draftTimer);
     if (!before) {
       before = {
-        view: filters.view,
         filters: [...filters.filters],
         rule: filters.rule,
         scroll: rowsScroller()?.scrollTop ?? 0,
@@ -663,7 +690,6 @@ export function makeAttention(ctx: Ctx): Section {
     readEl.replaceChildren(editor.el);
     document.addEventListener('keydown', onEditorEsc);
     handle.el.classList.add('cb-previewing');
-    handle.setChips('view', viewChips(''));
     filterBar.paint(filterRows, []);
     filterBar.setError(null);
     paintRules();
@@ -700,12 +726,10 @@ export function makeAttention(ctx: Ctx): Section {
       paintAll();
       return;
     }
-    filters.view = b.view;
     filters.filters = b.filters;
     filters.rule = b.rule;
     paintFilters();
     paintRules();
-    handle.setChips('view', viewChips(activeView()));
     offset = b.offset;
     totalItems = b.totalItems;
     totalItemsForView = b.totalItems;
@@ -726,12 +750,6 @@ export function makeAttention(ctx: Ctx): Section {
   }
   function filtered(): boolean {
     return filters.filters.length > 0 || filters.rule !== null;
-  }
-  // activeView is the view chip that shows selected: none while filtered.
-  // While a draft is previewing, no chip shows selected: the list is the
-  // draft's.
-  function activeView(): string {
-    return filtered() || draft !== null ? '' : filters.view;
   }
   function paintFilters(): void {
     filterBar.paint(filterRows, draft !== null ? [] : filters.filters);
@@ -767,7 +785,6 @@ export function makeAttention(ctx: Ctx): Section {
     showReadEmpty();
     filterBar.setError(null);
     paintFilters();
-    handle.setChips('view', viewChips(activeView()));
     goList();
     void reload();
   }
@@ -776,7 +793,7 @@ export function makeAttention(ctx: Ctx): Section {
     .querySelector('.kit-chips[data-group="view"]')
     ?.after(
       filterBar.el,
-      ruleBar.el,
+      ruleRow.el,
       h('div', { class: 'cb-list-tools' }, groupSwitch, previewLine),
     );
   void loadFilters();
@@ -854,7 +871,7 @@ export function makeAttention(ctx: Ctx): Section {
           ? { view: 'all', rule: filters.rule }
           : filtered()
             ? { filters: filters.filters.join(',') }
-            : { view: filters.view };
+            : { view: 'all' };
     p['offset'] = String(pageOffset);
     p['limit'] = String(PAGE_SIZE);
     if (filters.q) p['q'] = filters.q;
@@ -1265,9 +1282,10 @@ export function makeAttention(ctx: Ctx): Section {
 
   // headShell is a group's header, sticky over its rows: the caret, the
   // group's checkbox (box; a blank of its width without one), its label
-  // (hint under it) and its count; then the line its buttons go on, one
-  // line of one height whether or not they are there. The caret and the
-  // label collapse and expand it (id: the group's).
+  // (tags after it, hint under it), its count and (more) its ⋯; then the
+  // line its buttons go on, one line of one height whether or not they are
+  // there. The caret and the label collapse and expand it (id: the
+  // group's).
   function headShell(
     id: string,
     label: string,
@@ -1275,6 +1293,8 @@ export function makeAttention(ctx: Ctx): Section {
     box: HTMLElement | null,
     hint: HTMLElement | null,
     data: Record<string, string>,
+    tags: HTMLElement[] = [],
+    more: HTMLElement | null = null,
   ): { el: HTMLElement; acts: HTMLElement } {
     const isOpen = !collapsed.has(id);
     const toggleOpen = (): void => {
@@ -1301,10 +1321,16 @@ export function makeAttention(ctx: Ctx): Section {
       h(
         'span',
         { class: 'cb-group-name', onclick: toggleOpen },
-        h('span', { class: 'cb-group-label' }, label),
+        h(
+          'span',
+          { class: 'cb-group-line' },
+          h('span', { class: 'cb-group-label' }, label),
+          ...tags,
+        ),
         hint,
       ),
       h('span', { class: 'cb-group-n' }, String(n)),
+      more,
     );
     const acts = h('div', { class: 'cb-group-acts' });
     const el = h(
@@ -1350,9 +1376,11 @@ export function makeAttention(ctx: Ctx): Section {
   }
 
   // groupHead is one group's header: a checkbox that ticks every item of
-  // the group (every page), an outward group's "goes to To apply first"
-  // under its label; its buttons act on the whole group or its ticked
-  // items.
+  // the group (every page), an outward group's "goes to apply first" under
+  // its label; its buttons act on the whole group or its ticked items. A
+  // rule's group is headed by the rule: its name, "rule", its decision, its
+  // count and ⋯ (edit, turn off). "Came back" has no buttons: each of its
+  // items is decided on its own.
   function groupHead(g: GroupView): { el: HTMLElement; paint(): void } {
     const box = h('span', {
       class: 'cb-group-box',
@@ -1367,10 +1395,36 @@ export function makeAttention(ctx: Ctx): Section {
       g.outward && vocab?.to_apply_hint
         ? h('span', { class: 'cb-group-where' }, vocab.to_apply_hint)
         : null;
-    const { el, acts } = headShell(g.id, g.label, g.total, box, hint, {
-      group: g.id,
-      d: g.disposition,
-    });
+    const ruleId = g.source.startsWith('rule:') ? g.source.slice(5) : '';
+    const rr = ruleId ? ruleRows.find((r) => r.rule.id === ruleId) : undefined;
+    const tags = ruleId
+      ? [
+          h('span', { class: 'cb-group-tag' }, 'rule'),
+          h('span', { class: 'cb-group-decision' }, g.label),
+        ]
+      : [];
+    const more = rr
+      ? ruleMenu(rr, {
+          onEdit: () => openRuleEditor(rr, null),
+          onToggle: () =>
+            void toggleRule(ctx, rr)
+              .then(() => loadRules())
+              .then(() => reload())
+              .catch((err: unknown) =>
+                showReadError(err instanceof Error ? err.message : String(err)),
+              ),
+        })
+      : null;
+    const { el, acts } = headShell(
+      g.id,
+      ruleId ? rr?.rule.name || ruleId : g.label,
+      g.total,
+      box,
+      hint,
+      { group: g.id, d: g.disposition, ...(ruleId ? { rule: ruleId } : {}) },
+      tags,
+      more,
+    );
     const button = (
       cls: string,
       label: string,
@@ -1387,6 +1441,10 @@ export function makeAttention(ctx: Ctx): Section {
       );
       const t = ctx.dockTarget();
       if (!vocab) {
+        acts.replaceChildren();
+        return;
+      }
+      if (g.id === CAME_BACK) {
         acts.replaceChildren();
         return;
       }
@@ -1651,14 +1709,21 @@ export function makeAttention(ctx: Ctx): Section {
       const ids = ticked
         .map((k) => proposalOfKey.get(k))
         .filter((id): id is number => id !== undefined);
-      openDiscardSheet(ctx, vocab, ids.length, viewLabel(), { ids }, discarded);
+      openDiscardSheet(
+        ctx,
+        vocab,
+        ids.length,
+        discardWhere(),
+        { ids },
+        discarded,
+      );
       return;
     }
     openDiscardSheet(
       ctx,
       vocab,
       g.total,
-      viewLabel(),
+      discardWhere(),
       groupFilters(g),
       discarded,
     );
@@ -1679,53 +1744,8 @@ export function makeAttention(ctx: Ctx): Section {
         btn.hidden = true;
       }
     }
-    renderSummary();
-
     // The foot div itself is always visible.
     footEl.hidden = false;
-  }
-
-  // renderSummary is the pinned summary: the view's items and who
-  // recommended them (serve's summary words; the session in the agent's
-  // colour), and "discard all N" while it has agent recommendations.
-  function renderSummary(): void {
-    discardAllBtn.hidden = viewRecs === 0 || !vocab || draft !== null;
-    if (vocab)
-      discardAllBtn.textContent = vocab.discard_all.replaceAll(
-        '{n}',
-        String(viewRecs),
-      );
-    if (!vocab) {
-      summaryEl.replaceChildren();
-      return;
-    }
-    const n = String(totalItemsForView);
-    const recs = groups.filter((g) => g.id !== 'none');
-    const r = recs.reduce((sum, g) => sum + g.total, 0);
-    const makers = new Set(recs.map((g) => g.by?.id ?? g.source));
-    const one =
-      r > 0 &&
-      r === totalItemsForView &&
-      makers.size === 1 &&
-      !recs[0].source.startsWith('rule:');
-    if (!one) {
-      summaryEl.replaceChildren(
-        vocab.summary.mixed.replaceAll('{n}', n).replaceAll('{r}', String(r)),
-      );
-      return;
-    }
-    const [before, after = ''] = vocab.summary.one_session
-      .replaceAll('{n}', n)
-      .split('{session}');
-    summaryEl.replaceChildren(
-      before,
-      h(
-        'span',
-        { class: 'cb-summary-who' },
-        sessionName(recs[0].by, recs[0].source),
-      ),
-      after,
-    );
   }
 
   // markOpenRow moves the list's open row to the item the reading column
@@ -1779,7 +1799,6 @@ export function makeAttention(ctx: Ctx): Section {
   // ask the session to recommend the rest is made anew.
   function discarded(): void {
     asked = '';
-    refreshSummary();
     void reload();
   }
 
@@ -1791,20 +1810,10 @@ export function makeAttention(ctx: Ctx): Section {
       ctx,
       vocab,
       viewRecs,
-      viewLabel(),
+      discardWhere(),
       viewFilters(),
       discarded,
     );
-  }
-
-  // refreshSummary reads serve's summary: the view chips' counts.
-  function refreshSummary(): void {
-    void ctx.api
-      .get<SummaryView>('/summary')
-      .then((sv) => {
-        applyCounts(sv.counts);
-      })
-      .catch(() => {});
   }
 
   async function openDetail(key: string): Promise<void> {
@@ -2013,14 +2022,21 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- the decide step: decide, move on, undo ------------------------------
 
-  // viewLabel is the view's name in the summary ("due").
+  // viewLabel is what the list shows, by name: the rule or the filters it
+  // is narrowed to, else everything "to decide".
   function viewLabel(): string {
     if (filters.rule) {
       const rr = ruleRows.find((r) => r.rule.id === filters.rule);
       return `rule ${rr?.rule.name || filters.rule}`;
     }
     if (filtered()) return filterLabel(filterRows, filters.filters);
-    return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
+    return 'to decide';
+  }
+
+  // discardWhere is where a discard's confirm says the recommendations are:
+  // the rule or filters the list is narrowed to, else "the list".
+  function discardWhere(): string {
+    return filtered() ? viewLabel() : 'the list';
   }
 
   // showReadError shows serve's message in the reading column: on the open
@@ -2043,8 +2059,13 @@ export function makeAttention(ctx: Ctx): Section {
       h(
         'div',
         { class: 'cb-read-empty' },
-        h('p', { class: 'cb-read-empty-section kit-label' }, 'attention'),
-        h('p', { class: 'cb-read-done' }, `Nothing left in ${viewLabel()}.`),
+        h(
+          'p',
+          { class: 'cb-read-done' },
+          filtered()
+            ? `Nothing left in ${viewLabel()}.`
+            : 'Nothing left to decide.',
+        ),
       ),
     );
     feedAttached();
@@ -2234,27 +2255,6 @@ export function makeAttention(ctx: Ctx): Section {
 
   // ---- section wiring -------------------------------------------------------
 
-  // Helper to build the view chip array with the latest counts.
-  function viewChips(activeId: string): Chip[] {
-    return VIEWS.map((v) => ({
-      ...v,
-      on: v.id === activeId,
-      count: viewCounts[v.id],
-    }));
-  }
-
-  // Update view chip counts from SummaryView (or from the index live event).
-  // Resets every known view to 0 first so views that drop to zero items do
-  // not retain a stale count. The server omits zero-count views from event
-  // payloads, so Object.assign alone would leave stale counts in place.
-  function applyCounts(counts: Record<string, number> | null): void {
-    if (!counts) return;
-    // Zero every view before merging.
-    for (const v of VIEWS) viewCounts[v.id] = 0;
-    Object.assign(viewCounts, counts);
-    handle.setChips('view', viewChips(activeView()));
-  }
-
   // Initial load: restore search text from URL if present.
   {
     const urlQ = getUrlQ();
@@ -2350,8 +2350,6 @@ export function makeAttention(ctx: Ctx): Section {
     ...jumpKeys,
   ];
 
-  // Load summary for the view chips' counts.
-  refreshSummary();
   // The vocabulary words the groups' buttons and the summary.
   void getVocab(ctx)
     .then((v) => {
@@ -2449,19 +2447,14 @@ export function makeAttention(ctx: Ctx): Section {
     onLive(type: string, data: unknown) {
       if (type === 'gap') {
         // Events this page never heard were pruned: reload all it shows
-        // (the counts, the list, and the open item).
-        refreshSummary();
+        // (the rules, the list, and the open item).
+        void loadRules();
         void reload();
         if (currentOpenKey && currentOpenKey !== deciding) {
           void openDetail(currentOpenKey);
         }
       } else if (type === 'index') {
-        // One reload per index event: apply counts from the event payload and
-        // refresh the list.
-        const s = data as { counts?: Record<string, number> };
-        applyCounts(s?.counts ?? null);
-        // The recommended line's counts change with the index too.
-        refreshSummary();
+        // One reload per index event (the summary follows the list).
         void reload();
       } else if (type === 'decided') {
         // A live decided event can originate from the CLI or another client.
@@ -2482,8 +2475,6 @@ export function makeAttention(ctx: Ctx): Section {
         ) {
           void openDetail(currentOpenKey);
         }
-        // Re-fetch summary so view-chip counts stay correct.
-        refreshSummary();
         void reload();
       } else if (type === 'proposals') {
         // proposals event: an agent's or a rule's new pending proposals, or
@@ -2513,9 +2504,21 @@ export function makeAttention(ctx: Ctx): Section {
           void proposalsChanged(currentOpenKey);
         }
 
-        // Re-fetch summary to update view-chip counts (particularly 'proposed').
-        refreshSummary();
         void reload();
+      } else if (type === 'rules') {
+        // A rule saved, turned on or off, excluded from (this tab or
+        // another): the rule row, the groups' headers and an open rule
+        // follow.
+        void loadRules().then(() => {
+          if (
+            filters.rule &&
+            !currentOpenKey &&
+            draft === null &&
+            !listShown &&
+            active
+          )
+            showReadEmpty();
+        });
       } else if (type === 'filters') {
         // A filter saved or deleted (this tab or another): the chips, and a
         // filtered list, follow.

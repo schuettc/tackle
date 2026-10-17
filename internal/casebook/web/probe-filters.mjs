@@ -1,14 +1,14 @@
-// probe-filters.mjs — saved filters on the Attention list (casebook 0.7.0),
+// probe-filters.mjs — saved filters on decide's list (casebook 0.7.0),
 // run by probe.mjs with its check helpers (t.check, t.checkList, t.until,
 // t.eventually).
 //
 // Each scenario has a serve of its own (serve.mjs: --no-open,
 // CASEBOOK_NO_BROWSER=1, the hermetic git guard, the fake gh).
 //
-//   saved filters: the five examples as chips under the views; selecting
-//     lists serve's AND of them over every status, in the address, across
-//     a reload; the not-recommended group asks nothing while filtered; the
-//     switch and a view chip; + filter opens the editor in the middle pane,
+//   saved filters: the five examples as chips at the list's top (no view
+//     chips); selecting lists serve's AND of them over every status, in the
+//     address, across a reload; the not-recommended group asks nothing while
+//     filtered; the switch, and unselecting them; + filter opens the editor in the middle pane,
 //     the list beside it its faded live preview (its first row doesn't
 //     move), the field chips shown at once (conditions grow below them;
 //     a used field or one the type lacks greyed), a type condition with
@@ -158,14 +158,14 @@ async function savedFilters(context, t, s) {
 
     const pg = await context.newPage();
     await pg.goto(
-      `${s.url}${s.url.includes('?') ? '&' : '?'}session=${A}#/attention/due`,
+      `${s.url}${s.url.includes('?') ? '&' : '?'}session=${A}#/decide`,
       {
         waitUntil: 'domcontentloaded',
       },
     );
     await pg.waitForSelector('.cb-filters .cb-filter', { timeout: 8000 });
 
-    // 1: the chips, in id order, under the view chips.
+    // 1: the chips, in id order, at the list's top.
     t.checkList(
       'saved filters: the five examples are chips, in id order, with their names, none on',
       await chipState(pg),
@@ -173,19 +173,17 @@ async function savedFilters(context, t, s) {
     );
     {
       const g = await pg.evaluate(() => {
-        const v = document
-          .querySelector(
-            '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"]',
-          )
-          ?.getBoundingClientRect();
+        const views = document.querySelectorAll(
+          '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"] .kit-chip',
+        ).length;
         const b = document
           .querySelector('.cb-filters')
           ?.getBoundingClientRect();
-        return v && b ? { vb: v.bottom, bt: b.top, h: b.height } : null;
+        return b ? { views, h: b.height } : null;
       });
       t.check(
-        `the filter bar shows under the view chips (${JSON.stringify(g)})`,
-        !!g && g.h > 0 && g.bt >= g.vb - 0.5,
+        `the filter bar shows, and there are no view chips (${JSON.stringify(g)})`,
+        !!g && g.h > 0 && g.views === 0,
       );
     }
 
@@ -195,7 +193,7 @@ async function savedFilters(context, t, s) {
     await t.until(
       pg,
       (want) =>
-        location.hash === '#/attention?filters=incoming' &&
+        location.hash === '#/decide?filters=incoming' &&
         JSON.stringify(
           [
             ...document.querySelectorAll(
@@ -207,14 +205,8 @@ async function savedFilters(context, t, s) {
       8000,
     );
     t.check(
-      `Incoming: the address is #/attention?filters=incoming (${await pg.evaluate(() => location.hash)})`,
-      (await pg.evaluate(() => location.hash)) ===
-        '#/attention?filters=incoming',
-    );
-    t.check(
-      'and no view chip is on',
-      (await pg.$$(`${LIST} .kit-chips[data-group="view"] .kit-chip.on`))
-        .length === 0,
+      `Incoming: the address is #/decide?filters=incoming (${await pg.evaluate(() => location.hash)})`,
+      (await pg.evaluate(() => location.hash)) === '#/decide?filters=incoming',
     );
     t.checkList(
       "and the rows are serve's filters=incoming",
@@ -232,7 +224,7 @@ async function savedFilters(context, t, s) {
     await t.until(
       pg,
       (want) =>
-        location.hash === '#/attention?filters=incoming,quiet-14d' &&
+        location.hash === '#/decide?filters=incoming,quiet-14d' &&
         JSON.stringify(
           [
             ...document.querySelectorAll(
@@ -244,9 +236,9 @@ async function savedFilters(context, t, s) {
       8000,
     );
     t.check(
-      `+ Not updated in 14 days: the address is #/attention?filters=incoming,quiet-14d (${await pg.evaluate(() => location.hash)})`,
+      `+ Not updated in 14 days: the address is #/decide?filters=incoming,quiet-14d (${await pg.evaluate(() => location.hash)})`,
       (await pg.evaluate(() => location.hash)) ===
-        '#/attention?filters=incoming,quiet-14d',
+        '#/decide?filters=incoming,quiet-14d',
     );
     t.checkList("and the rows are serve's AND", await rowKeys(pg), both);
     t.check(
@@ -329,31 +321,30 @@ async function savedFilters(context, t, s) {
     await t.until(
       pg,
       () =>
-        location.hash === '#/attention?filters=incoming,quiet-14d&flat' &&
+        location.hash === '#/decide?filters=incoming,quiet-14d&flat' &&
         document.querySelectorAll(
           '.kit-app > .kit-list:not([hidden]) .cb-group',
         ).length === 0,
     );
     t.check(
-      `the switch: #/attention?filters=incoming,quiet-14d&flat and no group heads (${await pg.evaluate(() => location.hash)})`,
+      `the switch: #/decide?filters=incoming,quiet-14d&flat and no group heads (${await pg.evaluate(() => location.hash)})`,
       (await pg.evaluate(() => location.hash)) ===
-        '#/attention?filters=incoming,quiet-14d&flat' &&
+        '#/decide?filters=incoming,quiet-14d&flat' &&
         (await pg.$$(`${LIST} .cb-group`)).length === 0,
     );
 
-    // 7: a view chip clears the filters.
-    await pg.click(
-      `${LIST} .kit-chips[data-group="view"] .kit-chip[data-id="new"]`,
-    );
+    // 7: unselecting both: everything to decide again.
+    await pg.click('.cb-filter[data-id="incoming"]');
+    await pg.click('.cb-filter[data-id="quiet-14d"]');
     await t.until(
       pg,
       () =>
-        location.hash === '#/attention/new?flat' &&
+        location.hash === '#/decide?flat' &&
         document.querySelectorAll('.cb-filter.on').length === 0,
     );
     t.check(
-      `the view chip new turns every filter off: ${await pg.evaluate(() => location.hash)}`,
-      (await pg.evaluate(() => location.hash)) === '#/attention/new?flat' &&
+      `unselecting both filters lists everything to decide: ${await pg.evaluate(() => location.hash)}`,
+      (await pg.evaluate(() => location.hash)) === '#/decide?flat' &&
         (await pg.$$('.cb-filter.on')).length === 0,
     );
 
@@ -389,7 +380,7 @@ async function savedFilters(context, t, s) {
         return e && !e.hidden ? (e.textContent ?? '') : '';
       });
     // The view's rows first (step 7's reload may still be on its way).
-    const newRows = await served('view=new&group=false');
+    const newRows = await served('view=all&group=false');
     await t.until(
       pg,
       (k) =>
@@ -944,9 +935,9 @@ async function savedFilters(context, t, s) {
       (b) =>
         !document.querySelector('[data-testid="filter-editor"]') &&
         location.hash === b.hash &&
-        document.querySelector(
+        (document.querySelector(
           '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"] .kit-chip.on',
-        )?.dataset.id === b.view,
+        )?.dataset.id ?? '') === b.view,
       listBefore,
     );
     {
@@ -970,7 +961,7 @@ async function savedFilters(context, t, s) {
     await t.until(
       pg,
       () =>
-        location.hash.startsWith('#/attention?filters=open-issues') &&
+        location.hash.startsWith('#/decide?filters=open-issues') &&
         document
           .querySelector('.cb-filter[data-id="open-issues"]')
           ?.getAttribute('aria-pressed') === 'true' &&
@@ -984,7 +975,7 @@ async function savedFilters(context, t, s) {
         .textContent('.cb-filter[data-id="open-issues"]')
         .catch(() => '')) === 'Open issues' &&
         (await pg.evaluate(() => location.hash)).startsWith(
-          '#/attention?filters=open-issues',
+          '#/decide?filters=open-issues',
         ) &&
         !(await pg.$(`${LIST}.cb-previewing`)) &&
         (await line()) === '',
@@ -1062,7 +1053,7 @@ async function savedFilters(context, t, s) {
     t.check('and serve lacks it', (await saved()) === undefined);
 
     // 11: a filter deleted elsewhere: named, the list empty.
-    await pg.goto(`${s.url}#/attention?filters=nope`, {
+    await pg.goto(`${s.url}#/decide?filters=nope`, {
       waitUntil: 'domcontentloaded',
     });
     await t.until(
@@ -1081,7 +1072,7 @@ async function savedFilters(context, t, s) {
       ).length,
     }));
     t.check(
-      `#/attention?filters=nope says unknown filter "nope" and lists nothing (${JSON.stringify(err)})`,
+      `#/decide?filters=nope says unknown filter "nope" and lists nothing (${JSON.stringify(err)})`,
       err.shown && err.text.includes('unknown filter "nope"') && err.rows === 0,
     );
   } finally {
@@ -1093,7 +1084,7 @@ async function invalidFilter(context, t, s) {
   const agent = createAgent(s.base, s.token);
   const api = (m, p, b) => agent.api(m, p, b);
   const pg = await context.newPage();
-  await pg.goto(`${s.url}#/attention/due`, { waitUntil: 'domcontentloaded' });
+  await pg.goto(`${s.url}#/decide`, { waitUntil: 'domcontentloaded' });
   await pg.waitForSelector('.cb-filter[data-id="bad"]', { timeout: 8000 });
 
   // 12: marked, with serve's reason.

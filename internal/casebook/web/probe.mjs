@@ -3,9 +3,9 @@
 // Spawns a real seeded casebook serve (via serve.mjs), opens its page in
 // headless Chrome (playwright-core), and checks the four shell invariants:
 //
-//   1. three section controls with counts   (attention / rules / to apply)
+//   1. two places with counts               (decide / apply; no rules, no attention)
 //   2. theme toggle works                   (html[data-theme] flips)
-//   3. routing switches sections            (#/rules/... → rules, back → attention)
+//   3. routing switches places              (#/rules/<id> → decide?rule=<id>, #/apply, back)
 //   4. the live pill reads live             (.kit-live is visible, data-state="live")
 //
 // Chrome is required in CI (KIT_BROWSER=required) and optional locally.
@@ -102,53 +102,6 @@ process.on('exit', () => {
   cleanup();
 });
 
-// chipCountsMatchLists checks that every attention view chip count shown in
-// the DOM matches the API total for that view. Runs with the page settled.
-async function chipCountsMatchLists(pg, base, token, label) {
-  const views = ['new', 'due', 'proposed'];
-  let allMatch = true;
-  // Read until the page has settled after the last action (the counts
-  // agree), or the wait runs out and the last mismatches are reported.
-  let mismatches = [];
-  await eventually(async () => {
-    mismatches = await chipMismatches(pg, base, token, views);
-    return mismatches.length === 0;
-  });
-  for (const m of mismatches) {
-    console.error(`  [chip invariant] ${m}`);
-    allMatch = false;
-  }
-  check(`${label}: view chip counts match list totals`, allMatch);
-}
-
-// chipMismatches lists each view whose chip count differs from serve's total.
-async function chipMismatches(pg, base, token, views) {
-  const out = [];
-  for (const view of views) {
-    // Read the count from the chip label. The kit renders chip counts in a
-    // .kit-n span inside [data-id="<view>"].
-    const chipCount = await pg
-      .evaluate((v) => {
-        const chip = document.querySelector(`.kit-chip[data-id="${v}"]`);
-        if (!chip) return null;
-        const n = chip.querySelector('.kit-n');
-        return n ? parseInt(n.textContent ?? '0', 10) : 0;
-      }, view)
-      .catch(() => null);
-    if (chipCount === null) continue; // chip not visible
-    // Fetch the API total for the view.
-    const resp = await fetch(`${base}/api/items?view=${view}&limit=1`, {
-      headers: { 'X-Local-Token': token },
-    }).catch(() => null);
-    if (!resp) continue;
-    const data = await resp.json().catch(() => ({}));
-    const apiTotal = data.total ?? 0;
-    if (chipCount !== apiTotal)
-      out.push(`"${view}": chip=${chipCount} api=${apiTotal}`);
-  }
-  return out;
-}
-
 // ---- Task 7: the composer, the batch tray, the progress line, the waiting strip
 
 // until waits for a condition in the page and reports whether it held.
@@ -179,13 +132,34 @@ function settled(ok, what) {
   return ok;
 }
 
+// decideCountMatches checks that the bar's decide count is serve's total of
+// everything to decide (GET /api/items?view=all), once the page settles.
+async function decideCountMatches(pg, label) {
+  const { base, token } = _serveHandle;
+  let got = '';
+  let want = '';
+  const ok = await eventually(async () => {
+    const r = await fetch(`${base}/api/items?view=all&limit=1`, {
+      headers: { 'X-Local-Token': token },
+    }).catch(() => null);
+    if (!r?.ok) return false;
+    want = String((await r.json()).total ?? 0);
+    got = await pg
+      .$eval('.kit-ctl[data-id="decide"] .kit-n', (e) => e.textContent ?? '')
+      .catch(() => '');
+    return got === want;
+  });
+  check(`${label}: decide counts serve's total (${got}, serve ${want})`, ok);
+}
+
 // listShows waits until the page's shown list holds exactly the items serve
-// lists for view (q narrows it as the search does): the page has loaded it.
-async function listShows(pg, view, q = '', timeout = 6000) {
+// lists for decide (view=all; q narrows it as the search does): the page has
+// loaded it.
+async function listShows(pg, q = '', timeout = 6000) {
   const { base, token } = _serveHandle;
   const qs = q ? `&q=${encodeURIComponent(q)}` : '';
   return eventually(async () => {
-    const r = await fetch(`${base}/api/items?view=${view}&limit=200${qs}`, {
+    const r = await fetch(`${base}/api/items?view=all&limit=200${qs}`, {
       headers: { 'X-Local-Token': token },
     }).catch(() => null);
     if (!r?.ok) return false;
@@ -216,51 +190,7 @@ async function listShows(pg, view, q = '', timeout = 6000) {
         .catch(() => [])
     ).sort();
     return want.length === got.length && want.every((k, i) => k === got[i]);
-  }, timeout).then((ok) => settled(ok, `the ${view} list`));
-}
-
-// chipShows waits until view's chip counts what serve counts for it.
-async function chipShows(pg, view, timeout = 6000) {
-  const { base, token } = _serveHandle;
-  return eventually(async () => {
-    const r = await fetch(`${base}/api/items?view=${view}&limit=1`, {
-      headers: { 'X-Local-Token': token },
-    }).catch(() => null);
-    if (!r?.ok) return false;
-    const want = (await r.json()).total ?? 0;
-    const got = await pg
-      .evaluate((v) => {
-        const chip = document.querySelector(`.kit-chip[data-id="${v}"]`);
-        if (!chip) return null;
-        return parseInt(chip.querySelector('.kit-n')?.textContent ?? '0', 10);
-      }, view)
-      .catch(() => null);
-    return got === want;
-  }, timeout).then((ok) => settled(ok, `the ${view} chip`));
-}
-
-// clickLifecycle clicks a rule's primary (Activate or Deactivate) and
-// returns serve's reply to it. serve announces the change before it replies,
-// so the page can show the next primary while this request is still in
-// flight: a probe that waits on serve's state alone, then clicks, clicks
-// during the request. Waiting on the reply is what "done" means.
-async function clickLifecycle(pg, verb) {
-  const reply = lifecycleReply(pg, verb);
-  await pg.click('.kit-primary');
-  return reply;
-}
-
-// lifecycleReply is serve's reply to the next Activate or Deactivate the page
-// posts (null if none comes within 10 s).
-function lifecycleReply(pg, verb) {
-  return pg
-    .waitForResponse(
-      (r) =>
-        r.url().includes(`/api/rules/${verb}`) &&
-        r.request().method() === 'POST',
-      { timeout: 10000 },
-    )
-    .catch(() => null);
+  }, timeout).then((ok) => settled(ok, 'the list'));
 }
 
 // workedText formats worked_ms the way serve's workedBody does.
@@ -1932,12 +1862,12 @@ async function composerScenariosOn(context, serveHandle) {
         ),
       );
 
-      // Another section is shown: Rules with no rule open attaches nothing.
+      // The other place is shown: apply with nothing open attaches nothing.
       await pg.evaluate(() => {
-        location.hash = '#/rules';
+        location.hash = '#/apply';
       });
       check(
-        'showing Rules with no rule open sets its context ("nothing")',
+        'showing apply with nothing open sets its context ("nothing")',
         await until(
           pg,
           () =>
@@ -1969,11 +1899,11 @@ async function composerScenariosOn(context, serveHandle) {
         after === 'nothing',
       );
       const primaryHidden = await pg.$eval('.kit-primary', (e) => e.hidden);
-      check("and the bar's primary stays Rules' (none)", primaryHidden);
+      check("and the bar's primary stays apply's (none)", primaryHidden);
 
       // Back to Attention: it re-feeds what is still selected.
       await pg.evaluate(() => {
-        location.hash = '#/attention/new';
+        location.hash = '#/decide';
       });
       const rest = keys[1].slice(keys[1].indexOf(':') + 1);
       check(
@@ -1992,11 +1922,11 @@ async function composerScenariosOn(context, serveHandle) {
   }
 }
 
-// ---- section keys: Attention's a / r / d act only while Attention is shown -
+// ---- section keys: decide's a / r / d act only while decide is shown ------
 //
 // Its own serve (KEYS_SEED), so what a failing key does (accept a proposal,
-// open a sheet) touches nothing another scenario reads. Attention keeps its
-// open item and its selection while hidden; on #/rules neither a, r nor d may
+// open a sheet) touches nothing another scenario reads. decide keeps its
+// open item and its selection while hidden; on #/apply neither a, r nor d may
 // reach them.
 const KEYS_SEED = [
   seedRepo(
@@ -2059,17 +1989,17 @@ async function keyScopeScenariosOn(context, serveHandle) {
       undefined,
       8000,
     );
-    check('Attention shows the open item with its pending proposal', opened);
+    check('decide shows the open item with its pending proposal', opened);
 
-    // Show Rules: Attention's open item stays, hidden.
+    // Show apply: decide's open item stays, hidden.
     await pg.evaluate(() => {
-      location.hash = '#/rules';
+      location.hash = '#/apply';
     });
     await until(
       pg,
       () =>
         document
-          .querySelector('.kit-ctl[data-id="rules"]')
+          .querySelector('.kit-ctl[data-id="apply"]')
           ?.classList.contains('on') ?? false,
     );
 
@@ -2077,11 +2007,11 @@ async function keyScopeScenariosOn(context, serveHandle) {
     // proposal r would act on.
     await pressWithFocus(pg, 'r');
     // Kept (this one and a's): each check is that the key does nothing
-    // on #/rules; a window long enough for a sheet or a POST to land.
+    // on #/apply; a window long enough for a sheet or a POST to land.
     await pg.waitForTimeout(500);
     const rSheet = await sheetOpen(pg);
     check(
-      'on #/rules, "r" does not open the reject sheet for the hidden item',
+      'on #/apply, "r" does not open the reject sheet for the hidden item',
       !rSheet,
     );
     if (rSheet) {
@@ -2094,11 +2024,11 @@ async function keyScopeScenariosOn(context, serveHandle) {
     await pressWithFocus(pg, 'a');
     await pg.waitForTimeout(1500);
     check(
-      'on #/rules, "a" does not accept Attention\'s hidden open proposal',
+      'on #/apply, "a" does not accept decide\'s hidden open proposal',
       (await proposalState()) === 'pending',
     );
 
-    // Back on Attention the same keys work again.
+    // Back on decide the same keys work again.
     await pg.evaluate((k) => {
       location.hash = '#/item/' + encodeURIComponent(k);
     }, key);
@@ -2110,13 +2040,12 @@ async function keyScopeScenariosOn(context, serveHandle) {
     );
     await pressWithFocus(pg, 'a');
     check(
-      'back on Attention, "a" accepts the open item\'s proposal',
+      'back on decide, "a" accepts the open item\'s proposal',
       await eventually(async () => (await proposalState()) === 'accepted'),
     );
 
-    // The ? overlay lists what is bound: each section's own keys only while
-    // it is shown ("/" is Attention's search; "a" is Attention's accept and
-    // Rules' activate).
+    // The ? overlay lists what is bound: each place's own keys only while
+    // it is shown ("/" is decide's search; "a" is decide's accept).
     const overlay = async () => {
       await pressWithFocus(pg, '?');
       await until(pg, () => !!document.querySelector('.kit-keys'));
@@ -2128,67 +2057,48 @@ async function keyScopeScenariosOn(context, serveHandle) {
       await until(pg, () => !document.querySelector('.kit-keys'));
       return labels;
     };
-    const onAttention = await overlay();
+    const onDecide = await overlay();
     check(
-      `on Attention the overlay lists its keys ("search", "accept proposal"), not Rules' and not d's "decide selection" (${onAttention.join(', ')})`,
-      onAttention.includes('search') &&
-        onAttention.includes('accept proposal') &&
-        !onAttention.includes('activate the open draft') &&
-        !onAttention.includes('decide selection'),
-    );
-    await agent.api('POST', '/api/rules/draft', {
-      id: 'keys-rule',
-      name: 'Keys rule',
-      status: 'draft',
-      match: [{ field: 'repo', op: 'is', value: 'schuettc/keys-scope' }],
-      propose: { disposition: 'keep' },
-    });
-    await pg.evaluate(() => {
-      location.hash = '#/rules/keys-rule';
-    });
-    await until(
-      pg,
-      () =>
-        document.querySelector('.cb-rule')?.dataset.rule === 'keys-rule' &&
-        document.querySelector('.kit-primary')?.textContent === 'Activate',
-      undefined,
-      8000,
-    );
-    const onRules = await overlay();
-    check(
-      `on Rules the overlay lists "activate the open draft", not Attention's "search" or "accept proposal" (${onRules.join(', ')})`,
-      onRules.includes('activate the open draft') &&
-        !onRules.includes('search') &&
-        !onRules.includes('accept proposal'),
-    );
-    await pressWithFocus(pg, '/');
-    check(
-      'on Rules, "/" does not reach Attention\'s hidden search',
-      !(await pg.evaluate(() =>
-        document.activeElement?.classList.contains('kit-search'),
-      )),
-    );
-    await pressWithFocus(pg, 'a');
-    check(
-      'on Rules, "a" activates the open draft (the key Attention also binds)',
-      await eventually(async () => {
-        const r = await agent.api('GET', '/api/rule?id=keys-rule');
-        return r.rule.status === 'active';
-      }),
+      `on decide the overlay lists its keys ("search", "accept proposal"), not d's "decide selection" (${onDecide.join(', ')})`,
+      onDecide.includes('search') &&
+        onDecide.includes('accept proposal') &&
+        !onDecide.includes('decide selection'),
     );
     await pg.evaluate(() => {
-      location.hash = '#/attention/new';
+      location.hash = '#/apply';
     });
     await until(
       pg,
       () =>
         document
-          .querySelector('.kit-ctl[data-id="attention"]')
+          .querySelector('.kit-ctl[data-id="apply"]')
+          ?.classList.contains('on') ?? false,
+    );
+    const onApply = await overlay();
+    check(
+      `on apply the overlay lists neither decide's "search" nor "accept proposal" (${onApply.join(', ')})`,
+      !onApply.includes('search') && !onApply.includes('accept proposal'),
+    );
+    await pressWithFocus(pg, '/');
+    check(
+      'on apply, "/" does not reach decide\'s hidden search',
+      !(await pg.evaluate(() =>
+        document.activeElement?.classList.contains('kit-search'),
+      )),
+    );
+    await pg.evaluate(() => {
+      location.hash = '#/decide';
+    });
+    await until(
+      pg,
+      () =>
+        document
+          .querySelector('.kit-ctl[data-id="decide"]')
           ?.classList.contains('on') ?? false,
     );
     await pressWithFocus(pg, '/');
     check(
-      'back on Attention, "/" focuses its search',
+      'back on decide, "/" focuses its search',
       await until(pg, () =>
         document.activeElement?.classList.contains('kit-search'),
       ),
@@ -2198,13 +2108,13 @@ async function keyScopeScenariosOn(context, serveHandle) {
   }
 }
 
-// ---- Task 8: the Rules section ----------------------------------------------
+// ---- rules as groups on decide ----------------------------------------------
 //
-// The rules scenarios start their own serve. Its local branches come from a
-// seeded machine snapshot (serve.mjs seedMachines): machine probe-r8's clones
-// under /home/probe-r8, each branch with the landed verdict a real sync would
-// have written. Its rules are made through serve's own routes: Court's with
-// POST /api/rules/draft, the agent's with POST /api/agent/rule-save.
+// The rule-group scenarios start their own serve. Its local branches come
+// from a seeded machine snapshot (serve.mjs seedMachines): machine probe-r8's
+// clones under /home/probe-r8, each branch with the landed verdict a real
+// sync would have written. Its rules are saved through serve's own route
+// (POST /api/rules/save: saving turns a rule on).
 
 let r8Sha = 1;
 const r8Tip = () => (r8Sha++).toString(16).padStart(40, 'a');
@@ -2245,2452 +2155,277 @@ const R8_MACHINE = {
     ]),
     r8Clone('r8-other', [r8Branch('feat/o1', 'main')]),
     r8Clone('r8-agent', [r8Branch('feat/g1', 21), r8Branch('feat/g2', 22)]),
-    r8Clone(
-      'r8-many',
-      Array.from({ length: 203 }, (_, i) =>
-        r8Branch(`feat/n${String(i + 1).padStart(3, '0')}`, 'main'),
-      ),
-    ),
   ],
 };
-const R8_BR = (repo, b) => `branch:schuettc/${repo}@${b}`;
-// Court's draft: every landed branch of r8-landed and r8-other, undecided.
+// Court's rule: every landed branch of r8-landed and r8-other, undecided.
 // 6 match: 4 in main (a1 a2 a3 o1), 2 via merged PR (m1 m2).
-// REPO_V is the second condition's repository value (chips and a box).
-const REPO_V = '.cb-cond[data-index="1"] .cb-cond-typed';
-// setRepo swaps that value: × on its chip, the new one typed and Enter.
-async function setRepo(pg, v) {
-  await pg.click(`${REPO_V} .cb-cond-typed-x`);
-  await pg.click(`${REPO_V} input.cb-cond-typed-in`);
-  await pg.keyboard.type(v);
-  await pg.keyboard.press('Enter');
-}
-
 const R8_LANDED = {
   id: 'r8-landed',
-  name: 'Landed branches \u2192 delete',
-  status: 'draft',
+  name: 'Landed branches',
   match: [
     { field: 'kind', op: 'is', value: 'branch' },
     { field: 'repo', op: 'in', value: 'schuettc/r8-landed,schuettc/r8-other' },
     { field: 'landed', op: 'is', value: 'all-machines' },
     { field: 'landed-how', op: 'in', value: 'default-branch,merged-pr' },
-    { field: 'status', op: 'is', value: 'new' },
   ],
-  propose: { disposition: 'delete', note: 'landed ({how}); restore tip {tip}' },
+  propose: { disposition: 'delete', note: 'landed ({how})' },
 };
+// A second rule, turned off: "rules N" lists it.
 const R8_AGENT = {
   id: 'r8-agent',
-  name: 'Merged agent branches \u2192 delete',
-  status: 'draft',
+  name: 'Merged agent branches',
   match: [
     { field: 'kind', op: 'is', value: 'branch' },
     { field: 'repo', op: 'is', value: 'schuettc/r8-agent' },
-    { field: 'landed', op: 'is', value: 'all-machines' },
-  ],
-  propose: { disposition: 'delete' },
-};
-const R8_MANY = {
-  id: 'r8-many',
-  name: 'Many landed branches',
-  status: 'draft',
-  match: [
-    { field: 'kind', op: 'is', value: 'branch' },
-    { field: 'repo', op: 'is', value: 'schuettc/r8-many' },
   ],
   propose: { disposition: 'delete' },
 };
 
+// LIST and READ are decide's list and its middle pane.
+const LIST = '.kit-app > .kit-list:not([hidden])';
+const READ = '.kit-app > .kit-read:not([hidden])';
+
+// attentionWords is every visible text in the bar, the list and the middle
+// pane that says "attention" (none should: decide and apply are the two
+// places).
+async function attentionWords(pg) {
+  return pg.evaluate(() => {
+    const out = [];
+    for (const sel of [
+      '.kit-bar',
+      '.kit-app > .kit-list:not([hidden])',
+      '.kit-app > .kit-read:not([hidden])',
+    ]) {
+      const root = document.querySelector(sel);
+      if (!root) continue;
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const el = n.parentElement;
+        if (!el || !/attention/i.test(n.textContent ?? '')) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width && r.height) out.push(n.textContent.trim());
+      }
+    }
+    return out;
+  });
+}
+
 let _rulesServe = null;
-async function rulesScenarios(context) {
+async function ruleGroupsScenarios(context) {
   const serveHandle = await startServe({ seedMachines: [R8_MACHINE] });
   _rulesServe = serveHandle;
   try {
-    await rulesScenariosOn(context, serveHandle);
+    await ruleGroupsScenariosOn(context, serveHandle);
   } finally {
     serveHandle.stop();
     _rulesServe = null;
   }
 }
 
-// The page's words and state, read in one place.
-const r8Read = {
-  attached: (pg) =>
-    pg.$eval('[data-testid="composer-attached"]', (e) => e.textContent),
-  primary: (pg) =>
-    pg.$eval('.kit-primary', (e) => (e.hidden ? '' : e.textContent.trim())),
-  heading: (pg) =>
-    pg.$eval('.cb-matches-label', (e) => e.textContent).catch(() => ''),
-  ticked: (pg) =>
-    pg.$$eval('[data-testid="matches"] .cb-mr.on', (els) =>
-      els.map((e) => e.dataset.key),
-    ),
-  facts: (pg) =>
-    pg.$$eval('.cb-rule .kit-facts > span', (els) =>
-      els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()),
-    ),
-};
-
-// r8Light puts a page in the light theme (the control cycles system →
-// light → dark) and reports whether it is.
-async function r8Light(pg) {
-  for (let i = 0; i < 3; i++) {
-    const t = await pg.evaluate(() => document.documentElement.dataset.theme);
-    if (t === 'light') break;
-    await pg.click('button.kit-ctl:has-text("theme")');
-  }
-  return pg.evaluate(
-    () =>
-      document.documentElement.dataset.theme === 'light' &&
-      getComputedStyle(document.body).backgroundColor === 'rgb(244, 245, 248)',
-  );
-}
-
-async function r8Themes(pg, name) {
-  const bgs = { light: 'rgb(244, 245, 248)', dark: 'rgb(20, 22, 29)' };
-  for (const theme of ['light', 'dark']) {
-    for (let i = 0; i < 3; i++) {
-      const t = await pg.evaluate(() => document.documentElement.dataset.theme);
-      if (t === theme) break;
-      await pg.click('button.kit-ctl:has-text("theme")');
-    }
-    const got = await pg.evaluate(() => ({
-      theme: document.documentElement.dataset.theme,
-      bg: getComputedStyle(document.body).backgroundColor,
-    }));
-    check(
-      `the ${name} view is ${theme} (theme ${got.theme}, body ${got.bg})`,
-      got.theme === theme && got.bg === bgs[theme],
-    );
-  }
-  // Back to light for whatever follows.
-  for (let i = 0; i < 3; i++) {
-    const t = await pg.evaluate(() => document.documentElement.dataset.theme);
-    if (t === 'light') break;
-    await pg.click('button.kit-ctl:has-text("theme")');
-  }
-}
-
-async function rulesScenariosOn(context, serveHandle) {
+async function ruleGroupsScenariosOn(context, serveHandle) {
+  console.log('\nscenario: rules — a rule is the header of its group');
   const agent = createAgent(serveHandle.base, serveHandle.token);
-  const ruleOf = (id) =>
-    agent.api('GET', `/api/rule?id=${encodeURIComponent(id)}`);
-  const proposedBy = async (id) => {
-    const v = await agent.api('GET', '/api/items?view=proposed&limit=500');
-    return (v.items ?? [])
-      .filter((it) => it.proposal?.source === `rule:${id}`)
-      .map((it) => it.key)
-      .sort();
-  };
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  // ---- scenario: rules — matches update live ------------------------------
-  console.log('\nscenario: rules — matches update live');
-  {
-    const made = await agent.api('POST', '/api/rules/draft', R8_LANDED);
-    check(
-      'serve drafts r8-landed with 6 matches (the seeded snapshot)',
-      made?.matches?.total === 6,
-    );
-    const fx = await dockFixture(serveHandle, 'r8-rules');
-    const stopPresent = fx.present();
-    // Two more rules for the list, matching nothing: an active one of
-    // Court's and a draft of the agent's.
-    await agent.api('POST', '/api/rules/draft', {
-      id: 'r8-stale',
-      name: 'Stale bot PRs (180d+) \u2192 close',
-      status: 'draft',
-      match: [
-        { field: 'kind', op: 'is', value: 'pr' },
-        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
-      ],
-      propose: { disposition: 'close' },
-    });
-    await agent.api('POST', '/api/rules/activate', { id: 'r8-stale' });
-    await fx.agent.ruleDraft(fx.sid, {
-      id: 'r8-pi-idea',
-      name: 'Dependabot minor/patch \u2192 close when superseded',
-      status: 'draft',
-      match: [
-        { field: 'kind', op: 'is', value: 'pr' },
-        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
-      ],
-      propose: { disposition: 'close' },
-    });
-    // Playwright's clock belongs to the whole browser context: the faked,
-    // paused one gets a context of its own, or every later page of the
-    // shared one runs on it (seconds ahead of serve, or stopped).
-    const clockContext = await context.browser().newContext();
-    const pg = await openDock(clockContext, serveHandle, fx, {
-      hash: '#/rules/r8-landed',
-      clock: true,
-    });
-    let previews = 0;
-    pg.on('request', (r) => {
-      if (r.method() === 'POST' && r.url().includes('/api/rules/preview')) {
-        previews++;
-      }
-    });
-    try {
-      const opened = await until(
-        pg,
-        () =>
-          document.querySelector('.cb-rule')?.dataset.status === 'draft' &&
-          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-            .length === 6,
-        undefined,
-        8000,
-      );
-      check('#/rules/r8-landed opens the rule as a document', opened);
-      check(
-        'a draft shows matches by reason: "matches now · 6 · 4 in main · 2 via merged pr"',
-        (await r8Read.heading(pg)) ===
-          'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
-      );
-      const server = await ruleOf('r8-landed');
-      checkList(
-        'the reasons are serve\'s ("in main" 4, "via merged PR" 2)',
-        (server.matches.by_reason ?? []).map((r) => `${r.reason} ${r.count}`),
-        ['in main 4', 'via merged PR 2'],
-      );
-      checkList(
-        "the ticked rows are serve's matches, in serve's order",
-        await r8Read.ticked(pg),
-        (server.matches.page ?? []).map((m) => m.key),
-      );
-      checkList(
-        "the rows show keys without their kind, and each one's reason",
-        await pg.$$eval('[data-testid="matches"] .cb-mr.on', (els) =>
-          els.map(
-            (e) =>
-              `${e.querySelector('.cb-mr-k').textContent} | ${e.querySelector('.cb-mr-w').textContent}`,
-          ),
-        ),
-        (server.matches.page ?? []).map(
-          (m) => `${m.key.replace(/^branch:/, '')} | ${m.reason.toLowerCase()}`,
-        ),
-      );
-      checkList(
-        'the facts: status, matches, excluded, author',
-        await r8Read.facts(pg),
-        ['status draft', 'matches 6', 'excluded 0', 'by you'],
-      );
-      check(
-        'the kicker reads "rule · draft · rules/r8-landed.toml"',
-        (await pg.$eval('.cb-rule .kit-kick', (e) => e.textContent)) ===
-          'rule \u00b7 draft \u00b7 rules/r8-landed.toml',
-      );
-      check(
-        'the composer attaches the open rule: "rule r8-landed"',
-        (await r8Read.attached(pg)) === 'rule r8-landed',
-      );
-      check(
-        'the bar\'s primary on a draft is "Activate"',
-        (await r8Read.primary(pg)) === 'Activate',
-      );
-      checkList(
-        "the conditions table shows the rule's conditions",
-        await pg.$$eval('[data-testid="conditions"] .cb-cond', (els) =>
-          els.map((e) =>
-            [
-              e.querySelector('.cb-cond-f').dataset.name,
-              e.querySelector('.cb-cond-o').value ??
-                e.querySelector('.cb-cond-o').dataset.value,
-              e.querySelector('.cb-cond-v').value ??
-                e.querySelector('.cb-cond-v').dataset.value,
-            ].join(' '),
-          ),
-        ),
-        // A fixed-value field's values are ticked and a repository's are
-        // chips: their in reads "is".
-        R8_LANDED.match.map(
-          (c) =>
-            `${c.field} ${(c.field === 'landed-how' || c.field === 'repo') && c.op === 'in' ? 'is' : c.op} ${c.value}`,
-        ),
-      );
-      checkList(
-        "the proposal table: a draft's disposition (destructive: red) and note, editable (no until for delete)",
-        await pg.$$eval('[data-testid="propose"] .kit-tr', (els) =>
-          els
-            .filter((e) => getComputedStyle(e).display !== 'none')
-            .map((e) => {
-              const v = e.querySelector('button.cb-disp, input');
-              const val = v.tagName === 'BUTTON' ? v.dataset.value : v.value;
-              return `${e.querySelector('.cb-cond-f').textContent}=${val}${v.classList.contains('cb-danger') ? ' (danger)' : ''}`;
-            }),
-        ),
-        [
-          'disposition=delete (danger)',
-          'note=landed ({how}); restore tip {tip}',
-        ],
-      );
-
-      // Grouped by repo: serve's groups, each with its rows.
-      await pg.click('.cb-matches-view .kit-chip:has-text("by repo")');
-      checkList(
-        'by repo groups the matches under each repo, with its reasons',
-        await pg.$$eval(
-          '[data-testid="matches"] .cb-mgroup, [data-testid="matches"] .cb-mr.on',
-          (els) =>
-            els.map((e) =>
-              e.classList.contains('cb-mgroup')
-                ? `# ${e.textContent}`
-                : e.dataset.key,
-            ),
-        ),
-        [
-          '# schuettc/r8-landed5 \u00b7 3 in main \u00b7 2 via merged pr',
-          R8_BR('r8-landed', 'feat/a1'),
-          R8_BR('r8-landed', 'feat/a2'),
-          R8_BR('r8-landed', 'feat/a3'),
-          R8_BR('r8-landed', 'feat/m1'),
-          R8_BR('r8-landed', 'feat/m2'),
-          '# schuettc/r8-other1 \u00b7 1 in main',
-          R8_BR('r8-other', 'feat/o1'),
-        ],
-      );
-      await pg.click('.cb-matches-view .kit-chip:has-text("list")');
-
-      // Untick feat/a1: a reason, then serve excludes it.
-      const a1 = R8_BR('r8-landed', 'feat/a1');
-      const untick = async (key, reason) => {
-        await pg.click(
-          `[data-testid="matches"] .cb-mr[data-key="${key}"] .kit-box`,
-        );
-        await pg.waitForSelector('[data-testid="exclude-sheet"] input', {
-          timeout: 4000,
-        });
-        await pg.keyboard.type(reason);
-        await pg.keyboard.press('Enter');
-      };
-      await untick(a1, 'keep for reference');
-      check(
-        'unticking a match adds an exclusion and the count drops: "matches now · 5 · 3 in main · 2 via merged pr"',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-matches-label')?.textContent ===
-            'matches now \u00b7 5 \u00b7 3 in main \u00b7 2 via merged pr',
-        ),
-      );
-      const ex = await pg.$eval(
-        `[data-testid="matches"] .cb-mr[data-key="${a1}"]`,
-        (e) => ({
-          x: e.classList.contains('x'),
-          checked: e.querySelector('.kit-box').getAttribute('aria-checked'),
-          w: e.querySelector('.cb-mr-w').textContent,
-        }),
-      );
-      check(
-        `the row stays, marked excluded and unticked ("${ex.w}")`,
-        ex.x &&
-          ex.checked === 'false' &&
-          ex.w === 'excluded \u00b7 keep for reference',
-      );
-      const afterEx = await ruleOf('r8-landed');
-      checkList(
-        'serve holds the exclusion with its reason, and matches 5',
-        [
-          ...(afterEx.rule.exclude ?? []).map((x) => `${x.key} ${x.reason}`),
-          String(afterEx.matches.total),
-        ],
-        [`${a1} keep for reference`, '5'],
-      );
-      checkList('the facts count it: excluded 1', await r8Read.facts(pg), [
-        'status draft',
-        'matches 5',
-        'excluded 1',
-        'by you',
-      ]);
-
-      // Re-tick: serve includes it again.
-      await pg.click(
-        `[data-testid="matches"] .cb-mr.x[data-key="${a1}"] .kit-box`,
-      );
-      const retick = await until(
-        pg,
-        () =>
-          document.querySelector('.cb-matches-label')?.textContent ===
-          'matches now \u00b7 6 \u00b7 4 in main \u00b7 2 via merged pr',
-      );
-      check(
-        `re-ticking includes it: the count is 6 again${retick ? '' : ` (shows "${await pg.$eval('.cb-matches-label', (e) => e.textContent)}")`}`,
-        retick,
-      );
-      const afterIn = await ruleOf('r8-landed');
-      check(
-        'serve dropped the exclusion (none left, matches 6)',
-        (afterIn.rule.exclude ?? []).length === 0 &&
-          afterIn.matches.total === 6,
-      );
-
-      // Exclude it again for what follows: one excluded match.
-      await untick(a1, 'keep for reference');
-      await until(
-        pg,
-        () =>
-          !!document.querySelector('[data-testid="matches"] .cb-mr.x') &&
-          !document.querySelector('.kit-sheet'),
-      );
-
-      // Geometry and style: the list and the document fill their columns.
-      const geo = await pg.evaluate(() => {
-        const r = (sel) => {
-          const e = document.querySelector(sel);
-          if (!e) return null;
-          const b = e.getBoundingClientRect();
-          return {
-            x: Math.round(b.x),
-            y: Math.round(b.y),
-            w: Math.round(b.width),
-            h: Math.round(b.height),
-            display: getComputedStyle(e).display,
-          };
-        };
-        const lists = [...document.querySelectorAll('.kit-app > .kit-list')];
-        return {
-          list: r('.cb-rules-list'),
-          read: r('.cb-rules-read'),
-          doc: r('.cb-rules-read .kit-doc'),
-          rail: r('.kit-rail'),
-          bar: r('.kit-bar'),
-          others: lists
-            .filter((e) => !e.classList.contains('cb-rules-list'))
-            .map((e) => getComputedStyle(e).display),
-        };
-      });
-      check(
-        `the rules list fills the list column: x 0, 400 wide, bar to bottom (${JSON.stringify(geo.list)})`,
-        geo.list.x === 0 &&
-          geo.list.w === 400 &&
-          geo.list.y === geo.bar.h &&
-          geo.list.y + geo.list.h === 900,
-      );
-      check(
-        `the rule fills the reading column, between the list and the rail (${JSON.stringify(geo.read)})`,
-        geo.read.x === 400 &&
-          geo.read.x + geo.read.w === geo.rail.x &&
-          geo.read.y === geo.bar.h,
-      );
-      check(
-        `the document is the kit's 640 px column, centred (${JSON.stringify(geo.doc)})`,
-        geo.doc.w === 640 &&
-          Math.abs(geo.doc.x - (geo.read.x + (geo.read.w - 640) / 2)) <= 1,
-      );
-      check(
-        `Attention's and To apply's lists are not displayed (${geo.others.join(',')})`,
-        geo.others.length === 2 && geo.others.every((d) => d === 'none'),
-      );
-      const wait = await cssColor(pg, 'var(--kit-wait)');
-      const signal = await cssColor(pg, 'var(--kit-signal)');
-      const muted = await cssColor(pg, 'var(--kit-muted)');
-      const pill = await pg.$eval(
-        '.kit-row[data-rule="r8-landed"] .kit-meta',
-        (e) => {
-          const s = getComputedStyle(e);
-          return {
-            text: e.textContent,
-            color: s.color,
-            bg: s.backgroundColor,
-            radius: s.borderRadius,
-            h: Math.round(e.getBoundingClientRect().height),
-          };
-        },
-      );
-      check(
-        `the draft pill is the wait colour on its wash, a 6px pill (${JSON.stringify(pill)})`,
-        pill.text === 'draft' &&
-          pill.color === wait &&
-          pill.bg !== 'rgba(0, 0, 0, 0)' &&
-          pill.radius === '6px' &&
-          pill.h <= 22,
-      );
-      check(
-        "the open rule's row reads as open",
-        await pg.$eval('.kit-row[data-rule="r8-landed"]', (e) =>
-          e.classList.contains('open'),
-        ),
-      );
-      const boxes = await pg.evaluate(() => {
-        const st = (sel) => {
-          const e = document.querySelector(sel);
-          const s = getComputedStyle(e);
-          const b = e.getBoundingClientRect();
-          return {
-            bg: s.backgroundColor,
-            border: s.borderTopColor,
-            bw: s.borderTopWidth,
-            w: Math.round(b.width),
-            h: Math.round(b.height),
-          };
-        };
-        const k = document.querySelector(
-          '[data-testid="matches"] .cb-mr.x .cb-mr-k',
-        );
-        return {
-          on: st('[data-testid="matches"] .cb-mr.on .kit-box'),
-          off: st('[data-testid="matches"] .cb-mr.x .kit-box'),
-          struck: getComputedStyle(k).textDecorationLine,
-          kColor: getComputedStyle(k).color,
-        };
-      });
-      check(
-        `a ticked match's box is filled in the signal colour, 14px (${JSON.stringify(boxes.on)})`,
-        boxes.on.bg === signal &&
-          boxes.on.border === signal &&
-          boxes.on.w === 14 &&
-          boxes.on.h === 14,
-      );
-      check(
-        `the unticked box is empty with the muted edge (${JSON.stringify(boxes.off)})`,
-        boxes.off.bg === 'rgba(0, 0, 0, 0)' &&
-          boxes.off.border === muted &&
-          boxes.off.bw !== '0px' &&
-          boxes.off.w === 14 &&
-          boxes.off.h === 14,
-      );
-      check(
-        `the excluded key is struck through and muted (${boxes.struck}, ${boxes.kColor})`,
-        boxes.struck === 'line-through' && boxes.kColor === muted,
-      );
-      checkList(
-        "the list: each rule with its record and status pill, in serve's order",
-        await pg.$$eval('.cb-rules-list .kit-row', (els) =>
-          els.map(
-            (e) =>
-              `${e.dataset.rule}: ${e.querySelector('.kit-kicker').textContent} | ${e.querySelector('.kit-meta').className.replace('kit-meta kit-pill ', '')} ${e.querySelector('.kit-meta').textContent}`,
-          ),
-        ),
-        (await agent.api('GET', '/api/rules')).rules.map(
-          (r) =>
-            `${r.rule.id}: ${r.matches} match \u00b7 ${r.excluded} excluded | ${r.rule.status === 'active' ? 'ok' : 'wait'} ${r.rule.status}`,
-        ),
-      );
-      check(
-        'r8-landed\'s row reads "5 match · 1 excluded", as in the mock',
-        (await pg.$eval(
-          '.kit-row[data-rule="r8-landed"] .kit-kicker',
-          (e) => e.textContent,
-        )) === '5 match \u00b7 1 excluded',
-      );
-      const footGeo = await pg.evaluate(() => {
-        const f = document.querySelector('.cb-rules-list .kit-foot');
-        const b = f.getBoundingClientRect();
-        return {
-          shown: getComputedStyle(f).display !== 'none' && b.height > 0,
-          bottom: Math.round(b.bottom),
-          button: f.querySelector('[data-testid="new-rule"]')?.textContent,
-          ask: f.querySelector('.cb-rules-ask')?.textContent,
-        };
-      });
-      check(
-        `the list's foot, at its bottom: "new rule" and "or ask pi to draft one" (${JSON.stringify(footGeo)})`,
-        footGeo.shown &&
-          footGeo.bottom === 900 &&
-          footGeo.button === 'new rule' &&
-          footGeo.ask === 'or ask pi to draft one',
-      );
-      checkList(
-        'the views count all, active and drafts',
-        await pg.$$eval('.cb-rules-list .kit-chip', (els) =>
-          els.map((e) => e.textContent),
-        ),
-        ['all3', 'active1', 'drafts2'],
-      );
-      check(
-        'the bar counts the rules',
-        (await pg.$eval(
-          '.kit-ctl[data-id="rules"] .kit-n',
-          (e) => e.textContent,
-        )) === '3',
-      );
-      // The document from its top: kicker, title and facts, in the shot.
-      await pg.$eval('.cb-rules-read', (e) => {
-        e.scrollTop = 0;
-      });
-      await r8Themes(pg, 'rules');
-
-      // A draft's field chips are shown above its conditions, every field
-      // grouped by the types it applies to: a used one, or one branches
-      // (the rule's type) don't have, greyed, not offered.
-      await pg.$eval('[data-testid="conditions"]', (e) =>
-        e.scrollIntoView({ block: 'start' }),
-      );
-      const vocab = await agent.api('GET', '/api/rules/vocabulary');
-      const used = new Set(R8_LANDED.match.map((c) => c.field));
-      {
-        const groups = new Map();
-        for (const f of vocab.fields ?? []) {
-          const k = (f.kinds ?? []).join(',');
-          const off =
-            used.has(f.name) ||
-            !(!f.kinds?.length || f.kinds.includes('branch'));
-          groups.set(k, [
-            ...(groups.get(k) ?? []),
-            `${f.name}${off ? ' (greyed)' : ''}`,
-          ]);
-        }
-        checkList(
-          'the field chips list every field by the types it applies to, the used ones and those branches lack greyed',
-          await pg.$$eval('.cb-cond-menu-row', (els) =>
-            els.map(
-              (e) =>
-                `${e.dataset.field}${e.getAttribute('aria-disabled') === 'true' ? ' (greyed)' : ''}`,
-            ),
-          ),
-          [...groups.values()].flat(),
-        );
-      }
-      check(
-        'the field chips are shown, with no + condition button',
-        (await pg.$eval(
-          '.cb-rule .cb-cond-menu',
-          (e) => !e.hidden && e.offsetHeight > 40,
-        )) && (await pg.$eval('.cb-rule .cb-cond-add', (e) => e.hidden)),
-      );
-      await r8Themes(pg, 'condition-menu');
-
-      // Editing a condition re-previews, 300 ms after the last edit. The
-      // page's clock is paused so the debounce is measured, not slept.
-      await pg.clock.pauseAt(Date.now() + 2000);
-      previews = 0;
-      // landed how's values are ticked: default branch off, on, off leaves
-      // merged-pr, three edits.
-      const howPick = (v) =>
-        pg.click(`.cb-cond[data-index="3"] .cb-cond-pick[data-value="${v}"]`);
-      for (let i = 0; i < 3; i++) await howPick('default-branch');
-      // Kept (here and below): with the clock paused nothing may preview;
-      // a real-time window for a stray request to show.
-      await sleep(400);
-      check(
-        `no preview while the clock stands still after the edits (${previews})`,
-        previews === 0,
-      );
-      await pg.clock.runFor(299);
-      await sleep(400);
-      check(
-        `no preview 299 ms after the last edit (${previews})`,
-        previews === 0,
-      );
-      await pg.clock.runFor(1);
-      check(
-        'editing a condition re-previews after the debounce: "matches now · 2 · 2 via merged pr"',
-        await eventually(
-          async () =>
-            (await r8Read.heading(pg)) ===
-            'matches now \u00b7 2 \u00b7 2 via merged pr',
-        ),
-      );
-      check(`the three edits made one preview (${previews})`, previews === 1);
-      // Each edit restarts the wait.
-      previews = 0;
-      await howPick('default-branch');
-      await pg.clock.runFor(200);
-      await howPick('default-branch');
-      await pg.clock.runFor(200);
-      await sleep(300); // kept: no preview may come in this window
-      check(
-        `an edit 200 ms into the wait restarts it (${previews} after 400 ms)`,
-        previews === 0,
-      );
-      await pg.clock.runFor(100);
-      check(
-        '300 ms after the last edit it previews once',
-        await eventually(async () => previews === 1),
-      );
-      await pg.clock.resume();
-      check(
-        'nothing is saved by a preview (serve still has default-branch,merged-pr)',
-        (await ruleOf('r8-landed')).rule.match[3].value ===
-          'default-branch,merged-pr',
-      );
-      check(
-        'with unsaved edits the draft offers "save draft"',
-        await until(pg, () =>
-          [...document.querySelectorAll('.cb-rule-actions .kit-btn')]
-            .map((b) => b.textContent)
-            .includes('save draft'),
-        ),
-      );
-
-      // An older preview that answers late never paints over a newer one.
-      {
-        // setHow ticks exactly the values v (comma-separated): ticks
-        // first, so no edit leaves none.
-        const setHow = async (v) => {
-          const want = v.split(',');
-          const all = ['default-branch', 'merged-pr'];
-          for (const x of [...want, ...all.filter((y) => !want.includes(y))]) {
-            const on = await pg.$eval(
-              `.cb-cond[data-index="3"] .cb-cond-pick[data-value="${x}"]`,
-              (b) => b.classList.contains('on'),
-            );
-            if (on !== want.includes(x)) await howPick(x);
-          }
-        };
-        let release;
-        const gate = new Promise((r) => {
-          release = r;
-        });
-        let seen;
-        const firstSeen = new Promise((r) => {
-          seen = r;
-        });
-        let first = true;
-        const holdFirst = async (route) => {
-          if (route.request().method() === 'POST' && first) {
-            first = false;
-            seen();
-            await gate;
-          }
-          await route.continue();
-        };
-        const previewRoute = /\/api\/rules\/preview/;
-        await pg.route(previewRoute, holdFirst);
-        await setHow('default-branch,merged-pr');
-        await firstSeen; // "5 · 3 in main · 2 via merged pr", held
-        await setHow('default-branch');
-        check(
-          'the newer preview lands: "matches now · 3 · 3 in main"',
-          await until(
-            pg,
-            () =>
-              document.querySelector('.cb-matches-label')?.textContent ===
-              'matches now \u00b7 3 \u00b7 3 in main',
-          ),
-        );
-        const late = pg.waitForResponse(
-          (r) => previewRoute.test(r.url()) && r.request().method() === 'POST',
-        );
-        release();
-        await late;
-        // Watch the heading while the late reply is read and handled.
-        let held3 = true;
-        for (let i = 0; i < 10; i++) {
-          if (
-            (await r8Read.heading(pg)) !==
-            'matches now \u00b7 3 \u00b7 3 in main'
-          ) {
-            held3 = false;
-          }
-          await sleep(50); // kept: watches that the heading holds over 0.5 s
-        }
-        check(
-          'the older one, answering after it, is dropped (still "3 · 3 in main")',
-          held3,
-        );
-        await pg.unroute(previewRoute, holdFirst);
-        await setHow('merged-pr');
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-matches-label')?.textContent ===
-            'matches now \u00b7 2 \u00b7 2 via merged pr',
-        );
-      }
-
-      // Validation is serve's: a bad duration shows serve's message under
-      // the condition, and the matches wait for a valid rule. (The fields
-      // a branch rule is offered have no count; r8-bad2 is a bad count.)
-      const bodyNow = () =>
-        pg.evaluate(() =>
-          [
-            ...document.querySelectorAll('[data-testid="conditions"] .cb-cond'),
-          ].map((e) => ({
-            field: e.querySelector('.cb-cond-f').dataset.name,
-            op:
-              e.querySelector('.cb-cond-o').value ??
-              e.querySelector('.cb-cond-o').dataset.value,
-            value:
-              e.querySelector('.cb-cond-v').value ??
-              e.querySelector('.cb-cond-v').dataset.value,
-          })),
-        );
-      const serveSays = async () => {
-        const r = await fetch(`${serveHandle.base}/api/rules/preview`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Local-Token': serveHandle.token,
-          },
-          body: JSON.stringify({ ...R8_LANDED, match: await bodyNow() }),
-        });
-        const j = await r.json();
-        return { status: r.status, error: j.error ?? '' };
-      };
-      // A new condition takes the field's first operator, its value
-      // empty.
-      const addCondition = async (field, op) => {
-        await pg.click(`.cb-cond-menu-row[data-field="${field}"]`);
-        const o = await pg.$eval(
-          '.cb-cond[data-index="5"] select.cb-cond-o',
-          (e) => e.value,
-        );
-        if (o !== op) throw new Error(`${field}'s first operator is ${o}`);
-      };
-      const errorShown = (i) =>
-        pg.$eval(`.cb-cond[data-index="${i}"] .cb-cond-err`, (e) =>
-          e.hidden ? '' : e.textContent,
-        );
-      // A duration is a number and a unit: the one invalid value the page
-      // can make is none.
-      for (const [field, op, value] of [['updated', 'older-than', '']]) {
-        await addCondition(field, op);
-        const said = await serveSays();
-        check(
-          `serve refuses ${field} ${op} "${value}", naming the sixth row "condition 6" (${said.status}: ${said.error})`,
-          said.status === 400 && said.error.startsWith('condition 6: '),
-        );
-        check(
-          `the page shows serve's message under ${field} (the sixth row)`,
-          await eventually(async () => (await errorShown(5)) === said.error),
-        );
-        check(
-          `a bad ${field} is not previewed as if valid (no count, matches "—")`,
-          (await r8Read.heading(pg)) === 'matches now' &&
-            (await pg.$eval(
-              '[data-testid="matches"]',
-              (e) => e.textContent,
-            )) === 'not previewed: the conditions aren\u2019t valid' &&
-            (await r8Read.facts(pg))[1] === 'matches \u2014',
-        );
-        await pg.click('.cb-cond[data-index="5"] .cb-cond-rm');
-        check(
-          `removing it previews the valid rule again (${field})`,
-          await until(
-            pg,
-            () =>
-              document.querySelector('.cb-matches-label')?.textContent ===
-                'matches now \u00b7 2 \u00b7 2 via merged pr' &&
-              [...document.querySelectorAll('.cb-cond-err')].every(
-                (e) => e.hidden,
-              ),
-          ),
-        );
-      }
-
-      // save draft persists the edit.
-      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-      check(
-        'save draft saves the edit to serve',
-        await eventually(
-          async () =>
-            (await ruleOf('r8-landed')).rule.match[3].value === 'merged-pr',
-        ),
-      );
-      check(
-        'once saved, "save draft" goes',
-        await until(
-          pg,
-          () =>
-            ![...document.querySelectorAll('.cb-rule-actions .kit-btn')]
-              .map((b) => b.textContent)
-              .includes('save draft'),
-        ),
-      );
-
-      // Live: a decision made elsewhere changes the matches under the open
-      // rule (status is new), without a reload, and leaves the
-      // attached line alone.
-      await pg.evaluate(() => {
-        window.__r8NoReload = true;
-      });
-      const m1 = R8_BR('r8-landed', 'feat/m1');
-      const decided = await agent.api('POST', '/api/decide', {
-        keys: [m1],
-        disposition: 'keep',
-      });
-      check('serve decides feat/m1 (keep)', !!decided);
-      check(
-        'the matches update live: "matches now · 1 · 1 via merged pr"',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-matches-label')?.textContent ===
-            'matches now \u00b7 1 \u00b7 1 via merged pr',
-        ),
-      );
-      check(
-        'without a reload',
-        await pg.evaluate(() => window.__r8NoReload === true),
-      );
-      check(
-        'a live event for the hidden Attention leaves "rule r8-landed" attached',
-        (await r8Read.attached(pg)) === 'rule r8-landed',
-      );
-
-      // propose once: the current matches become proposals.
-      await pg.click('.cb-rule-actions .kit-btn:has-text("propose once")');
-      check(
-        'propose once says what it proposed',
-        await until(pg, () =>
-          (
-            document.querySelector('.cb-rule-note')?.textContent ?? ''
-          ).startsWith('1 match proposed'),
-        ),
-      );
-      checkList(
-        'serve has the match as a pending proposal from rule:r8-landed',
-        await proposedBy('r8-landed'),
-        [R8_BR('r8-landed', 'feat/m2')],
-      );
-    } finally {
-      stopPresent();
-      await pg.close();
-      await clockContext.close();
-    }
-  }
-
-  // ---- scenario: rules — a long match list pages ---------------------------
-  console.log('\nscenario: rules — a long match list pages at 200');
-  {
-    await agent.api('POST', '/api/rules/draft', R8_MANY);
-    // Its faked clock in a context of its own (see r8-landed's above).
-    const clockContext = await context.browser().newContext();
-    const pg = await clockContext.newPage();
-    try {
-      await pg.setViewportSize({ width: 1600, height: 900 });
-      await pg.clock.install({ time: Date.now() });
-      await pg.goto(serveHandle.url + '#/rules/r8-many', {
-        waitUntil: 'domcontentloaded',
-      });
-      check(
-        '203 matches render 200 rows and "… 3 more"',
-        await until(
-          pg,
-          () =>
-            document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-              .length === 200 &&
-            document.querySelector('.cb-mr-more .cb-mr-k')?.textContent ===
-              '\u2026 3 more',
-          undefined,
-          8000,
-        ),
-      );
-      // A live re-preview (a decision elsewhere: events replayed on
-      // connect, or new ones) can land while "show more" loads. Here it
-      // does, every time: the page-2 answer is held until the re-preview
-      // (debounced, page one) has answered. Court's "show more" still
-      // brings the rest.
-      let releaseMore;
-      const moreGate = new Promise((r) => (releaseMore = r));
-      let moreAsked = 0;
-      const holdMore = async (r) => {
-        if (moreAsked++ === 0) await moreGate;
-        await r.continue();
-      };
-      await pg.route(/\/api\/rules\/preview\?offset=/, holdMore);
-      const rePreview = pg.waitForResponse(
-        (r) =>
-          r.url().includes('/api/rules/preview') &&
-          !r.url().includes('offset='),
-        { timeout: 10000 },
-      );
-      await pg.click('.cb-mr-more .cb-link');
-      await eventually(async () => moreAsked === 1);
-      await agent.api('POST', '/api/decide', {
-        keys: [R8_BR('r8-many', 'feat/n003')],
-        disposition: 'keep',
-      });
-      const rePreviewed = await rePreview.then(
-        () => true,
-        () => false,
-      );
-      releaseMore();
-      check(
-        `"show 3 more" loads the rest, and the more row goes, with a re-preview landing while it loads (re-preview ${rePreviewed})`,
-        rePreviewed &&
-          (await until(
-            pg,
-            () =>
-              document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-                .length === 203 && !document.querySelector('.cb-mr-more'),
-            undefined,
-            8000,
-          )),
-      );
-      await pg.unroute(/\/api\/rules\/preview\?offset=/, holdMore);
-      const keys = await r8Read.ticked(pg);
-      check(
-        'the 203 rows are 203 different branches',
-        new Set(keys).size === 203,
-      );
-
-      // Decisions elsewhere (a live decided and index) re-preview the open
-      // rule once, 300 ms after the last event, and keep the rows Court
-      // opened with "show more".
-      const firsts = [];
-      pg.on('request', (r) => {
-        if (
-          r.method() === 'POST' &&
-          r.url().includes('/api/rules/preview') &&
-          !r.url().includes('offset=')
-        ) {
-          firsts.push(r.url());
-        }
-      });
-      // Let what the page was already doing finish (events from before it
-      // opened replay on connect), then count from a still clock.
-      await pg.clock.pauseAt(Date.now() + 2000);
-      await pg.clock.runFor(1000);
-      await pg.waitForLoadState('domcontentloaded');
-      await eventually(async () => {
-        const n = firsts.length;
-        await sleep(300); // kept: "settled" is no new request in 300 ms
-        return firsts.length === n;
-      });
-      firsts.length = 0;
-      const listed = pg.waitForRequest((r) => /\/api\/rules$/.test(r.url()));
-      await agent.api('POST', '/api/decide', {
-        keys: [R8_BR('r8-many', 'feat/n001'), R8_BR('r8-many', 'feat/n002')],
-        disposition: 'keep',
-      });
-      await listed; // the index event reached the page (it reloads the list)
-      await sleep(300); // kept: no preview may come before the debounce
-      check(
-        `the live events wait for the debounce (${firsts.length} previews)`,
-        firsts.length === 0,
-      );
-      await pg.clock.runFor(300);
-      check(
-        'then one preview for them all',
-        await eventually(async () => firsts.length === 1),
-      );
-      check(
-        'and the 203 rows Court opened stay open',
-        await eventually(
-          async () =>
-            (await r8Read.ticked(pg)).length === 203 &&
-            !(await pg.$('.cb-mr-more')),
-        ),
-      );
-      await pg.clock.runFor(1000);
-      check(`still one preview (${firsts.length})`, firsts.length === 1);
-      await pg.clock.resume();
-    } finally {
-      await pg.close();
-      await clockContext.close();
-    }
-    // The shared context's pages still run on the real clock: its timers
-    // fire, and its time is serve's.
-    const after = await context.newPage();
-    try {
-      await after.goto(serveHandle.url, { waitUntil: 'domcontentloaded' });
-      const skew = (await after.evaluate(() => Date.now())) - Date.now();
-      // A paused fake clock never fires the page's timer: node's own
-      // timer ends the wait.
-      const fired = await Promise.race([
-        after
-          .evaluate(() => new Promise((r) => setTimeout(() => r(true), 50)))
-          .catch(() => false), // the page closed with it waiting
-        sleep(2000).then(() => false),
-      ]);
-      check(
-        `the clocked rules pages leave the shared context's clock real (skew ${skew}ms, timer ${fired ? 'fired' : 'stood still'})`,
-        fired && Math.abs(skew) < 1500,
-      );
-    } finally {
-      await after.close();
-    }
-  }
-
-  // ---- scenario: rules — "show more" during a re-preview in flight ----------
-  console.log(
-    '\nscenario: rules — "show more" while a re-preview is already in flight',
+  await agent.api('POST', '/api/rules/save?create=1', R8_LANDED);
+  await agent.api('POST', '/api/rules/save?create=1', R8_AGENT);
+  await agent.api('POST', '/api/rules/deactivate', { id: 'r8-agent' });
+  const pending = async (id) =>
+    (await agent.api('GET', '/api/items?view=all&limit=500')).items.filter(
+      (it) =>
+        it.proposal?.state === 'pending' && it.proposal.source === `rule:${id}`,
+    ).length;
+  check(
+    'the saved rule recommends its 6 matches; the one turned off none',
+    (await pending('r8-landed')) === 6 && (await pending('r8-agent')) === 0,
   );
-  {
-    const pg = await context.newPage();
-    try {
-      await pg.setViewportSize({ width: 1600, height: 900 });
-      await pg.goto(serveHandle.url + '#/rules/r8-many', {
-        waitUntil: 'domcontentloaded',
-      });
-      const paged = await until(
-        pg,
-        () =>
-          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-            .length === 200 &&
-          document.querySelector('.cb-mr-more .cb-mr-k')?.textContent ===
-            '\u2026 3 more',
-        undefined,
-        8000,
-      );
-      // Let the previews the page was already making (events replayed on
-      // connect) finish first.
-      const previews = [];
-      const onPreview = (r) => {
-        if (r.method() === 'POST' && r.url().includes('/api/rules/preview'))
-          previews.push(r.url());
-      };
-      pg.on('request', onPreview);
-      await eventually(async () => {
-        const n = previews.length;
-        await sleep(600); // kept: "settled" is no new request in 600 ms
-        return previews.length === n;
-      });
-      // The order 49f7f70 left open, forced: a live re-preview's page one
-      // is held; Court clicks "show 3 more" (its request is held too); the
-      // re-preview, answered, reads what he opened and brings rows 200-202
-      // itself; then "show more"'s answer arrives, last.
-      let releaseFirst, releaseMore;
-      const firstGate = new Promise((r) => (releaseFirst = r));
-      const moreGate = new Promise((r) => (releaseMore = r));
-      let firstHeld = false;
-      let moreHeld = false;
-      const hold = async (route) => {
-        const paging = route.request().url().includes('offset=');
-        if (!paging && !firstHeld) {
-          firstHeld = true;
-          await firstGate;
-        } else if (paging && !moreHeld) {
-          moreHeld = true;
-          await moreGate;
-        }
-        await route.continue();
-      };
-      await pg.route(/\/api\/rules\/preview/, hold);
-      await agent.api('POST', '/api/decide', {
-        keys: [R8_BR('r8-many', 'feat/n004')],
-        disposition: 'keep',
-      });
-      const rePreviewHeld = await eventually(async () => firstHeld, 8000);
-      await pg.click('.cb-mr-more .cb-link');
-      const moreAsked = await eventually(async () => moreHeld);
-      releaseFirst();
-      const rePreviewed = await until(
-        pg,
-        () =>
-          document.querySelectorAll('[data-testid="matches"] .cb-mr.on')
-            .length === 203,
-        undefined,
-        8000,
-      );
-      const moreAnswered = pg
-        .waitForResponse(
-          (r) =>
-            r.url().includes('/api/rules/preview') &&
-            r.url().includes('offset=200'),
-          { timeout: 8000 },
-        )
-        .then(
-          () => true,
-          () => false,
-        );
-      releaseMore();
-      const answered = await moreAnswered;
-      // Kept: the late answer must not add its rows a second time; a window
-      // for it to be (wrongly) drawn.
-      await sleep(300);
-      const keys = await r8Read.ticked(pg);
-      check(
-        `"show 3 more" clicked during a re-preview in flight shows the 3 rows once (page ${paged}, held ${rePreviewHeld}/${moreAsked}, re-previewed ${rePreviewed}, answered ${answered}: ${keys.length} rows, ${new Set(keys).size} different, more row ${!!(await pg.$('.cb-mr-more'))})`,
-        paged &&
-          rePreviewHeld &&
-          moreAsked &&
-          rePreviewed &&
-          answered &&
-          keys.length === 203 &&
-          new Set(keys).size === 203 &&
-          !(await pg.$('.cb-mr-more')),
-      );
-      await pg.unroute(/\/api\/rules\/preview/, hold);
-      pg.off('request', onPreview);
-    } finally {
-      await pg.close();
-    }
-  }
 
-  // ---- scenario: rules — activate proposes ---------------------------------
-  console.log('\nscenario: rules — activate proposes');
-  {
-    const sid = `probe-r8-agent-${Date.now()}`;
-    await agent.presence(sid, 'pi \u00b7 r8', '/home/court/r8', 'pi');
-    const drafted = await agent.ruleDraft(sid, R8_AGENT);
-    check(
-      `the agent drafts r8-agent (${drafted?.rule?.created_by})`,
-      drafted?.rule?.created_by === `pi:${sid}` &&
-        drafted?.rule?.status === 'draft',
-    );
-    let refused = '';
-    try {
-      await agent.ruleDraft(sid, { ...R8_AGENT, status: 'active' });
-    } catch (err) {
-      refused = String(err.message);
-    }
-    check(
-      'serve refuses the agent activating it',
-      refused.includes('400') &&
-        refused.includes('cannot set status to active'),
-    );
-    check(
-      'so it is still a draft',
-      (await ruleOf('r8-agent')).rule.status === 'draft',
-    );
-
-    const pg = await context.newPage();
-    try {
-      await pg.setViewportSize({ width: 1600, height: 900 });
-      await pg.goto(serveHandle.url + '#/rules/r8-agent', {
-        waitUntil: 'domcontentloaded',
-      });
-      await until(
-        pg,
-        () => document.querySelector('.cb-rule')?.dataset.rule === 'r8-agent',
-        undefined,
-        8000,
-      );
-      await until(
-        pg,
-        () => !!document.querySelector('.kit-row[data-rule="r8-agent"]'),
-      );
-      const row = await pg.$eval('.kit-row[data-rule="r8-agent"]', (e) => ({
-        sub: e.querySelector('.kit-sub')?.textContent ?? '',
-        pill: e.querySelector('.kit-meta').textContent,
-      }));
-      check(
-        `the agent's draft shows its author in the list ("${row.sub}")`,
-        row.sub === 'drafted by pi \u00b7 awaiting your review' &&
-          row.pill === 'draft',
-      );
-      const agentColour = await cssColor(pg, 'var(--kit-agent)');
-      const by = await pg.$eval(
-        '.cb-rule .kit-facts > span:last-child b',
-        (e) => ({
-          text: e.textContent,
-          color: getComputedStyle(e).color,
-        }),
-      );
-      check(
-        `the document names its author, in the agent's colour ("by ${by.text}")`,
-        by.text === 'pi' && by.color === agentColour,
-      );
-      check(
-        'and says only Court activates it',
-        (
-          await pg.$eval('.cb-rule > p:not(.kit-kick)', (e) => e.textContent)
-        ).startsWith(
-          'pi drafted this rule. It proposes nothing until you activate it, and only you can.',
-        ),
-      );
-      check(
-        'the composer attaches "rule r8-agent"',
-        (await r8Read.attached(pg)) === 'rule r8-agent',
-      );
-
-      // A hidden Rules does not touch the attached line: show Attention, then
-      // the agent edits its draft (a live rules event).
-      await pg.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      check(
-        'on Attention the attached line is Attention\'s ("nothing")',
-        await until(
-          pg,
-          () =>
-            document.querySelector('[data-testid="composer-attached"]')
-              .textContent === 'nothing',
-        ),
-      );
-      await agent.ruleDraft(sid, {
-        ...R8_AGENT,
-        name: 'Merged agent branches \u2192 delete (edited)',
-      });
-      check(
-        'the hidden Rules list takes the live edit',
-        await until(pg, () =>
-          [...document.querySelectorAll('.cb-rules-list .kit-title')]
-            .map((e) => e.textContent)
-            .includes('Merged agent branches \u2192 delete (edited)'),
-        ),
-      );
-      check(
-        'and the attached line stays "nothing"',
-        (await r8Read.attached(pg)) === 'nothing',
-      );
-      check(
-        "and the primary stays Attention's (none)",
-        (await r8Read.primary(pg)) === '',
-      );
-
-      // A rule still loading when Rules is left: its answer, arriving under
-      // Attention, must not reach the attached line or the primary.
-      const slowRule = /\/api\/rule\?id=r8-stale/;
-      let release;
-      const gate = new Promise((r) => {
-        release = r;
-      });
-      let held;
-      const heldSeen = new Promise((r) => {
-        held = r;
-      });
-      const hold = async (route) => {
-        held();
-        await gate;
-        await route.continue();
-      };
-      await pg.route(slowRule, hold);
-      await pg.evaluate(() => {
-        location.hash = '#/rules/r8-stale';
-      });
-      await heldSeen; // the rule is loading
-      await pg.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await until(
-        pg,
-        () =>
-          document
-            .querySelector('.kit-ctl[data-id="attention"]')
-            ?.classList.contains('on') ?? false,
-      );
-      const answered = pg.waitForResponse(slowRule);
-      release();
-      await answered;
-      // The hidden Rules has drawn the rule (its feed() has run).
-      await until(
-        pg,
-        () => !!document.querySelector('.cb-rule[data-rule="r8-stale"]'),
-      );
-      check(
-        'a rule that finishes loading after Rules is left attaches nothing',
-        (await r8Read.attached(pg)) === 'nothing' &&
-          (await r8Read.primary(pg)) === '',
-      );
-      await pg.unroute(slowRule, hold);
-
-      await pg.evaluate(() => {
-        location.hash = '#/rules/r8-agent';
-      });
-      check(
-        'back on Rules: "rule r8-agent" and "Activate"',
-        await until(
-          pg,
-          () =>
-            document.querySelector('[data-testid="composer-attached"]')
-              .textContent === 'rule r8-agent' &&
-            document.querySelector('.kit-primary')?.textContent === 'Activate',
-        ),
-      );
-      checkList(
-        'nothing is proposed from r8-agent yet',
-        await proposedBy('r8-agent'),
-        [],
-      );
-      const agentActivated = await clickLifecycle(pg, 'activate');
-      check(
-        "Court's Activate activates it",
-        agentActivated?.status() === 200 &&
-          (await eventually(
-            async () => (await ruleOf('r8-agent')).rule.status === 'active',
-          )),
-      );
-      checkList(
-        'activate turns its matches into pending proposals (serve)',
-        await proposedBy('r8-agent'),
-        [R8_BR('r8-agent', 'feat/g1'), R8_BR('r8-agent', 'feat/g2')],
-      );
-      const ok = await cssColor(pg, 'var(--kit-ok)');
-      check(
-        'the rule shows as active: pill in the ok colour, primary "Deactivate", "2 match · 0 excluded · 2 pending"',
-        await until(
-          pg,
-          ([okc]) => {
-            const r = document.querySelector('.kit-row[data-rule="r8-agent"]');
-            const m = r?.querySelector('.kit-meta');
-            return (
-              m?.textContent === 'active' &&
-              getComputedStyle(m).color === okc &&
-              r.querySelector('.kit-kicker').textContent ===
-                '2 match \u00b7 0 excluded \u00b7 2 pending' &&
-              document.querySelector('.kit-primary')?.textContent ===
-                'Deactivate'
-            );
-          },
-          [ok],
-        ),
-      );
-      check(
-        "an active rule's conditions are read-only (no field chips)",
-        !(await pg.$('.cb-rule .cb-cond-add, .cb-rule .cb-cond-menu')) &&
-          !(await pg.$(
-            '.cb-rule [data-testid="conditions"] input, .cb-rule select, .cb-rule button.cb-disp',
-          )),
-      );
-
-      await pg.evaluate(() => {
-        location.hash = '#/attention/proposed';
-      });
-      checkList(
-        "the page lists them as proposals in Attention's proposed view",
-        await (async () => {
-          await until(
-            pg,
-            () =>
-              [
-                ...document.querySelectorAll(
-                  '.kit-list:not(.cb-rules-list) .kit-row .kit-kicker',
-                ),
-              ].filter((e) => e.textContent.includes('r8-agent')).length === 2,
-          );
-          // Each row with its group: the header before it.
-          return pg.$$eval('.kit-list:not(.cb-rules-list) .kit-row', (els) =>
-            els
-              .filter((e) =>
-                e.querySelector('.kit-kicker').textContent.includes('r8-agent'),
-              )
-              .map((e) => {
-                let g = e.previousElementSibling;
-                while (g && !g.classList.contains('cb-group'))
-                  g = g.previousElementSibling;
-                const by = (g?.getAttribute('data-group') ?? '').split(':')[0];
-                const label = g?.querySelector('.cb-group-label')?.textContent;
-                return `${e.querySelector('.kit-kicker').textContent} | ${by} | ${label}`;
-              })
-              .sort(),
-          );
-        })(),
-        [
-          'branch \u00b7 schuettc/r8-agent@feat/g1 | rule | Delete it',
-          'branch \u00b7 schuettc/r8-agent@feat/g2 | rule | Delete it',
-        ],
-      );
-
-      await pg.evaluate(() => {
-        location.hash = '#/rules/r8-agent';
-      });
-      await until(
-        pg,
-        () =>
-          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
-      );
-      const agentDeactivated = await clickLifecycle(pg, 'deactivate');
-      check(
-        'Deactivate puts it back to a draft',
-        agentDeactivated?.status() === 200 &&
-          (await eventually(
-            async () => (await ruleOf('r8-agent')).rule.status === 'draft',
-          )),
-      );
-      check(
-        'and the primary is "Activate" again',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.kit-primary')?.textContent === 'Activate',
-        ),
-      );
-    } finally {
-      await pg.close();
-    }
-  }
-
-  // ---- scenario: rules — new rule, and asking the agent --------------------
-  console.log('\nscenario: rules — new rule, and asking the agent');
-  {
-    const fx = await dockFixture(serveHandle, 'r8-new');
-    const stopPresent = fx.present();
-    const pg = await openDock(context, serveHandle, fx, {
-      hash: '#/rules/no-such-rule',
+  const pg = await context.newPage();
+  const errors = [];
+  pg.on('pageerror', (e) => errors.push(String(e)));
+  try {
+    await pg.setViewportSize({ width: 1440, height: 900 });
+    await pg.goto(serveHandle.url + '#/decide', {
+      waitUntil: 'domcontentloaded',
     });
-    try {
-      check(
-        'a rule that does not exist says so',
-        await until(pg, () =>
-          (
-            document.querySelector('.cb-rules-read')?.textContent ?? ''
-          ).includes('rule no-such-rule not found'),
-        ),
-      );
-      check(
-        'and attaches nothing (not "rule no-such-rule")',
-        (await r8Read.attached(pg)) === 'nothing',
-      );
-
-      // new rule: a name and an id, nothing else.
-      await pg.click('[data-testid="new-rule"]');
-      await pg.waitForSelector('[data-testid="new-rule-sheet"] input');
-      await pg.keyboard.type('Old forks \u2192 archive');
-      check(
-        'the id follows the name: "old-forks-archive"',
-        (await pg.$eval(
-          '[data-testid="new-rule-sheet"] input[aria-label="id"]',
-          (e) => e.value,
-        )) === 'old-forks-archive',
-      );
-      await pg.keyboard.press('Enter');
-      check(
-        'new rule creates the draft and opens it',
-        await until(
-          pg,
-          () =>
-            location.hash === '#/rules/old-forks-archive' &&
-            document.querySelector('.cb-rule')?.dataset.rule ===
-              'old-forks-archive',
-          undefined,
-          8000,
-        ),
-      );
-      const fresh = await ruleOf('old-forks-archive');
-      check(
-        `serve has it as Court's draft, named as typed (${fresh.rule.created_by})`,
-        fresh.rule.status === 'draft' &&
-          fresh.rule.name === 'Old forks \u2192 archive' &&
-          fresh.rule.created_by === 'schuettc',
-      );
-      check(
-        `with no disposition it is shown as not valid, in serve's words (${fresh.invalid})`,
-        (await pg.$eval(
-          '[data-testid="rule-invalid"] .cb-invalid-msg',
-          (e) => e.textContent,
-        )) === fresh.invalid && fresh.invalid !== '',
-      );
-      check(
-        'the new rule is at the top of the reading column, and attached',
-        (await r8Read.attached(pg)) === 'rule old-forks-archive' &&
-          (await pg.$eval('.cb-rule .kit-h1', (e) => e.textContent)) ===
-            'Old forks \u2192 archive',
-      );
-      // The proposal: the picker offers what serve says this rule may
-      // propose, following its conditions (N1).
-      const chips = async () => {
-        await pg.click('[data-testid="propose"] button.cb-disp');
-        await pg.waitForSelector('.cb-disp-menu:not([hidden])', {
-          timeout: 4000,
-        });
-        return pg.$$eval('.cb-disp-menu .cb-disp-opt', (els) =>
-          els.map((e) => e.dataset.disp),
-        );
-      };
-      const closeMenu = async () => {
-        await pg.keyboard.press('Escape');
-        await until(pg, () =>
-          document.querySelector('.cb-disp-menu')?.hasAttribute('hidden'),
-        );
-      };
-      checkList(
-        "with no kind condition the picker offers serve's dispositions for every kind (no archive)",
-        await chips(),
-        fresh.matches.dispositions,
-      );
-      checkList('(serve says keep, wait, ignore)', fresh.matches.dispositions, [
-        'keep',
-        'wait',
-        'ignore',
-      ]);
-      // P1: the picker says why, in the menu, while it is open.
-      const why = await pg
-        .$eval('[data-testid="disp-why"]', (e) => ({
-          text: e.textContent,
-          shown:
-            getComputedStyle(e).display !== 'none' &&
-            e.getBoundingClientRect().height > 0,
+    const HEAD = `${LIST} .cb-group[data-rule="r8-landed"]`;
+    const shown = await until(
+      pg,
+      (sel) =>
+        !!document.querySelector(`${sel} .cb-rule-more`) &&
+        !!document.querySelector(`${sel} .cb-group-acts .fill`),
+      HEAD,
+      8000,
+    );
+    const head = shown
+      ? await pg.$eval(HEAD, (e) => ({
+          name: e.querySelector('.cb-group-label')?.textContent,
+          tag: e.querySelector('.cb-group-tag')?.textContent,
+          decision: e.querySelector('.cb-group-decision')?.textContent,
+          n: e.querySelector('.cb-group-n')?.textContent,
+          more: e.querySelector('.cb-rule-more')?.textContent,
+          button: e.querySelector('.cb-group-acts .fill')?.textContent,
         }))
-        .catch(() => ({ text: '', shown: false }));
-      check(
-        `with no kind condition the picker says why it offers only these ("${why.text}")`,
-        why.shown &&
-          why.text ===
-            'add a kind condition to propose archive, close, delete, merge or watch',
-      );
-      // P2: the arrow keys move between the chips (a roving tab stop), Home
-      // and End go to the ends, and the page's list doesn't move with them.
-      const focusedDisp = () =>
-        pg.evaluate(() => document.activeElement?.dataset?.disp ?? '');
-      const firstFocused = await focusedDisp();
-      await pg.keyboard.press('ArrowRight');
-      const afterRight = await focusedDisp();
-      await pg.keyboard.press('ArrowDown');
-      const afterDown = await focusedDisp();
-      await pg.keyboard.press('ArrowLeft');
-      const afterLeft = await focusedDisp();
-      await pg.keyboard.press('End');
-      const atEnd = await focusedDisp();
-      await pg.keyboard.press('Home');
-      const atHome = await focusedDisp();
-      await pg.keyboard.press('ArrowUp');
-      const wrapped = await focusedDisp();
-      checkList(
-        'the disposition menu: → ↓ ← End Home ↑ move through the chips (wrapping)',
-        [
-          firstFocused,
-          afterRight,
-          afterDown,
-          afterLeft,
-          atEnd,
-          atHome,
-          wrapped,
-        ],
-        ['keep', 'wait', 'ignore', 'wait', 'ignore', 'keep', 'ignore'],
-      );
-      check(
-        'the chips are one tab stop (only the focused chip is tabbable)',
-        await pg.$$eval(
-          '.cb-disp-menu .cb-disp-opt',
-          (els) =>
-            els.map((e) => `${e.dataset.disp}:${e.tabIndex}`).join(' ') ===
-            'keep:-1 wait:-1 ignore:0',
-        ),
-      );
-      // Focus Tabs out of the menu (headless Chrome withholds focus events
-      // without window focus, so the focusout is fired as a Tab makes it).
-      await pg.evaluate(() => {
-        const from = document.activeElement;
-        const to = document.querySelector(
-          '[data-testid="propose"] input[aria-label="note"]',
-        );
-        from.dispatchEvent(
-          new FocusEvent('focusout', { bubbles: true, relatedTarget: to }),
-        );
-      });
-      check(
-        'the disposition menu closes when focus Tabs out of it',
-        await until(pg, () =>
-          document.querySelector('.cb-disp-menu')?.hasAttribute('hidden'),
-        ),
-      );
-      // Two conditions: kind is repo (a new type condition has nothing
-      // ticked), fork is true.
-      await pg.click('.cb-cond-menu-row[data-field="kind"]');
-      await pg.click(
-        '.cb-cond[data-index="0"] .cb-cond-pick[data-value="repo"]',
-      );
-      await pg.click('.cb-cond-menu-row[data-field="fork"]');
-      const forks = {
-        match: [
-          { field: 'kind', op: 'is', value: 'repo' },
-          { field: 'fork', op: 'is', value: 'true' },
-        ],
-        propose: { disposition: '' },
-      };
-      const forServe = await agent.api('POST', '/api/rules/preview', forks);
+      : {};
+    checkList(
+      'the header reads the rule: name, "rule", its decision, its count and ⋯',
+      [head.name, head.tag, head.decision, head.n, head.more],
+      ['Landed branches', 'rule', 'Delete it', '6', '\u22ef'],
+    );
+    check(
+      `its button names the decision for all of them: "Delete all 6" (${head.button})`,
+      head.button === 'Delete all 6',
+    );
+    checkList('nothing visible says "attention"', await attentionWords(pg), []);
+    // The starter rules (store/tidy.go seeds 3) and these 2.
+    check(
+      'the rule row under the filters: "+ rule" and "rules 5" (the one turned off too)',
+      (await pg.$eval(`${LIST} .cb-rule-row`, (e) => e.textContent)) ===
+        '+ rulerules 5',
+    );
+
+    // ⋯ edit: the editor in the middle pane, the list its preview.
+    await pg.click(`${HEAD} .cb-rule-more`);
+    await pg.click(`${HEAD} .cb-filter-menu-item[data-act="edit"]`);
+    check(
+      'edit opens the rule editor beside the list, and the list previews it',
       await until(
         pg,
-        (want) =>
-          document.querySelector('.cb-matches-label')?.textContent === want,
-        `matches now \u00b7 ${forServe.total}`,
-      );
-      checkList(
-        "with kind is repo it offers serve's dispositions for a repo (archive, no close)",
-        await chips(),
-        forServe.dispositions,
-      );
-      await pg.click('.cb-disp-opt[data-disp="wait"]');
-      const untilShown = () =>
-        pg.$eval(
-          '[data-testid="propose"] input[aria-label="until"]',
-          (e) => getComputedStyle(e.closest('.kit-tr')).display !== 'none',
-        );
-      const withWait = await untilShown();
-      const dv = await agent.api('GET', '/api/decisions/vocabulary');
-      const hints = await pg.evaluate(() => {
-        const t = (id) =>
-          document.querySelector(`[data-testid="${id}"] .cb-prop-hint-t`);
-        const fits = (e) =>
-          !!e &&
-          e.scrollWidth <= e.clientWidth &&
-          getComputedStyle(e).display !== 'none' &&
-          e.getBoundingClientRect().right <=
-            document.querySelector('.cb-propose').getBoundingClientRect().right;
-        return {
-          until: t('until-hint')?.textContent,
-          untilFits: fits(t('until-hint')),
-          placeholder: document.querySelector(
-            '[data-testid="propose"] input[aria-label="until"]',
-          ).placeholder,
-          note: t('note-hint')?.textContent,
-          noteFits: fits(t('note-hint')),
-          notePlaceholder: document.querySelector(
-            '[data-testid="propose"] input[aria-label="note"]',
-          ).placeholder,
-        };
-      });
-      check(
-        `the until hint is serve's until forms, whole ("${hints.until}", ${hints.placeholder})`,
-        withWait &&
-          hints.untilFits &&
-          hints.until ===
-            (dv.until_forms ?? []).map((f) => f.syntax).join('\u00a0\u00b7 ') &&
-          hints.placeholder === `e.g. ${dv.until_forms[0].example}`,
-      );
-      const rv = await agent.api('GET', '/api/rules/vocabulary');
-      check(
-        `the note hint lists serve's tokens, generically and whole ("${hints.note}")`,
-        hints.noteFits &&
-          hints.notePlaceholder === 'optional' &&
-          hints.note ===
-            'may use ' +
-              (rv.note_tokens ?? [])
-                .map((t) => `${t.token} ${t.meaning}`)
-                .join('\u00a0\u00b7 ') &&
-          (rv.note_tokens ?? []).length === 5,
-      );
-      // An until serve can't parse: saved (a draft may be unfinished), shown
-      // as not valid in serve's words, and never activated.
-      await pg.fill('[data-testid="propose"] input[aria-label="until"]', '30d');
-      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-      let withBadUntil = null;
-      await eventually(async () => {
-        const r = await ruleOf('old-forks-archive');
-        if (r.rule.propose.until === '30d') withBadUntil = r;
-        return !!withBadUntil;
-      });
-      check(
-        `serve holds "wait until 30d" as not valid (${withBadUntil?.invalid})`,
-        (withBadUntil?.invalid ?? '').includes('invalid until "30d"'),
-      );
-      check(
-        "the page shows serve's reason in the card and under the proposal",
-        await until(
-          pg,
-          (w) =>
-            document.querySelector(
-              '[data-testid="rule-invalid"] .cb-invalid-msg',
-            )?.textContent === w &&
-            document.querySelector('[data-testid="propose-err"]')
-              ?.textContent === w &&
-            !document.querySelector('[data-testid="propose-err"]').hidden,
-          withBadUntil?.invalid ?? '-',
-        ),
-      );
-      // P3: Activate is refused on the page (nothing is posted that is sure
-      // to be refused); the note points to the card, and serve's reason is
-      // on the page twice: in the card and at the field.
-      let activatePosts = 0;
-      const countActivate = (r) => {
-        if (r.url().includes('/api/rules/activate')) activatePosts++;
-      };
-      pg.on('request', countActivate);
-      await pg.click('.kit-primary');
-      const pointed = await until(
-        pg,
         () =>
-          document.querySelector('.cb-rule-note')?.textContent ===
-          'not activated: fix what\u2019s marked above',
-      );
-      // Kept: the check is that no activate POST goes out; a window for one.
-      await pg.waitForTimeout(300);
-      pg.off('request', countActivate);
-      check(
-        'Activate on a saved invalid rule is refused on the page, pointing to the card',
-        pointed && activatePosts === 0,
-      );
-      check(
-        "serve's reason shows once in the card and once at the field, never in the note",
-        await pg.evaluate((w) => {
-          const doc = document.querySelector('.cb-rule');
-          const all = doc.textContent.split(w).length - 1;
-          return (
-            all === 2 &&
-            !document.querySelector('.cb-rule-note').textContent.includes(w)
-          );
-        }, withBadUntil?.invalid ?? '-'),
-      );
-      check(
-        'serve still has a draft',
-        (await ruleOf('old-forks-archive')).rule.status === 'draft',
-      );
-      // The proposal with the until hint, the picker open.
-      await chips();
-      await pg.$eval('[data-testid="propose"]', (e) =>
-        e.scrollIntoView({ block: 'center' }),
-      );
-      check('the proposal is light (theme and body)', await r8Light(pg));
-      await closeMenu();
-      // Fixed: archive, no until.
-      await pg.fill('[data-testid="propose"] input[aria-label="until"]', '');
-      await chips();
-      // A live preview while the menu is open (something is decided
-      // elsewhere: the index moves and the rule's matches are previewed
-      // again, offering the same dispositions) leaves the menu open, its
-      // chips as they were and Court's focus where it was.
-      const openFocus = await pg.evaluateHandle(() => document.activeElement);
-      const livePreview = pg
-        .waitForResponse((r) => r.url().includes('/api/rules/preview'), {
-          timeout: 8000,
-        })
-        .catch(() => null);
-      await agent.api('POST', '/api/decide', {
-        keys: [R8_BR('r8-many', 'feat/n150')],
-        disposition: 'keep',
-      });
-      const livePreviewed = await livePreview;
-      await pg.evaluate(
-        () =>
-          new Promise((r) =>
-            requestAnimationFrame(() => requestAnimationFrame(r)),
+          !!document.querySelector(
+            '.kit-app > .kit-read:not([hidden]) [data-testid="rule-editor"]',
+          ) &&
+          !!document.querySelector('.kit-list.cb-decide-list.cb-previewing') &&
+          /previewing a draft rule · 6 items/.test(
+            document.querySelector('.cb-preview-line')?.textContent ?? '',
           ),
-      );
-      check(
-        `a live preview (${livePreviewed?.status()}) while the disposition menu is open leaves it open, with Court's focus on the same chip`,
-        !!livePreviewed &&
-          (await pg.evaluate(
-            (f) =>
-              !document.querySelector('.cb-disp-menu').hidden &&
-              f.matches('.cb-disp-opt') &&
-              f.isConnected &&
-              document.activeElement === f,
-            openFocus,
-          )),
-      );
-      await pg.click('.cb-disp-opt[data-disp="archive"]');
-      check(
-        'the until row showed for wait, not for archive',
-        withWait && !(await untilShown()),
-      );
-      // serve's reply to the save is held until Court has changed a
-      // condition after it (as a slow runner delivers it late): his change
-      // is newer than the copy saved, and stays.
-      let releaseSave;
-      const saveReleased = new Promise((r) => (releaseSave = r));
-      const holdSave = async (route) => {
-        const res = await route.fetch();
-        await saveReleased;
-        await route.fulfill({ response: res });
-      };
-      await pg.route('**/api/rules/draft?*', holdSave);
-      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-      check(
-        'saved: serve has the disposition and the conditions, and it is valid',
-        await eventually(async () => {
-          const r = await ruleOf('old-forks-archive');
-          return (
-            r.rule.propose.disposition === 'archive' &&
-            !r.rule.propose.until &&
-            r.rule.match.map((c) => `${c.field} ${c.value}`).join(', ') ===
-              'kind repo, fork true' &&
-            !r.invalid
-          );
-        }),
-      );
-      // A condition that makes the disposition one the rule can't propose:
-      // the page says so before anything is saved.
-      // Branch ticked beside repo (fork applies to repos only, so a rule
-      // on branches alone and fork is refused).
-      const kindPick = (v) =>
-        pg.click(
-          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] .cb-cond-pick[data-value="' +
-            v +
-            '"]',
-        );
-      await kindPick('branch');
-      const saveReplied = pg.waitForResponse((r) =>
-        r.url().includes('/api/rules/draft?'),
-      );
-      releaseSave();
-      await saveReplied;
-      await pg.unroute('**/api/rules/draft?*', holdSave);
-      check(
-        'a condition changed while the save was in flight stays changed once its reply lands',
-        !(await until(
-          pg,
-          () =>
-            document.querySelector(
-              '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] .cb-cond-picks',
-            )?.dataset.value !== 'repo,branch',
-          undefined,
-          1500,
-        )),
-      );
-      const branchDisps = (
-        await agent.api('POST', '/api/rules/preview', {
-          ...forks,
-          match: [
-            { field: 'kind', op: 'in', value: 'repo,branch' },
-            forks.match[1],
-          ],
-        })
-      ).dispositions;
-      check(
-        `kind in repo,branch: "archive can't be proposed", with serve's list (${branchDisps})`,
-        await until(
-          pg,
-          (want) =>
-            document.querySelector('[data-testid="propose-err"]')
-              ?.textContent === want,
-          `archive can\u2019t be proposed for what this rule matches (allowed: ${branchDisps.join(', ')})`,
-        ),
-      );
-      await kindPick('branch');
-      check(
-        'back to kind is repo: the message goes',
-        await until(
-          pg,
-          () => document.querySelector('[data-testid="propose-err"]')?.hidden,
-        ),
-      );
-      check(
-        'the page drops the not-valid card, and the list pill reads draft',
-        await until(
-          pg,
-          () =>
-            !document.querySelector('[data-testid="rule-invalid"] .kit-card') &&
-            document.querySelector(
-              '.kit-row[data-rule="old-forks-archive"] .kit-meta',
-            )?.textContent === 'draft',
-        ),
-      );
-      // A new rule never overwrites one.
-      await pg.click('[data-testid="new-rule"]');
-      await pg.waitForSelector('[data-testid="new-rule-sheet"] input');
-      await pg.keyboard.type('Landed again');
-      await pg.fill(
-        '[data-testid="new-rule-sheet"] input[aria-label="id"]',
-        'r8-landed',
-      );
-      await pg.keyboard.press('Enter');
-      check(
-        'new rule with an id in use says so, and changes nothing',
-        await until(pg, () =>
-          (
-            document.querySelector(
-              '[data-testid="new-rule-sheet"] .cb-sheet-err',
-            )?.textContent ?? ''
-          ).includes('already exists'),
-        ),
-      );
-      check(
-        'r8-landed is untouched',
-        (await ruleOf('r8-landed')).rule.name === R8_LANDED.name,
-      );
-      await pg.keyboard.press('Escape');
+      ),
+    );
+    await pg.click(`${READ} .cb-filter-cancel`);
+    await until(
+      pg,
+      () => !document.querySelector('.kit-list.cb-decide-list.cb-previewing'),
+    );
 
-      // "or ask pi to draft one": the composer, attached to Rules, empty.
-      await pg.evaluate(() => {
-        location.hash = '#/rules';
-      });
-      await until(pg, () => !document.querySelector('.cb-rule'));
-      await pg.click('.cb-rules-ask');
-      const asked = await pg.evaluate(() => ({
-        focused:
-          document.activeElement ===
-          document.querySelector('[data-testid="composer-input"]'),
-        value: document.querySelector('[data-testid="composer-input"]').value,
-        attached: document.querySelector('[data-testid="composer-attached"]')
-          .textContent,
-      }));
-      check(
-        `asking the agent focuses the composer, "attached: section rules" (as the agent reads it), no text (${JSON.stringify(asked)})`,
-        asked.focused &&
-          asked.attached === 'section rules' &&
-          asked.value === '',
-      );
-      await pg.keyboard.type('draft a rule for dependabot minor bumps');
-      await pg.keyboard.press('Enter');
-      const d = await fx.agent.wait(fx.sid);
-      checkList(
-        'the agent gets the message with the rules section attached',
-        (d?.delivery?.messages ?? []).map(
-          (m) => `${m.body} | ${JSON.stringify(m.attached)}`,
-        ),
-        ['draft a rule for dependabot minor bumps | {"section":"rules"}'],
-      );
-    } finally {
-      stopPresent();
-      await pg.close();
-    }
-  }
+    // ⋯ turn off: its recommendations are withdrawn and the group leaves
+    // the list, live.
+    const reloads = [];
+    pg.on('framenavigated', (f) => {
+      if (f === pg.mainFrame()) reloads.push(f.url());
+    });
+    await pg.click(`${HEAD} .cb-rule-more`);
+    await pg.click(`${HEAD} .cb-filter-menu-item[data-act="turn off"]`);
+    check(
+      'turn off removes the group, live (no reload)',
+      (await until(pg, (sel) => !document.querySelector(sel), HEAD)) &&
+        reloads.length === 0,
+    );
+    check(
+      'and serve withdrew its recommendations',
+      await eventually(async () => (await pending('r8-landed')) === 0),
+    );
 
-  // ---- scenario: rules — a change under Court's edits (I1) -----------------
-  console.log("\nscenario: rules — a change under Court's edits");
-  {
-    const sid = `probe-r8-arch-${Date.now()}`;
-    await agent.presence(sid, 'pi \u00b7 arch', '/home/court/r8', 'pi');
-    const arch = (disposition, name = 'Dormant repos') => ({
-      id: 'r8-arch',
-      name,
-      status: 'draft',
-      match: [
-        { field: 'kind', op: 'is', value: 'repo' },
-        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
+    // "rules N": every rule, off ones too, in the middle pane.
+    await pg.click(`${LIST} [data-testid="rules-n"]`);
+    await until(
+      pg,
+      () =>
+        document.querySelectorAll(
+          '.kit-app > .kit-read:not([hidden]) .cb-rules-row',
+        ).length === 5,
+    );
+    checkList(
+      "rules N lists both rules (serve's order, by id), each off now, with its decision",
+      await pg.$$eval(`${READ} .cb-rules-row[data-id^="r8-"]`, (els) =>
+        els.map(
+          (e) =>
+            `${e.querySelector('.cb-rules-row-name').textContent} | ${e.querySelector('.cb-rules-row-state').textContent} | ${e.querySelector('.cb-rules-row-d').textContent}`,
+        ),
+      ),
+      [
+        'Merged agent branches | off | Delete it',
+        'Landed branches | off | Delete it',
       ],
-      propose: { disposition },
-    });
-    await agent.ruleDraft(sid, arch('archive'));
-    const pg = await context.newPage();
-    const activates = [];
-    pg.on('request', (r) => {
-      if (r.url().includes('/api/rules/activate')) activates.push(r.url());
-    });
-    try {
-      await pg.setViewportSize({ width: 1600, height: 900 });
-      await pg.goto(serveHandle.url + '#/rules/r8-arch', {
-        waitUntil: 'domcontentloaded',
-      });
+    );
+    // Turn it on again from the list: the group comes back.
+    await pg.click(`${READ} .cb-rules-row[data-id="r8-landed"] .cb-rule-more`);
+    await pg.click(
+      `${READ} .cb-rules-row[data-id="r8-landed"] .cb-filter-menu-item[data-act="turn on"]`,
+    );
+    check(
+      'turn on from the list brings its group back, 6 items',
+      await until(
+        pg,
+        (sel) =>
+          document.querySelector(`${sel} .cb-group-n`)?.textContent === '6',
+        HEAD,
+        8000,
+      ),
+    );
+    // A row opens the rule, and the list narrows to it.
+    await pg.click(
+      `${READ} .cb-rules-row[data-id="r8-landed"] .cb-rules-row-open`,
+    );
+    check(
+      'a row opens the rule in the middle pane and narrows the list (rule=r8-landed)',
       await until(
         pg,
         () =>
-          document.querySelector('.cb-rule')?.dataset.rule === 'r8-arch' &&
-          document.querySelector('[data-testid="conditions"]')?.dataset
-            .ready === 'true',
+          location.hash === '#/decide?rule=r8-landed' &&
+          document.querySelector('.kit-app > .kit-read:not([hidden]) .cb-rule')
+            ?.dataset.rule === 'r8-landed' &&
+          document.querySelectorAll(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+          ).length === 6,
         undefined,
         8000,
-      );
-      // Court edits a condition; before he saves, the agent changes the
-      // proposal from archive to delete.
-      await setRepo(pg, 'schuettc/r8-other');
-      await agent.ruleDraft(sid, arch('delete'));
-      check(
-        'the change shows: "changed while you were editing · by pi"',
-        await until(
-          pg,
-          () =>
-            document.querySelector(
-              '[data-testid="rule-conflict"] .kit-card-head',
-            )?.textContent === 'changed while you were editing \u00b7 by pi',
-        ),
-      );
-      check(
-        "serve's copy is shown: it now proposes delete",
-        (await pg.$eval(
-          '[data-testid="conflict-disposition"]',
-          (e) => e.textContent,
-        )) === 'delete',
-      );
-      check(
-        'his edit is kept',
-        (await pg.$eval(
-          `.cb-rule > [data-testid="conditions"] ${REPO_V}`,
-          (e) => e.dataset.value,
-        )) === 'schuettc/r8-other',
-      );
-      await pg.$eval('.cb-rules-read', (e) => {
-        e.scrollTop = 0;
-      });
-      check('the conflict is light (theme and body)', await r8Light(pg));
-      await pg.click('.kit-primary');
-      check(
-        'Activate refuses while it stands, and says why',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-conflict-note')?.textContent ===
-            'Activate waits: reload their copy, or keep yours over it, first.',
-        ),
-      );
-      check(
-        `nothing was sent to activate (${activates.length}), and serve still has a draft`,
-        activates.length === 0 &&
-          (await ruleOf('r8-arch')).rule.status === 'draft',
-      );
+      ),
+    );
+    check(
+      'the rule reads on, with its record',
+      (await pg.$eval(`${READ} .cb-rule .kit-kick`, (e) => e.textContent)) ===
+        'rule · on',
+    );
 
-      // Keep mine: his edits over theirs, saved against serve's copy.
-      await pg.click(
-        '[data-testid="rule-conflict"] .kit-btn:has-text("keep mine")',
-      );
-      await until(
-        pg,
-        () =>
-          !document.querySelector('[data-testid="rule-conflict"] .kit-card'),
-      );
-      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-      check(
-        'keep mine, then save: serve has his condition and his proposal (archive)',
-        await eventually(async () => {
-          const r = await ruleOf('r8-arch');
-          return (
-            r.rule.match[1].value === 'schuettc/r8-other' &&
-            r.rule.propose.disposition === 'archive'
-          );
-        }),
-      );
-
-      // Reload theirs: the agent changes it again under a new edit; Court
-      // takes serve's copy, and Activate activates exactly that.
-      await until(
-        pg,
-        () =>
-          !document.querySelector('.cb-rule-actions .kit-btn') ||
-          ![...document.querySelectorAll('.cb-rule-actions .kit-btn')]
-            .map((b) => b.textContent)
-            .includes('save draft'),
-      );
-      await setRepo(pg, 'schuettc/r8-landed');
-      await agent.ruleDraft(sid, {
-        ...arch('keep'),
-        match: [
-          { field: 'kind', op: 'is', value: 'repo' },
-          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
-        ],
-      });
-      await until(
-        pg,
-        () =>
-          !!document.querySelector('[data-testid="rule-conflict"] .kit-card'),
-      );
-      await pg.click(
-        '[data-testid="rule-conflict"] .kit-btn:has-text("reload theirs")',
-      );
-      check(
-        "reload theirs shows serve's copy (keep), and drops his edit",
-        await until(
-          pg,
-          () =>
-            document.querySelector('[data-testid="propose"] button.cb-disp')
-              ?.dataset.value === 'keep' &&
-            document.querySelector('.cb-cond[data-index="1"] .cb-cond-typed')
-              ?.dataset.value === 'schuettc/r8-other',
-        ),
-      );
-      const archActivated = await clickLifecycle(pg, 'activate');
-      check(
-        'Activate then activates what is shown: keep',
-        archActivated?.status() === 200 &&
-          (await eventually(async () => {
-            const r = await ruleOf('r8-arch');
-            return (
-              r.rule.status === 'active' &&
-              r.rule.propose.disposition === 'keep'
-            );
-          })),
-      );
-      await until(
-        pg,
-        () =>
-          document.querySelector('.kit-primary')?.textContent === 'Deactivate',
-      );
-      check(
-        'Deactivate (after the Activate replied) puts r8-arch back to a draft',
-        (await clickLifecycle(pg, 'deactivate'))?.status() === 200 &&
-          (await eventually(
-            async () => (await ruleOf('r8-arch')).rule.status === 'draft',
-          )),
-      );
-
-      // A change the page hasn't heard of yet (its live reads held): serve
-      // refuses the stale Activate, and the page shows what it refused.
-      await until(
-        pg,
-        () =>
-          document.querySelector('.kit-primary')?.textContent === 'Activate',
-      );
-      let open;
-      const shut = new Promise((r) => {
-        open = r;
-      });
-      const liveReads = /\/api\/rule\?id=r8-arch/;
-      const holdReads = async (route) => {
-        await shut;
-        await route.continue();
-      };
-      await pg.route(liveReads, holdReads);
-      await agent.ruleDraft(sid, arch('delete', 'Dormant repos, all of them'));
-      const n0 = activates.length;
-      const refused = pg.waitForResponse((r) =>
-        r.url().includes('/api/rules/activate'),
-      );
-      await pg.click('.kit-primary');
-      check(
-        'serve refuses the Activate of a copy that changed (409)',
-        (await refused).status() === 409 && activates.length === n0 + 1,
-      );
-      open();
-      check(
-        "the page shows serve's copy (delete), saying nothing was activated",
-        await until(
-          pg,
-          () =>
-            document.querySelector('.cb-rule .kit-h1')?.textContent ===
-              'Dormant repos, all of them' &&
-            document.querySelector('[data-testid="propose"] button.cb-disp')
-              ?.dataset.value === 'delete' &&
-            (
-              document.querySelector('.cb-rule-note')?.textContent ?? ''
-            ).startsWith(
-              'It changed before you activated it; nothing was activated.',
-            ),
-        ),
-      );
-      check(
-        'and serve still has a draft',
-        (await ruleOf('r8-arch')).rule.status === 'draft',
-      );
-      await pg.unroute(liveReads, holdReads);
-    } finally {
-      await pg.close();
-    }
-  }
-
-  // ---- scenario: rules — Court's own save, heard live first (N4) ----------
-  //
-  // serve publishes the save before the page has its reply; the live read
-  // of it can land first. That is Court's own change, not someone else's:
-  // no conflict card ("by you") appears, none is left behind, and Activate
-  // is not held up.
-  console.log("\nscenario: rules — Court's own save, heard live first");
-  {
-    await agent.api('POST', '/api/rules/draft', {
-      id: 'r8-race',
-      name: 'Race repos',
-      status: 'draft',
-      match: [
-        { field: 'kind', op: 'is', value: 'repo' },
-        { field: 'repo', op: 'is', value: 'schuettc/r8-none' },
-      ],
-      propose: { disposition: 'archive' },
+    // "Delete all 6" decides the 6, and they leave the list.
+    await pg.goto(serveHandle.url + '#/decide', {
+      waitUntil: 'domcontentloaded',
     });
-    const pg = await context.newPage();
-    const card = () =>
-      pg.$eval(
-        '[data-testid="rule-conflict"]',
-        (e) => e.querySelector('.kit-card-head')?.textContent ?? '',
-      );
-    try {
-      await pg.setViewportSize({ width: 1600, height: 900 });
-      await pg.goto(serveHandle.url + '#/rules/r8-race', {
-        waitUntil: 'domcontentloaded',
-      });
+    await until(pg, (sel) => !!document.querySelector(sel), `${HEAD} .fill`);
+    const applyBefore = await pg.$eval(
+      '.kit-ctl[data-id="apply"] .kit-n',
+      (e) => Number(e.textContent),
+    );
+    await pg.click(`${HEAD} .cb-group-acts .fill`);
+    check(
+      'Delete all 6 decides them: the group leaves the list',
+      await until(pg, (sel) => !document.querySelector(sel), HEAD, 8000),
+    );
+    check(
+      'and apply counts 6 more',
       await until(
         pg,
-        () =>
-          document.querySelector('.cb-rule')?.dataset.rule === 'r8-race' &&
-          document.querySelector('[data-testid="conditions"]')?.dataset
-            .ready === 'true',
-        undefined,
+        (n) =>
+          Number(
+            document.querySelector('.kit-ctl[data-id="apply"] .kit-n')
+              ?.textContent,
+          ) === n,
+        applyBefore + 6,
         8000,
-      );
-      await setRepo(pg, 'schuettc/r8-other');
-      // Hold the save's reply (serve has done the save) until the live
-      // read of it has been answered and drawn.
-      let release;
-      const held = new Promise((r) => {
-        release = r;
-      });
-      const saves = /\/api\/rules\/draft/;
-      let replied;
-      const answered = new Promise((r) => {
-        replied = r;
-      });
-      const hold = async (route) => {
-        const resp = await route.fetch();
-        await held;
-        await route.fulfill({ response: resp });
-        replied();
-      };
-      await pg.route(saves, hold);
-      const liveRead = pg.waitForResponse(
-        (r) => r.url().includes('/api/rule?id=r8-race') && r.status() === 200,
-      );
-      await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-      await liveRead;
-      check(
-        'serve has his save while the page still waits for its reply',
-        await eventually(
-          async () =>
-            (await ruleOf('r8-race')).rule.match[1].value ===
-            'schuettc/r8-other',
-        ),
-      );
-      // Two frames for the live read to be drawn.
-      await pg.evaluate(
-        () =>
-          new Promise((r) =>
-            requestAnimationFrame(() => requestAnimationFrame(r)),
-          ),
-      );
-      const during = await card();
-      check(
-        `the live read of his own save is no conflict (card: "${during}")`,
-        during === '',
-      );
-      release();
-      await answered;
-      await pg.unroute(saves, hold);
-      check(
-        'after the reply: no conflict card, nothing left to save',
-        await until(
-          pg,
-          () =>
-            !document.querySelector(
-              '[data-testid="rule-conflict"] .kit-card',
-            ) &&
-            ![...document.querySelectorAll('.cb-rule-actions .kit-btn')].some(
-              (b) => b.textContent === 'save draft',
-            ),
-        ),
-      );
-      // serve announces an activate before it replies, so the page shows
-      // Deactivate while the Activate is still in flight. Court's click
-      // then is not dropped: it waits for the reply and runs after it.
-      // (The Activate's reply is held here, so the click is certain to
-      // land during it.)
-      let releaseActivate;
-      const activateHeld = new Promise((r) => {
-        releaseActivate = r;
-      });
-      const activates = /\/api\/rules\/activate/;
-      const holdActivate = async (route) => {
-        const resp = await route.fetch();
-        await activateHeld;
-        await route.fulfill({ response: resp });
-      };
-      await pg.route(activates, holdActivate);
-      let deactivatePosts = 0;
-      const countDeactivate = (r) => {
-        if (r.url().includes('/api/rules/deactivate')) deactivatePosts++;
-      };
-      pg.on('request', countDeactivate);
-      const raceActivated = lifecycleReply(pg, 'activate');
-      await pg.click('.kit-primary');
-      check(
-        'and Activate activates his copy at once',
-        await eventually(async () => {
-          const r = await ruleOf('r8-race');
-          return (
-            r.rule.status === 'active' &&
-            r.rule.match[1].value === 'schuettc/r8-other'
-          );
-        }),
-      );
-      check(
-        'serve announced it before replying: the page shows Deactivate while the Activate is in flight',
-        await until(
-          pg,
-          () =>
-            document.querySelector('.kit-primary')?.textContent ===
-            'Deactivate',
-        ),
-      );
-      const raceDeactivated = lifecycleReply(pg, 'deactivate');
-      await pg.click('.kit-primary'); // during the Activate
-      // Two frames: a click that was going to post would have by now.
-      await pg.evaluate(
-        () =>
-          new Promise((r) =>
-            requestAnimationFrame(() => requestAnimationFrame(r)),
-          ),
-      );
-      check(
-        `Deactivate clicked during the Activate waits for its reply (${deactivatePosts} posted early)`,
-        deactivatePosts === 0 &&
-          (await ruleOf('r8-race')).rule.status === 'active',
-      );
-      releaseActivate();
-      const raceA = await raceActivated;
-      const raceD = await raceDeactivated;
-      // Unrouted only once nothing is in flight: requests caught mid-unroute
-      // can be left hanging (Playwright), which is the probe, not the page.
-      await pg.unroute(activates, holdActivate);
-      pg.off('request', countDeactivate);
-      check(
-        `the Deactivate then runs, and puts it back to a draft, editable again (activate ${raceA?.status()}, deactivate ${raceD?.status()})`,
-        raceA?.status() === 200 &&
-          raceD?.status() === 200 &&
-          (await eventually(
-            async () => (await ruleOf('r8-race')).rule.status === 'draft',
-          )) &&
-          (await until(
-            pg,
-            () =>
-              !!document.querySelector(
-                '.cb-cond[data-index="1"] input.cb-cond-typed-in',
-              ),
-          )),
-      );
-
-      // A conflict that stops holding clears: Court's edit, the agent's
-      // change over it, then Court undoes his edit — nothing of his is
-      // left to keep, so serve's copy shows and Activate isn't held.
-      await until(
-        pg,
-        () =>
-          document.querySelector('.kit-primary')?.textContent === 'Activate',
-      );
-      await setRepo(pg, 'schuettc/r8-landed');
-      await agent.api('POST', '/api/rules/draft', {
-        id: 'r8-race',
-        name: 'Race repos, renamed',
-        status: 'draft',
-        match: [
-          { field: 'kind', op: 'is', value: 'repo' },
-          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
-        ],
-        propose: { disposition: 'archive' },
-      });
-      check(
-        'a change under his edit shows as a conflict',
-        await until(
-          pg,
-          () =>
-            !!document.querySelector('[data-testid="rule-conflict"] .kit-card'),
-        ),
-      );
-      await setRepo(pg, 'schuettc/r8-other');
-      check(
-        "undoing his edit clears it: serve's copy (renamed) shows, no card",
-        await until(
-          pg,
-          () =>
-            !document.querySelector(
-              '[data-testid="rule-conflict"] .kit-card',
-            ) &&
-            document.querySelector('.cb-rule .kit-h1')?.textContent ===
-              'Race repos, renamed',
-        ),
-      );
-
-      // Nothing of his unsaved: a change of serve's draws the rule again.
-      // With the disposition menu open, it stays open, its chips (and his
-      // focus) the same elements, so his click on one lands.
-      await pg.click('[data-testid="propose"] button.cb-disp');
-      const keepChip = await pg.waitForSelector(
-        '.cb-disp-menu:not([hidden]) .cb-disp-opt[data-disp="keep"]',
-        { timeout: 4000 },
-      );
-      const focused = await pg.evaluateHandle(() => document.activeElement);
-      await agent.api('POST', '/api/rules/draft', {
-        id: 'r8-race',
-        name: 'Race repos, renamed again',
-        status: 'draft',
-        match: [
-          { field: 'kind', op: 'is', value: 'repo' },
-          { field: 'repo', op: 'is', value: 'schuettc/r8-other' },
-        ],
-        propose: { disposition: 'archive' },
-      });
-      const redrawn = await until(
-        pg,
-        () =>
-          document.querySelector('.cb-rule .kit-h1')?.textContent ===
-          'Race repos, renamed again',
-      );
-      check(
-        "serve's copy drawn again while the menu is open leaves it open, its chips and Court's focus where they were",
-        redrawn &&
-          (await pg.evaluate(
-            ([k, f]) =>
-              !document.querySelector('.cb-disp-menu').hidden &&
-              k.isConnected &&
-              f.matches('.cb-disp-opt') &&
-              f.isConnected &&
-              document.activeElement === f,
-            [keepChip, focused],
-          )),
-      );
-      const clicked = await keepChip
-        .click({ timeout: 5000 })
-        .then(() => true)
-        .catch(() => false);
-      check(
-        'and his click on a chip chooses it',
-        clicked &&
-          (await until(
-            pg,
-            () =>
-              document.querySelector('[data-testid="propose"] button.cb-disp')
-                ?.dataset.value === 'keep',
-          )),
-      );
-    } finally {
-      await pg.close();
-    }
+      ),
+    );
+    check('no page errors', errors.length === 0);
+    if (errors.length) console.error(errors);
+  } catch (err) {
+    check(`rule groups: the scenario ran to its end — ${err.message}`, false);
+  } finally {
+    await pg.close();
   }
 }
 
-// ---- Task 8 fix: invalid rules (I2) -----------------------------------------
+// ---- invalid rules ----------------------------------------------------------
 //
 // Its own serve, whose data repo holds rule files as a person (or an older
-// casebook) wrote them: an active rule with a bool value serve refuses, an
-// active one with a count that isn't one, and a file that isn't a rule.
+// casebook) wrote them: an active rule with a bool value serve refuses, and
+// a file that isn't a rule.
 const RULE_HEAD = (id, name, status) =>
   [
     `id = "${id}"`,
@@ -4710,346 +2445,78 @@ const INVALID_SEED = {
     '[propose]\ndisposition = "close"',
     '',
   ].join('\n'),
-  'rules/r8-bad2.toml': [
-    RULE_HEAD('r8-bad2', 'Busy repos \u2192 keep', 'active'),
-    cond('kind', 'is', 'repo'),
-    cond('open-prs', 'gt', 'lots'),
-    '[propose]\ndisposition = "keep"',
-    '',
-  ].join('\n'),
   'rules/r8-broken.toml': 'this is [not a rule\n',
 };
 
 let _invalidServe = null;
-async function invalidRulesScenarios(context) {
+async function invalidRuleScenarios(context) {
   const serveHandle = await startServe({ seedFiles: INVALID_SEED });
   _invalidServe = serveHandle;
   try {
-    await invalidRulesScenariosOn(context, serveHandle);
+    await invalidRuleScenariosOn(context, serveHandle);
   } finally {
     serveHandle.stop();
     _invalidServe = null;
   }
 }
 
-async function invalidRulesScenariosOn(context, serveHandle) {
-  console.log('\nscenario: rules — invalid rules are shown and recoverable');
+async function invalidRuleScenariosOn(context, serveHandle) {
+  console.log('\nscenario: rules — an invalid rule says so and opens to fix');
   const agent = createAgent(serveHandle.base, serveHandle.token);
-  const ruleOf = (id) => agent.api('GET', `/api/rule?id=${id}`);
-  const status = async (method, path, body) => {
-    const r = await fetch(serveHandle.base + path, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Local-Token': serveHandle.token,
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    return r.status;
-  };
-  const bad = await ruleOf('r8-bad');
+  const bad = await agent.api('GET', '/api/rule?id=r8-bad');
   check(
-    `serve reads r8-bad as invalid, naming its second condition as Court counts: "condition 2" (${bad.invalid})`,
-    bad.invalid.startsWith('condition 2: ') && bad.matches.total === 0,
+    `serve reads r8-bad as invalid, naming its second condition (${bad.invalid})`,
+    bad.invalid.startsWith('condition 2: '),
   );
-  checkList(
-    'serve refuses to preview it or propose from it',
-    [
-      await status('POST', '/api/rules/preview', bad.rule),
-      await status('POST', '/api/rules/propose-once', { id: 'r8-bad' }),
-    ],
-    [400, 400],
-  );
-
   const pg = await context.newPage();
   try {
-    await pg.setViewportSize({ width: 1600, height: 900 });
-    await pg.goto(serveHandle.url + '#/rules/r8-bad', {
+    await pg.setViewportSize({ width: 1440, height: 900 });
+    await pg.goto(serveHandle.url + '#/decide', {
       waitUntil: 'domcontentloaded',
     });
+    await pg.click(`${LIST} [data-testid="rules-n"]`);
     await until(
       pg,
       () =>
-        document.querySelector('.cb-rule')?.dataset.rule === 'r8-bad' &&
-        document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
-          'true' &&
-        document.querySelectorAll('.cb-rules-list .kit-row').length === 3,
-      undefined,
-      8000,
+        !!document.querySelector(
+          '.kit-app > .kit-read:not([hidden]) .cb-rules-row[data-id="r8-bad"]',
+        ),
     );
-    const rows = await pg.$$eval('.cb-rules-list .kit-row', (els) =>
-      els.map((e) => {
-        const m = e.querySelector('.kit-meta');
-        return {
-          id: e.dataset.rule,
-          kicker: e.querySelector('.kit-kicker').textContent,
-          pill: m.textContent,
-          invalid: m.classList.contains('cb-pill-invalid'),
-          color: getComputedStyle(m).color,
-          title: e.title,
-        };
-      }),
-    );
-    const signal = await cssColor(pg, 'var(--kit-signal)');
-    const list = (await agent.api('GET', '/api/rules')).rules;
-    checkList(
-      'the list shows every rule serve holds as invalid (all three, the unreadable one too), pill "not valid" in the signal colour',
-      rows.map(
-        (r) =>
-          `${r.id}: ${r.kicker} | ${r.pill} ${r.invalid && r.color === signal} | ${r.title}`,
-      ),
-      list.map(
-        (r) => `${r.rule.id}: not valid | not valid true | ${r.invalid}`,
+    const rows = await pg.$$eval(`${READ} .cb-rules-row`, (els) =>
+      els.map(
+        (e) =>
+          `${e.dataset.id} | ${e.querySelector('.cb-rules-row-state').textContent}`,
       ),
     );
-    const doc = await pg.evaluate(() => ({
-      head: document.querySelector(
-        '[data-testid="rule-invalid"] .kit-card-head',
-      )?.textContent,
-      msg: document.querySelector(
-        '[data-testid="rule-invalid"] .cb-invalid-msg',
-      )?.textContent,
-      inline: (() => {
-        const e = document.querySelector(
-          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] .cb-cond-err',
-        );
-        return e && !e.hidden ? e.textContent : '';
-      })(),
-      matches: document.querySelector('[data-testid="matches"]').textContent,
-      primary: document.querySelector('.kit-primary')?.textContent,
-    }));
     check(
-      `the document says it is invalid and skipped ("${doc.head}")`,
-      doc.head === 'not valid \u00b7 active, but skipped at every sync' &&
-        doc.msg === bad.invalid,
+      `rules N says "not valid" for r8-bad (${rows.join('; ')})`,
+      rows.includes('r8-bad | not valid'),
     );
-    check(
-      "serve's message is under the condition it names too (the second row)",
-      doc.inline === bad.invalid,
-    );
-    const numbered = await pg.$$eval(
-      '.cb-rule > [data-testid="conditions"] .cb-cond',
-      (els) =>
-        els
-          .map((e, i) => {
-            const err = e.querySelector('.cb-cond-err');
-            if (!err || err.hidden) return null;
-            const m = /^condition (\d+): /.exec(err.textContent);
-            return `row ${i + 1} says condition ${m ? m[1] : '?'}`;
-          })
-          .filter(Boolean),
-    );
-    checkList(
-      'the number Court reads is the row it sits under, counted from 1',
-      numbered,
-      ['row 2 says condition 2'],
-    );
-    check(
-      'its matches are not previewed (no count, no list / by repo)',
-      doc.matches === 'not previewed: the conditions aren\u2019t valid' &&
-        (await r8Read.heading(pg)) === 'matches now' &&
-        (await pg.$eval(
-          '.cb-matches-view',
-          (e) => getComputedStyle(e).display === 'none',
-        )),
-    );
-    check('its primary is Deactivate', doc.primary === 'Deactivate');
-    checkList(
-      'the facts: status "active · not valid", matches "—"',
-      (await r8Read.facts(pg)).slice(0, 2),
-      ['status active \u00b7 not valid', 'matches \u2014'],
-    );
-    await pg.$eval('.cb-rules-read', (e) => {
-      e.scrollTop = 0;
-    });
-    check('the invalid rule is light (theme and body)', await r8Light(pg));
-
-    // Fix it on the page: bot is true, then save (it becomes a draft).
+    await pg.click(`${READ} .cb-rules-row[data-id="r8-bad"] .cb-rule-more`);
     await pg.click(
-      '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] .cb-cond-pick[data-value="true"]',
+      `${READ} .cb-rules-row[data-id="r8-bad"] .cb-filter-menu-item[data-act="edit"]`,
     );
-    check(
-      'the fixed conditions preview',
-      await until(pg, () =>
-        (
-          document.querySelector('.cb-matches-label')?.textContent ?? ''
-        ).startsWith('matches now \u00b7 '),
-      ),
-    );
-    await pg.click('.cb-rule-actions .kit-btn:has-text("save as draft")');
-    check(
-      'save as draft: serve has the fix, as a valid draft',
-      await eventually(async () => {
-        const r = await ruleOf('r8-bad');
-        return (
-          r.rule.status === 'draft' &&
-          r.rule.match[1].value === 'true' &&
-          !r.invalid
-        );
-      }),
-    );
-    check(
-      'the page shows it fixed: no card, pill "draft"',
-      await until(
-        pg,
-        () =>
-          !document.querySelector('[data-testid="rule-invalid"] .kit-card') &&
-          document.querySelector('.kit-row[data-rule="r8-bad"] .kit-meta')
-            ?.textContent === 'draft',
-      ),
-    );
-
-    // Or deactivate it: r8-bad2 stays invalid, but no longer active.
-    await pg.evaluate(() => {
-      location.hash = '#/rules/r8-bad2';
-    });
-    await until(
+    const shownMsg = await until(
       pg,
-      () =>
-        document.querySelector('.cb-rule')?.dataset.rule === 'r8-bad2' &&
-        document.querySelector('.kit-primary')?.textContent === 'Deactivate',
-    );
-    const bad2Deactivated = await clickLifecycle(pg, 'deactivate');
-    check(
-      'Deactivate works on an invalid rule, and keeps it (and its value)',
-      bad2Deactivated?.status() === 200 &&
-        (await eventually(async () => {
-          const r = await ruleOf('r8-bad2');
-          return (
-            r.rule.status === 'draft' &&
-            r.rule.match[1].value === 'lots' &&
-            r.invalid.startsWith('condition 2: ')
-          );
-        })),
+      (msg) =>
+        [
+          ...document.querySelectorAll(
+            '.kit-app > .kit-read:not([hidden]) [data-testid="rule-editor"] *',
+          ),
+        ].some((e) => !e.hidden && e.textContent === msg),
+      bad.invalid,
     );
     check(
-      'the page: a draft, still not valid, no longer skipped',
-      await until(
-        pg,
-        () =>
-          document.querySelector('[data-testid="rule-invalid"] .kit-card-head')
-            ?.textContent === 'not valid' &&
-          document.querySelector('.kit-primary')?.textContent === 'Activate',
-      ),
+      `it opens in the editor with serve's message ("${bad.invalid}")`,
+      shownMsg,
     );
-
-    // A file that isn't a rule: listed, shown with its parse error, and a
-    // save from the page replaces it.
-    const broken = await ruleOf('r8-broken');
-    await pg.evaluate(() => {
-      location.hash = '#/rules/r8-broken';
-    });
-    check(
-      `the unreadable file shows serve's parse error (${broken.invalid})`,
-      await until(
-        pg,
-        (w) =>
-          document.querySelector('.cb-rule')?.dataset.rule === 'r8-broken' &&
-          document.querySelector('[data-testid="rule-invalid"] .cb-invalid-msg')
-            ?.textContent === w,
-        broken.invalid,
-      ),
-    );
-    await until(
-      pg,
-      () =>
-        document.querySelector('[data-testid="conditions"]')?.dataset.ready ===
-        'true',
-    );
-    // The condition he adds is previewed (debounced) and the preview offers
-    // the dispositions it allows, a different list. Here it lands while
-    // the disposition menu is open, as it can on a slow runner: the preview
-    // is held until the menu is open, then let through. The chips that
-    // stay offered stay the same elements, so his click lands, and his
-    // focus stays where it was.
-    let previewAsked;
-    const asked = new Promise((r) => (previewAsked = r));
-    let releasePreview;
-    const release = new Promise((r) => (releasePreview = r));
-    const holdPreview = async (route) => {
-      previewAsked();
-      await release;
-      await route.continue();
-    };
-    await pg.route('**/api/rules/preview*', holdPreview);
-    await pg.click('.cb-cond-menu-row[data-field="kind"]');
-    await pg.click('.cb-cond[data-index="0"] .cb-cond-pick[data-value="repo"]');
-    await asked;
-    await pg.click('[data-testid="propose"] button.cb-disp');
-    const chipsNow = () =>
-      pg.$$eval('.cb-disp-opt', (els) => els.map((e) => e.dataset.disp));
-    const before = await chipsNow();
-    const keepChip = await pg.$('.cb-disp-opt[data-disp="keep"]');
-    const focused = await pg.evaluateHandle(() => document.activeElement);
-    const previewed = pg.waitForResponse((r) =>
-      r.url().includes('/api/rules/preview'),
-    );
-    releasePreview();
-    await previewed;
-    await pg.unroute('**/api/rules/preview*', holdPreview);
-    const changed = await until(
-      pg,
-      (b) =>
-        [...document.querySelectorAll('.cb-disp-opt')]
-          .map((e) => e.dataset.disp)
-          .join(' ') !== b,
-      before.join(' '),
-    );
-    const after = await chipsNow();
-    check(
-      `a preview offering other dispositions (${before.join(',')} → ${after.join(',')}) while the menu is open leaves it open, the "keep" chip and Court's focus where they were`,
-      changed &&
-        !!keepChip &&
-        (await pg.evaluate(
-          ([k, f]) =>
-            !document.querySelector('.cb-disp-menu').hidden &&
-            k.isConnected &&
-            f.matches('.cb-disp-opt') &&
-            f.isConnected &&
-            document.activeElement === f,
-          [keepChip, focused],
-        )),
-    );
-    // His click on the chip he saw lands on it (were it replaced, the
-    // click fails, and the menu is reopened for the rest of the scenario).
-    const clicked = await keepChip
-      .click({ timeout: 5000 })
-      .then(() => true)
-      .catch(() => false);
-    if (!clicked) {
-      if (await pg.$eval('.cb-disp-menu', (m) => m.hidden)) {
-        await pg.click('[data-testid="propose"] button.cb-disp');
-      }
-      await pg.click('.cb-disp-opt[data-disp="keep"]');
-    }
-    check(
-      'the click on that chip chooses it',
-      clicked &&
-        (await until(
-          pg,
-          () =>
-            document.querySelector('[data-testid="propose"] button.cb-disp')
-              ?.dataset.value === 'keep',
-        )),
-    );
-    await pg.click('.cb-rule-actions .kit-btn:has-text("save draft")');
-    check(
-      'saving replaces it with a valid rule',
-      await eventually(async () => {
-        const r = await ruleOf('r8-broken');
-        return (
-          !r.invalid &&
-          r.rule.match.length === 1 &&
-          r.rule.propose.disposition === 'keep'
-        );
-      }),
-    );
+  } catch (err) {
+    check(`invalid rules: the scenario ran to its end — ${err.message}`, false);
   } finally {
     await pg.close();
   }
 }
 
-// The helpers the To apply scenarios (probe-apply.mjs) check with.
 const applyHelpers = { check, checkList, until, eventually };
 
 // ---- the scenario list ------------------------------------------------------
@@ -5057,7 +2524,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 1013;
+const MIN_CHECKS = 856;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5178,10 +2645,10 @@ async function run() {
       await keyScopeScenarios(context);
       return;
     }
-    // PROBE_ONLY=rules runs only the Rules scenarios (their own serve).
+    // PROBE_ONLY=rules runs only the rule-group scenarios (their own serve).
     if (process.env.PROBE_ONLY === 'rules') {
-      await rulesScenarios(context);
-      await invalidRulesScenarios(context);
+      await ruleGroupsScenarios(context);
+      await invalidRuleScenarios(context);
       return;
     }
     // PROBE_ONLY=apply runs only the To apply scenarios (their own serves).
@@ -5231,11 +2698,11 @@ async function run() {
     await page.waitForSelector('.kit-bar', { timeout: 8000 });
     // Wait for the summary API call to complete so counts are rendered.
     // The summary sets at least one .kit-n span inside a .kit-ctl[data-id].
-    // (attention's and to apply's: Rules counts its own, sooner.)
+    // (decide's and apply's.)
     await page
       .waitForFunction(
         () =>
-          !!document.querySelector('.kit-ctl[data-id="attention"] .kit-n') &&
+          !!document.querySelector('.kit-ctl[data-id="decide"] .kit-n') &&
           !!document.querySelector('.kit-ctl[data-id="apply"] .kit-n'),
         undefined,
         { timeout: 5000 },
@@ -5246,21 +2713,31 @@ async function run() {
 
     console.log('\nscenario: the shell boots');
 
-    // 1. Three section controls with counts.
+    // 1. Two places, decide and apply, with counts; no rules control.
     {
       const controls = await page.$$('.kit-ctl[data-id]');
       const ids = await Promise.all(
         controls.map((c) => c.getAttribute('data-id')),
       );
-      check('attention control present', ids.includes('attention'));
-      check('rules control present', ids.includes('rules'));
+      check('decide control present', ids.includes('decide'));
       check('apply control present', ids.includes('apply'));
+      check(
+        'no rules control, no attention control',
+        !ids.includes('rules') && !ids.includes('attention'),
+      );
+      checkList(
+        'the bar names the two places: decide and apply',
+        await page.$$eval('.kit-ctl[data-id]', (els) =>
+          els.map((e) => e.firstChild?.textContent?.trim() ?? ''),
+        ),
+        ['decide', 'apply'],
+      );
 
       // Each section control must show a number (even "0").
       let allHaveCount = true;
       for (const ctrl of controls) {
         const id = await ctrl.getAttribute('data-id');
-        if (!id || !['attention', 'rules', 'apply'].includes(id)) continue;
+        if (!id || !['decide', 'apply'].includes(id)) continue;
         const text = (await ctrl.textContent()) ?? '';
         if (!/\d/.test(text)) {
           allHaveCount = false;
@@ -5280,35 +2757,34 @@ async function run() {
       await page.click('button.kit-ctl:has-text("theme")');
     }
 
-    // 3. Routing switches sections.
+    // 3. Routing: an old #/rules/<id> lands on decide, narrowed to the
+    // rule; #/apply and #/decide switch places.
     {
+      const on = (id) =>
+        page.$eval(
+          `.kit-ctl[data-id="${id}"]`,
+          (el) =>
+            el.classList.contains('on') ||
+            el.getAttribute('aria-current') === 'page',
+        );
       await page.evaluate(() => {
         location.hash = '#/rules/test';
       });
-      await page.waitForFunction(() => location.hash === '#/rules/test');
-
-      const rulesActive = await page.$eval(
-        '.kit-ctl[data-id="rules"]',
-        (el) =>
-          el.classList.contains('on') ||
-          el.getAttribute('aria-current') === 'page',
-      );
-      check('routing to #/rules/... activates rules section', rulesActive);
-
-      await page.evaluate(() => {
-        location.hash = '#/attention';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention');
-      const attentionActive = await page.$eval(
-        '.kit-ctl[data-id="attention"]',
-        (el) =>
-          el.classList.contains('on') ||
-          el.getAttribute('aria-current') === 'page',
-      );
       check(
-        'routing back to #/attention activates attention section',
-        attentionActive,
+        '#/rules/test lands on decide with rule=test',
+        (await until(page, () => location.hash === '#/decide?rule=test')) &&
+          (await on('decide')),
       );
+      await page.evaluate(() => {
+        location.hash = '#/apply';
+      });
+      await page.waitForFunction(() => location.hash === '#/apply');
+      check('routing to #/apply activates apply', await on('apply'));
+      await page.evaluate(() => {
+        location.hash = '#/decide';
+      });
+      await page.waitForFunction(() => location.hash === '#/decide');
+      check('routing back to #/decide activates decide', await on('decide'));
     }
 
     // 4. Brand mark is an <svg> inside .kit-brand.
@@ -5344,14 +2820,14 @@ async function run() {
       check('live pill is visible within 5s', livePillVisible);
       check('live pill data-state is "live"', liveState === 'live');
     }
-    // ---- scenario: attention list and detail --------------------------------
-    console.log('\nscenario: attention list and detail');
+    // ---- scenario: decide's list and detail ---------------------------------
+    console.log("\nscenario: decide's list and detail");
 
-    // Navigate to attention / new view.
+    // Navigate to decide.
     await page.evaluate(() => {
-      location.hash = '#/attention/new';
+      location.hash = '#/decide';
     });
-    await page.waitForFunction(() => location.hash === '#/attention/new');
+    await page.waitForFunction(() => location.hash === '#/decide');
 
     // Wait for the attention list panel.
     await page.waitForSelector('.kit-list', { timeout: 5000 }).catch(() => {});
@@ -5359,50 +2835,37 @@ async function run() {
     // Wait for rows to appear (the API call may take a moment).
     await page.waitForSelector('.kit-row', { timeout: 8000 }).catch(() => {});
 
-    // Check: seeded items appear in the new view.
+    // Check: seeded items appear in the list.
     {
       const rowCount = await page.$$eval('.kit-row', (rows) => rows.length);
-      check('seeded items appear in the new view', rowCount > 0);
+      check("seeded items appear in decide's list", rowCount > 0);
     }
 
-    // Check: clicking a view chip narrows the list.
+    // Check: decide is one list: no view chips.
     {
-      const beforeCount = await page.$$eval('.kit-row', (rows) => rows.length);
-
-      // Click the 'due' view chip.
-      const dueChip = await page.$('[data-id="due"]');
-      if (dueChip) {
-        await dueChip.click();
-        // Wait for the list to update.
-        await listShows(page, 'due');
-      }
-      const afterCount = await page.$$eval('.kit-row', (rows) => rows.length);
-      // The 'due' view may have 0 rows in the fixture (all are new), so we
-      // just verify the chip click did not error (afterCount is a number).
-      check(
-        'clicking a view chip changes the row set',
-        (typeof afterCount === 'number' && afterCount !== beforeCount) ||
-          afterCount === 0,
+      await listShows(page);
+      const views = await page.$$eval(
+        '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"] .kit-chip',
+        (els) => els.length,
       );
-
-      // Return to the new view.
-      await page.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
+      check(`decide has no view chips (${views})`, views === 0);
+      checkList(
+        'nothing visible says "attention"',
+        await attentionWords(page),
+        [],
+      );
     }
 
-    // ---- scenario: search the Attention list (kit v0.11.0) -----------------
-    console.log('\nscenario: search the Attention list (kit v0.11.0)');
+    // ---- scenario: search decide's list (kit v0.11.0) ----------------------
+    console.log("\nscenario: search decide's list (kit v0.11.0)");
 
     {
       // Navigate to the new view and count the full row set.
       await page.evaluate(() => {
-        location.hash = '#/attention/new';
+        location.hash = '#/decide';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
+      await page.waitForFunction(() => location.hash === '#/decide');
+      await listShows(page);
 
       const fullCount = await page.$$eval('.kit-row', (rows) => rows.length);
 
@@ -5413,7 +2876,7 @@ async function run() {
           await searchField.click();
           await searchField.fill('nudge');
           // Wait for 200ms debounce + network round-trip.
-          await listShows(page, 'new', 'nudge');
+          await listShows(page, 'nudge');
           const narrowCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5441,7 +2904,7 @@ async function run() {
         if (searchField) {
           await searchField.press('Escape');
           // Wait for 200ms debounce + reload.
-          await listShows(page, 'new');
+          await listShows(page);
           const afterEscCount = await page.$$eval(
             '.kit-row',
             (rows) => rows.length,
@@ -5488,10 +2951,10 @@ async function run() {
       {
         const reloadPage = await context.newPage();
         try {
-          // Navigate to /?q=nudge#/attention/new. The context's cookie
-          // provides auth; no ?t= needed.
+          // Navigate to /?q=nudge#/decide. The context's cookie provides
+          // auth; no ?t= needed.
           const baseUrl = serveHandle.base.replace(/\/$/, '');
-          await reloadPage.goto(baseUrl + '/?q=nudge#/attention/new', {
+          await reloadPage.goto(baseUrl + '/?q=nudge#/decide', {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -5555,7 +3018,7 @@ async function run() {
         await directPage.close();
       }
     }
-    console.log('\nscenario: attention list and detail (continued)');
+    console.log("\nscenario: decide's list and detail (continued)");
 
     // Check: opening a row shows item detail in .kit-read.
     {
@@ -5592,10 +3055,10 @@ async function run() {
       // The foot element must NOT be hidden: the selection count and the
       // summary must be visible even when the show-more button hides.
       await page.evaluate(() => {
-        location.hash = '#/attention/new';
+        location.hash = '#/decide';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
+      await page.waitForFunction(() => location.hash === '#/decide');
+      await listShows(page);
       await page.waitForSelector('.kit-row', { timeout: 5000 }).catch(() => {});
 
       // cb-foot must not be hidden (the hidden attribute sets display:none).
@@ -5641,12 +3104,10 @@ async function run() {
 
         // Open an undecided item in the 'new' view.
         await detailPage.evaluate(() => {
-          location.hash = '#/attention/new';
+          location.hash = '#/decide';
         });
-        await detailPage.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
-        await listShows(detailPage, 'new');
+        await detailPage.waitForFunction(() => location.hash === '#/decide');
+        await listShows(detailPage);
         await detailPage
           .waitForSelector('.kit-row', { timeout: 5000 })
           .catch(() => {});
@@ -5698,73 +3159,38 @@ async function run() {
       }
     }
     // ---- scenario: no board ------------------------------------------------
-    // The board is gone: no board chip among the views, no .cb-board, and an
-    // old link to it (#/attention/board) lands on due's list.
+    // The board is gone: no .cb-board, and an old link to it
+    // (#/attention/board) lands on decide's one list.
     console.log('\nscenario: no board');
 
     {
       await page.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      const onNew = await listShows(page, 'new');
-      const views = await page.$$eval(
-        '.kit-app > .kit-list:not([hidden]) .kit-chips[data-group="view"] .kit-chip',
-        (els) => els.map((e) => e.getAttribute('data-id') ?? ''),
-      );
-      const boards = await page.$$eval('.cb-board', (els) => els.length);
-      check(
-        `no board: no board chip and no .cb-board (views: ${views.join(', ')}; .cb-board: ${boards})`,
-        onNew && views.join(',') === 'new,due,proposed' && boards === 0,
-      );
-
-      await page.evaluate(() => {
         location.hash = '#/attention/board';
       });
-      await page.waitForFunction(() => location.hash === '#/attention/board');
-      const landed = await listShows(page, 'due');
-      const dueOn = await until(
-        page,
-        () =>
-          !!document.querySelector(
-            '.kit-chips[data-group="view"] .kit-chip.on[data-id="due"]',
-          ),
-      );
-      // The list is shown and wide, its rows visible (not a blank panel).
+      await page.waitForFunction(() => location.hash === '#/decide');
+      const landed = await listShows(page);
       const geo = await page.evaluate(() => {
-        const l = document.querySelector('.kit-app > .kit-list');
+        const l = document.querySelector('.kit-app > .kit-list:not([hidden])');
         const r = l?.getBoundingClientRect();
-        const row = document.querySelector('.kit-app > .kit-list .kit-row');
+        const row = l?.querySelector('.kit-row');
         const rr = row?.getBoundingClientRect();
         return {
           listW: r?.width ?? 0,
           rowH: rr?.height ?? 0,
           rowShown: !!row && getComputedStyle(row).visibility === 'visible',
           board: !!document.querySelector('.cb-board'),
+          on: !!document.querySelector('.kit-ctl[data-id="decide"].on'),
         };
       });
-      // Due's rows, when it has any, are visible (not a blank panel).
-      const dueTotal = (
-        await (
-          await fetch(`${_serveHandle.base}/api/items?view=due&limit=1`, {
-            headers: { 'X-Local-Token': _serveHandle.token },
-          })
-        ).json()
-      ).total;
       check(
-        `no board: #/attention/board lands on due's list (list ${Math.round(geo.listW)}px, row ${Math.round(geo.rowH)}px, ${dueTotal} due)`,
+        `no board: #/attention/board lands on #/decide's list (list ${Math.round(geo.listW)}px, row ${Math.round(geo.rowH)}px)`,
         landed &&
-          dueOn &&
+          geo.on &&
           geo.listW >= 280 &&
-          (dueTotal === 0 || (geo.rowH > 0 && geo.rowShown)) &&
+          geo.rowH > 0 &&
+          geo.rowShown &&
           !geo.board,
       );
-
-      await page.evaluate(() => {
-        location.hash = '#/attention/new';
-      });
-      await page.waitForFunction(() => location.hash === '#/attention/new');
-      await listShows(page, 'new');
     }
 
     // ---- fix-round-2: encoded item URL opens correctly ------------------
@@ -5824,11 +3250,9 @@ async function run() {
 
         // Navigate to the new view (no item open).
         await emptyReadPage.evaluate(() => {
-          location.hash = '#/attention/new';
+          location.hash = '#/decide';
         });
-        await emptyReadPage.waitForFunction(
-          () => location.hash === '#/attention/new',
-        );
+        await emptyReadPage.waitForFunction(() => location.hash === '#/decide');
         await emptyReadPage
           .waitForSelector('.kit-row', { timeout: 8000 })
           .catch(() => {});
@@ -5850,16 +3274,18 @@ async function run() {
           hasEmptyState,
         );
 
-        // The empty state must show the section name.
-        const sectionLabel = await emptyReadPage
+        // The empty state is a summary: how many to decide, no section
+        // name.
+        const head = await emptyReadPage
           .$eval(
-            '.kit-read .cb-read-empty-section',
+            '.kit-read:not([hidden]) .cb-read-empty-count',
             (el) => el.textContent ?? '',
           )
           .catch(() => '');
         check(
-          'empty state shows the section name (attention)',
-          sectionLabel.toLowerCase().includes('attention'),
+          `empty state is the summary ("${head}"), with no section name`,
+          /^\d+ to decide$/.test(head) &&
+            !(await emptyReadPage.$('.kit-read .cb-read-empty-section')),
         );
 
         // The empty state must show a prompt line.
@@ -5875,43 +3301,26 @@ async function run() {
       }
     }
 
-    // ---- scenario: proposals event updates the proposed chip count ----------
-    // Post a fake-agent proposal via /api/agent/propose.  The server emits a
+    // ---- scenario: a proposal shows in the list live ------------------------
+    // Post a fake-agent proposal via /api/agent/propose. The server emits a
     // "proposals" live event WITHOUT a follow-up index rebuild, so the page
-    // must re-fetch /api/summary and update the "proposed" chip count.
+    // must hear it and list the item in the agent's group.
     console.log(
-      '\nscenario: fake-agent proposal updates the "proposed" chip count',
+      "\nscenario: fake-agent proposal shows in the list's groups live",
     );
 
     {
       const propCountPage = await context.newPage();
       try {
-        await propCountPage.goto(serveHandle.url, {
+        await propCountPage.goto(serveHandle.url + '#/decide', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
         await propCountPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        // Wait for the initial summary counts to arrive.
-        await propCountPage
-          .waitForSelector('.kit-chip[data-id="proposed"] .kit-n', {
-            timeout: 6000,
-          })
-          .catch(() => {});
-        await chipShows(propCountPage, 'proposed');
+        await listShows(propCountPage);
 
-        // Read the "proposed" chip count before posting the proposal.
-        const beforeText = await propCountPage
-          .$eval(
-            '.kit-chip[data-id="proposed"] .kit-n',
-            (el) => el.textContent ?? '',
-          )
-          .catch(() => '0');
-        const beforeN = parseInt(beforeText, 10) || 0;
-
-        // Use issue:schuettc/hail#5 (added to the fixture for this probe).
-        // POST to /api/agent/propose — this does NOT trigger an index rebuild,
-        // so only the "proposals" live event fires.  The page must re-fetch
-        // /api/summary and update the chip count.
+        // Use pr:schuettc/hail#3. POST to /api/agent/propose — this does NOT
+        // trigger an index rebuild, so only the "proposals" live event fires.
         const propKey = 'pr:schuettc/hail#3';
         const propSess = 'probe-session-1';
         await propCountPage.evaluate(
@@ -5945,22 +3354,24 @@ async function run() {
           },
         );
 
-        // Wait for the live proposals event to be received and the summary
-        // re-fetch to complete.
-        await chipShows(propCountPage, 'proposed');
-
-        // The "proposed" chip count must have increased.
-        const afterText = await propCountPage
-          .$eval(
-            '.kit-chip[data-id="proposed"] .kit-n',
-            (el) => el.textContent ?? '',
-          )
-          .catch(() => '0');
-        const afterN = parseInt(afterText, 10) || 0;
-
         check(
-          'fake-agent proposal updates the "proposed" chip count',
-          afterN > beforeN,
+          "fake-agent proposal shows live: the item is in the agent's group",
+          await until(
+            propCountPage,
+            (key) =>
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .cb-group[data-group^="pi:probe-session-1|keep"]',
+                ),
+              ].length === 1 &&
+              [
+                ...document.querySelectorAll(
+                  '.kit-app > .kit-list:not([hidden]) .kit-row .kit-kicker',
+                ),
+              ].some((e) => e.textContent === key),
+            'pr \u00b7 schuettc/hail#3',
+            8000,
+          ),
         );
       } finally {
         await propCountPage.close();
@@ -6143,17 +3554,15 @@ async function run() {
           check('proposal card is inside the .kit-doc reading document', false);
         }
 
-        // The proposed view's rows sit under their recommendation's header.
+        // Recommended rows sit under their recommendation's header.
         await propGeoPage.evaluate(() => {
-          location.hash = '#/attention/proposed';
+          location.hash = '#/decide';
         });
-        await propGeoPage.waitForFunction(
-          () => location.hash === '#/attention/proposed',
-        );
+        await propGeoPage.waitForFunction(() => location.hash === '#/decide');
         await propGeoPage
           .waitForSelector('.kit-row', { timeout: 6000 })
           .catch(() => {});
-        await listShows(propGeoPage, 'proposed');
+        await listShows(propGeoPage);
 
         await until(
           propGeoPage,
@@ -6172,9 +3581,9 @@ async function run() {
           )
           .catch(() => []);
         check(
-          `the proposed view's rows sit under their recommendation's header (${heads.map((g) => g.label).join(', ')})`,
-          heads.length > 0 &&
-            heads.every((g) => g.id !== 'none' && g.label !== '' && g.shown),
+          `recommended rows sit under their recommendation's header (${heads.map((g) => g.label).join(', ')})`,
+          heads.some((g) => g.id !== 'none') &&
+            heads.every((g) => g.label !== '' && g.shown),
         );
       } finally {
         await propGeoPage.close();
@@ -6250,12 +3659,12 @@ async function run() {
 
             // Navigate to proposed view: the item should no longer be there.
             await acceptPage.evaluate(() => {
-              location.hash = '#/attention/proposed';
+              location.hash = '#/decide';
             });
             await acceptPage.waitForFunction(
-              () => location.hash === '#/attention/proposed',
+              () => location.hash === '#/decide',
             );
-            await listShows(acceptPage, 'proposed');
+            await listShows(acceptPage);
 
             const proposedRows = await acceptPage
               .$$eval('.kit-row', (rows) => rows.map((r) => r.dataset.id ?? ''))
@@ -6582,7 +3991,7 @@ async function run() {
         });
         await keyPage.waitForSelector('.kit-bar', { timeout: 8000 });
 
-        // Create a proposal on issue:schuettc/hail#5 for the key tests.
+        // Create a proposal on issue:schuettc/hail#7 for the key tests.
         const propA = await agentPropose(
           keyPage,
           'probe-key-a-sess',
@@ -6594,35 +4003,31 @@ async function run() {
         const proposedA = propA?.propose?.proposed ?? 0;
 
         if (proposedA > 0) {
-          // Navigate to proposed view, open the item.
+          // Navigate to decide, open the item.
           await keyPage.evaluate(() => {
-            location.hash = '#/attention/proposed';
+            location.hash = '#/decide';
           });
-          await keyPage.waitForFunction(
-            () => location.hash === '#/attention/proposed',
-          );
+          await keyPage.waitForFunction(() => location.hash === '#/decide');
           await keyPage
             .waitForSelector('.kit-row', { timeout: 6000 })
             .catch(() => {});
-          // The first row recommends something: it is the row opened next.
-          // (Not listShows: a view change while the page is reloading the
-          // list is dropped (attention.ts reload), and the list can stay the
-          // new view's, whose first row here has the proposal too.)
-          await until(keyPage, () => {
-            const rows = document.querySelector(
-              '.kit-app > .kit-list:not([hidden]) .kit-rows',
-            );
-            const head = rows?.querySelector(':scope > .cb-group');
-            return (
-              !!rows?.querySelector('.kit-row') &&
-              !!head &&
-              head.getAttribute('data-group') !== 'none'
-            );
-          });
+          // The recommended item's row is in the session's group.
+          await until(
+            keyPage,
+            () =>
+              !!document.querySelector(
+                '.kit-app > .kit-list:not([hidden]) .cb-group[data-group^="pi:probe-key-a-sess|"]',
+              ),
+            undefined,
+            8000,
+          );
 
-          // Click the first row to open the item.
-          const firstRow = await keyPage.$('.kit-row');
-          if (firstRow) {
+          // Click its row to open the item.
+          const firstRow = keyPage.locator(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+            { hasText: 'schuettc/hail#7' },
+          );
+          if ((await firstRow.count()) === 1) {
             await firstRow.click();
             await keyPage
               .waitForSelector('.cb-proposal-card', { timeout: 5000 })
@@ -6706,33 +4111,29 @@ async function run() {
 
         if (proposedR > 0) {
           await keyPage.evaluate(() => {
-            location.hash = '#/attention/proposed';
+            location.hash = '#/decide';
           });
-          await keyPage.waitForFunction(
-            () => location.hash === '#/attention/proposed',
-          );
+          await keyPage.waitForFunction(() => location.hash === '#/decide');
           await keyPage
             .waitForSelector('.kit-row', { timeout: 6000 })
             .catch(() => {});
-          // The first row recommends something: it is the row opened next.
-          // (Not listShows: a view change while the page is reloading the
-          // list is dropped (attention.ts reload), and the list can stay the
-          // new view's, whose first row here has the proposal too.)
-          await until(keyPage, () => {
-            const rows = document.querySelector(
-              '.kit-app > .kit-list:not([hidden]) .kit-rows',
-            );
-            const head = rows?.querySelector(':scope > .cb-group');
-            return (
-              !!rows?.querySelector('.kit-row') &&
-              !!head &&
-              head.getAttribute('data-group') !== 'none'
-            );
-          });
+          // The recommended repo's row is in the session's group.
+          await until(
+            keyPage,
+            () =>
+              !!document.querySelector(
+                '.kit-app > .kit-list:not([hidden]) .cb-group[data-group^="pi:probe-key-r-sess|"]',
+              ),
+            undefined,
+            8000,
+          );
 
-          // Open the first row.
-          const rowForR = await keyPage.$('.kit-row');
-          if (rowForR) {
+          // Open its row.
+          const rowForR = keyPage.locator(
+            '.kit-app > .kit-list:not([hidden]) .kit-row',
+            { hasText: 'repo \u00b7 schuettc/hail' },
+          );
+          if ((await rowForR.count()) === 1) {
             await rowForR.click();
             await keyPage
               .waitForSelector('.cb-proposal-card', { timeout: 5000 })
@@ -6790,113 +4191,34 @@ async function run() {
       }
     }
 
-    // ---- fix-round-2: foot layout — single line, no wrap, no overlap --------
-    console.log(
-      '\nscenario: foot layout — single line, no wrap at 400\u202fpx list width',
-    );
+    // ---- the foot: only "show N more" --------------------------------------
+    // The summary and "discard all N" are the middle pane's (decide's
+    // summary); the list's foot keeps only "show N more".
+    console.log('\nscenario: the foot keeps only "show N more"');
 
     {
       const footPage = await context.newPage();
       try {
-        await footPage.goto(serveHandle.url, {
+        await footPage.goto(serveHandle.url + '#/decide', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
         await footPage.waitForSelector('.kit-bar', { timeout: 8000 });
-
-        // Helper: check that every foot control is single-line (no wrapping)
-        // and that no two controls overlap horizontally.
-        async function checkFootLayout(view, label) {
-          await footPage.evaluate((v) => {
-            location.hash = `#/attention/${v}`;
-          }, view);
-          await footPage.waitForFunction(
-            (v) => location.hash === `#/attention/${v}`,
-            view,
+        await listShows(footPage);
+        const foot = await footPage.evaluate(() => {
+          const f = document.querySelector(
+            '.kit-app > .kit-list:not([hidden]) .cb-foot',
           );
-          await footPage
-            .waitForSelector('.kit-row', { timeout: 5000 })
-            .catch(() => {});
-          await listShows(footPage, view);
-
-          // Tick every visible row: the groups' lines grow, the foot
-          // stays one line.
-          const boxes = footPage.locator('.kit-row .kit-box');
-          const nBoxes = await boxes.count();
-          for (let i = 0; i < nBoxes; i++) {
-            await boxes.nth(i).click();
-          }
-
-          // Collect bounding rects of all visible foot controls.
-          const footRects = await footPage.evaluate(() => {
-            const foot = document.querySelector('.cb-foot');
-            if (!foot) return null;
-            // Gather all interactive foot controls (visible ones only).
-            const selectors = ['.cb-discard-all', '.cb-foot-more'];
-            const rects = [];
-            for (const sel of selectors) {
-              const el = foot.querySelector(sel);
-              if (!el || el.hidden || getComputedStyle(el).display === 'none')
-                continue;
-              const r = el.getBoundingClientRect();
-              if (r.width === 0 && r.height === 0) continue;
-              // lineHeight: scrollHeight > clientHeight would indicate wrap.
-              rects.push({
-                sel,
-                top: r.top,
-                bottom: r.bottom,
-                left: r.left,
-                right: r.right,
-                scrollH: el.scrollHeight,
-                clientH: el.clientHeight,
-              });
-            }
-            return rects;
-          });
-
-          if (!footRects || footRects.length === 0) {
-            check(`${label}: foot controls found`, false);
-            return;
-          }
-
-          // Each control must not be taller than a single line.
-          // A line height of ~20 px is typical; wrapping adds at least half again.
-          // We check scrollHeight <= clientHeight (no overflow) as the wrap signal.
-          let allSingleLine = true;
-          for (const r of footRects) {
-            if (r.scrollH > r.clientH + 2) {
-              allSingleLine = false;
-              console.error(
-                `    wrap detected in ${r.sel}: scrollH=${r.scrollH} clientH=${r.clientH}`,
-              );
-            }
-          }
-          check(
-            `${label}: all foot controls are single-line (no wrapping)`,
-            allSingleLine,
-          );
-
-          // No two controls must overlap horizontally (left/right rectangles).
-          let noOverlap = true;
-          for (let i = 0; i < footRects.length; i++) {
-            for (let j = i + 1; j < footRects.length; j++) {
-              const a = footRects[i];
-              const b = footRects[j];
-              // Overlap: a.right > b.left && b.right > a.left (horizontal).
-              if (a.right > b.left + 1 && b.right > a.left + 1) {
-                noOverlap = false;
-                console.error(
-                  `    overlap: ${a.sel} [${a.left.toFixed(0)}\..\.${a.right.toFixed(0)}] overlaps ${b.sel} [${b.left.toFixed(0)}\..\.${b.right.toFixed(0)}]`,
-                );
-              }
-            }
-          }
-          check(`${label}: no foot controls overlap`, noOverlap);
-        }
-
-        // Test with a selection in the proposed view and in the new view.
-        await checkFootLayout('proposed', 'proposed view with selection');
-        await checkFootLayout('new', 'new view with selection');
+          return {
+            summary: !!f?.querySelector('.cb-summary'),
+            discard: !!f?.querySelector('.cb-discard-all'),
+            more: !!f?.querySelector('.cb-foot-more'),
+          };
+        });
+        check(
+          `the foot has no summary and no discard all, only "show N more" (${JSON.stringify(foot)})`,
+          !foot.summary && !foot.discard && foot.more,
+        );
       } finally {
         await footPage.close();
       }
@@ -6914,12 +4236,10 @@ async function run() {
 
         // Navigate to proposed view first to see any proposals.
         await claudePage.evaluate(() => {
-          location.hash = '#/attention/proposed';
+          location.hash = '#/decide';
         });
-        await claudePage.waitForFunction(
-          () => location.hash === '#/attention/proposed',
-        );
-        await listShows(claudePage, 'proposed');
+        await claudePage.waitForFunction(() => location.hash === '#/decide');
+        await listShows(claudePage);
 
         // Create a proposal from a 'claude' session so we can verify the
         // agent name is taken from the source, not hardcoded.
@@ -8028,18 +5348,11 @@ async function run() {
         });
         await chipInvPage.waitForSelector('.kit-bar', { timeout: 8000 });
         await chipInvPage.evaluate(() => {
-          location.hash = '#/attention/new';
+          location.hash = '#/decide';
         });
-        await chipInvPage.waitForFunction(() =>
-          location.hash.includes('#/attention'),
-        );
-        await listShows(chipInvPage, 'new');
-        await chipCountsMatchLists(
-          chipInvPage,
-          serveHandle.base,
-          serveHandle.token,
-          'after-dock-scenarios',
-        );
+        await chipInvPage.waitForFunction(() => location.hash === '#/decide');
+        await listShows(chipInvPage);
+        await decideCountMatches(chipInvPage, 'after-dock-scenarios');
       } finally {
         await chipInvPage.close();
       }
@@ -8256,8 +5569,8 @@ async function run() {
     await keyScopeScenarios(context);
 
     // ---- Task 8: Rules (its own seeded serve) -------------------------------
-    await rulesScenarios(context);
-    await invalidRulesScenarios(context);
+    await ruleGroupsScenarios(context);
+    await invalidRuleScenarios(context);
 
     // ---- Task 9: To apply (its own seeded serves) ---------------------------
     await applyScenarios(context, applyHelpers);
@@ -8493,20 +5806,13 @@ async function run() {
           timeout: 15000,
         });
         await invPage.waitForSelector('.kit-bar', { timeout: 8000 });
-        // Navigate to attention to ensure chips are rendered.
+        // decide, so its count shows.
         await invPage.evaluate(() => {
-          location.hash = '#/attention/new';
+          location.hash = '#/decide';
         });
-        await invPage.waitForFunction(() =>
-          location.hash.includes('#/attention'),
-        );
-        await listShows(invPage, 'new');
-        await chipCountsMatchLists(
-          invPage,
-          serveHandle.base,
-          serveHandle.token,
-          'end-of-probe',
-        );
+        await invPage.waitForFunction(() => location.hash === '#/decide');
+        await listShows(invPage);
+        await decideCountMatches(invPage, 'end-of-probe');
       } finally {
         await invPage.close();
       }

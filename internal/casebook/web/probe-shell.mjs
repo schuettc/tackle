@@ -185,12 +185,12 @@ async function overlayKeys(t, pg) {
 }
 
 // The keys every section lists: the switches and the dock's.
-const PAGE_KEYS = ['g a', 'g r', 'g p', '.', '\u2318\u21b5'];
+const PAGE_KEYS = ['g d', 'g a', '.', '\u2318\u21b5'];
 const MOVE_OPEN = ['j', '\u2193', 'k', '\u2191', 'o', '\u21b5'];
 const SELECT = ['x', '\u21e7x'];
 const FAMILY = ['?', 'Esc'];
 const EXPECT = {
-  attention: [
+  decide: [
     ...MOVE_OPEN,
     ...SELECT,
     '/',
@@ -204,7 +204,6 @@ const EXPECT = {
     '[',
     ']',
   ],
-  rules: [...MOVE_OPEN, ...FAMILY, ...PAGE_KEYS, 'a'],
   apply: [...MOVE_OPEN, ...SELECT, ...FAMILY, ...PAGE_KEYS, 'a', 'p'],
 };
 
@@ -271,18 +270,6 @@ async function keyboardScenario(shared, t) {
         keys: ['repo:schuettc/kb-dormant-a', 'repo:schuettc/kb-dormant-b'],
         disposition: 'archive',
       });
-      for (const [id, name] of [
-        ['kb-first', 'First keyboard rule'],
-        ['kb-second', 'Second keyboard rule'],
-      ]) {
-        await agent.api('POST', '/api/rules/draft', {
-          id,
-          name,
-          status: 'draft',
-          match: [{ field: 'repo', op: 'is', value: `schuettc/${KB}` }],
-          propose: { disposition: 'keep' },
-        });
-      }
       const item = (key) =>
         agent.api('GET', `/api/item?key=${encodeURIComponent(key)}`);
 
@@ -291,7 +278,7 @@ async function keyboardScenario(shared, t) {
       pg.on('pageerror', (e) => errors.push(String(e)));
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
-        await pg.goto(`${serveHandle.url}&q=${KB}#/attention/new`, {
+        await pg.goto(`${serveHandle.url}&q=${KB}#/decide`, {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -547,7 +534,7 @@ async function keyboardScenario(shared, t) {
         // . focuses the composer; typed there, keys are text (none fires);
         // ⌘↵ fires in the field (it is inField): the draft joins the batch.
         await pg.evaluate(() => {
-          location.hash = '#/attention/new';
+          location.hash = '#/decide';
         });
         await until(
           pg,
@@ -583,7 +570,7 @@ async function keyboardScenario(shared, t) {
         check(
           `typed in the composer, g r j x d ? are text: nothing switches, moves, selects or opens ("${inField.value}", ${inField.hash}, sheet ${inField.sheet}, ${inField.sel} selected)`,
           inField.value === typed &&
-            inField.hash === '#/attention/new' &&
+            inField.hash === '#/decide' &&
             !inField.sheet &&
             inField.sel === 0 &&
             (await curOf(pg)) === curBefore,
@@ -630,11 +617,11 @@ async function keyboardScenario(shared, t) {
 
         // ? lists every key that works here, and none that doesn't.
         checkList(
-          'on Attention the ? overlay lists exactly its keys',
+          'on decide the ? overlay lists exactly its keys (g d and g a; no g r, no g p)',
           await overlayKeys(t, pg),
-          [...EXPECT.attention].sort(),
+          [...EXPECT.decide].sort(),
         );
-        // The overlay on Attention, light and dark: the theme is set with it
+        // The overlay on decide, light and dark: the theme is set with it
         // closed (its backdrop takes clicks), then it is opened.
         for (const theme of ['light', 'dark']) {
           await setTheme(pg, theme);
@@ -661,81 +648,12 @@ async function keyboardScenario(shared, t) {
         }
         await setTheme(pg, 'light');
 
-        // g r: Rules, without the mouse. Its list takes the list keys; the
-        // hidden Attention list keeps its cursor.
         const attCur = await curOf(pg);
-        await press(pg, 'g', 'r');
-        check(
-          'g r switches to Rules',
-          await until(
-            pg,
-            () =>
-              location.hash === '#/rules' &&
-              document
-                .querySelector('.kit-ctl[data-id="rules"]')
-                ?.classList.contains('on') &&
-              !!document.querySelector(
-                '.kit-app > .kit-list.cb-rules-list:not([hidden])',
-              ),
-          ),
-        );
-        await until(
-          pg,
-          () =>
-            document.querySelectorAll(
-              '.kit-app > .kit-list:not([hidden]) .kit-row',
-            ).length >= 2,
-        );
-        checkList(
-          'on Rules the ? overlay lists exactly its keys (no x or ⇧x: rules are not selected)',
-          await overlayKeys(t, pg),
-          [...EXPECT.rules].sort(),
-        );
-        const ruleRows = await rowsOf(pg);
-        const ruleCur = await curOf(pg);
-        await press(pg, 'j');
-        const ruleCur2 = await curOf(pg);
-        check(
-          `j moves the Rules list's cursor (${ruleCur} → ${ruleCur2})`,
-          ruleCur2 === ruleCur + 1,
-        );
-        check(
-          "and not the hidden Attention list's",
-          (await curOf(
-            pg,
-            '.kit-app > .kit-list:not(.cb-rules-list):not(.cb-apply-list)',
-          )) === attCur,
-        );
-        await press(pg, 'o');
-        const ruleTitle = ruleRows[ruleCur2]?.title ?? '';
-        check(
-          `o opens the rule under the cursor ("${ruleTitle}")`,
-          await until(
-            pg,
-            (want) =>
-              document.querySelector('.kit-app > .kit-read:not([hidden]) h1')
-                ?.textContent === want &&
-              document.querySelector('.kit-primary')?.textContent ===
-                'Activate',
-            ruleTitle,
-          ),
-        );
-        const ruleId = await pg.evaluate(
-          () => document.querySelector('.cb-rule')?.dataset.rule,
-        );
-        await press(pg, 'a');
-        check(
-          `a activates the open draft (${ruleId}), the key Attention binds to accept`,
-          await eventually(async () => {
-            const r = await agent.api('GET', `/api/rule?id=${ruleId}`);
-            return r.rule.status === 'active';
-          }),
-        );
 
-        // g p: To apply. Its list selects (the decided items).
-        await press(pg, 'g', 'p');
+        // g a: apply. Its list selects (the decided items).
+        await press(pg, 'g', 'a');
         check(
-          'g p switches to To apply',
+          'g a switches to apply',
           await until(
             pg,
             () =>
@@ -746,7 +664,7 @@ async function keyboardScenario(shared, t) {
           ),
         );
         checkList(
-          'on To apply the ? overlay lists exactly its keys',
+          'on apply the ? overlay lists exactly its keys',
           await overlayKeys(t, pg),
           [...EXPECT.apply].sort(),
         );
@@ -776,22 +694,23 @@ async function keyboardScenario(shared, t) {
         );
         const applyCurNow = await curOf(pg);
 
-        // g a: back to Attention; its list has the keys again.
-        await press(pg, 'g', 'a');
+        // g d: back to decide; its list has the keys again, its cursor where
+        // it was.
+        await press(pg, 'g', 'd');
         check(
-          'g a switches back to Attention',
+          'g d switches back to decide',
           await until(
             pg,
             () =>
-              location.hash === '#/attention' &&
+              location.hash === '#/decide' &&
               document
-                .querySelector('.kit-ctl[data-id="attention"]')
+                .querySelector('.kit-ctl[data-id="decide"]')
                 ?.classList.contains('on'),
           ),
         );
-        // #/attention opens on due (empty here): back to new's list.
-        await pg.click(
-          '.kit-app > .kit-list:not([hidden]) .kit-chip[data-id="new"]',
+        check(
+          `decide's list kept its cursor while apply was shown (${attCur})`,
+          (await curOf(pg)) === attCur,
         );
         await until(
           pg,
@@ -805,7 +724,7 @@ async function keyboardScenario(shared, t) {
         await press(pg, 'j');
         const back1 = await curOf(pg);
         check(
-          `back on Attention, k and j move its cursor (${back0} → ${back1}) and not To apply's`,
+          `back on decide, k and j move its cursor (${back0} → ${back1}) and not To apply's`,
           back0 === 0 &&
             back1 === 1 &&
             (await curOf(pg, '.kit-app > .kit-list.cb-apply-list')) ===
@@ -859,7 +778,7 @@ async function pollFallbackScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${FB}#/attention/new`, {
+          await pg.goto(`${serveHandle.url}&q=${FB}#/decide`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1015,7 +934,7 @@ async function downScenario(shared, t) {
           if (SUMMARY.test(q.url())) summaries++;
         });
         await pg.route(SUMMARY, (r) => r.abort());
-        await pg.goto(serveHandle.url + '#/attention/new', {
+        await pg.goto(serveHandle.url + '#/decide', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1063,8 +982,8 @@ async function downScenario(shared, t) {
         );
         const barNow = () =>
           pg.evaluate(() => ({
-            attention:
-              document.querySelector('.kit-ctl[data-id="attention"] .kit-n')
+            decide:
+              document.querySelector('.kit-ctl[data-id="decide"] .kit-n')
                 ?.textContent ?? '',
             apply:
               document.querySelector('.kit-ctl[data-id="apply"] .kit-n')
@@ -1073,8 +992,8 @@ async function downScenario(shared, t) {
           }));
         const bar0 = await barNow();
         check(
-          `the boot's summary failed (${summaries} asked): no counts, no status ("${bar0.attention}", "${bar0.apply}", "${bar0.status}")`,
-          summaries > 0 && !bar0.attention && !bar0.apply && !bar0.status,
+          `the boot's summary failed (${summaries} asked): no counts, no status ("${bar0.decide}", "${bar0.apply}", "${bar0.status}")`,
+          summaries > 0 && !bar0.decide && !bar0.apply && !bar0.status,
         );
         await pg.unroute(SUMMARY);
         const EVENTS = /\/api\/events/;
@@ -1188,14 +1107,14 @@ async function downScenario(shared, t) {
           '/api/summary',
         );
         const want = {
-          attention: String(sum.counts?.all ?? 0),
+          decide: String(sum.counts?.all ?? 0),
           apply: String(sum.counts?.['to-apply'] ?? 0),
         };
         const got = await until(
           pg,
           (w) =>
-            document.querySelector('.kit-ctl[data-id="attention"] .kit-n')
-              ?.textContent === w.attention &&
+            document.querySelector('.kit-ctl[data-id="decide"] .kit-n')
+              ?.textContent === w.decide &&
             document.querySelector('.kit-ctl[data-id="apply"] .kit-n')
               ?.textContent === w.apply &&
             /^synced \d+m ago · probe$/.test(
@@ -1210,7 +1129,7 @@ async function downScenario(shared, t) {
           f1.ok,
         );
         check(
-          `reconnected, the page asks for the summary it missed (${summaries - asked} asked): attention ${bar1.attention}, to apply ${bar1.apply}, "${bar1.status}"`,
+          `reconnected, the page asks for the summary it missed (${summaries - asked} asked): decide ${bar1.decide}, apply ${bar1.apply}, "${bar1.status}"`,
           got && summaries > asked,
         );
         // "synced Nm ago" follows the clock, with no request (the clock is
@@ -1337,7 +1256,7 @@ async function staleScenario(shared, t) {
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
         await pg.clock.install();
-        await pg.goto(serveHandle.url + '#/attention/new', {
+        await pg.goto(serveHandle.url + '#/decide', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1402,11 +1321,11 @@ async function staleScenario(shared, t) {
           first401 >= 0 && first401Url === '/api/state',
         );
 
-        // The tab stops: over a minute and more, and with Court clicking a
-        // view and switching sections, no request leaves it.
+        // The tab stops: over a minute and more, and with Court regrouping
+        // the list and switching places, no request leaves it.
         await pg.clock.runFor(60000);
-        await pg.click('.kit-chip[data-id="new"]');
-        await press(pg, 'g', 'p');
+        await pg.click('.cb-group-switch');
+        await press(pg, 'g', 'a');
         await pg.clock.runFor(60000);
         // Kept: no call may fire; a real-time window for one to go out.
         await pg.waitForTimeout(500);
@@ -1470,7 +1389,7 @@ async function offlineQueuedScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(serveHandle.url + '#/attention/new', {
+          await pg.goto(serveHandle.url + '#/decide', {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1497,6 +1416,7 @@ async function offlineQueuedScenario(shared, t) {
             s0.color === muted && !s0.text.startsWith('offline'),
           );
           const danger = await cssColor(pg, 'var(--kit-danger)');
+          let extra = 0;
           for (const [n, pr] of [
             [1, 61],
             [2, 62],
@@ -1506,21 +1426,26 @@ async function offlineQueuedScenario(shared, t) {
               disposition: 'keep',
             });
             // serve answers before its push to the casebook remote; the
-            // count is the push's to say once it has failed.
+            // count is the push's to say once it has failed. The first
+            // write may commit housekeeping of its own too (the example
+            // rules, store/tidy.go): counted from the first decision on.
             let sum = {};
             await eventually(async () => {
               sum = await agent.api('GET', '/api/summary');
-              return sum.offline_queued === n;
+              return n === 1
+                ? sum.offline_queued >= 1
+                : sum.offline_queued === n + extra;
             });
+            if (n === 1) extra = sum.offline_queued - 1;
             const shown = await until(
               pg,
               (w) => document.querySelector('.kit-status')?.textContent === w,
-              `offline \u00b7 ${n} queued`,
+              `offline \u00b7 ${n + extra} queued`,
             );
             const s = await status();
             check(
               `a decision serve can't push yet (offline_queued ${sum.offline_queued}) shows live, without a reload: "${s.text}" in danger (${s.color})`,
-              sum.offline_queued === n &&
+              sum.offline_queued === n + extra &&
                 shown &&
                 s.tone === 'danger' &&
                 s.color === danger,
@@ -1579,7 +1504,7 @@ async function slowPushScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${SP}#/attention/new`, {
+          await pg.goto(`${serveHandle.url}&q=${SP}#/decide`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1699,6 +1624,10 @@ async function pushFailedScenario(shared, t) {
     {
       keepOwn: true,
       conflictRemote: true,
+      // Its repo already has its example rules settled (rules/.gitkeep), so
+      // the first write commits only the decision: every commit counted
+      // here is one this scenario made.
+      seedFiles: { 'rules/.gitkeep': '' },
       seedRepos: [
         seedRepo(PF, [
           [81, 'decide into a conflict', 'vic'],
@@ -1713,7 +1642,7 @@ async function pushFailedScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${PF}#/attention/new`, {
+          await pg.goto(`${serveHandle.url}&q=${PF}#/decide`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -1885,7 +1814,7 @@ async function staleApiScenario(shared, t) {
       try {
         await pg.setViewportSize({ width: 1600, height: 900 });
         await pg.clock.install();
-        await pg.goto(serveHandle.url + '#/attention/new', {
+        await pg.goto(serveHandle.url + '#/decide', {
           waitUntil: 'domcontentloaded',
           timeout: 15000,
         });
@@ -1914,8 +1843,8 @@ async function staleApiScenario(shared, t) {
             document.querySelector('.kit-live')?.dataset.state === 'polling',
         );
         const beforeClick = reqs.length;
-        // Court clicks a view: the API call meets the restarted serve.
-        await pg.click('.kit-chip[data-id="new"]');
+        // Court regroups the list: the API call meets the restarted serve.
+        await pg.click('.cb-group-switch');
         const staleNow = await until(
           pg,
           (w) => {
@@ -1937,8 +1866,8 @@ async function staleApiScenario(shared, t) {
         );
         const at = reqs.length;
         await pg.clock.runFor(60000);
-        await pg.click('.kit-chip[data-id="new"]');
-        await press(pg, 'g', 'r');
+        await pg.click('.cb-group-switch');
+        await press(pg, 'g', 'a');
         await pg.clock.runFor(60000);
         // Kept: no call may fire; a real-time window for one to go out.
         await pg.waitForTimeout(500);
@@ -2011,7 +1940,7 @@ async function pageCapScenario(shared, t) {
         const pg = await context.newPage();
         try {
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}&q=${BIG}#/attention/new`, {
+          await pg.goto(`${serveHandle.url}&q=${BIG}#/decide`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -2083,9 +2012,7 @@ async function pageCapScenario(shared, t) {
 // the page's first load is held, then the load is let go.
 async function heldLoadScenario(shared, t) {
   const { check, checkList, until, eventually } = t;
-  console.log(
-    '\nscenario: a view or search change while a list load is on its way',
-  );
+  console.log('\nscenario: a search change while a list load is on its way');
   const HL = 'hl-probe';
   await withServe(
     {
@@ -2120,9 +2047,8 @@ async function heldLoadScenario(shared, t) {
           disposition: 'wait',
           until: 'date(2026-01-01)',
         });
-        const due = await serveHas('due');
-        const fresh = await serveHas('new');
-        const ledger = await serveHas('new', 'ledger');
+        const fresh = await serveHas('all');
+        const ledger = await serveHas('all', 'ledger');
 
         // openHeld opens the list with its /api/items requests held, and
         // records every set of rows the list paints from then on.
@@ -2156,7 +2082,7 @@ async function heldLoadScenario(shared, t) {
             }).observe(document, { childList: true, subtree: true });
           });
           await pg.setViewportSize({ width: 1600, height: 900 });
-          await pg.goto(`${serveHandle.url}#/attention/${view}`, {
+          await pg.goto(`${serveHandle.url}#/decide${view}`, {
             waitUntil: 'domcontentloaded',
             timeout: 15000,
           });
@@ -2182,57 +2108,22 @@ async function heldLoadScenario(shared, t) {
             want.join('|'),
             8000,
           );
+        // The middle pane's summary heads with how many to decide.
         const summary = (pg) =>
           pg
-            .$eval(`${SHOWN} .cb-summary`, (e) => e.textContent ?? '')
+            .$eval(
+              '.kit-app > .kit-read:not([hidden]) .cb-read-empty-count',
+              (e) => e.textContent ?? '',
+            )
             .catch(() => '');
         const painted = (pg) => pg.evaluate(() => window.__painted);
 
-        // A view switched to while the list's load is held.
-        {
-          const { pg, errors, release, isHeld } = await openHeld('due');
-          try {
-            check(
-              `the due list's first load is held on its way (${due.total} due, ${fresh.total} new)`,
-              isHeld &&
-                due.total > 0 &&
-                fresh.total > due.total &&
-                (await rowKeys(pg)).length === 0,
-            );
-            await pg.click('.kit-chip[data-id="new"]');
-            await until(pg, () => location.hash === '#/attention/new');
-            release();
-            const shown = await listIs(pg, fresh.keys);
-            checkList(
-              'switched to "new" while the load was held, the list shows the new view\'s items',
-              await rowKeys(pg),
-              fresh.keys,
-            );
-            const count = await summary(pg);
-            check(
-              `and its count ("${count}")`,
-              shown && count.startsWith(`${fresh.total} items, `),
-            );
-            const seen = await painted(pg);
-            check(
-              `the held due load never painted over it (painted ${seen.length} row sets)`,
-              shown && !seen.includes(due.keys.join('|')),
-            );
-            check(
-              `no page errors (${errors.join(' | ')})`,
-              errors.length === 0,
-            );
-          } finally {
-            await pg.close();
-          }
-        }
-
         // A search typed while the list's load is held.
         {
-          const { pg, errors, release, isHeld } = await openHeld('new');
+          const { pg, errors, release, isHeld } = await openHeld('');
           try {
             check(
-              `the new list's first load is held on its way (serve finds ${ledger.total} of ${fresh.total} for "ledger")`,
+              `the list's first load is held on its way (serve finds ${ledger.total} of ${fresh.total} for "ledger")`,
               isHeld &&
                 ledger.total > 0 &&
                 ledger.total < fresh.total &&
@@ -2255,7 +2146,7 @@ async function heldLoadScenario(shared, t) {
             const count = await summary(pg);
             check(
               `and its count ("${count}")`,
-              shown && count.startsWith(`${ledger.total} items, `),
+              shown && count === `${ledger.total} to decide`,
             );
             const seen = await painted(pg);
             check(

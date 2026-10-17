@@ -25,7 +25,6 @@ import { h } from '/_kit/kit.js';
 import type {
   Condition,
   Field,
-  NoteToken,
   Operator,
   ValueCount,
   ValuesView,
@@ -75,11 +74,6 @@ export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
 /** ruleOperators are every operator with its label (fetched once). */
 export function ruleOperators(ctx: Ctx): Promise<Operator[]> {
   return ruleVocabularyView(ctx).then((v) => v.operators ?? []);
-}
-
-/** noteTokens are the placeholders a rule's note may use (serve's). */
-export function noteTokens(ctx: Ctx): Promise<NoteToken[]> {
-  return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
 }
 
 // picks reports whether a field's values are ticked from a fixed list.

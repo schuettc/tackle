@@ -19,8 +19,14 @@ import {
   navTargets,
   shortKey,
   rowSub,
+  decideSummary,
 } from './decide-math.ts';
-import type { DecisionVocabView, GroupView, ItemView } from './wire.d.ts';
+import type {
+  DecisionVocabView,
+  GroupView,
+  ItemView,
+  RuleRow,
+} from './wire.d.ts';
 
 // ---- fixture vocab (mirrors item.Allowed for all five kinds) ----------------
 //
@@ -515,5 +521,82 @@ describe('rowSub', () => {
   });
   test('left open: no sub', () => {
     assert.equal(rowSub(vocab, pr({ status: 'left-open' }), true), undefined);
+  });
+  test("came back: why, first; serve's words when the item has no reason", () => {
+    const v = {
+      ...vocab,
+      came_back: { drift: 'it changed on GitHub since you decided' },
+    } as unknown as DecisionVocabView;
+    assert.equal(
+      rowSub(
+        v,
+        pr({
+          status: 'due',
+          group: 'came-back',
+          due_reason: 'its condition was met',
+          proposal: undefined,
+        }),
+        false,
+      ),
+      'its condition was met',
+    );
+    assert.equal(
+      rowSub(
+        v,
+        pr({ status: 'drift', group: 'came-back', proposal: undefined }),
+        false,
+      ),
+      'it changed on GitHub since you decided',
+    );
+  });
+});
+
+// ---- decideSummary ------------------------------------------------------------
+
+describe('decideSummary', () => {
+  const g = (id: string, source: string, label: string, total: number) =>
+    ({ id, source, label, total }) as unknown as GroupView;
+  const vocab = {
+    summary: {
+      to_decide: '{n} to decide',
+      came_back: '{n} came back',
+      group: '{who} \u00b7 {decision} \u00b7 {n}',
+      not_recommended: '{n} not recommended yet',
+    },
+  } as unknown as DecisionVocabView;
+  const rules = [
+    { rule: { id: 'landed-branches', name: 'Landed branches' } },
+  ] as unknown as RuleRow[];
+
+  test('what is to decide, what came back, what each rule and agent recommends, the rest', () => {
+    assert.deepEqual(
+      decideSummary(
+        [
+          g('came-back', '', 'Came back', 3),
+          g(
+            'rule:landed-branches|delete|Delete it',
+            'rule:landed-branches',
+            'Delete it',
+            30,
+          ),
+          g('pi:x|archive|Archive it', 'pi:x', 'Archive it', 5),
+          g('none', '', 'Not recommended yet', 12),
+        ],
+        50,
+        rules,
+        vocab,
+      ),
+      [
+        '50 to decide',
+        '3 came back',
+        'Landed branches \u00b7 Delete it \u00b7 30',
+        'pi \u00b7 Archive it \u00b7 5',
+        '12 not recommended yet',
+      ],
+    );
+  });
+
+  test('nothing to decide: the one line', () => {
+    assert.deepEqual(decideSummary([], 0, rules, vocab), ['0 to decide']);
   });
 });

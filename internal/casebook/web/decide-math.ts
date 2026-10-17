@@ -14,6 +14,7 @@ import type {
   ItemView,
   LookIntoVocab,
   NotNowForm,
+  RuleRow,
   Session,
 } from './wire.d.ts';
 import { sessionName } from './sessions.ts';
@@ -283,11 +284,14 @@ export function recommendLine(
   return `${who} ${choiceLabel(vocab, key, disposition)}`;
 }
 
+/** CAME_BACK is the id of decide's "Came back" group (serve's). */
+export const CAME_BACK = 'came-back';
+
 /**
- * rowSub is an Attention row's second line: why new activity brought it
- * back, then its pending recommendation's reason. The flat list has no
- * group heads, so there the reason follows the choice ("Close it · stale").
- * A left-open row has none.
+ * rowSub is a decide row's second line: why it came back (its own reason,
+ * or serve's words for its status), then its pending recommendation's
+ * reason. The flat list has no group heads, so there the reason follows
+ * the choice ("Close it · stale"). A left-open row has none.
  */
 export function rowSub(
   vocab: DecisionVocabView | null,
@@ -300,7 +304,11 @@ export function rowSub(
       : undefined;
   return (
     [
-      it.new_activity ? it.due_reason : undefined,
+      it.group === CAME_BACK
+        ? it.due_reason || vocab?.came_back?.[it.status]
+        : it.new_activity
+          ? it.due_reason
+          : undefined,
       p && flat ? choiceLabel(vocab, it.key, p.disposition) : undefined,
       p?.note || undefined,
     ]
@@ -309,7 +317,41 @@ export function rowSub(
   );
 }
 
-// ---- the groups of an Attention view ----------------------------------------
+/**
+ * decideSummary is the middle pane's summary with nothing open, one line
+ * each (serve's words): how many to decide, how many came back, what each
+ * rule (by its name) and agent recommends and for how many, and how many
+ * are not recommended yet. A line with nothing to count is left out.
+ */
+export function decideSummary(
+  groups: GroupView[],
+  total: number,
+  rules: RuleRow[],
+  vocab: DecisionVocabView,
+): string[] {
+  const w = vocab.summary;
+  const n = (t: string, k: number) => t.replaceAll('{n}', String(k));
+  const lines = [n(w.to_decide, total)];
+  const back = groups.find((g) => g.id === CAME_BACK);
+  if (back?.total) lines.push(n(w.came_back, back.total));
+  for (const g of groups) {
+    if (!g.source || !g.total) continue;
+    const rule = g.source.startsWith('rule:') ? g.source.slice(5) : '';
+    const who = rule
+      ? rules.find((r) => r.rule.id === rule)?.rule.name || rule
+      : sessionName(g.by, g.source);
+    lines.push(
+      n(w.group, g.total)
+        .replaceAll('{who}', who)
+        .replaceAll('{decision}', g.label),
+    );
+  }
+  const none = groups.find((g) => g.id === 'none');
+  if (none?.total) lines.push(n(w.not_recommended, none.total));
+  return lines;
+}
+
+// ---- the groups of decide's list --------------------------------------------
 
 /**
  * countWord is the word for a group button's {n} (serve's count_words, the

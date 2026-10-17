@@ -147,13 +147,16 @@ func TestVocabularyGroupWords(t *testing.T) {
 	if v.LookMany != "Look into {n}" || v.DiscardMany != "Discard {n}" || v.RecommendThese != "Ask {session} to recommend {n}" || v.DiscardAll != "discard all {n}" {
 		t.Fatalf("group words %q %q %q %q", v.LookMany, v.DiscardMany, v.RecommendThese, v.DiscardAll)
 	}
-	if v.Summary != (SummaryVocab{OneSession: "{n} items, all recommended by {session}", Mixed: "{n} items, {r} recommended"}) {
+	if v.Summary != (SummaryVocab{ToDecide: "{n} to decide", CameBack: "{n} came back", Group: "{who} \u00b7 {decision} \u00b7 {n}", NotRecommended: "{n} not recommended yet"}) {
 		t.Fatalf("summary %+v", v.Summary)
+	}
+	if v.CameBack["drift"] == "" || v.CameBack["conflict"] == "" || v.CameBack["due"] == "" {
+		t.Fatalf("came back words %+v", v.CameBack)
 	}
 	if v.CountWords != (CountWords{One: "it", Two: "both", All: "all {n}", Some: "{n}"}) {
 		t.Fatalf("count words %+v", v.CountWords)
 	}
-	if v.ToApplyHint != "goes to To apply first" || v.Untick != "untick" {
+	if v.ToApplyHint != "goes to apply first" || v.Untick != "untick" {
 		t.Fatalf("hint %q, untick %q", v.ToApplyHint, v.Untick)
 	}
 	if v.LeftOpen != "left open" {
