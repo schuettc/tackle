@@ -52,3 +52,19 @@ func TestExplain(t *testing.T) {
 		t.Errorf("plain 404 explained as %q", got)
 	}
 }
+
+// TestCleanSpinnerRedraw uses the byte layout real npm 11.19.1 printed for
+// `npm trust list` under a pty: its spinner redraws with CSI 1G (cursor to
+// column 1) and CSI 0K, not a carriage return, so the first field of a block
+// arrives after a spinner frame on the same line.
+func TestCleanSpinnerRedraw(t *testing.T) {
+	for raw, want := range map[string]string{
+		"\u2826\x1b[1G\x1b[0Ktype: \x1b[32mgithub\x1b[39m\r":                  "type: github",
+		"\x1b[0mrepository\x1b[0m: \x1b[32macme/widgets\x1b[39m\r":            "repository: acme/widgets",
+		"\u2819\x1b[1G\x1b[0K\u2839\x1b[1G\x1b[0K\x1b[1mnpm\x1b[22m notice x": "npm notice x",
+	} {
+		if got := clean(raw); got != want {
+			t.Errorf("clean(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}

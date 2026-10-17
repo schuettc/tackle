@@ -32,6 +32,8 @@ func fakeRegistry(t *testing.T) (*Client, *[]string) {
 				"versions":{"0.0.0-stage":{},"1.0.0":{"deprecated":"Moved to @demo/new"},
 				"1.1.0":{"dist":{"attestations":{"provenance":{"predicateType":"https://slsa.dev/provenance/v1"}}}}},
 				"time":{"0.0.0-stage":"2026-10-01T00:00:00Z","1.0.0":"2026-10-02T00:00:00Z","1.1.0":"2026-10-03T00:00:00Z"}}`))
+		case "/@demo%2Ffirst":
+			_, _ = w.Write([]byte(`{"name":"@demo/first","dist-tags":{},"versions":{"0.0.0-stage":{}}}`))
 		case "/@demo%2Fnew":
 			_, _ = w.Write([]byte(`{"name":"@demo/new","dist-tags":{}}`))
 		case "/-/npm/v1/attestations/@demo%2Fpkg@1.1.0":
@@ -59,8 +61,11 @@ func TestPackage(t *testing.T) {
 	if !p.Has("1.1.0") || !p.Has("1.0.0") || p.Has("0.0.0-stage") || p.Has("2.0.0") {
 		t.Error("Has")
 	}
-	if !p.Staging() {
-		t.Error("0.0.0-stage present: want Staging")
+	// npm keeps 0.0.0-stage in versions for good once a package has had
+	// one staged publish (seen on two live scoped packages, hours after
+	// their versions went live), so beside real versions it means nothing.
+	if p.Staging() {
+		t.Error("0.0.0-stage beside real versions: want not Staging")
 	}
 	v, ok := p.Version("1.0.0")
 	if !ok || v.Deprecated != "Moved to @demo/new" || v.HasProvenance {
@@ -85,6 +90,11 @@ func TestPackageMissingOrProcessing(t *testing.T) {
 	p, err = c.Package(context.Background(), "@demo/new")
 	if err != nil || !p.Exists || len(p.Versions) != 0 || p.Has("1.0.0") {
 		t.Fatalf("processing: %+v %v", p, err)
+	}
+	// A first publish being processed: only the placeholder.
+	p, err = c.Package(context.Background(), "@demo/first")
+	if err != nil || !p.Staging() || len(p.Real()) != 0 {
+		t.Fatalf("first publish processing: %+v %v", p, err)
 	}
 }
 

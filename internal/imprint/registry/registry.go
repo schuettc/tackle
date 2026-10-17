@@ -70,9 +70,14 @@ func (p Package) Version(number string) (Version, bool) {
 	return Version{}, false
 }
 
-// Staging reports whether npm shows its processing placeholder: a publish
-// is still being processed.
+// Staging reports whether a first publish is still being processed: npm
+// shows its placeholder and no real version yet. npm keeps the placeholder
+// in versions for good afterwards, so beside a real version it means
+// nothing, and a later publish's processing isn't visible here at all.
 func (p Package) Staging() bool {
+	if len(p.Real()) > 0 {
+		return false
+	}
 	if _, ok := p.Version(Stage); ok {
 		return true
 	}

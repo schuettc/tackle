@@ -7,6 +7,8 @@ import (
 
 var (
 	codeRE = regexp.MustCompile(`(?m)^npm (?:error|ERR!) code (\S+)`)
+	// col1RE matches CSI 1G and CSI G: the cursor back to column 1.
+	col1RE = regexp.MustCompile(`\x1b\[1?G`)
 	// ansiRE matches CSI and OSC escape sequences.
 	ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
 )
@@ -36,8 +38,11 @@ func Explain(code, output string) string {
 }
 
 // clean is one line of terminal output as plain text: escape sequences
-// gone, and of a line redrawn with carriage returns only its last drawing.
+// gone, and of a line redrawn (carriage return or cursor to column 1) only
+// its last drawing.
 func clean(line string) string {
+	// npm's spinner returns to column 1 with CSI 1G (or CSI G), not \r.
+	line = col1RE.ReplaceAllString(line, "\r")
 	line = ansiRE.ReplaceAllString(line, "")
 	line = strings.TrimRight(line, "\r")
 	if i := strings.LastIndex(line, "\r"); i >= 0 {

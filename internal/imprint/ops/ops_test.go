@@ -514,10 +514,19 @@ func TestShow(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := s.String()
-	for _, want := range []string{"latest: 1.1.0", "1.1.0 signed by CI from acme/widgets", "1.0.0 deprecated: Moved", "still processing"} {
+	for _, want := range []string{"latest: 1.1.0", "1.1.0 signed by CI from acme/widgets", "1.0.0 deprecated: Moved"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("summary lacks %q:\n%s", want, text)
 		}
+	}
+	// npm keeps 0.0.0-stage for good after a staged publish: beside real
+	// versions it is not a publish in progress.
+	if strings.Contains(text, "still processing") {
+		t.Errorf("stage beside real versions reported as processing:\n%s", text)
+	}
+	e.reg.set("demo-first", map[string]string{registry.Stage: ""}, nil)
+	if s, _ := e.ops.Show(context.Background(), "demo-first"); !strings.Contains(s.String(), "still processing") {
+		t.Errorf("first publish processing: %s", s)
 	}
 	if s, _ := e.ops.Show(context.Background(), "demo-missing"); !strings.Contains(s.String(), "not on npm") {
 		t.Errorf("missing: %s", s)
