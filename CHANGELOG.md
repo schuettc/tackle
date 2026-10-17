@@ -4,6 +4,11 @@ All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull`, `sift` an
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.8.2] - 2026-10-17
+
+### Fixed
+- A sync without a GitHub refresh (the one pi runs after a session event) no longer writes this machine's branches with no landed state. Every branch read "unknown" until the next full sync, so landed-branch filters and rules matched nothing for most of each half hour. It now works landed out from the cached merged-PR lists, as a full sync does.
+
 ## [imprint 0.1.1] - 2026-10-17
 
 ### Added

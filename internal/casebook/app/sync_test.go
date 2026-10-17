@@ -1,7 +1,9 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,5 +244,56 @@ func TestSyncDropsSpooledTempFolderEvents(t *testing.T) {
 	defer b.Close()
 	if len(b.Events) != 0 {
 		t.Errorf("temp events left in the spool: %d", len(b.Events))
+	}
+}
+
+// TestQuickSyncKeepsLanded: a sync with no GitHub refresh (the one pi runs
+// after a session event) works out branches' landed state from the cache,
+// as a full sync does, rather than writing them blank (every branch then
+// read "unknown" until the next full sync).
+func TestQuickSyncKeepsLanded(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.app.Sync(ctx, SyncOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	landed := func() map[string]string {
+		b, err := r.app.Repo.ReadFile("machines/mbp.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s struct {
+			Clones []struct {
+				Branches []struct {
+					Name        string `json:"name"`
+					LandedState string `json:"landed_state"`
+				} `json:"branches"`
+			} `json:"clones"`
+		}
+		if err := json.Unmarshal(b, &s); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, c := range s.Clones {
+			for _, br := range c.Branches {
+				out[br.Name] = br.LandedState
+			}
+		}
+		return out
+	}
+	full := landed()
+	known := 0
+	for _, st := range full {
+		if st != "" {
+			known++
+		}
+	}
+	if known == 0 {
+		t.Fatalf("the full sync wrote no landed state: %v", full)
+	}
+	if _, err := r.app.Sync(ctx, SyncOptions{NoGitHub: true}); err != nil {
+		t.Fatal(err)
+	}
+	if quick := landed(); !maps.Equal(quick, full) {
+		t.Fatalf("quick sync landed %v, want the full sync's %v", quick, full)
 	}
 }
