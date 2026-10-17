@@ -68,3 +68,32 @@ func TestWithdrawKeysAndAgentPendingKeys(t *testing.T) {
 		t.Fatalf("agent pending keys after %v", keys)
 	}
 }
+
+// TestWithdrawRuleProposalsLeavesAgentsAlone: PendingFromRules lists only
+// rules' pending proposals, and WithdrawRuleProposals withdraws only
+// rules' proposals, whatever ids it is given.
+func TestWithdrawRuleProposalsLeavesAgentsAlone(t *testing.T) {
+	s, _ := newStore(t)
+	agent, _ := s.Propose(ctx, "pi:s1", []string{"pr:a/b#1"}, "close", "", "stale")
+	rule, _ := s.Propose(ctx, "rule:stale", []string{"pr:a/b#1", "pr:a/b#2"}, "keep", "", "")
+	pend, err := s.PendingFromRules(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pend) != 2 || pend[0].Source != "rule:stale" || pend[1].Source != "rule:stale" {
+		t.Fatalf("pending from rules %+v, want the rule's two", pend)
+	}
+	got, err := s.WithdrawRuleProposals(ctx, []int64{agent[0].ID, rule[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != rule[0].ID || got[0].State != Withdrawn {
+		t.Fatalf("withdrawn %+v, want only the rule's", got)
+	}
+	if p, _ := s.Get(ctx, agent[0].ID); p.State != Pending {
+		t.Fatalf("the agent's proposal is %s, want pending", p.State)
+	}
+	if p, _ := s.Get(ctx, rule[1].ID); p.State != Pending {
+		t.Fatalf("the rule's other proposal is %s, want pending", p.State)
+	}
+}

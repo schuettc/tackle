@@ -303,3 +303,61 @@ func TestGroupSplitsByKindLabel(t *testing.T) {
 		t.Fatalf("watch's group %q", items[2].Group)
 	}
 }
+
+// cameBackFixture is a due PR (the oldest), a new PR and a new PR a rule
+// recommends closing, plus a due PR the same rule recommends closing too.
+func cameBackFixture() (*Index, map[string]propose.Proposal) {
+	t0 := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	due := prAt(1, t0)
+	due.Status = item.StatusDue
+	dueRec := prAt(4, t0.Add(time.Hour))
+	dueRec.Status = item.StatusDue
+	idx := &Index{}
+	idx.set(engine.Result{Items: []engine.Item{due, prAt(2, t0.Add(3*time.Hour)), prAt(3, t0.Add(2*time.Hour)), dueRec}}, "abc", time.Now())
+	return idx, map[string]propose.Proposal{
+		"pr:schuettc/hail#3": {Key: "pr:schuettc/hail#3", Source: "rule:stale", Disposition: "close"},
+		"pr:schuettc/hail#4": {Key: "pr:schuettc/hail#4", Source: "rule:stale", Disposition: "close"},
+	}
+}
+
+// TestCameBackItemsComeFirst: whatever its age, an item that came back
+// (due, drift, conflict) is in the "Came back" group, listed first; flat,
+// it comes first.
+func TestCameBackItemsComeFirst(t *testing.T) {
+	idx, pending := cameBackFixture()
+	q := Query{View: ViewAll}
+	gs := idx.Groups(q, pending)
+	if len(gs) == 0 || gs[0].ID != GroupCameBack || gs[0].Label != "Came back" || gs[0].Total != 2 {
+		t.Fatalf("groups %+v, want came-back first with 2", gs)
+	}
+	items, _ := idx.List(q, pending)
+	if got := ids(items)[:2]; !slices.Equal(got, []string{"pr:schuettc/hail#4", "pr:schuettc/hail#1"}) {
+		t.Fatalf("grouped list starts %v", got)
+	}
+	q.Flat = true
+	items, _ = idx.List(q, pending)
+	if got, want := ids(items), []string{"pr:schuettc/hail#4", "pr:schuettc/hail#1", "pr:schuettc/hail#2", "pr:schuettc/hail#3"}; !slices.Equal(got, want) {
+		t.Fatalf("flat list %v, want %v", got, want)
+	}
+}
+
+// TestCameBackItemIsNotInItsRecommendationGroup: a due item a rule
+// recommends is in "Came back", and the rule's group leaves it out, so the
+// group's button never decides it.
+func TestCameBackItemIsNotInItsRecommendationGroup(t *testing.T) {
+	idx, pending := cameBackFixture()
+	items, _ := idx.List(Query{View: ViewAll}, pending)
+	for _, it := range items {
+		if it.ID == "pr:schuettc/hail#4" && it.Group != GroupCameBack {
+			t.Fatalf("due item recommended by a rule is in %q", it.Group)
+		}
+	}
+	for _, g := range idx.Groups(Query{View: ViewAll}, pending) {
+		if g.Source == "rule:stale" && g.Total != 1 {
+			t.Fatalf("rule group %+v counts the item that came back", g)
+		}
+	}
+	if keys := idx.Keys(Query{View: ViewAll, Group: "rule:stale|close|Close it without merging"}, pending); !slices.Equal(keys, []string{"pr:schuettc/hail#3"}) {
+		t.Fatalf("rule group keys %v", keys)
+	}
+}

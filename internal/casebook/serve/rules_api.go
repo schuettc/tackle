@@ -547,7 +547,8 @@ func (s *Server) postRulesActivate(w http.ResponseWriter, r *http.Request) {
 }
 
 // postRulesDeactivate handles POST /api/rules/deactivate.
-// Sets the rule back to draft status.
+// Sets the rule back to draft status (off) and withdraws its pending
+// recommendations.
 func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		ID string `json:"id"`
@@ -576,6 +577,12 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 	msg := "rule " + ru.ID + " → draft by " + by
 	if err := s.App.Repo.WriteRule(ctx, *ru, msg); err != nil {
 		reply(w, nil, bad("%v", err))
+		return
+	}
+	// Turning it off withdraws its recommendations at once, through the
+	// serialized rebuild path, not on the next sync.
+	if err := s.rebuild(ctx); err != nil {
+		reply(w, nil, bad("rebuild: %v", err))
 		return
 	}
 

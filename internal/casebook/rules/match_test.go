@@ -269,10 +269,11 @@ func TestNeverOverridesADecision(t *testing.T) {
 	}
 }
 
-// TestRuleRecordCounts verifies that RuleRecord counts accepted/rejected/pending
-// proposals from a real propose.Store: accepted+changed → Accepted, rejected →
+// TestRuleRecordCountsDecidedDifferently verifies that RuleRecord counts a
+// rule's proposals from a real propose.Store: accepted → Accepted, changed
+// (Court decided the item another way) → DecidedDifferently, rejected →
 // Rejected, pending → Pending; proposals from other sources are ignored.
-func TestRuleRecordCounts(t *testing.T) {
+func TestRuleRecordCountsDecidedDifferently(t *testing.T) {
 	d, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "casebook.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -309,8 +310,11 @@ func TestRuleRecordCounts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RuleRecord: %v", err)
 	}
-	if rec.Accepted != 2 {
-		t.Errorf("Accepted = %d, want 2 (accepted+changed)", rec.Accepted)
+	if rec.Accepted != 1 {
+		t.Errorf("Accepted = %d, want 1", rec.Accepted)
+	}
+	if rec.DecidedDifferently != 1 {
+		t.Errorf("DecidedDifferently = %d, want 1", rec.DecidedDifferently)
 	}
 	if rec.Rejected != 1 {
 		t.Errorf("Rejected = %d, want 1", rec.Rejected)

@@ -82,11 +82,11 @@ func TestOpenSendsTheChannelsSession(t *testing.T) {
 		return http.StatusOK
 	})
 	ch := New(Identity{Session: "s1", Harness: "pi", CWD: "/w"}, c, "test")
-	if _, err := ch.Call(context.Background(), "casebook_open", json.RawMessage(`{"view":"proposed"}`)); err != nil {
+	if _, err := ch.Call(context.Background(), "casebook_open", json.RawMessage(`{"key":"pr:a/b#1"}`)); err != nil {
 		t.Fatal(err)
 	}
 	opens := rec.get("/api/agent/open")
-	if len(opens) != 2 || opens[1]["session"] != "s1" || opens[1]["view"] != "proposed" {
+	if len(opens) != 2 || opens[1]["session"] != "s1" || opens[1]["key"] != "pr:a/b#1" || opens[1]["view"] != nil {
 		t.Fatalf("open bodies %v", opens)
 	}
 	if len(rec.get("/api/agent/presence")) != 1 {
@@ -131,13 +131,13 @@ func TestOpenAgainstAnOldServeRetriesWithoutTheSession(t *testing.T) {
 	t.Cleanup(ts.Close)
 	c := &Client{HTTP: ts.Client(), Find: func() (serve.Advert, error) { return serve.Advert{Base: ts.URL, Token: "tok"}, nil }}
 	ch := New(Identity{Session: "s1", Harness: "pi", CWD: "/w"}, c, "test")
-	out, err := ch.Call(context.Background(), "casebook_open", json.RawMessage(`{"view":"proposed"}`))
+	out, err := ch.Call(context.Background(), "casebook_open", json.RawMessage(`{"key":"pr:a/b#1"}`))
 	if err != nil {
 		t.Fatalf("open against an old serve: %v", err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(opens) != 2 || opens[0]["session"] != "s1" || opens[1]["session"] != nil || opens[1]["view"] != "proposed" {
+	if len(opens) != 2 || opens[0]["session"] != "s1" || opens[1]["session"] != nil || opens[1]["key"] != "pr:a/b#1" || opens[1]["view"] != nil {
 		t.Fatalf("open bodies %v", opens)
 	}
 	if !strings.Contains(out, "restart") || !strings.Contains(out, "casebook serve --stop") {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/subaud-tools/tackle/internal/casebook/engine"
@@ -101,4 +102,43 @@ func ProposeOnce(ctx context.Context, r Rule, res engine.Result, now time.Time, 
 		created = append(created, ps...)
 	}
 	return created, len(created), errors.Join(propErrs...)
+}
+
+// Stale returns the ids of the pending rule proposals (pending, each from
+// "rule:<id>") that their rule no longer makes: the rule is missing from
+// all, not active, no longer matches the item, or now proposes another
+// disposition or until. Rebuilding withdraws them, so turning a rule off,
+// editing it or deleting it takes its old recommendations with it.
+func Stale(all []Rule, res engine.Result, now time.Time, pending []propose.Proposal) []int64 {
+	byID := make(map[string]Rule, len(all))
+	for _, r := range all {
+		byID[r.ID] = r
+	}
+	matched := map[string]map[string]bool{}
+	var out []int64
+	for _, p := range pending {
+		id, ok := strings.CutPrefix(p.Source, "rule:")
+		if !ok {
+			continue
+		}
+		r, ok := byID[id]
+		if !ok || r.Status != StatusActive || r.Validate() != nil ||
+			p.Disposition != r.Propose.Disposition || p.Until != r.Propose.Until {
+			out = append(out, p.ID)
+			continue
+		}
+		keys, ok := matched[id]
+		if !ok {
+			keys = map[string]bool{}
+			ms, _ := r.MatchAll(res, now)
+			for _, m := range ms {
+				keys[m.Key] = true
+			}
+			matched[id] = keys
+		}
+		if !keys[p.Key] {
+			out = append(out, p.ID)
+		}
+	}
+	return out
 }

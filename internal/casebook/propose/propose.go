@@ -23,7 +23,8 @@ const (
 	Rejected   = "rejected"   // Court said no
 	Superseded = "superseded" // replaced by a newer proposal, or Court decided directly
 	// Withdrawn: Court cleared it so the agent recommends the item again,
-	// with no judgement. It is no rejection: no track record counts it
+	// or its rule no longer makes it (turned off, edited, deleted), with no
+	// judgement. It is no rejection: no track record counts it
 	// (Tally, Overruled and RejectedFor read the other states).
 	Withdrawn = "withdrawn"
 )
@@ -234,11 +235,28 @@ func (s *Store) WithdrawKeys(ctx context.Context, keys []string) ([]Proposal, er
 	return withdraw(ctx, s, withdrawKey, keys)
 }
 
-// withdrawn's UPDATEs: one proposal by id, or every one for a key.
+// PendingFromRules is every rule's pending proposal, oldest first.
+func (s *Store) PendingFromRules(ctx context.Context) ([]Proposal, error) {
+	return s.list(ctx, "state = 'pending' AND "+ruleSource+" ORDER BY id")
+}
+
+// WithdrawRuleProposals marks the pending rule proposals among ids
+// withdrawn (the rule no longer makes them) and returns them, in ids'
+// order. An agent's proposal, or one no longer pending, is left as it is.
+func (s *Store) WithdrawRuleProposals(ctx context.Context, ids []int64) ([]Proposal, error) {
+	return withdraw(ctx, s, withdrawRuleID, ids)
+}
+
+// ruleSource is the SQL condition for a rule's proposal.
+const ruleSource = "source LIKE 'rule:%'"
+
+// withdrawn's UPDATEs: one agent proposal by id, every agent proposal for a
+// key, or one rule proposal by id.
 const (
-	withdrawSet = "UPDATE proposals SET state = 'withdrawn', settled_at = ? WHERE state = 'pending' AND " + agentSource
-	withdrawID  = withdrawSet + " AND id = ? RETURNING " + cols
-	withdrawKey = withdrawSet + " AND key = ? RETURNING " + cols
+	withdrawSet    = "UPDATE proposals SET state = 'withdrawn', settled_at = ? WHERE state = 'pending' AND "
+	withdrawID     = withdrawSet + agentSource + " AND id = ? RETURNING " + cols
+	withdrawKey    = withdrawSet + agentSource + " AND key = ? RETURNING " + cols
+	withdrawRuleID = withdrawSet + ruleSource + " AND id = ? RETURNING " + cols
 )
 
 // withdraw runs query (withdrawID or withdrawKey) for each of args in one

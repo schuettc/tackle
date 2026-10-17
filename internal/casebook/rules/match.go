@@ -21,10 +21,13 @@ type Match struct {
 }
 
 // TrackRecord summarises how a rule's past proposals fared.
+// DecidedDifferently counts the items Court decided another way than the
+// rule recommended: they count against it.
 type TrackRecord struct {
-	Accepted int `json:"accepted"`
-	Rejected int `json:"rejected"`
-	Pending  int `json:"pending"`
+	Accepted           int `json:"accepted"`
+	DecidedDifferently int `json:"decided_differently"`
+	Rejected           int `json:"rejected"`
+	Pending            int `json:"pending"`
 }
 
 // RuleRecord returns the track record for rule id by counting proposals whose
@@ -34,12 +37,11 @@ func RuleRecord(ctx context.Context, s *propose.Store, id string) (TrackRecord, 
 	if err != nil {
 		return TrackRecord{}, err
 	}
-	// Accepted + Changed both count as accepted (Changed means Court accepted
-	// but chose a different disposition).
 	return TrackRecord{
-		Accepted: t.Accepted + t.Changed,
-		Rejected: t.Rejected,
-		Pending:  t.Pending,
+		Accepted:           t.Accepted,
+		DecidedDifferently: t.Changed,
+		Rejected:           t.Rejected,
+		Pending:            t.Pending,
 	}, nil
 }
 

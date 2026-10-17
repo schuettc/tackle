@@ -95,7 +95,7 @@ func TestOpenAttachesThePageToTheCallingSession(t *testing.T) {
 	}{
 		{`{"session":"s1"}`, 200, "?t=" + adv.Token + "&session=s1"},
 		{`{"session":"s1","key":"pr:schuettc/hail#3"}`, 200, "?t=" + adv.Token + "&session=s1#/item/pr:schuettc%2Fhail%233"},
-		{`{"session":"s1","view":"proposed"}`, 200, "&session=s1#/attention/proposed"},
+		{`{"session":"s1","view":"proposed"}`, 400, ""},
 		{`{}`, 200, "?t=" + adv.Token},
 		{`{"session":"nobody"}`, 404, ""},
 	} {

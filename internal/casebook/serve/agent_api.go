@@ -524,12 +524,8 @@ func (s *Server) agentInterrupted(w http.ResponseWriter, r *http.Request) {
 }
 
 // agentOpen is casebook_open: open the page in Court's browser.
-// openViews are the routes casebook_open can land on besides an item: the
-// Attention views (spec §3.2).
-var openViews = map[string]bool{ViewNew: true, ViewDue: true, ViewProposed: true, ViewAll: true}
-
 // agentOpen is casebook_open: open the page in Court's browser, at one item
-// (key), at an Attention view (view), or at the front (neither).
+// (key) or at the front (no key).
 //
 // The page belongs to the session that opened it (galley's rule: an editor
 // belongs to the one session that opened it). The channel sends its session,
@@ -540,7 +536,6 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Session string `json:"session"`
 		Key     string `json:"key"`
-		View    string `json:"view"`
 	}
 	if err := decode(r, &in); err != nil {
 		reply(w, nil, err)
@@ -553,11 +548,7 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	fragment := ""
-	switch {
-	case in.Key != "" && in.View != "":
-		reply(w, nil, bad("give a key or a view, not both"))
-		return
-	case in.Key != "":
+	if in.Key != "" {
 		k, err := item.ParseKey(in.Key)
 		if err != nil {
 			reply(w, nil, bad("%v", err))
@@ -568,12 +559,6 @@ func (s *Server) agentOpen(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		fragment = "#/item/" + url.PathEscape(k.String())
-	case in.View != "":
-		if !openViews[in.View] {
-			reply(w, nil, bad("unknown view %q (new, due, proposed or all)", in.View))
-			return
-		}
-		fragment = "#/attention/" + in.View
 	}
 	s.mu.Lock()
 	openFn := s.openPage

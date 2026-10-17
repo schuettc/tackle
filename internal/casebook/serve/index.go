@@ -105,7 +105,7 @@ func inView(view string, it engine.Item, pending map[string]propose.Proposal) bo
 	case ViewNew:
 		return it.Status == item.StatusNew
 	case ViewDue:
-		return it.Status == item.StatusDue || it.Status == item.StatusDrift || it.Status == item.StatusConflict
+		return cameBack(it)
 	case ViewProposed:
 		_, ok := pending[it.ID]
 		return ok
@@ -140,6 +140,9 @@ func groupOf(view string, it engine.Item, pending map[string]propose.Proposal) G
 	if !grouped(view) {
 		return GroupView{}
 	}
+	if cameBack(it) {
+		return GroupView{ID: GroupCameBack, Label: GroupCameBackLabel}
+	}
 	p, ok := pending[it.ID]
 	if !ok {
 		return GroupView{ID: GroupNone, Label: GroupNoneLabel}
@@ -154,6 +157,12 @@ func groupOf(view string, it engine.Item, pending map[string]propose.Proposal) G
 	}
 	g.ID = g.Source + "|" + g.Disposition + "|" + g.Label
 	return g
+}
+
+// cameBack reports whether it was decided and came back for a decision:
+// due, drift or conflict.
+func cameBack(it engine.Item) bool {
+	return it.Status == item.StatusDue || it.Status == item.StatusDrift || it.Status == item.StatusConflict
 }
 
 // choiceOf is d's choice for kind k and its place among k's choices; -1
@@ -237,8 +246,8 @@ func matches(q Query, it engine.Item, group string) bool {
 
 // listed is every item q's view lists (every page), each with its group,
 // and the view's groups in the order it lists them. An Attention view's
-// items are newest first (engine.NewerFirst) and its groups go by their
-// newest item; To apply and tracked keep key order. The caller holds x.mu.
+// items are newest first (engine.NewerFirst) after the items that came
+// back, and its groups go by their newest item, "Came back" first; To apply and tracked keep key order. The caller holds x.mu.
 func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView, []GroupView) {
 	src := x.res.Items
 	if q.Filtered {
@@ -246,7 +255,13 @@ func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView
 		sort.SliceStable(src, func(i, j int) bool { return engine.NewerFirst(src[i], src[j]) })
 	} else if grouped(q.View) {
 		src = slices.Clone(x.res.Attention())
-		sort.SliceStable(src, func(i, j int) bool { return engine.NewerFirst(src[i], src[j]) })
+		// What came back leads, grouped (its group is listed first) or flat.
+		sort.SliceStable(src, func(i, j int) bool {
+			if a, b := cameBack(src[i]), cameBack(src[j]); a != b {
+				return a
+			}
+			return engine.NewerFirst(src[i], src[j])
+		})
 	}
 	var out []ItemView
 	groups := map[string]*GroupView{}

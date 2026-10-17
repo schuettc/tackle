@@ -921,3 +921,13 @@ func TestAttentionFilters(t *testing.T) {
 		t.Fatalf("nope %q %v", out, isErr)
 	}
 }
+
+// TestOpenOffersNoView: casebook_open opens an item or the front; the page
+// has no views to open at.
+func TestOpenOffersNoView(t *testing.T) {
+	for _, tool := range Tools() {
+		if tool.Name == "casebook_open" && (strings.Contains(string(tool.InputSchema), `"view"`) || strings.Contains(tool.Description, "(view)")) {
+			t.Fatalf("casebook_open still offers a view: %s %s", tool.Description, tool.InputSchema)
+		}
+	}
+}

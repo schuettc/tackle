@@ -179,7 +179,7 @@ func callBody(t *testing.T, adv Advert, path, body string) int {
 	return resp.StatusCode
 }
 
-func TestOpenLandsOnAnItemOrAView(t *testing.T) {
+func TestOpenLandsOnAnItemOrTheFront(t *testing.T) {
 	r := apptest.New(t)
 	var opened []string
 	adv, _, stop := runOnce(t, r, &opened)
@@ -191,11 +191,9 @@ func TestOpenLandsOnAnItemOrAView(t *testing.T) {
 	}{
 		{`{}`, 200, "?t=" + adv.Token},
 		{`{"key":"pr:schuettc/hail#3"}`, 200, "?t=" + adv.Token + "#/item/pr:schuettc%2Fhail%233"},
-		{`{"view":"proposed"}`, 200, "?t=" + adv.Token + "#/attention/proposed"},
-		{`{"view":"board"}`, 400, ""},
+		{`{"view":"new"}`, 400, ""},
 		{`{"key":"pr:schuettc/hail#999"}`, 404, ""},
 		{`{"key":"not a key"}`, 400, ""},
-		{`{"view":"everything"}`, 400, ""},
 		{`{"key":"pr:schuettc/hail#3","view":"new"}`, 400, ""},
 	} {
 		before := len(opened)

@@ -21,8 +21,8 @@ func Tools() []channelmcp.Tool {
 	return []channelmcp.Tool{
 		{Name: "casebook_status", Description: "The attention counts, whether the user has the casebook page open, and what changed since you last looked: how many of your proposals the user accepted, and each one they changed or rejected with their reason.",
 			InputSchema: schema(`{"type":"object","properties":{}}`)},
-		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key) or an Attention view (view), or at the front with neither. The page opens attached to this session: the user's messages from it come to you. Only when they ask, or when you hand them something to review; never repeatedly.",
-			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"},"view":{"type":"string","enum":["new","due","proposed","all"],"description":"open at this Attention view"}}}`)},
+		{Name: "casebook_open", Description: "Open the casebook page in the user's browser, straight at one item (key), or at the front without one. The page opens attached to this session: the user's messages from it come to you. Only when they ask, or when you hand them something to review; never repeatedly.",
+			InputSchema: schema(`{"type":"object","properties":{"key":{"type":"string","description":"an item key: open at that item"}}}`)},
 		{Name: "casebook_attention", Description: "List items needing attention, newest first. view: new (undecided), due (due/drift/conflict), proposed (a proposal is pending), all. The reply ends with the saved filters casebook knows.",
 			InputSchema: schema(`{"type":"object","properties":{"view":{"type":"string","enum":["new","due","proposed","all"]},"filters":{"type":"array","items":{"type":"string"},"description":"saved filter ids: every item matching all of them, whatever its status (view is then ignored)"},"kind":{"type":"string","enum":["repo","pr","issue","branch","worktree"]},"repo":{"type":"string","description":"owner/name or owner"},"q":{"type":"string","description":"substring of key or title"},"offset":{"type":"integer"},"limit":{"type":"integer"}}}`)},
 		{Name: "casebook_show", Description: "One item: its observation, decision, pending proposal, evidence and recent history.",
@@ -106,7 +106,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		// Court's messages from it come here. No session: nobody's page.
 		open := func(session string) func() (string, error) {
 			return func() (string, error) {
-				body := map[string]any{"key": a.Key, "view": a.View}
+				body := map[string]any{"key": a.Key}
 				if session != "" {
 					body["session"] = session
 				}
@@ -131,11 +131,8 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 		if err != nil {
 			return "", err
 		}
-		switch {
-		case a.Key != "":
+		if a.Key != "" {
 			return "opened the casebook page at " + a.Key + note, nil
-		case a.View != "":
-			return "opened the casebook page at the " + a.View + " view" + note, nil
 		}
 		return "opened the casebook page" + note, nil
 	case "casebook_attention":

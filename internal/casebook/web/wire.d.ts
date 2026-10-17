@@ -517,6 +517,7 @@ export interface Rule {
 
 export interface TrackRecord {
   accepted: number;
+  decided_differently: number;
   rejected: number;
   pending: number;
 }

@@ -676,3 +676,80 @@ func TestRuleSaveTurnsItOn(t *testing.T) {
 		t.Fatal("a refused rule was written")
 	}
 }
+
+// ruleProposals is the rule's pending proposals, by key.
+func (r *rig) ruleProposals(t *testing.T, id string) map[string]int64 {
+	t.Helper()
+	ps, err := r.s.Props.PendingFromRules(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, p := range ps {
+		if p.Source == "rule:"+id {
+			out[p.Key] = p.ID
+		}
+	}
+	return out
+}
+
+// TestTurningARuleOffWithdrawsItsRecommendations: turning a rule off
+// withdraws its pending recommendations at once (not on the next sync),
+// says so in a "proposals" event, and its group leaves the list.
+func TestTurningARuleOffWithdrawsItsRecommendations(t *testing.T) {
+	r := newRig(t)
+	ru := rules.Rule{ID: "open-issues", Name: "Open issues", Match: []rules.Condition{{Field: "kind", Op: "is", Value: "issue"}}, Propose: rules.RuleAction{Disposition: "close"}}
+	if c := r.do(t, "POST", "/api/rules/save?create=1", ru, nil); c != 200 {
+		t.Fatalf("save %d", c)
+	}
+	before := r.ruleProposals(t, ru.ID)
+	if len(before) == 0 {
+		t.Fatal("the rule recommended nothing")
+	}
+	head, _ := r.s.Bus.Head(ctx)
+	if c := r.do(t, "POST", "/api/rules/deactivate", map[string]any{"id": ru.ID}, nil); c != 200 {
+		t.Fatalf("deactivate %d", c)
+	}
+	if left := r.ruleProposals(t, ru.ID); len(left) != 0 {
+		t.Fatalf("still pending after turning it off: %v", left)
+	}
+	ev := r.lastProposals(t, head, "withdrawn")
+	if len(ev.IDs) != len(before) {
+		t.Fatalf("withdrawn event %+v, want %d ids", ev, len(before))
+	}
+	for _, g := range r.viewItems(t, "view=all").Groups {
+		if strings.HasPrefix(g.ID, "rule:"+ru.ID+"|") {
+			t.Fatalf("the rule's group is still listed: %+v", g)
+		}
+	}
+}
+
+// TestEditingARuleWithdrawsWhatItNoLongerRecommends: saving a rule that
+// now recommends another decision withdraws the old recommendations and
+// makes the new ones in the same save.
+func TestEditingARuleWithdrawsWhatItNoLongerRecommends(t *testing.T) {
+	r := newRig(t)
+	ru := rules.Rule{ID: "open-issues", Name: "Open issues", Match: []rules.Condition{{Field: "kind", Op: "is", Value: "issue"}}, Propose: rules.RuleAction{Disposition: "close"}}
+	if c := r.do(t, "POST", "/api/rules/save?create=1", ru, nil); c != 200 {
+		t.Fatalf("save %d", c)
+	}
+	old := r.ruleProposals(t, ru.ID)
+	ru.Propose.Disposition = "keep"
+	if c := r.do(t, "POST", "/api/rules/save", ru, nil); c != 200 {
+		t.Fatalf("edit %d", c)
+	}
+	for key, id := range old {
+		if p, _ := r.s.Props.Get(ctx, id); p.State != "withdrawn" {
+			t.Fatalf("old recommendation for %s is %s, want withdrawn", key, p.State)
+		}
+	}
+	now := r.ruleProposals(t, ru.ID)
+	if len(now) != len(old) {
+		t.Fatalf("after the edit %d pending, want %d", len(now), len(old))
+	}
+	for key, id := range now {
+		if p, _ := r.s.Props.Get(ctx, id); p.Disposition != "keep" {
+			t.Fatalf("%s is recommended %s, want keep", key, p.Disposition)
+		}
+	}
+}

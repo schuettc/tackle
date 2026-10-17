@@ -79,6 +79,14 @@ const (
 	GroupNoneLabel = "Not recommended yet"
 )
 
+// GroupCameBack is the group of an Attention view's items that were
+// decided and came back (due, drift, conflict), whatever recommends them;
+// it is listed first. GroupCameBackLabel is its name.
+const (
+	GroupCameBack      = "came-back"
+	GroupCameBackLabel = "Came back"
+)
+
 // GroupView is one group of an Attention view: the items whose pending
 // proposals share a source, a disposition (watch reads as wait) and the
 // label of that choice for the item's kind. ID is
