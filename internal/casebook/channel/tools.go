@@ -39,7 +39,7 @@ func Tools() []channelmcp.Tool {
 			InputSchema: schema(`{"type":"object","properties":{"text":{"type":"string"},"n":{"type":"integer"},"total":{"type":"integer"}},"required":["text"]}`)},
 		{Name: "casebook_reply", Description: "Settle the user's messages by id (the number in [m-N]). state: received, working, answered, declined or failed. text is your reply, shown in the thread. Every delivered message must end answered, declined or failed. You may also settle a message from a previous turn that was left unanswered; use answered, declined or failed.",
 			InputSchema: schema(`{"type":"object","properties":{"ids":{"type":"array","items":{"type":"integer"}},"state":{"type":"string","enum":["received","working","answered","declined","failed"]},"text":{"type":"string"}},"required":["ids","state"]}`)},
-		{Name: "casebook_rule_draft", Description: "Create or update a draft rule (the user activates it; you never can). Provide a rule object with id, name, match conditions and a propose block. status must be \"draft\" or omitted; setting it to \"active\" is refused. The draft must be complete and valid: a condition casebook doesn't know, a disposition the rule's kind doesn't allow (with no kind condition, only keep, wait and ignore), or an until that isn't date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d) or released(<repo>) is refused with the reason, and nothing is written. Conditions are numbered from 1.",
+		{Name: "casebook_rule_save", Description: "Create or update a rule; it is on once saved: undecided items that match get its recommendation now and after every sync (the user accepts or rejects each; nothing is decided). You may edit only rules you created. Provide a rule object with id, name, match conditions and a propose block. The rule must be complete and valid: a condition casebook doesn't know, a disposition the rule's kind doesn't allow (with no kind condition, only keep, wait and ignore), or an until that isn't date(YYYY-MM-DD), merged(<pr>), closed(<pr|issue>), inactive(90d) or released(<repo>) is refused with the reason, and nothing is written. Conditions are numbered from 1.",
 			InputSchema: schema(`{"type":"object","properties":{"id":{"type":"string","description":"rule id: lower-case letters, digits and hyphens"},"name":{"type":"string"},"match":{"type":"array","items":{"type":"object","properties":{"Field":{"type":"string"},"Op":{"type":"string"},"Value":{"type":"string"}}}},"propose":{"type":"object","properties":{"Disposition":{"type":"string"},"Until":{"type":"string"},"Note":{"type":"string"}}},"note":{"type":"string","description":"a short note about what this rule is for"}},"required":["id","name","match","propose"]}`)},
 		{Name: "casebook_job_step", Description: "Report an apply job step's progress. state: started (beginning work on the step), reported (command dispatched — casebook verifies the outcome), paused (precondition failed; provide detail), failed (command error; provide detail). Only the session the job was approved for may call this.",
 			InputSchema: schema(`{"type":"object","properties":{"job":{"type":"integer","description":"job id"},"step":{"type":"integer","description":"step id"},"state":{"type":"string","enum":["started","reported","paused","failed"]},"detail":{"type":"string","description":"reason for paused or failed"}},"required":["job","step","state"]}`)},
@@ -189,7 +189,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/reply", map[string]any{"session": ch.ID.Session, "ids": a.IDs, "state": a.State, "text": a.Text}, &out)
 			return pretty(out), err
 		})
-	case "casebook_rule_draft":
+	case "casebook_rule_save":
 		if err := needSession(); err != nil {
 			return "", err
 		}
@@ -204,7 +204,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 			}
 			if len(args) > 0 {
 				if err := json.Unmarshal(args, &rd); err != nil {
-					return "", fmt.Errorf("bad rule_draft arguments: %w", err)
+					return "", fmt.Errorf("bad rule_save arguments: %w", err)
 				}
 			}
 			// Build match conditions using snake_case json keys (Fix 2: rules structs
@@ -246,7 +246,7 @@ func (ch *Channel) Call(ctx context.Context, name string, args json.RawMessage) 
 				},
 			}
 			var out map[string]any
-			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/rule-draft", body, &out)
+			_, err := ch.Client.Do(ctx, http.MethodPost, "/api/agent/rule-save", body, &out)
 			if err != nil {
 				return "", err
 			}

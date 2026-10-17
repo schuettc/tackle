@@ -83,6 +83,12 @@ func TestDispositionsFollowTheKindConditions(t *testing.T) {
 		{[]Condition{{Field: "kind", Op: "in", Value: "pr,issue"}}, []string{"keep", "close", "wait", "watch", "ignore"}},
 		{nil, []string{"keep", "wait", "ignore"}},
 		{[]Condition{kindIs("pr"), kindIs("repo")}, []string{}},
+		// A field only some types have narrows the types when its empty
+		// value can't match: opened by someone else is a PR or an issue.
+		{[]Condition{{Field: "relation", Op: "is", Value: "incoming"}}, []string{"keep", "close", "wait", "watch", "ignore"}},
+		{[]Condition{{Field: "unpushed", Op: "is", Value: "true"}}, []string{"keep", "delete", "wait", "ignore"}},
+		// ...and leaves them when it can: "is not" matches an empty value.
+		{[]Condition{{Field: "relation", Op: "is-not", Value: "incoming"}}, []string{"keep", "wait", "ignore"}},
 	} {
 		if got := Dispositions(tc.match); !slices.Equal(got, tc.want) {
 			t.Errorf("Dispositions(%v) = %v, want %v", tc.match, got, tc.want)

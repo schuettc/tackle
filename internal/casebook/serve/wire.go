@@ -362,7 +362,7 @@ type RuleRow struct {
 
 // RuleDetailView is the response body of GET /api/rule, POST /api/rules/draft,
 // POST /api/rules/activate, POST /api/rules/deactivate, POST /api/rules/exclude,
-// POST /api/rules/include, and POST /api/agent/rule-draft.
+// POST /api/rules/include, and POST /api/agent/rule-save.
 type RuleDetailView struct {
 	Rule    rules.Rule        `json:"rule"`
 	Record  rules.TrackRecord `json:"record"`
@@ -385,6 +385,9 @@ type MatchPreview struct {
 	// Dispositions is what the rule may propose: those valid for every kind
 	// of item its conditions can match (rules.Dispositions).
 	Dispositions []string `json:"dispositions"`
+	// Kinds are the item types its conditions can match (rules.Kinds), so
+	// the page names each decision as it reads for them.
+	Kinds []string `json:"kinds"`
 }
 
 // ReasonCount is one reason bucket inside a MatchPreview.

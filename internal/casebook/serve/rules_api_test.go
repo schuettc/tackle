@@ -1,6 +1,8 @@
 package serve
 
 import (
+	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -218,8 +220,9 @@ func TestRulesListAndDetail(t *testing.T) {
 	if len(list.Rules) == 0 {
 		t.Fatal("rules list empty")
 	}
-	if list.Rules[0].Rule.ID != "kind-repo" {
-		t.Fatalf("first rule id %q", list.Rules[0].Rule.ID)
+	// The rig's rule, beside the example rules a new repo has.
+	if !slices.ContainsFunc(list.Rules, func(x RuleRow) bool { return x.Rule.ID == "kind-repo" }) {
+		t.Fatalf("rules %+v lack kind-repo", list.Rules)
 	}
 
 	// Detail.
@@ -273,74 +276,51 @@ func TestDraftEndpointCreatesAndEdits(t *testing.T) {
 	}
 }
 
-func TestAgentRuleDraftCannotActivate(t *testing.T) {
+// TestAgentRuleSaveIsOn: a rule an agent saves is on at once, records who
+// made it, and has proposed; the agent can edit it again (Court,
+// 2026-10-17: every rule is on once saved).
+func TestAgentRuleSaveIsOn(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
-
-	// Agent tries to set status=active → 400.
-	var out map[string]any
-	code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
-		"session": "s1",
-		"rule": map[string]any{
-			"id":      "agent-rule",
-			"name":    "Agent rule",
-			"status":  "active", // not allowed
-			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
-			"propose": map[string]any{"disposition": "close"},
-		},
-	}, &out)
-	if code != 400 {
-		t.Fatalf("agent activate: want 400, got %d", code)
-	}
-	if msg, _ := out["error"].(string); !strings.Contains(strings.ToLower(msg), "active") || !strings.Contains(msg, "schuettc activates rules") {
-		t.Fatalf("error %q does not mention active, or who activates", msg)
-	}
-
-	// Writing a draft works and records created_by = "pi:s1".
 	var detail RuleDetailView
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code := r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "agent-rule",
 			"name":    "Agent rule",
-			"status":  "draft",
 			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
 			"propose": map[string]any{"disposition": "close"},
 		},
 	}, &detail)
 	if code != 200 {
-		t.Fatalf("agent draft %d", code)
+		t.Fatalf("agent save %d", code)
 	}
-	if detail.Rule.CreatedBy != "pi:s1" {
-		t.Fatalf("created_by %q, want pi:s1", detail.Rule.CreatedBy)
+	if detail.Rule.CreatedBy != "pi:s1" || detail.Rule.Status != rules.StatusActive {
+		t.Fatalf("saved %+v, want on and by pi:s1", detail.Rule)
 	}
-
-	// Trying to edit an active rule via agent is refused.
-	// First activate via the page endpoint.
-	ru, _ := r.App.Repo.ReadRule("agent-rule")
-	if ru == nil {
-		t.Fatal("rule not found")
-	}
-	ru.Status = rules.StatusActive
-	if err := r.App.Repo.WriteRule(ctx, *ru, "rule agent-rule → active by court"); err != nil {
+	pend, err := r.s.Props.Pending(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	var out2 map[string]any
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	n := 0
+	for _, p := range pend {
+		if p.Source == "rule:agent-rule" {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("the agent's rule proposed nothing")
+	}
+	if code := r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "agent-rule",
 			"name":    "Agent rule edited",
-			"status":  "draft",
 			"match":   []map[string]any{{"field": "kind", "op": "is", "value": "pr"}},
 			"propose": map[string]any{"disposition": "close"},
 		},
-	}, &out2)
-	if code != 400 {
-		t.Fatalf("editing active rule via agent: want 400, got %d", code)
-	}
-	if msg, _ := out2["error"].(string); !strings.Contains(msg, "only schuettc can edit active rules") {
-		t.Fatalf("error %q doesn't say who can", msg)
+	}, &detail); code != 200 || detail.Rule.Name != "Agent rule edited" || detail.Rule.Status != rules.StatusActive {
+		t.Fatalf("agent edit of its own rule: %d %+v", code, detail.Rule)
 	}
 }
 
@@ -435,7 +415,7 @@ func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
 
 	// Session s1 tries to edit court's draft → 400 naming "court".
 	var out map[string]any
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code = r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "court-rule",
@@ -455,7 +435,7 @@ func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
 
 	// Session s1 creates its own draft.
 	var detail2 RuleDetailView
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code = r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "s1-rule",
@@ -471,7 +451,7 @@ func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
 
 	// Session s2 tries to edit s1's draft → 400 naming "pi:s1".
 	var out2 map[string]any
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code = r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s2",
 		"rule": map[string]any{
 			"id":      "s1-rule",
@@ -490,7 +470,7 @@ func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
 
 	// Session s1 edits its own draft → 200.
 	var detail3 RuleDetailView
-	code = r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code = r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "s1-rule",
@@ -507,9 +487,9 @@ func TestAgentCannotEditOtherAgentsDraft(t *testing.T) {
 		t.Fatalf("rule name %q", detail3.Rule.Name)
 	}
 
-	// Court may edit any draft (including s1's).
+	// Court may edit any rule (including s1's).
 	var detail4 RuleDetailView
-	code = r.do(t, "POST", "/api/rules/draft", map[string]any{
+	code = r.do(t, "POST", "/api/rules/save", map[string]any{
 		"id":      "s1-rule",
 		"name":    "s1 rule fixed by court",
 		"status":  "draft",
@@ -581,14 +561,14 @@ func TestDraftEndpointRejectsInvalidID(t *testing.T) {
 	}
 }
 
-// TestAgentDraftRejectsInvalidID checks Fix 6: POST /api/agent/rule-draft
+// TestAgentDraftRejectsInvalidID checks Fix 6: POST /api/agent/rule-save
 // returns 400 "invalid rule id" for an id that fails ValidID.
 func TestAgentDraftRejectsInvalidID(t *testing.T) {
 	r := newRig(t)
 	r.attach(t, "s1")
 
 	var out map[string]any
-	code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+	code := r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 		"session": "s1",
 		"rule": map[string]any{
 			"id":      "Bad-ID",
@@ -648,5 +628,51 @@ func TestValuesEndpoint(t *testing.T) {
 	}
 	if code := r.do(t, "GET", "/api/rules/values?field=kind", nil, nil); code != 400 {
 		t.Fatalf("values?field=kind %d, want 400", code)
+	}
+}
+
+// TestRuleSaveTurnsItOn: saving a rule (new, or an edit of one that is on)
+// writes it on and evaluates it at once; a rule with no disposition, or
+// ?create=1 over an existing one, is refused and nothing is written.
+func TestRuleSaveTurnsItOn(t *testing.T) {
+	r := newRig(t)
+	ru := rules.Rule{ID: "open-issues", Name: "Open issues", Match: []rules.Condition{{Field: "kind", Op: "is", Value: "issue"}}, Propose: rules.RuleAction{Disposition: "keep", Note: "still open"}}
+	var got RuleDetailView
+	if c := r.do(t, "POST", "/api/rules/save?create=1", ru, &got); c != 200 {
+		t.Fatalf("save %d", c)
+	}
+	if got.Rule.Status != rules.StatusActive {
+		t.Fatalf("saved status %q, want active", got.Rule.Status)
+	}
+	pend, err := r.s.Props.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, p := range pend {
+		if p.Source == "rule:open-issues" {
+			n++
+		}
+	}
+	if n == 0 {
+		t.Fatal("saving the rule proposed nothing")
+	}
+	var pv MatchPreview
+	if c := r.do(t, "POST", "/api/rules/preview?limit=0", rules.Rule{Match: []rules.Condition{{Field: "relation", Op: "is", Value: "incoming"}}}, &pv); c != 200 || strings.Join(pv.Kinds, ",") != "pr,issue" {
+		t.Fatalf("preview kinds for opened by someone else: %d %v, want pr,issue", c, pv.Kinds)
+	}
+	if c := r.do(t, "POST", "/api/rules/save?create=1", ru, nil); c != 409 {
+		t.Fatalf("create over existing %d, want 409", c)
+	}
+	ru.Name = "Open issues, kept"
+	if c := r.do(t, "POST", "/api/rules/save", ru, &got); c != 200 || got.Rule.Name != "Open issues, kept" || got.Rule.Status != rules.StatusActive {
+		t.Fatalf("edit of an on rule: %d %+v", c, got.Rule)
+	}
+	bad := rules.Rule{ID: "no-disp", Name: "No disposition", Match: ru.Match}
+	if c := r.do(t, "POST", "/api/rules/save?create=1", bad, nil); c != 400 {
+		t.Fatalf("no disposition %d, want 400", c)
+	}
+	if got, _ := r.s.App.Repo.ReadRule("no-disp"); got != nil {
+		t.Fatal("a refused rule was written")
 	}
 }

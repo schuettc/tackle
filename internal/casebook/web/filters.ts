@@ -41,6 +41,7 @@ export function makeFilterBar(
     onChanged(): void;
     onDeleted(id: string): void;
     onEdit(row: FilterRow | null): void;
+    onMakeRule?(row: FilterRow): void;
   },
 ): FilterBar {
   let rows: FilterRow[] = [];
@@ -65,6 +66,7 @@ export function makeFilterBar(
   const el = h(
     'div',
     { class: 'cb-filters', 'aria-label': 'saved filters' },
+    h('span', { class: 'cb-bar-label' }, 'filters'),
     chipsEl,
     errEl,
   );
@@ -127,6 +129,9 @@ export function makeFilterBar(
       'div',
       { class: 'cb-filter-menu', role: 'menu', hidden: true },
       item('edit', () => hooks.onEdit(row)),
+      ...(hooks.onMakeRule && !row.invalid
+        ? [item('make a rule', () => hooks.onMakeRule?.(row))]
+        : []),
       item('delete', () => void remove(id)),
     );
     const onEsc = (e: KeyboardEvent) => {

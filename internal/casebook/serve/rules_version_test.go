@@ -24,7 +24,7 @@ func TestActivateAndSaveRefuseAStaleVersion(t *testing.T) {
 	r.attach(t, "s1")
 	agentDraft := func(disp string) {
 		t.Helper()
-		code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		code := r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 			"session": "s1",
 			"rule": map[string]any{
 				"id":      "agent-arch",
@@ -44,6 +44,10 @@ func TestActivateAndSaveRefuseAStaleVersion(t *testing.T) {
 		t.Fatal("GET /api/rule carries no version")
 	}
 	agentDraft("delete")
+	// Saved by the agent it is on; Court turned it off, to turn on again.
+	if code := r.do(t, "POST", "/api/rules/deactivate", map[string]any{"id": "agent-arch"}, nil); code != 200 {
+		t.Fatalf("deactivate %d", code)
+	}
 	now := ruleDetail(t, r, "agent-arch")
 	if now.Version == seen.Version {
 		t.Fatal("changing the proposal did not change the version")

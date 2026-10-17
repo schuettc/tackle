@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -37,6 +38,27 @@ func proposeOnceAndReject(t *testing.T, r *rig, id string) int {
 		t.Fatalf("reject %d", code)
 	}
 	return res.Proposed
+}
+
+// rejectPending rejects every pending proposal rule id made.
+func rejectPending(t *testing.T, r *rig, id string) {
+	t.Helper()
+	pend, err := r.s.Props.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int64
+	for _, p := range pend {
+		if p.Source == "rule:"+id {
+			ids = append(ids, p.ID)
+		}
+	}
+	if len(ids) == 0 {
+		t.Fatal("the rule proposed nothing; the fixture must match")
+	}
+	if code := r.do(t, "POST", "/api/proposals/reject", map[string]any{"ids": ids, "reason": "no"}, nil); code != 200 {
+		t.Fatalf("reject %d", code)
+	}
 }
 
 func reproposed(t *testing.T, r *rig, id string) int {
@@ -124,15 +146,16 @@ func TestAgentUnchangedRedraftKeepsEditedAt(t *testing.T) {
 			},
 		}
 	}
-	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "is"), nil); code != 200 {
+	if code := r.do(t, "POST", "/api/agent/rule-save", body("Repos", "is"), nil); code != 200 {
 		t.Fatalf("agent create %d", code)
 	}
 	made := diskEditedAt(t, r, "agent-keep")
 	c.add(time.Minute)
-	proposeOnceAndReject(t, r, "agent-keep")
+	// Saved, it is on and has proposed already: reject those.
+	rejectPending(t, r, "agent-keep")
 	c.add(time.Minute)
 	for _, name := range []string{"Repos", "Repos (renamed)"} {
-		if code := r.do(t, "POST", "/api/agent/rule-draft", body(name, "is"), nil); code != 200 {
+		if code := r.do(t, "POST", "/api/agent/rule-save", body(name, "is"), nil); code != 200 {
 			t.Fatalf("agent re-draft %d", code)
 		}
 		if got := diskEditedAt(t, r, "agent-keep"); !got.Equal(made) {
@@ -143,7 +166,7 @@ func TestAgentUnchangedRedraftKeepsEditedAt(t *testing.T) {
 	if n := reproposed(t, r, "agent-keep"); n != 0 {
 		t.Errorf("after the agent's unchanged re-drafts, %d rejected items were proposed again", n)
 	}
-	if code := r.do(t, "POST", "/api/agent/rule-draft", body("Repos", "in"), nil); code != 200 {
+	if code := r.do(t, "POST", "/api/agent/rule-save", body("Repos", "in"), nil); code != 200 {
 		t.Fatalf("agent edit %d", code)
 	}
 	if got := diskEditedAt(t, r, "agent-keep"); !got.After(made) {

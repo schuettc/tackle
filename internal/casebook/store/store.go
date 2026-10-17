@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,6 +75,11 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 	if err != nil {
 		return nil, err
 	}
+	ruleFiles, err := exampleRuleFiles(time.Now().UTC())
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(files, ruleFiles)
 	files["casebook.toml"] = fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\nformat_version = %d\n", FormatVersion)
 	files["README.md"] = []byte(readme)
 	files[".gitignore"] = []byte(gitignore)

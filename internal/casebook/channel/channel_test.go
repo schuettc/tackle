@@ -731,7 +731,7 @@ func TestReplyNotFoundNoPresence(t *testing.T) {
 	}
 }
 
-// TestChannelRuleDraftTool verifies that the casebook_rule_draft tool creates
+// TestChannelRuleDraftTool verifies that the casebook_rule_save tool creates
 // a draft rule via the API (status:"active" refused, draft works, created_by set).
 func TestChannelRuleDraftTool(t *testing.T) {
 	r := apptest.New(t)
@@ -745,7 +745,7 @@ func TestChannelRuleDraftTool(t *testing.T) {
 	// inside the rule object is ignored (the channel converts it to draft).
 	// The actual 400 path is if the server receives status=active directly.
 	// Let's test the end-to-end: tool writes a draft and the rule appears.
-	out, isErr := m.tool("casebook_rule_draft", map[string]any{
+	out, isErr := m.tool("casebook_rule_save", map[string]any{
 		"id":   "ch-test-rule",
 		"name": "Channel test rule",
 		"match": []map[string]any{
@@ -756,7 +756,7 @@ func TestChannelRuleDraftTool(t *testing.T) {
 		},
 	})
 	if isErr {
-		t.Fatalf("casebook_rule_draft failed: %q", out)
+		t.Fatalf("casebook_rule_save failed: %q", out)
 	}
 	if !strings.Contains(out, "ch-test-rule") {
 		t.Fatalf("output %q does not mention rule id", out)
@@ -788,7 +788,7 @@ func TestChannelRuleDraftToolSaysWhyADraftIsInvalid(t *testing.T) {
 	m := start(t, ch)
 
 	draft := func(disp, until string) (string, bool) {
-		return m.tool("casebook_rule_draft", map[string]any{
+		return m.tool("casebook_rule_save", map[string]any{
 			"id":      "ch-bad-rule",
 			"name":    "Channel bad rule",
 			"match":   []map[string]any{{"Field": "kind", "Op": "is", "Value": "branch"}},

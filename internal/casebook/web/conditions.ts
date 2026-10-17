@@ -73,7 +73,7 @@ export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
 }
 
 /** ruleOperators are every operator with its label (fetched once). */
-function ruleOperators(ctx: Ctx): Promise<Operator[]> {
+export function ruleOperators(ctx: Ctx): Promise<Operator[]> {
   return ruleVocabularyView(ctx).then((v) => v.operators ?? []);
 }
 
@@ -89,6 +89,17 @@ function picks(f: Field): boolean {
 
 function choices(f: Field): string[] {
   return f.type === BOOL ? ['true', 'false'] : (f.values ?? []);
+}
+
+// durationWords reads a duration as the editor shows it: "3 weeks ago"
+// after "more than", "3 weeks" after "within the last"; a date as itself.
+export function durationWords(op: string, v: string): string {
+  const m = /^(\d+)([hdw])$/.exec(v.trim());
+  if (!m) return v;
+  const n = Number(m[1]);
+  const unit = { h: 'hour', d: 'day', w: 'week' }[m[2] as 'h' | 'd' | 'w'];
+  const words = `${n} ${unit}${n === 1 ? '' : 's'}`;
+  return op === 'older-than' ? `${words} ago` : words;
 }
 
 // TYPED are the fields whose values are picked from what casebook has seen,
@@ -313,7 +324,9 @@ export function conditionEditor(
           ? pickedValues(c)
               .values.map((v) => valueLabel(f, v))
               .join(' or ')
-          : valueLabel(f, c.value);
+          : f?.type === DURATION
+            ? durationWords(c.op, c.value)
+            : valueLabel(f, c.value);
       return h('span', { class: 'cb-cond-v', 'data-value': c.value }, shown);
     }
     if (picks(f)) return pickControl(c, f);

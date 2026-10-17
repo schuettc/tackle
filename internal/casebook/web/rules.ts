@@ -68,6 +68,7 @@ import {
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { DANGER_DISPS, getVocab } from './decide.ts';
 import { menuNav } from './menu-nav.ts';
+import { dispositionLabel } from './rule-editor.ts';
 import {
   authorOf,
   conditionErrorIndex,
@@ -137,6 +138,10 @@ export function renderRule(
   ctx: Ctx,
   detail: RuleDetailView,
   hooks: RuleHooks,
+  // embedded: the rule on the Attention list (Court, 2026-10-17): read only
+  // here, edited in the editor beside the list (onEdit); on or off, not
+  // draft or active.
+  embedded?: { onEdit(): void; onToggle(on: boolean): Promise<void> },
 ): RuleDoc {
   const id = detail.rule.id;
   let saved: RuleDetailView = detail; // serve's copy, as shown
@@ -180,7 +185,7 @@ export function renderRule(
     !sameAction(workPropose, base.propose);
   const isDraft = () => base.status !== 'active';
   // An active rule is edited only while serve holds it invalid (to fix it).
-  const editable = () => isDraft() || !!saved.invalid;
+  const editable = () => !embedded && (isDraft() || !!saved.invalid);
   const body = (): Rule => ({
     ...base,
     match: work,
@@ -216,7 +221,14 @@ export function renderRule(
     const who = authorOf(base.created_by);
     const byEl = h('b', who.agent ? { class: 'cb-by-agent' } : null, who.name);
     const next = facts([
-      ['status', saved.invalid ? `${base.status} · not valid` : base.status],
+      [
+        'status',
+        embedded
+          ? `${isDraft() ? 'off' : 'on'}${saved.invalid ? ' · not valid' : ''}`
+          : saved.invalid
+            ? `${base.status} · not valid`
+            : base.status,
+      ],
       ['matches', invalid ? '\u2014' : String(preview.total)],
       ['excluded', String(exclude.length)],
       ['by', byEl],
@@ -226,6 +238,14 @@ export function renderRule(
   }
 
   function drawProse(): void {
+    if (embedded) {
+      proseEl.replaceChildren(
+        isDraft()
+          ? 'Off: it recommends nothing until you turn it on.'
+          : 'On: undecided items that match get this recommendation, now and after every sync. Nothing is decided until you accept it.',
+      );
+      return;
+    }
     const who = authorOf(base.created_by);
     const lifecycle =
       'Once active, casebook proposes new matches after every sync, and never overrides an item that\u2019s already decided.';
@@ -310,8 +330,9 @@ export function renderRule(
               'span',
               {
                 class:
-                  'cb-cond-v' +
+                  'cb-cond-v cb-disp-ro' +
                   (DANGER_DISPS.has(p.disposition) ? ' cb-danger' : ''),
+                'data-value': p.disposition,
               },
               p.disposition,
             ),
@@ -322,6 +343,17 @@ export function renderRule(
           p.note ? tr('note', h('span', { class: 'cb-cond-v' }, p.note)) : null,
         ),
       );
+      // The decision as it reads for the types the rule matches ("Stop
+      // tracking it"), once the vocabulary is in.
+      void getVocab(ctx).then((vocab) => {
+        const el = proposeEl.querySelector<HTMLElement>('.cb-disp-ro');
+        if (el)
+          el.textContent = dispositionLabel(
+            vocab,
+            preview.kinds ?? null,
+            p.disposition,
+          );
+      });
       return;
     }
     // The disposition: a picker of what serve says this rule may propose
@@ -1188,6 +1220,20 @@ export function renderRule(
 
   function drawActions(): void {
     const bs: Button[] = [];
+    if (embedded) {
+      bs.push({ label: 'edit', run: () => embedded.onEdit() });
+      bs.push({
+        label: isDraft() ? 'turn on' : 'turn off',
+        run: () => {
+          note.textContent = '';
+          void embedded.onToggle(isDraft()).catch((err: unknown) => {
+            note.textContent = message(err);
+          });
+        },
+      });
+      actionsEl.replaceChildren(buttons(bs), note);
+      return;
+    }
     if (editable() && dirty()) {
       bs.push({
         label: isDraft() ? 'save draft' : 'save as draft',
@@ -1248,7 +1294,9 @@ export function renderRule(
         : null;
     doc.dataset.status = base.status;
     doc.toggleAttribute('data-invalid', !!d.invalid);
-    kickEl.textContent = `rule \u00b7 ${base.status} \u00b7 rules/${id}.toml`;
+    kickEl.textContent = embedded
+      ? `rule \u00b7 ${isDraft() ? 'off' : 'on'}`
+      : `rule \u00b7 ${base.status} \u00b7 rules/${id}.toml`;
     titleEl.textContent = base.name || id;
     editor = conditionEditor(
       ctx,
@@ -1355,7 +1403,8 @@ export function makeRules(ctx: Ctx): Section {
     view === 'all' ||
     (view === 'active' ? statusOf(r) === 'active' : statusOf(r) !== 'active');
 
-  // ---- the foot: new rule, or ask the agent ----
+  // ---- + rule, or ask the agent: under the views, where + filter is on
+  // Attention (Court, 2026-10-17: one place on every page to make one) ----
 
   const askEl = h(
     'button',
@@ -1375,20 +1424,20 @@ export function makeRules(ctx: Ctx): Section {
   };
   nameAgent();
   ctx.onAgentName(nameAgent);
-  const foot = h(
+  const makeBar = h(
     'div',
-    { class: 'cb-rules-foot' },
+    { class: 'cb-make-bar' },
     h(
       'button',
       {
         type: 'button',
-        class: 'kit-btn',
+        class: 'kit-chip cb-filter-add',
         'data-testid': 'new-rule',
         onclick() {
           newRule();
         },
       },
-      'new rule',
+      '+ rule',
     ),
     askEl,
   );
@@ -1511,9 +1560,9 @@ export function makeRules(ctx: Ctx): Section {
       if (painting) return; // paintList marking the open row
       ctx.route.go('rules', r.rule.id);
     },
-    foot,
   });
   handle.el.classList.add('cb-rules-list');
+  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(makeBar);
 
   // paintList draws the list and marks each row's status as a pill (the
   // kit's row has no pill slot: its meta span takes the pill classes).

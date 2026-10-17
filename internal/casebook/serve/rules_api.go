@@ -121,7 +121,16 @@ func invalidReason(ru rules.Rule) string {
 // and what it may propose.
 func emptyPreview(match []rules.Condition) MatchPreview {
 	return MatchPreview{ByReason: []ReasonCount{}, Groups: []RepoGroup{}, Page: []MatchRow{},
-		Dispositions: rules.Dispositions(match)}
+		Dispositions: rules.Dispositions(match), Kinds: kindNames(match)}
+}
+
+// kindNames are the item types match can match, as strings.
+func kindNames(match []rules.Condition) []string {
+	out := []string{}
+	for _, k := range rules.Kinds(match) {
+		out = append(out, string(k))
+	}
+	return out
 }
 
 // postRulesDraft handles POST /api/rules/draft.
@@ -215,6 +224,72 @@ func (s *Server) postRulesDraft(w http.ResponseWriter, r *http.Request) {
 
 	s.publish(ctx, "rules", map[string]any{"id": in.ID, "action": "drafted", "by": by})
 
+	reply(w, s.ruleDetail(ctx, in), nil)
+}
+
+// postRulesSave handles POST /api/rules/save: a rule Court saves is on
+// (Court, 2026-10-17: saving turns a rule on; there is no separate
+// activate). The whole rule must be valid; ?create=1 never overwrites one,
+// ?version= saves over exactly the copy the page read. It is evaluated at
+// once, so its proposals are there when the page shows it.
+func (s *Server) postRulesSave(w http.ResponseWriter, r *http.Request) {
+	var in rules.Rule
+	if err := decode(r, &in); err != nil {
+		reply(w, nil, err)
+		return
+	}
+	if !rules.ValidID(in.ID) {
+		reply(w, nil, bad("invalid rule id %q", in.ID))
+		return
+	}
+	in.Status = rules.StatusActive
+	if err := in.Validate(); err != nil {
+		reply(w, nil, bad("%v", err))
+		return
+	}
+	ctx := r.Context()
+	by := s.App.Cfg.User
+	if by == "" {
+		by = "court"
+	}
+	existing, err := s.App.Repo.ReadRule(in.ID)
+	var fe *store.RuleFileError
+	replacing := errors.As(err, &fe)
+	if err != nil && !replacing {
+		reply(w, nil, bad("%v", err))
+		return
+	}
+	q := r.URL.Query()
+	if q.Get("create") == "1" && (existing != nil || replacing) {
+		reply(w, nil, conflict("rule %q already exists", in.ID))
+		return
+	}
+	if v := q.Get("version"); v != "" && existing != nil && v != rules.Version(*existing) {
+		reply(w, nil, conflict("rule %s changed since you read it; nothing was saved", in.ID))
+		return
+	}
+	now := s.Now()
+	msg := "rule " + in.ID + " saved by " + by
+	if existing == nil {
+		in.CreatedBy, in.CreatedAt, in.EditedAt = by, now, now
+	} else {
+		in.CreatedBy, in.CreatedAt = existing.CreatedBy, existing.CreatedAt
+		in.EditedAt = editedAt(*existing, in, now)
+		if in.Exclude == nil {
+			in.Exclude = existing.Exclude
+		}
+	}
+	if !unchanged(existing, in) {
+		if err := s.App.Repo.WriteRule(ctx, in, msg); err != nil {
+			reply(w, nil, bad("%v", err))
+			return
+		}
+	}
+	if err := s.rebuild(ctx); err != nil {
+		reply(w, nil, bad("rebuild: %v", err))
+		return
+	}
+	s.publish(ctx, "rules", map[string]any{"id": in.ID, "action": "saved", "by": by})
 	reply(w, s.ruleDetail(ctx, in), nil)
 }
 
@@ -553,12 +628,12 @@ func (s *Server) getRulesValues(w http.ResponseWriter, r *http.Request) {
 	reply(w, ValuesView{Values: out}, nil)
 }
 
-// agentRuleDraft handles POST /api/agent/rule-draft.
-// Creates or updates a DRAFT rule from an agent session. Refuses status="active".
+// agentRuleSave handles POST /api/agent/rule-save.
+// Creates or updates a rule from an agent session; it is on once saved.
 // Sets created_by = "<harness>:<session>".
-// An agent may only edit drafts it created itself (created_by == source(sess));
-// editing another author's draft is refused with 400 naming the author.
-func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
+// An agent may only edit rules it created itself (created_by == source(sess));
+// editing another author's rule is refused with 400 naming the author.
+func (s *Server) agentRuleSave(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Session string     `json:"session"`
 		Rule    rules.Rule `json:"rule"`
@@ -579,19 +654,13 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Refuse status="active" with a clear error.
-	if in.Rule.Status == rules.StatusActive {
-		reply(w, nil, bad("casebook_rule_draft cannot set status to active; %s activates rules on the page", s.userName()))
-		return
-	}
-	in.Rule.Status = rules.StatusDraft
-
-	// An agent submits a complete draft: one serve holds invalid is refused
-	// with the reason, and nothing is written. The agent corrects it; it is
-	// never told a draft it can't have was saved (Court's own new rule may
-	// be saved unfinished; the agent's may not).
+	// A rule an agent saves is on, as one Court saves is (Court, 2026-10-17:
+	// every rule is on once saved; its recommendations still wait for him).
+	// It must be complete: one serve holds invalid is refused with the
+	// reason, and nothing is written.
+	in.Rule.Status = rules.StatusActive
 	if err := in.Rule.Validate(); err != nil {
-		reply(w, nil, bad("draft rule %q not written, not valid: %v", in.Rule.ID, err))
+		reply(w, nil, bad("rule %q not saved, not valid: %v", in.Rule.ID, err))
 		return
 	}
 
@@ -612,14 +681,9 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		in.Rule.EditedAt = now
 		msg = "rule " + in.Rule.ID + " created by " + by
 	} else {
-		// Refuse to edit an active rule.
-		if existing.Status == rules.StatusActive {
-			reply(w, nil, bad("casebook_rule_draft cannot edit an active rule; only %s can edit active rules", s.userName()))
-			return
-		}
-		// Fix 3: an agent may only edit drafts it created itself.
+		// An agent may only edit rules it created itself.
 		if existing.CreatedBy != by {
-			reply(w, nil, bad("casebook_rule_draft cannot edit rule %q: it was created by %s", in.Rule.ID, existing.CreatedBy))
+			reply(w, nil, bad("casebook_rule_save cannot edit rule %q: it was created by %s", in.Rule.ID, existing.CreatedBy))
 			return
 		}
 		in.Rule.CreatedBy = existing.CreatedBy
@@ -636,8 +700,12 @@ func (s *Server) agentRuleDraft(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, bad("%v", err))
 		return
 	}
+	if err := s.rebuild(ctx); err != nil {
+		reply(w, nil, bad("rebuild: %v", err))
+		return
+	}
 
-	s.publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "drafted", "by": by})
+	s.publish(ctx, "rules", map[string]any{"id": in.Rule.ID, "action": "saved", "by": by})
 
 	reply(w, s.ruleDetail(ctx, in.Rule), nil)
 }
@@ -803,5 +871,6 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 		Groups:       groups,
 		Page:         rows,
 		Dispositions: rules.Dispositions(r.Match),
+		Kinds:        kindNames(r.Match),
 	}
 }

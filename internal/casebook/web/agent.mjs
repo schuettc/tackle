@@ -194,12 +194,12 @@ export function createAgent(base, token) {
     },
 
     /**
-     * POST /api/agent/rule-draft — the agent drafts (or edits its own) rule.
+     * POST /api/agent/rule-save — the agent drafts (or edits its own) rule.
      * @param {string} session — the session id
      * @param {object} rule — a rules.Rule (id, name, match, propose, …)
      */
     async ruleDraft(session, rule) {
-      return call('POST', '/api/agent/rule-draft', { session, rule });
+      return call('POST', '/api/agent/rule-save', { session, rule });
     },
 
     /**

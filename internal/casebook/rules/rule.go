@@ -149,7 +149,7 @@ func ValidateConditions(match []Condition) error {
 		}
 		first[c.Field] = i
 	}
-	kinds := Kinds(match)
+	kinds := typeKinds(match)
 	for i, c := range match {
 		f := vocabIndex[c.Field]
 		if len(f.Kinds) == 0 || len(kinds) == 0 {
@@ -267,10 +267,25 @@ var allKinds = []item.Kind{item.KindRepo, item.KindPR, item.KindIssue, item.Kind
 // dispositionOrder is the order dispositions are listed in.
 var dispositionOrder = []item.Disposition{item.Keep, item.Archive, item.Close, item.Delete, item.Merge, item.Wait, item.Watch, item.Ignore}
 
-// Kinds lists the kinds of item match can match, as its kind conditions
-// say: every kind when it has none. Other fields aren't read (a condition
-// that only some kinds have a value for still leaves the others possible:
-// "is-not" and "not-in" match an empty value).
+// typeKinds lists the kinds match's kind conditions allow, every kind when
+// it has none: the types a "doesn't apply to" check measures a field
+// against.
+func typeKinds(match []Condition) []item.Kind {
+	var kindOnly []Condition
+	for _, c := range match {
+		if c.Field == "kind" {
+			kindOnly = append(kindOnly, c)
+		}
+	}
+	return Kinds(kindOnly)
+}
+
+// Kinds lists the kinds of item match can match: those its kind conditions
+// allow (every kind when it has none), less those a condition on a field
+// the kind doesn't have rules out. Such a field is empty on that kind, so
+// the condition is tried on the empty value: "opened by someone else"
+// rules out branches, while "is-not" and "not-in" match an empty value and
+// leave them possible.
 func Kinds(match []Condition) []item.Kind {
 	out := []item.Kind{}
 	for _, k := range allKinds {
@@ -278,7 +293,9 @@ func Kinds(match []Condition) []item.Kind {
 		ok := true
 		for _, c := range match {
 			if c.Field != "kind" {
-				continue
+				if fv, known := vocabIndex[c.Field]; !known || len(fv.Kinds) == 0 || slices.Contains(fv.Kinds, string(k)) {
+					continue
+				}
 			}
 			if m, err := c.Eval(f); err != nil || !m {
 				ok = false

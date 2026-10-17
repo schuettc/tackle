@@ -161,7 +161,11 @@ function renderRecBox(
   hooks: ItemHooks,
 ): HTMLElement {
   const it = detail.item;
-  const slot = h('div', { class: 'cb-rec-empty' });
+  const slot = h(
+    'div',
+    { class: 'cb-rec-empty' },
+    h('p', { class: 'cb-rec-empty-says' }, 'No recommendation yet.'),
+  );
   const pending =
     it.proposal && it.proposal.state === 'pending' ? it.proposal : null;
   if (!pending) return slot;
@@ -289,8 +293,17 @@ export function renderItem(
       bodyWrap.append(fold('read more', h('p', null, rest)));
     }
   }
+  // Only a pull request or an issue has a description: other items show
+  // no empty box for one (a due reason still shows).
+  const hasBody =
+    it.kind === 'pr' || it.kind === 'issue' || !!it.due_reason || !!it.body;
   el.append(
-    h('div', { class: 'cb-lead' }, renderRecBox(ctx, detail, hooks), bodyWrap),
+    h(
+      'div',
+      { class: 'cb-lead' },
+      renderRecBox(ctx, detail, hooks),
+      hasBody ? bodyWrap : null,
+    ),
   );
 
   // ---- decide: the question, the cards --------------------------------------

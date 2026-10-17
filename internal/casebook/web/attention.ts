@@ -33,6 +33,9 @@ import type {
   Message,
   FilterRow,
   FiltersView,
+  RuleDetailView,
+  RuleRow,
+  RulesView,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
@@ -58,7 +61,8 @@ import { lookingLine, sessionName } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
 import { openRejectSheet, openDiscardSheet } from './proposals.ts';
 import { makeFilterBar, filterEditor, type FilterEditor } from './filters.ts';
-import { PREVIEW_DEBOUNCE_MS } from './rules.ts';
+import { makeRuleBar, ruleEditor } from './rule-editor.ts';
+import { PREVIEW_DEBOUNCE_MS, renderRule } from './rules.ts';
 import { parseFilterIds, filterLabel } from './filters-text.ts';
 
 // RECOMMEND_THE_REST is what the not-recommended group's "Ask ‹session› to
@@ -91,11 +95,13 @@ const VIEWS: Chip[] = [
 interface Filters {
   view: string;
   filters: string[];
+  // rule is the selected rule (the list shows its matches), or null.
+  rule: string | null;
   q: string;
 }
 
 function emptyFilters(): Filters {
-  return { view: 'due', filters: [], q: '' };
+  return { view: 'due', filters: [], rule: null, q: '' };
 }
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
@@ -274,8 +280,54 @@ export function makeAttention(ctx: Ctx): Section {
   function showReadEmpty(): void {
     currentOpenKey = null;
     shownDetail = null;
+    // A selected rule shows in the middle pane until an item is opened.
+    const rr =
+      filters.rule && draft === null
+        ? ruleRows.find((r) => r.rule.id === filters.rule)
+        : undefined;
     readEl.replaceChildren(renderReadEmpty());
+    if (rr) void showRuleDoc(rr);
     feedAttached();
+  }
+
+  // showRuleDoc puts the selected rule in the middle pane: the Rules page's
+  // view of it, read only, with edit and turn on / off.
+  let ruleDocSeq = 0;
+  async function showRuleDoc(rr: RuleRow): Promise<void> {
+    const mine = ++ruleDocSeq;
+    let d: RuleDetailView;
+    try {
+      d = await ctx.api.get<RuleDetailView>('/rule', { id: rr.rule.id });
+    } catch {
+      return;
+    }
+    if (mine !== ruleDocSeq || filters.rule !== rr.rule.id || draft !== null)
+      return;
+    if (currentOpenKey) return;
+    const doc = renderRule(
+      ctx,
+      d,
+      {
+        primaryChanged() {},
+        saved() {
+          void loadRules().then(() => void reload());
+        },
+      },
+      {
+        onEdit() {
+          openRuleEditor(rr, null);
+        },
+        async onToggle(on: boolean) {
+          await ctx.api.post(on ? '/rules/activate' : '/rules/deactivate', {
+            id: rr.rule.id,
+          });
+          await loadRules();
+          showReadEmpty();
+          void reload();
+        },
+      },
+    );
+    readEl.replaceChildren(doc.el);
   }
 
   // Initialise the reading column with the empty state so it is never blank.
@@ -364,8 +416,10 @@ export function makeAttention(ctx: Ctx): Section {
         // A view clears the saved filters.
         filters.view = id;
         filters.filters = [];
+        filters.rule = null;
         filterBar.setError(null);
         paintFilters();
+        showReadEmpty();
         handle.setChips('view', viewChips(id));
         ctx.route.go('attention', id, attentionQuery({ flat, filters: [] }));
         void reload();
@@ -433,7 +487,56 @@ export function makeAttention(ctx: Ctx): Section {
     onEdit(row) {
       openFilterEditor(row);
     },
+    onMakeRule(row) {
+      openRuleEditor(null, {
+        name: row.filter.name,
+        match: row.filter.match ?? [],
+      });
+    },
   });
+
+  // ---- rules, beside the filters --------------------------------------------
+
+  let ruleRows: RuleRow[] = [];
+  const ruleBar = makeRuleBar(ctx, {
+    onSelect(id) {
+      selectRule(id);
+    },
+    onEdit(row) {
+      openRuleEditor(row, null);
+    },
+    onChanged() {
+      void loadRules().then(() => {
+        if (filters.rule) void reload();
+        showReadEmpty();
+      });
+    },
+  });
+  async function loadRules(): Promise<void> {
+    try {
+      const v = await ctx.api.get<RulesView>('/rules');
+      ruleRows = v.rules ?? [];
+      paintRules();
+    } catch {
+      // non-fatal: the chips stay as they were
+    }
+  }
+  function paintRules(): void {
+    ruleBar.paint(ruleRows, draft !== null ? null : filters.rule);
+  }
+  // selectRule makes id the selection (null: back to the view): the list
+  // shows the rule's matches, the middle pane the rule.
+  function selectRule(id: string | null): void {
+    filters.rule = id;
+    if (id) filters.filters = [];
+    filterBar.setError(null);
+    paintFilters();
+    paintRules();
+    handle.setChips('view', viewChips(activeView()));
+    showReadEmpty();
+    goList();
+    void reload();
+  }
 
   // ---- the filter editor beside the list ------------------------------------
 
@@ -450,6 +553,7 @@ export function makeAttention(ctx: Ctx): Section {
   let before: {
     view: string;
     filters: string[];
+    rule: string | null;
     scroll: number;
     offset: number;
     totalItems: number;
@@ -469,12 +573,60 @@ export function makeAttention(ctx: Ctx): Section {
     previewLine.textContent = text ?? '';
   }
 
+  function openRuleEditor(
+    row: RuleRow | null,
+    seed: { name: string; match: Condition[] } | null,
+  ): void {
+    openEditor(
+      row ? row.rule.id : '',
+      row?.rule.match ?? seed?.match ?? [],
+      (hooks) => ruleEditor(ctx, row, seed, hooks),
+      (id) => {
+        void loadRules().then(() => selectRule(id));
+      },
+      'rule',
+    );
+  }
+
   function openFilterEditor(row: FilterRow | null): void {
+    openEditor(
+      row ? row.filter.id : '',
+      row?.filter.match ?? [],
+      (hooks) => filterEditor(ctx, row, hooks),
+      (id) => {
+        filters.filters = [id];
+        filters.rule = null;
+        void loadFilters();
+        handle.setChips('view', viewChips(''));
+        goList();
+        void reload();
+      },
+      'filter',
+    );
+  }
+
+  // editing is what the editor makes ("filter" or "rule"), for the preview
+  // line.
+  let editing: 'filter' | 'rule' = 'filter';
+
+  function openEditor(
+    id: string,
+    start: Condition[],
+    make: (hooks: {
+      onDraft(match: Condition[]): void;
+      onSaved(id: string): void;
+      onCancel(): void;
+    }) => FilterEditor,
+    saved: (id: string) => void,
+    kind: 'filter' | 'rule',
+  ): void {
+    editing = kind;
     if (draftTimer !== null) clearTimeout(draftTimer);
     if (!before) {
       before = {
         view: filters.view,
         filters: [...filters.filters],
+        rule: filters.rule,
         scroll: rowsScroller()?.scrollTop ?? 0,
         offset,
         totalItems,
@@ -490,10 +642,10 @@ export function makeAttention(ctx: Ctx): Section {
     // Opening the editor closes an open item, as clicking away does.
     if (currentOpenKey) goList();
     showReadEmpty();
-    editingId = row ? row.filter.id : '';
-    draft = (row?.filter.match ?? []).map((c) => ({ ...c }));
+    editingId = id;
+    draft = start.map((c) => ({ ...c })).filter((c) => c.value.trim() !== '');
     draftHash = location.hash;
-    editor = filterEditor(ctx, row, {
+    editor = make({
       onDraft(match) {
         // An unfinished condition (no value yet) waits: it isn't previewed.
         draft = match.filter((c) => c.value.trim() !== '');
@@ -505,11 +657,7 @@ export function makeAttention(ctx: Ctx): Section {
       },
       onSaved(id) {
         closeFilterEditor(false);
-        filters.filters = [id];
-        void loadFilters();
-        handle.setChips('view', viewChips(''));
-        goList();
-        void reload();
+        saved(id);
       },
       onCancel() {
         closeFilterEditor(true);
@@ -521,6 +669,7 @@ export function makeAttention(ctx: Ctx): Section {
     handle.setChips('view', viewChips(''));
     filterBar.paint(filterRows, []);
     filterBar.setError(null);
+    paintRules();
     paintAll();
     void reload();
     editor.el.querySelector<HTMLElement>('.cb-filter-name')?.focus();
@@ -556,7 +705,9 @@ export function makeAttention(ctx: Ctx): Section {
     }
     filters.view = b.view;
     filters.filters = b.filters;
+    filters.rule = b.rule;
     paintFilters();
+    paintRules();
     handle.setChips('view', viewChips(activeView()));
     offset = b.offset;
     totalItems = b.totalItems;
@@ -577,7 +728,7 @@ export function makeAttention(ctx: Ctx): Section {
     void reload();
   }
   function filtered(): boolean {
-    return filters.filters.length > 0;
+    return filters.filters.length > 0 || filters.rule !== null;
   }
   // activeView is the view chip that shows selected: none while filtered.
   // While a draft is previewing, no chip shows selected: the list is the
@@ -604,12 +755,19 @@ export function makeAttention(ctx: Ctx): Section {
     ctx.route.go(
       'attention',
       filtered() ? '' : filters.view,
-      attentionQuery({ flat, filters: filters.filters }),
+      attentionQuery({
+        flat,
+        filters: filters.filters,
+        rule: filters.rule ?? '',
+      }),
     );
   }
   // selectFilters makes ids the selection (none: back to the view).
   function selectFilters(ids: string[]): void {
     filters.filters = ids;
+    if (ids.length) filters.rule = null;
+    paintRules();
+    showReadEmpty();
     filterBar.setError(null);
     paintFilters();
     handle.setChips('view', viewChips(activeView()));
@@ -621,9 +779,11 @@ export function makeAttention(ctx: Ctx): Section {
     .querySelector('.kit-chips[data-group="view"]')
     ?.after(
       filterBar.el,
+      ruleBar.el,
       h('div', { class: 'cb-list-tools' }, groupSwitch, previewLine),
     );
   void loadFilters();
+  void loadRules();
 
   // ---- the list collapses to a rail -----------------------------------------
 
@@ -693,9 +853,11 @@ export function makeAttention(ctx: Ctx): Section {
     const p: Record<string, string> =
       draft !== null
         ? { match: JSON.stringify(draft) }
-        : filtered()
-          ? { filters: filters.filters.join(',') }
-          : { view: filters.view };
+        : filters.rule
+          ? { view: 'all', rule: filters.rule }
+          : filtered()
+            ? { filters: filters.filters.join(',') }
+            : { view: filters.view };
     p['offset'] = String(pageOffset);
     p['limit'] = String(PAGE_SIZE);
     if (filters.q) p['q'] = filters.q;
@@ -771,7 +933,7 @@ export function makeAttention(ctx: Ctx): Section {
         editor?.showError(null);
         paintPreviewLine(
           draft.length
-            ? `previewing a draft filter \u00b7 ${pluralize(data.total, 'item')}`
+            ? `previewing a draft ${editing} \u00b7 ${pluralize(data.total, 'item')}`
             : 'add a condition to preview',
         );
       }
@@ -786,7 +948,7 @@ export function makeAttention(ctx: Ctx): Section {
       const refused = err instanceof ApiError && err.status === 400;
       if (draft !== null && refused) {
         editor?.showError(err);
-        paintPreviewLine('previewing a draft filter \u00b7 not valid yet');
+        paintPreviewLine(`previewing a draft ${editing} \u00b7 not valid yet`);
       } else if (filtered() && refused) {
         filterBar.setError(err.message);
       }
@@ -1856,6 +2018,10 @@ export function makeAttention(ctx: Ctx): Section {
 
   // viewLabel is the view's name in the summary ("due").
   function viewLabel(): string {
+    if (filters.rule) {
+      const rr = ruleRows.find((r) => r.rule.id === filters.rule);
+      return `rule ${rr?.rule.name || filters.rule}`;
+    }
     if (filtered()) return filterLabel(filterRows, filters.filters);
     return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
   }
@@ -2222,7 +2388,22 @@ export function makeAttention(ctx: Ctx): Section {
     const ids = sub
       ? []
       : parseFilterIds(new URLSearchParams(query).get('filters'));
-    if (ids.length) {
+    const ruleId = sub ? '' : (new URLSearchParams(query).get('rule') ?? '');
+    if (ruleId) {
+      // A rule (#/attention?rule=<id>): the list is its matches.
+      flat = flatFor(true, query, storedFlat());
+      storeFlat(flat);
+      paintSwitch();
+      filters.rule = ruleId;
+      filters.filters = [];
+      paintFilters();
+      paintRules();
+      handle.setChips('view', viewChips(''));
+      showReadEmpty();
+      void reload();
+    } else if (ids.length) {
+      filters.rule = null;
+      paintRules();
       // Saved filters (#/attention?filters=a,b): the address names the
       // list, so it says whether it is flat. No view is selected.
       flat = flatFor(true, query, storedFlat());
@@ -2242,8 +2423,10 @@ export function makeAttention(ctx: Ctx): Section {
       filters.view = view;
       if (filtered()) {
         filters.filters = [];
+        filters.rule = null;
         filterBar.setError(null);
         paintFilters();
+        paintRules();
       }
       handle.setChips('view', viewChips(filters.view));
       showReadEmpty();

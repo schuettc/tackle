@@ -723,7 +723,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/agent/open", s.agentOpen)
 	m.HandleFunc("POST /api/agent/settled", s.agentSettled)
 	m.HandleFunc("GET /api/agent/interrupted", s.agentInterrupted)
-	m.HandleFunc("POST /api/agent/rule-draft", s.agentRuleDraft)
+	m.HandleFunc("POST /api/agent/rule-save", s.agentRuleSave)
 	m.HandleFunc("POST /api/agent/job-step", s.agentJobStep)
 	m.HandleFunc("POST /api/agent/job-ask", s.agentJobAsk)
 	// apply
@@ -741,6 +741,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("GET /api/rules", s.getRules)
 	m.HandleFunc("GET /api/rule", s.getRule)
 	m.HandleFunc("POST /api/rules/draft", s.postRulesDraft)
+	m.HandleFunc("POST /api/rules/save", s.postRulesSave)
 	m.HandleFunc("POST /api/rules/preview", s.postRulesPreview)
 	m.HandleFunc("POST /api/rules/exclude", s.postRulesExclude)
 	m.HandleFunc("POST /api/rules/include", s.postRulesInclude)

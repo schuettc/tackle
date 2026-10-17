@@ -2204,7 +2204,7 @@ async function keyScopeScenariosOn(context, serveHandle) {
 // seeded machine snapshot (serve.mjs seedMachines): machine probe-r8's clones
 // under /home/probe-r8, each branch with the landed verdict a real sync would
 // have written. Its rules are made through serve's own routes: Court's with
-// POST /api/rules/draft, the agent's with POST /api/agent/rule-draft.
+// POST /api/rules/draft, the agent's with POST /api/agent/rule-save.
 
 let r8Sha = 1;
 const r8Tip = () => (r8Sha++).toString(16).padStart(40, 'a');

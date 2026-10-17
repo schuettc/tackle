@@ -117,7 +117,7 @@ func TestServeNumbersConditionsFromOne(t *testing.T) {
 	}
 	body["id"] = "n-agent"
 	out = nil
-	r.do(t, "POST", "/api/agent/rule-draft", map[string]any{"session": "s1", "rule": body}, &out)
+	r.do(t, "POST", "/api/agent/rule-save", map[string]any{"session": "s1", "rule": body}, &out)
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "condition 2: ") {
 		t.Errorf("agent draft: %q, want condition 2", msg)
 	}
@@ -139,7 +139,7 @@ func TestAgentDraftMustBeValid(t *testing.T) {
 		{"archive-branch", "archive", "", "branch", "archive can't be proposed for a branch"},
 	} {
 		var out map[string]any
-		code := r.do(t, "POST", "/api/agent/rule-draft", map[string]any{
+		code := r.do(t, "POST", "/api/agent/rule-save", map[string]any{
 			"session": "s1", "rule": draftBody("agent-"+tc.name, tc.disp, tc.until, kindCond(tc.kind)),
 		}, &out)
 		msg, _ := out["error"].(string)

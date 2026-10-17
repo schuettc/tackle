@@ -59,8 +59,10 @@ export function parse(hash: string): {
 export function attentionQuery(o: {
   flat: boolean;
   filters: string[];
+  rule?: string;
 }): string {
   const parts: string[] = [];
+  if (o.rule) parts.push(`rule=${o.rule}`);
   if (o.filters.length) parts.push(`filters=${o.filters.join(',')}`);
   if (o.flat) parts.push('flat');
   return parts.join('&');

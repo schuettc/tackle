@@ -58,6 +58,8 @@ export function sameAction(a: RuleAction, b: RuleAction): boolean {
 export function authorOf(createdBy: string): { agent: boolean; name: string } {
   const i = createdBy.indexOf(':');
   if (i > 0) return { agent: true, name: createdBy.slice(0, i) };
+  // The starter rules casebook ships.
+  if (createdBy === 'casebook') return { agent: false, name: 'casebook' };
   return { agent: false, name: 'you' };
 }
 

@@ -240,7 +240,14 @@ func TestWriteReadRuleCommits(t *testing.T) {
 	if len(errs) != 0 {
 		t.Fatalf("Rules errors: %v", errs)
 	}
-	if len(all) != 1 || all[0].ID != "landed-branches" {
+	// (a new repo also has the example rules)
+	n := 0
+	for _, ru := range all {
+		if ru.ID == "landed-branches" && ru.CreatedBy == "court" {
+			n++
+		}
+	}
+	if n != 1 || len(all) != len(rules.Examples()) {
 		t.Errorf("Rules = %+v", all)
 	}
 
