@@ -5872,7 +5872,7 @@ function makeAttention(ctx) {
         flat = !flat;
         storeFlat(flat);
         paintSwitch();
-        goList();
+        if (draft === null) goList();
         void reload();
       }
     },
@@ -6017,10 +6017,10 @@ function makeAttention(ctx) {
     return filters.filters.length > 0;
   }
   function activeView() {
-    return filtered() ? "" : filters.view;
+    return filtered() || draft !== null ? "" : filters.view;
   }
   function paintFilters() {
-    filterBar.paint(filterRows, filters.filters);
+    filterBar.paint(filterRows, draft !== null ? [] : filters.filters);
   }
   async function loadFilters() {
     try {

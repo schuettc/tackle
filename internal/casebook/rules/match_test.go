@@ -458,7 +458,25 @@ func TestPatterns(t *testing.T) {
 			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
 		}
 	}
-	if err := ValidateCondition(Condition{Field: "repo", Op: "is", Value: "subaud-tools/[*"}); err == nil {
-		t.Error("a bad pattern validated")
+	// Only * is special: ?, [ ] and \ are literal, with or without a *, as
+	// the page's globRe has them.
+	g := engine.Fields{Kind: "issue", Repo: "o/r?x", Labels: []string{"needs [triage"}, Author: `a\b`}
+	for _, tc := range []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "label", Op: "is", Value: "needs [triage"}, true},
+		{Condition{Field: "label", Op: "is", Value: "needs [*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "o/r?*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "o/r?"}, false},
+		{Condition{Field: "repo", Op: "is", Value: "o/ra*"}, false},
+		{Condition{Field: "author", Op: "is", Value: `a\*`}, true},
+	} {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(g); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
 	}
 }

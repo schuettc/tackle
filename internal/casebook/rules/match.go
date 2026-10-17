@@ -3,7 +3,6 @@ package rules
 import (
 	"context"
 	"fmt"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -102,17 +101,29 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 	}
 }
 
-// PatternFields are the pick-or-type fields whose values may use *, which
-// matches within one path segment (it never crosses a /).
-var PatternFields = map[string]bool{"repo": true, "owner": true, "author": true, "label": true}
-
-// matchValue reports whether v is want, or matches it when want holds a *.
+// matchValue reports whether v matches want, where * stands for any run of
+// characters other than / and every other character is itself (the page's
+// globRe agrees).
 func matchValue(want, v string) bool {
-	if !strings.Contains(want, "*") {
-		return v == want
+	for len(want) > 0 {
+		if want[0] == '*' {
+			rest := want[1:]
+			for i := 0; i <= len(v); i++ {
+				if matchValue(rest, v[i:]) {
+					return true
+				}
+				if i < len(v) && v[i] == '/' {
+					break
+				}
+			}
+			return false
+		}
+		if len(v) == 0 || want[0] != v[0] {
+			return false
+		}
+		want, v = want[1:], v[1:]
 	}
-	ok, _ := path.Match(want, v)
-	return ok
+	return len(v) == 0
 }
 
 // evalPatterns handles is / is-not / in / not-in on a pick-or-type field:

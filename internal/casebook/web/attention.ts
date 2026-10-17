@@ -397,7 +397,9 @@ export function makeAttention(ctx: Ctx): Section {
         flat = !flat;
         storeFlat(flat);
         paintSwitch();
-        goList();
+        // While a filter is being built the list is its preview: regroup it
+        // in place (a new address would close the editor and lose the draft).
+        if (draft === null) goList();
         void reload();
       },
     },
@@ -578,11 +580,13 @@ export function makeAttention(ctx: Ctx): Section {
     return filters.filters.length > 0;
   }
   // activeView is the view chip that shows selected: none while filtered.
+  // While a draft is previewing, no chip shows selected: the list is the
+  // draft's.
   function activeView(): string {
-    return filtered() ? '' : filters.view;
+    return filtered() || draft !== null ? '' : filters.view;
   }
   function paintFilters(): void {
-    filterBar.paint(filterRows, filters.filters);
+    filterBar.paint(filterRows, draft !== null ? [] : filters.filters);
   }
   async function loadFilters(): Promise<void> {
     try {

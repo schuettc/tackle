@@ -606,6 +606,67 @@ async function savedFilters(context, t, s) {
       await rowKeys(pg),
       draftKeys,
     );
+    // Review 2026-10-17: a filters update while a draft previews (another
+    // tab saves one) leaves every chip unselected; the grouping switch
+    // regroups the preview in place and keeps the draft.
+    {
+      await api('POST', '/api/filters/save?create=1', {
+        id: 'probe-other',
+        name: 'Probe other',
+        match: [{ field: 'kind', op: 'is', value: 'repo' }],
+      });
+      await t.until(
+        pg,
+        () => !!document.querySelector('.cb-filter[data-id="probe-other"]'),
+        null,
+        8000,
+      );
+      const chipsOn = await pg.evaluate(
+        () =>
+          document
+            .querySelector('.kit-app > .kit-list:not([hidden])')
+            ?.querySelectorAll('.kit-chip.on:not(.cb-group-switch)').length,
+      );
+      t.check(
+        `a filters update while previewing selects no chip (${chipsOn} on)`,
+        chipsOn === 0,
+      );
+      const hashBefore = await pg.evaluate(() => location.hash);
+      const condsBefore = await pg.evaluate(
+        (ed) => document.querySelectorAll(`${ed} .cb-cond`).length,
+        ED,
+      );
+      await pg.click('.cb-group-switch');
+      await pg.waitForTimeout(800);
+      const after = await pg.evaluate(
+        (ed) => ({
+          editor: !!document.querySelector(ed),
+          conds: document.querySelectorAll(`${ed} .cb-cond`).length,
+          hash: location.hash,
+          heads: document.querySelectorAll('.cb-group').length,
+          grouped:
+            document
+              .querySelector('.cb-group-switch')
+              ?.getAttribute('aria-checked') === 'true',
+        }),
+        ED,
+      );
+      t.check(
+        `the grouping switch while previewing keeps the editor and its ${condsBefore} conditions and regroups the list in place (${JSON.stringify(after)})`,
+        after.editor &&
+          after.conds === condsBefore &&
+          after.hash === hashBefore &&
+          after.grouped === after.heads > 0,
+      );
+      t.checkList(
+        'and the regrouped preview holds the same matches',
+        [...(await rowKeys(pg))].sort(),
+        [...draftKeys].sort(),
+      );
+      await pg.click('.cb-group-switch');
+      await pg.waitForTimeout(800);
+      await api('POST', '/api/filters/delete', { id: 'probe-other' });
+    }
     // rowsAre waits for the list's rows to be want.
     const rowsAre = (want) =>
       t.until(

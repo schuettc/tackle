@@ -2,7 +2,6 @@ package rules
 
 import (
 	"fmt"
-	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -234,16 +233,6 @@ func ValidateCondition(c Condition) error {
 		if _, err := regexp.Compile(c.Value); err != nil {
 			return fmt.Errorf("field %q op %q: bad regex %q: %w", c.Field, c.Op, c.Value, err)
 		}
-	case "is", "is-not", "in", "not-in":
-		if PatternFields[c.Field] {
-			for _, v := range splitIn(c.Value) {
-				if _, err := path.Match(v, ""); err != nil {
-					return fmt.Errorf("field %q: %q is not a pattern (* matches within a /)", c.Field, v)
-				}
-			}
-		}
-	}
-	switch c.Op {
 	case "is", "is-not":
 		if f.Type == FieldTypeEnum && len(f.Values) > 0 {
 			if !slices.Contains(f.Values, c.Value) {
