@@ -22,6 +22,7 @@ type VersionInfo struct {
 	Number, Deprecated string
 	Signed             string // the repo whose CI signed it, "" for none
 	Workflow, Ref      string
+	Unknown            bool // the registry advertises provenance but reading it failed
 }
 
 // String is the summary as the agent reads it.
@@ -49,9 +50,12 @@ func (s Summary) String() string {
 	}
 	for _, v := range s.Recent {
 		line := v.Number
-		if v.Signed != "" {
+		switch {
+		case v.Signed != "":
 			line += fmt.Sprintf(" signed by CI from %s (%s, %s)", v.Signed, v.Workflow, v.Ref)
-		} else {
+		case v.Unknown:
+			line += " provenance unknown (reading it from the registry failed)"
+		default:
 			line += " no provenance"
 		}
 		if v.Deprecated != "" {
@@ -81,7 +85,11 @@ func (o *Ops) Show(ctx context.Context, pkg string) (Summary, error) {
 		v := real[i]
 		vi := VersionInfo{Number: v.Number, Deprecated: v.Deprecated}
 		if v.HasProvenance {
-			if pv, ok, err := o.Reg.Provenance(ctx, pkg, v.Number); err == nil && ok {
+			pv, ok, err := o.Reg.Provenance(ctx, pkg, v.Number)
+			switch {
+			case err != nil:
+				vi.Unknown = true
+			case ok:
 				vi.Signed, vi.Workflow, vi.Ref = pv.Repository, pv.Workflow, pv.Ref
 			}
 		}
@@ -112,7 +120,9 @@ func (o *Ops) ShowTrust(ctx context.Context, pkg string, report Report) error {
 		switch {
 		case latest == "":
 			msg += "; unproven: no version is published yet"
-		case err == nil && ok && t.matches(pv.Repository, pv.Workflow):
+		case err != nil:
+			msg += fmt.Sprintf("; couldn't read the provenance of %s@%s (%v), so whether it proves this trusted publisher is unknown; check again with imprint_show", pkg, latest, err)
+		case ok && t.matches(pv.Repository, pv.Workflow):
 			msg += fmt.Sprintf("; proven by %s@%s", pkg, latest)
 		default:
 			msg += fmt.Sprintf("; unproven: the latest version, %s, wasn't published by CI from %s; run one CI release and confirm it with imprint_expect", latest, t.Repository)
