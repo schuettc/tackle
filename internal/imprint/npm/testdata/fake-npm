@@ -1,0 +1,38 @@
+#!/bin/sh
+# A stand-in for npm in imprint's tests. It replays a script of what the
+# real npm printed: FAKE_NPM_SCRIPT is a file of lines
+#   print <text>   print a line (a bare "print" prints an empty one)
+#   sleep <s>      sleep
+#   mark <text>    append a line to $FAKE_NPM_MARKS
+#   exit <n>       exit with n
+# or a directory holding one such file per command, named by npm's first
+# two arguments ("trust_list") or its first ("whoami"); a file
+# "<name>.<n>" is used instead on the n-th call of that command. It fails
+# unless its stdout is a terminal, as imprint always runs npm in one, and
+# appends its arguments, one call per line, to $FAKE_NPM_ARGS.
+[ -t 1 ] || { echo "fake npm: stdout is not a terminal" >&2; exit 97; }
+[ -n "$FAKE_NPM_ARGS" ] && printf '%s\n' "$*" >> "$FAKE_NPM_ARGS"
+script="$FAKE_NPM_SCRIPT"
+if [ -d "$script" ]; then
+	name="$1"
+	[ -n "$2" ] && [ -e "$script/$1_$2" -o -e "$script/$1_$2.1" ] && name="$1_$2"
+	count="$script/.count-$name"
+	n=$(( $(cat "$count" 2>/dev/null || echo 0) + 1 ))
+	echo "$n" > "$count"
+	if [ -e "$script/$name.$n" ]; then
+		script="$script/$name.$n"
+	else
+		script="$script/$name"
+	fi
+fi
+[ -f "$script" ] || { echo "fake npm: no script for: $*" >&2; exit 98; }
+while IFS= read -r line || [ -n "$line" ]; do
+	case "$line" in
+	print) echo ;;
+	"print "*) printf '%s\n' "${line#print }" ;;
+	"sleep "*) sleep "${line#sleep }" ;;
+	"mark "*) [ -n "$FAKE_NPM_MARKS" ] && printf '%s\n' "${line#mark }" >> "$FAKE_NPM_MARKS" ;;
+	"exit "*) exit "${line#exit }" ;;
+	esac
+done < "$script"
+exit 0

@@ -14,6 +14,8 @@ member. One Go monorepo; each tool is an independent binary under `cmd/`.
   Install: `kempt apply -manifest cmd/cull/kempt.toml -packages cull`, then `cull init` in each project.
 - **sift** — audits the instruction files coding agents read (global files, repo files, skills), has the agent recommend one revised version per file, and puts each in front of you on a local page; what you approve becomes one pull request per repo. (Preview.)
   Install: `kempt apply -manifest cmd/sift/kempt.toml -packages sift`, then `sift skills install` and `sift init --root DIR`.
+- **imprint** — guides a coding agent through publishing npm packages, trusted publishers and deprecation, opening each approval for you and checking every step on the registry.
+  Install: `kempt apply -manifest cmd/imprint/kempt.toml -packages imprint`, then `imprint skills install`.
 
 ## Install
 
