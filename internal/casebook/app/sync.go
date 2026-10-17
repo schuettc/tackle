@@ -89,15 +89,21 @@ func (a *App) Sync(ctx context.Context, o SyncOptions) (SyncReport, error) {
 		var gr observe.RefreshReport
 		g, gr = observe.Refresh(ctx, a.Gh, g, observe.RefreshOptions{Owners: a.Cfg.Owners, Keys: engine.LookupKeys(decisions), Now: a.Now()})
 		rep.GitHubErrors, rep.RateLimited = gr.Errors, gr.RateLimited
-		// Two-phase landed computation:
-		// 1. Git ancestry check for all non-default branches.
-		// 2. Fetch merged PRs only for repos that still have unlanded branches.
-		// 3. Merged-PR check for the remaining branches.
-		allRepos := observe.AllRepos(g)
-		observe.ComputeAncestorLanded(ctx, &snap, allRepos)
+	}
+	// Landed, in three steps: the git ancestry check for every non-default
+	// branch; the merged PRs of the repos that still have unlanded ones
+	// (fetched only with a GitHub refresh; a sync without one uses the
+	// cached lists); the merged-PR check for the rest. A sync without a
+	// refresh still works it out, so it never writes this machine's branches
+	// blank (they read "unknown" until the next full sync).
+	allRepos := observe.AllRepos(g)
+	observe.ComputeAncestorLanded(ctx, &snap, allRepos)
+	if !o.NoGitHub {
 		reposToCheck := observe.ReposWithUnlandedBranches(snap, allRepos)
 		g.MergedPRs = observe.FetchMergedPRs(ctx, a.Gh, reposToCheck, g.MergedPRs, a.Now())
-		observe.ComputeMergedPRLanded(ctx, &snap, g.MergedPRs)
+	}
+	observe.ComputeMergedPRLanded(ctx, &snap, g.MergedPRs)
+	if !o.NoGitHub {
 		if err := observe.SaveGitHub(config.CachePath(), g); err != nil {
 			return rep, err
 		}
