@@ -24,8 +24,9 @@ import (
 // fakeReg is a registry whose packages a test changes while an operation
 // watches it.
 type fakeReg struct {
-	mu   sync.Mutex
-	pkgs map[string]*fakePkg
+	mu         sync.Mutex
+	pkgs       map[string]*fakePkg
+	attestDown bool // the attestations endpoint answers 500
 }
 
 type fakePkg struct {
@@ -44,6 +45,10 @@ func (f *fakeReg) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	path := strings.ReplaceAll(r.URL.EscapedPath(), "%2F", "/")
 	if rest, ok := strings.CutPrefix(path, "/-/npm/v1/attestations/"); ok {
+		if f.attestDown {
+			http.Error(w, "unavailable", http.StatusInternalServerError)
+			return
+		}
 		i := strings.LastIndex(rest, "@")
 		p := f.pkgs[rest[:i]]
 		if p == nil {
@@ -292,7 +297,7 @@ func TestPublishWatchesUntilLive(t *testing.T) {
 	r := newReports()
 	done := make(chan error, 1)
 	go func() { done <- e.ops.Publish(context.Background(), filepath.Base(tb), r.add) }()
-	r.waitFor(t, "waiting for your approval: https://www.npmjs.com/auth/cli/p1")
+	r.waitFor(t, "waiting for your approval: https://www.npmjs.com/auth/cli/p1 (opened in the browser; it expires in 5 minutes)")
 	r.waitFor(t, "approved")
 	r.waitFor(t, "npm accepted demo-pkg@1.0.0 and is processing it")
 	e.reg.set("demo-pkg", map[string]string{"0.9.0": "", registry.Stage: ""}, nil)
@@ -542,6 +547,49 @@ func TestShowTrust(t *testing.T) {
 		t.Fatalf("%v: %s", err, r.all())
 	}
 	if !strings.Contains(r.all(), "acme/widgets") || !strings.Contains(r.all(), "unproven") {
+		t.Errorf("reports:\n%s", r.all())
+	}
+}
+
+// A failed attestations fetch is unknown provenance, never "no provenance"
+// or "wasn't published by CI".
+func TestShowProvenanceUnknown(t *testing.T) {
+	e := newEnv(t)
+	e.reg.set("demo-pkg", map[string]string{"1.0.0": ""}, map[string]registry.Provenance{
+		"1.0.0": {Repository: "acme/widgets", Workflow: ".github/workflows/release.yml", Ref: "refs/tags/v1.0.0"}})
+	e.reg.mu.Lock()
+	e.reg.attestDown = true
+	e.reg.mu.Unlock()
+	s, err := e.ops.Show(context.Background(), "demo-pkg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := s.String(); strings.Contains(text, "no provenance") || !strings.Contains(text, "1.0.0 provenance unknown") {
+		t.Errorf("summary:\n%s", text)
+	}
+	e.script(t, "trust_list", trustListNew)
+	r := newReports()
+	if err := e.ops.ShowTrust(context.Background(), "demo-pkg", r.add); err != nil {
+		t.Fatalf("%v: %s", err, r.all())
+	}
+	if strings.Contains(r.all(), "wasn't published by CI") || !strings.Contains(r.all(), "couldn't read the provenance of demo-pkg@1.0.0") {
+		t.Errorf("reports:\n%s", r.all())
+	}
+}
+
+// An approval that expires during the org check is an expired approval,
+// with npm's output named, not a missing org.
+func TestPublishOrgCheckApprovalExpired(t *testing.T) {
+	e := newEnv(t)
+	e.script(t, "whoami", "print demo-user\nexit 0\n")
+	e.script(t, "org_ls", "print Authenticate your account at:\nprint https://www.npmjs.com/auth/cli/o1\n"+
+		"print npm error code E404\nprint npm error 404 Not Found - GET https://registry.npmjs.org/-/v1/done?authId=o1 - Not found\nexit 1\n")
+	tb := tarball(t, t.TempDir(), "@demo/pkg", "1.0.0")
+	r := newReports()
+	if err := e.ops.Publish(context.Background(), tb, r.add); err == nil {
+		t.Fatalf("no error: %s", r.all())
+	}
+	if strings.Contains(r.all(), "there is no npm org") || !strings.Contains(r.all(), "approval expired") || !strings.Contains(r.all(), ".log") {
 		t.Errorf("reports:\n%s", r.all())
 	}
 }

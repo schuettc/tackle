@@ -54,7 +54,9 @@ func (o *Ops) npm(ctx context.Context, op, pkg string, args []string, report Rep
 	res, err := o.NPM.Run(ctx, op, pkg, args, func(e npm.Event) {
 		switch e.Kind {
 		case npm.ApprovalNeeded:
-			report("waiting for your approval: " + e.URL + " (opened in the browser)")
+			report(fmt.Sprintf("waiting for your approval: %s (opened in the browser; it expires in %s)", e.URL, minutes(o.NPM.ApprovalWindow())))
+		case npm.ApprovalExpiring:
+			report(fmt.Sprintf("still waiting for your approval: %s; %s left before it expires and the step has to run again", e.URL, minutes(e.Left)))
 		case npm.ApprovalGiven:
 			report("approved")
 		}
@@ -189,4 +191,16 @@ func (o *Ops) whoami(ctx context.Context, report Report) (string, error) {
 		return "", fmt.Errorf("failed: npm whoami printed no user; npm's full output: %s", res.Log)
 	}
 	return user, nil
+}
+
+// minutes is d as the user reads it: "5 minutes", "1 minute", "30 seconds".
+func minutes(d time.Duration) string {
+	switch m := int(d.Round(time.Second) / time.Minute); {
+	case d < time.Minute:
+		return fmt.Sprintf("%d seconds", int(d.Round(time.Second)/time.Second))
+	case m == 1:
+		return "1 minute"
+	default:
+		return fmt.Sprintf("%d minutes", m)
+	}
 }

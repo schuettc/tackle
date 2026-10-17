@@ -81,7 +81,9 @@ func (o *Ops) checkOrg(ctx context.Context, scope string, report Report) error {
 	}
 	res, err := o.npm(ctx, "org", scope, []string{"org", "ls", scope}, report)
 	if err != nil {
-		if res.Code == "E404" {
+		// An E404 on npm's -/v1/done poll is an expired approval, which err
+		// already explains; only the org lookup's own 404 means no org.
+		if res.Code == "E404" && !strings.Contains(res.Output, "-/v1/done") {
 			return fmt.Errorf("there is no npm org %s; create it at npmjs.com before the first publish of @%s/…", scope, scope)
 		}
 		return err
