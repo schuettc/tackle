@@ -1266,6 +1266,11 @@ async function groupsScenario(context, t, s) {
     await agent.presence(B, 'pi \u00b7 groups-b', '/home/court/groups-b', 'pi');
   };
   await beat();
+  // ...for the whole scenario: on a slow runner it outlasts 3s long before
+  // the dock's chooser is used, and a session gone from it can't be picked
+  // (CI runs 38960108340, 39044823368, 39062323422).
+  const beating = setInterval(() => void beat().catch(() => {}), 1000);
+  beating.unref();
   // B already has a thread of its own: the ask must not land there.
   const bThread = await agent.newThread(B, 'b work');
   await agent.propose(A, CLOSE, 'close', 'superseded');
@@ -1693,6 +1698,7 @@ async function groupsScenario(context, t, s) {
       { sel: groupSel(''), w: `asked ${aName}` },
     ),
   );
+  clearInterval(beating);
   await pg.close();
 }
 
