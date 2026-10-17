@@ -2256,6 +2256,16 @@ const R8_MACHINE = {
 const R8_BR = (repo, b) => `branch:schuettc/${repo}@${b}`;
 // Court's draft: every landed branch of r8-landed and r8-other, undecided.
 // 6 match: 4 in main (a1 a2 a3 o1), 2 via merged PR (m1 m2).
+// REPO_V is the second condition's repository value (chips and a box).
+const REPO_V = '.cb-cond[data-index="1"] .cb-cond-typed';
+// setRepo swaps that value: × on its chip, the new one typed and Enter.
+async function setRepo(pg, v) {
+  await pg.click(`${REPO_V} .cb-cond-typed-x`);
+  await pg.click(`${REPO_V} input.cb-cond-typed-in`);
+  await pg.keyboard.type(v);
+  await pg.keyboard.press('Enter');
+}
+
 const R8_LANDED = {
   id: 'r8-landed',
   name: 'Landed branches \u2192 delete',
@@ -2491,10 +2501,11 @@ async function rulesScenariosOn(context, serveHandle) {
             ].join(' '),
           ),
         ),
-        // A fixed-value field's values are ticked: its in reads "is".
+        // A fixed-value field's values are ticked and a repository's are
+        // chips: their in reads "is".
         R8_LANDED.match.map(
           (c) =>
-            `${c.field} ${c.field === 'landed-how' && c.op === 'in' ? 'is' : c.op} ${c.value}`,
+            `${c.field} ${(c.field === 'landed-how' || c.field === 'repo') && c.op === 'in' ? 'is' : c.op} ${c.value}`,
         ),
       );
       checkList(
@@ -2799,40 +2810,45 @@ async function rulesScenariosOn(context, serveHandle) {
       });
       await r8Themes(pg, 'rules');
 
-      // The + condition menu offers the vocabulary's fields that apply to
-      // branches (the rule's type), one condition per field: a used one is
-      // shown, not offered.
-      await pg.click('.cb-cond-add');
+      // A draft's field chips are shown above its conditions, every field
+      // grouped by the types it applies to: a used one, or one branches
+      // (the rule's type) don't have, greyed, not offered.
       await pg.$eval('[data-testid="conditions"]', (e) =>
         e.scrollIntoView({ block: 'start' }),
       );
       const vocab = await agent.api('GET', '/api/rules/vocabulary');
       const used = new Set(R8_LANDED.match.map((c) => c.field));
-      checkList(
-        'the + condition menu lists the fields that apply to branches, the used ones not offered',
-        await pg.$$eval('.cb-cond-menu-row', (els) =>
-          els.map(
-            (e) =>
-              `${e.dataset.field}${e.getAttribute('aria-disabled') === 'true' ? ' (used)' : ''}`,
+      {
+        const groups = new Map();
+        for (const f of vocab.fields ?? []) {
+          const k = (f.kinds ?? []).join(',');
+          const off =
+            used.has(f.name) ||
+            !(!f.kinds?.length || f.kinds.includes('branch'));
+          groups.set(k, [
+            ...(groups.get(k) ?? []),
+            `${f.name}${off ? ' (greyed)' : ''}`,
+          ]);
+        }
+        checkList(
+          'the field chips list every field by the types it applies to, the used ones and those branches lack greyed',
+          await pg.$$eval('.cb-cond-menu-row', (els) =>
+            els.map(
+              (e) =>
+                `${e.dataset.field}${e.getAttribute('aria-disabled') === 'true' ? ' (greyed)' : ''}`,
+            ),
           ),
-        ),
-        (vocab.fields ?? [])
-          .filter((f) => !f.kinds?.length || f.kinds.includes('branch'))
-          .map((f) => `${f.name}${used.has(f.name) ? ' (used)' : ''}`),
-      );
+          [...groups.values()].flat(),
+        );
+      }
       check(
-        'the menu is shown',
-        await pg.$eval(
-          '.cb-cond-menu',
-          (e) => !e.hidden && e.offsetHeight > 100,
-        ),
+        'the field chips are shown, with no + condition button',
+        (await pg.$eval(
+          '.cb-rule .cb-cond-menu',
+          (e) => !e.hidden && e.offsetHeight > 40,
+        )) && (await pg.$eval('.cb-rule .cb-cond-add', (e) => e.hidden)),
       );
       await r8Themes(pg, 'condition-menu');
-      await pg.keyboard.press('Escape');
-      check(
-        'Esc closes the menu',
-        await until(pg, () => document.querySelector('.cb-cond-menu').hidden),
-      );
 
       // Editing a condition re-previews, 300 ms after the last edit. The
       // page's clock is paused so the debounce is measured, not slept.
@@ -3003,23 +3019,23 @@ async function rulesScenariosOn(context, serveHandle) {
         return { status: r.status, error: j.error ?? '' };
       };
       // A new condition takes the field's first operator, its value
-      // focused.
-      const addCondition = async (field, op, value) => {
-        await pg.click('.cb-cond-add');
+      // empty.
+      const addCondition = async (field, op) => {
         await pg.click(`.cb-cond-menu-row[data-field="${field}"]`);
         const o = await pg.$eval(
           '.cb-cond[data-index="5"] select.cb-cond-o',
           (e) => e.value,
         );
         if (o !== op) throw new Error(`${field}'s first operator is ${o}`);
-        await pg.keyboard.type(value);
       };
       const errorShown = (i) =>
         pg.$eval(`.cb-cond[data-index="${i}"] .cb-cond-err`, (e) =>
           e.hidden ? '' : e.textContent,
         );
-      for (const [field, op, value] of [['updated', 'older-than', '7x']]) {
-        await addCondition(field, op, value);
+      // A duration is a number and a unit: the one invalid value the page
+      // can make is none.
+      for (const [field, op, value] of [['updated', 'older-than', '']]) {
+        await addCondition(field, op);
         const said = await serveSays();
         check(
           `serve refuses ${field} ${op} "${value}", naming the sixth row "condition 6" (${said.status}: ${said.error})`,
@@ -3594,10 +3610,10 @@ async function rulesScenariosOn(context, serveHandle) {
         ),
       );
       check(
-        "an active rule's conditions are read-only (no + condition)",
-        !(await pg.$('.cb-rule .cb-cond-add')) &&
+        "an active rule's conditions are read-only (no field chips)",
+        !(await pg.$('.cb-rule .cb-cond-add, .cb-rule .cb-cond-menu')) &&
           !(await pg.$(
-            '.cb-rule input.cb-cond-v, .cb-rule select, .cb-rule button.cb-disp',
+            '.cb-rule [data-testid="conditions"] input, .cb-rule select, .cb-rule button.cb-disp',
           )),
       );
 
@@ -3832,54 +3848,12 @@ async function rulesScenariosOn(context, serveHandle) {
           document.querySelector('.cb-disp-menu')?.hasAttribute('hidden'),
         ),
       );
-      // The + condition menu: the same keys, and it closes on Tab-out too.
-      await pg.click('.cb-cond-add');
-      await pg.waitForSelector('.cb-cond-menu:not([hidden])', {
-        timeout: 4000,
-      });
-      // Its keys are the search box's: ↓ ↑ move the highlighted field
-      // (wrapping), Enter picks it.
-      const fieldOrder = await pg.$$eval(
-        '.cb-cond-menu .cb-cond-menu-row:not([aria-disabled="true"])',
-        (els) => els.map((e) => e.dataset.field),
-      );
-      const activeField = () =>
-        pg.evaluate(() =>
-          document.activeElement?.classList.contains('cb-cond-search')
-            ? (document.querySelector('.cb-cond-menu-row.on')?.dataset.field ??
-              '')
-            : '',
-        );
-      const fFirst = await activeField();
-      await pg.keyboard.press('ArrowDown');
-      const fSecond = await activeField();
-      await pg.keyboard.press('ArrowUp');
-      await pg.keyboard.press('ArrowUp');
-      const fWrapped = await activeField();
-      checkList(
-        'the + condition menu: its search has focus, ↓ ↑ move through its fields (wrapping)',
-        [fFirst, fSecond, fWrapped],
-        [fieldOrder[0], fieldOrder[1], fieldOrder[fieldOrder.length - 1]],
-      );
-      await pg.evaluate(() => {
-        document.activeElement.dispatchEvent(
-          new FocusEvent('focusout', {
-            bubbles: true,
-            relatedTarget:
-              document.querySelector('.cb-rule .kit-h1') ?? document.body,
-          }),
-        );
-      });
-      check(
-        'the + condition menu closes when focus Tabs out of it',
-        await until(pg, () =>
-          document.querySelector('.cb-cond-menu')?.hasAttribute('hidden'),
-        ),
-      );
-      // Two conditions: kind is repo, fork is true.
-      await pg.click('.cb-cond-add');
+      // Two conditions: kind is repo (a new type condition has nothing
+      // ticked), fork is true.
       await pg.click('.cb-cond-menu-row[data-field="kind"]');
-      await pg.click('.cb-cond-add');
+      await pg.click(
+        '.cb-cond[data-index="0"] .cb-cond-pick[data-value="repo"]',
+      );
       await pg.click('.cb-cond-menu-row[data-field="fork"]');
       const forks = {
         match: [
@@ -4253,10 +4227,7 @@ async function rulesScenariosOn(context, serveHandle) {
       );
       // Court edits a condition; before he saves, the agent changes the
       // proposal from archive to delete.
-      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
-        clickCount: 3,
-      });
-      await pg.keyboard.type('schuettc/r8-other');
+      await setRepo(pg, 'schuettc/r8-other');
       await agent.ruleDraft(sid, arch('delete'));
       check(
         'the change shows: "changed while you were editing · by pi"',
@@ -4278,8 +4249,8 @@ async function rulesScenariosOn(context, serveHandle) {
       check(
         'his edit is kept',
         (await pg.$eval(
-          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] input.cb-cond-v',
-          (e) => e.value,
+          `.cb-rule > [data-testid="conditions"] ${REPO_V}`,
+          (e) => e.dataset.value,
         )) === 'schuettc/r8-other',
       );
       await pg.$eval('.cb-rules-read', (e) => {
@@ -4333,10 +4304,7 @@ async function rulesScenariosOn(context, serveHandle) {
             .map((b) => b.textContent)
             .includes('save draft'),
       );
-      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
-        clickCount: 3,
-      });
-      await pg.keyboard.type('schuettc/r8-landed');
+      await setRepo(pg, 'schuettc/r8-landed');
       await agent.ruleDraft(sid, {
         ...arch('keep'),
         match: [
@@ -4359,8 +4327,8 @@ async function rulesScenariosOn(context, serveHandle) {
           () =>
             document.querySelector('[data-testid="propose"] button.cb-disp')
               ?.dataset.value === 'keep' &&
-            document.querySelector('.cb-cond[data-index="1"] input.cb-cond-v')
-              ?.value === 'schuettc/r8-other',
+            document.querySelector('.cb-cond[data-index="1"] .cb-cond-typed')
+              ?.dataset.value === 'schuettc/r8-other',
         ),
       );
       const archActivated = await clickLifecycle(pg, 'activate');
@@ -4480,10 +4448,7 @@ async function rulesScenariosOn(context, serveHandle) {
         undefined,
         8000,
       );
-      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
-        clickCount: 3,
-      });
-      await pg.keyboard.type('schuettc/r8-other');
+      await setRepo(pg, 'schuettc/r8-other');
       // Hold the save's reply (serve has done the save) until the live
       // read of it has been answered and drawn.
       let release;
@@ -4617,7 +4582,7 @@ async function rulesScenariosOn(context, serveHandle) {
             pg,
             () =>
               !!document.querySelector(
-                '.cb-cond[data-index="1"] input.cb-cond-v',
+                '.cb-cond[data-index="1"] input.cb-cond-typed-in',
               ),
           )),
       );
@@ -4630,10 +4595,7 @@ async function rulesScenariosOn(context, serveHandle) {
         () =>
           document.querySelector('.kit-primary')?.textContent === 'Activate',
       );
-      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
-        clickCount: 3,
-      });
-      await pg.keyboard.type('schuettc/r8-landed');
+      await setRepo(pg, 'schuettc/r8-landed');
       await agent.api('POST', '/api/rules/draft', {
         id: 'r8-race',
         name: 'Race repos, renamed',
@@ -4652,10 +4614,7 @@ async function rulesScenariosOn(context, serveHandle) {
             !!document.querySelector('[data-testid="rule-conflict"] .kit-card'),
         ),
       );
-      await pg.click('.cb-cond[data-index="1"] input.cb-cond-v', {
-        clickCount: 3,
-      });
-      await pg.keyboard.type('schuettc/r8-other');
+      await setRepo(pg, 'schuettc/r8-other');
       check(
         "undoing his edit clears it: serve's copy (renamed) shows, no card",
         await until(
@@ -5013,8 +4972,8 @@ async function invalidRulesScenariosOn(context, serveHandle) {
       await route.continue();
     };
     await pg.route('**/api/rules/preview*', holdPreview);
-    await pg.click('.cb-cond-add');
     await pg.click('.cb-cond-menu-row[data-field="kind"]');
+    await pg.click('.cb-cond[data-index="0"] .cb-cond-pick[data-value="repo"]');
     await asked;
     await pg.click('[data-testid="propose"] button.cb-disp');
     const chipsNow = () =>
@@ -5098,7 +5057,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 1000;
+const MIN_CHECKS = 1010;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,

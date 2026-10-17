@@ -10,9 +10,12 @@
 //     a reload; the not-recommended group asks nothing while filtered; the
 //     switch and a view chip; + filter opens the editor in the middle pane,
 //     the list beside it its faded live preview (its first row doesn't
-//     move), one row per field with values ticked, the + condition dropdown
-//     (it moves nothing; a search; only fields that apply), cancel puts the
-//     list back, save selects the new filter; edit and delete;
+//     move), the field chips shown at once (conditions grow below them;
+//     a used field or one the type lacks greyed), a type condition with
+//     nothing ticked, last activity as 3 weeks or before a date, a
+//     repository picked from its list or as owner/* (each matching serve's
+//     GET /api/items?match=), cancel puts the list back, save selects the
+//     new filter; edit and delete;
 //     a filter deleted elsewhere is named, the list empty.
 //   a filter that does not validate: marked with serve's reason, not
 //     selectable, editable into a valid one.
@@ -51,8 +54,20 @@ function seed() {
     created_at: '2026-08-01T00:00:00Z',
     updated_at: at,
   });
+  // Several repos under one owner, and one name under two owners: the
+  // repository field's suggestions and patterns.
+  const bare = (repo) => ({
+    repo,
+    pushed_at: '2026-09-20T00:00:00Z',
+    default_branch: 'main',
+    prs: [],
+    issues: [],
+  });
   return {
     seedRepos: [
+      bare(`schuettc/${REPO}-a`),
+      bare(`schuettc/${REPO}-b`),
+      bare(`other/${REPO}`),
       {
         repo: `schuettc/${REPO}`,
         pushed_at: '2026-09-20T00:00:00Z',
@@ -420,75 +435,106 @@ async function savedFilters(context, t, s) {
         document.querySelector('.cb-preview-line')?.textContent ===
         'add a condition to preview',
     );
-    // The dropdown floats: opening it moves neither the name nor save.
-    const fixed = () =>
+    // The field chips show at once, above the conditions (no + condition
+    // to open, no search), and stay put as conditions are added below.
+    const geo = () =>
       pg.evaluate((ed) => {
-        const y = (sel) =>
-          document.querySelector(`${ed} ${sel}`)?.getBoundingClientRect().top;
-        return { name: y('.cb-filter-name'), save: y('.cb-filter-save') };
-      }, ED);
-    const shut = await fixed();
-    await pg.click(`${ED} .cb-cond-add`);
-    await pg.waitForSelector(`${ED} .cb-cond-menu:not([hidden])`);
-    {
-      const open = await fixed();
-      const got = await pg.evaluate((ed) => {
-        const r = document.querySelector(
-          `${ed} .cb-cond-menu-row[data-field="kind"]`,
-        );
+        const r = (sel) =>
+          document.querySelector(`${ed} ${sel}`)?.getBoundingClientRect();
+        const rows = r('.cb-cond-rows');
         return {
-          f: r?.querySelector('.cb-cond-menu-f')?.textContent ?? '',
-          help: r?.querySelector('.cb-cond-menu-help')?.textContent ?? '',
-          search: document.activeElement?.classList.contains('cb-cond-search'),
-          unpushed:
-            document.querySelector(
-              `${ed} .cb-cond-menu-row[data-field="unpushed"] .cb-cond-menu-help`,
-            )?.textContent ?? '',
+          name: r('.cb-filter-name')?.top,
+          chips: r('.cb-cond-menu')?.top,
+          chipsBottom: r('.cb-cond-menu')?.bottom,
+          rowsTop: rows?.top,
+          rowsH: rows?.height,
+        };
+      }, ED);
+    const shut = await geo();
+    {
+      const got = await pg.evaluate((ed) => {
+        const m = document.querySelector(`${ed} .cb-cond-menu`);
+        const add = document.querySelector(`${ed} .cb-cond-add`);
+        const search = document.querySelector(`${ed} .cb-cond-search`);
+        return {
+          chips: document.querySelectorAll(`${ed} .cb-cond-menu-row`).length,
+          shown: !!m && !m.hidden && m.getBoundingClientRect().height > 0,
+          add: !!add && add.hidden && add.getBoundingClientRect().height === 0,
+          search: !!search && getComputedStyle(search).display === 'none',
+          offered: document.querySelectorAll(
+            `${ed} .cb-cond-menu-row[aria-disabled="false"]`,
+          ).length,
         };
       }, ED);
       t.check(
-        `the + condition dropdown opens over the editor: name and save stay put (${JSON.stringify(shut)} → ${JSON.stringify(open)})`,
-        Math.abs(open.name - shut.name) <= 1 &&
-          Math.abs(open.save - shut.save) <= 1,
+        `+ filter shows the field chips at once, all offered, with no + condition button and no search (${JSON.stringify(got)})`,
+        got.chips > 5 &&
+          got.shown &&
+          got.add &&
+          got.search &&
+          got.offered === got.chips,
       );
-      t.check(
-        `it lists "type" with its hint, a field for some types names them, and its search box has focus (${JSON.stringify(got)})`,
-        got.f === 'type' &&
-          got.help === 'repository, pull request, issue, branch or worktree' &&
-          got.unpushed === 'commits on no remote · branch, worktree' &&
-          got.search,
-      );
-      // Nothing clips it: the point at the middle of its list's bottom
-      // edge is in the list.
-      const hit = await pg.evaluate((ed) => {
-        const l = document.querySelector(`${ed} .cb-cond-menu-list`);
-        const r = l?.getBoundingClientRect();
-        if (!r) return { h: 0, in: false };
-        const e = document.elementFromPoint(r.left + r.width / 2, r.bottom - 4);
-        return { h: Math.round(r.height), in: !!e && l.contains(e) };
+    }
+    {
+      const vocab = await api('GET', '/api/rules/vocabulary');
+      const help = (n) =>
+        (vocab.fields ?? []).find((f) => f.name === n)?.help ?? '?';
+      const got = await pg.evaluate((ed) => {
+        const chip = (n) =>
+          document.querySelector(`${ed} .cb-cond-menu-row[data-field="${n}"]`);
+        const group = (n) =>
+          chip(n)?.closest('.cb-cond-group')?.querySelector('.cb-cond-group-l')
+            ?.textContent ?? '';
+        return {
+          type: chip('kind')?.textContent ?? '',
+          typeTitle: chip('kind')?.getAttribute('title') ?? '',
+          typeGroup: group('kind'),
+          unpushedTitle: chip('unpushed')?.getAttribute('title') ?? '',
+          unpushedGroup: group('unpushed'),
+        };
       }, ED);
       t.check(
-        `and the dropdown shows whole, over the editor, its fields list ${hit.h}px (${JSON.stringify(hit)})`,
-        hit.in && hit.h >= 200,
+        `a chip's title is its field's help, its group the types it applies to: type for any type, unpushed commits for branch, worktree (${JSON.stringify(got)})`,
+        got.type === 'type' &&
+          got.typeTitle === help('kind') &&
+          got.typeGroup === 'any type' &&
+          got.unpushedTitle === help('unpushed') &&
+          got.unpushedGroup === 'branch, worktree',
       );
     }
-    await pg.keyboard.type('upd');
-    {
-      const got = await pg.$$eval(`${ED} .cb-cond-menu-row`, (els) =>
-        els.map((e) => e.dataset.field),
-      );
-      t.checkList('the search "upd" narrows it to last activity', got, [
-        'updated',
-      ]);
-    }
-    await pg.fill(`${ED} .cb-cond-search`, 'type');
-    await pg.keyboard.press('Enter');
-    await pg.waitForSelector(`${ED} .cb-cond[data-index="0"] .cb-cond-picks`);
-    // Tick issue and pull request, untick repository: one row, "is".
+    // A new type condition has nothing ticked: it isn't previewed.
     const c0 = `${ED} .cb-cond[data-index="0"]`;
+    const c1 = `${ED} .cb-cond[data-index="1"]`;
+    const draftLoad = () =>
+      pg.waitForResponse(
+        (r) => r.url().includes('/api/items?') && r.url().includes('match='),
+        { timeout: 8000 },
+      );
+    {
+      const loaded = draftLoad();
+      await pg.click(`${ED} .cb-cond-menu-row[data-field="kind"]`);
+      await loaded;
+      const got = await pg.evaluate((c) => {
+        const r = document.querySelector(c);
+        return {
+          f: r?.querySelector('.cb-cond-f')?.textContent ?? '',
+          picks: r?.querySelectorAll('.cb-cond-pick').length ?? 0,
+          on: r?.querySelectorAll('.cb-cond-pick.on').length ?? -1,
+          value: r?.querySelector('.cb-cond-picks')?.dataset.value,
+        };
+      }, c0);
+      t.check(
+        `the type chip adds "type" below with no value ticked (${JSON.stringify(got)})`,
+        got.f === 'type' && got.picks === 5 && got.on === 0 && got.value === '',
+      );
+      t.check(
+        `and with only it, unfilled, the list reads "add a condition to preview" ("${await line()}")`,
+        (await line()) === 'add a condition to preview',
+      );
+    }
+    // Tick issue and pull request: one row, "is".
     await pg.click(`${c0} .cb-cond-pick[data-value="issue"]`);
     await pg.click(`${c0} .cb-cond-pick[data-value="pr"]`);
-    await pg.click(`${c0} .cb-cond-pick[data-value="repo"]`);
     {
       const got = await pg.evaluate((c) => {
         const r = document.querySelector(c);
@@ -507,7 +553,7 @@ async function savedFilters(context, t, s) {
         };
       }, c0);
       t.check(
-        `Enter adds type; ticking issue and pull request reads "type is issue or pull request", values ticked, never typed (${JSON.stringify(got)})`,
+        `ticking issue and pull request reads "type is issue or pull request", values ticked, never typed (${JSON.stringify(got)})`,
         got.f === 'type' &&
           got.o === 'is' &&
           JSON.stringify(got.ops) === JSON.stringify(['is', 'is not']) &&
@@ -560,51 +606,276 @@ async function savedFilters(context, t, s) {
       await rowKeys(pg),
       draftKeys,
     );
-    await pg.click(`${ED} .cb-cond-add`);
-    await pg.waitForSelector(`${ED} .cb-cond-menu:not([hidden])`);
+    // rowsAre waits for the list's rows to be want.
+    const rowsAre = (want) =>
+      t.until(
+        pg,
+        (w) =>
+          JSON.stringify(
+            [
+              ...document.querySelectorAll(
+                '.kit-app > .kit-list:not([hidden]) .kit-rows > .kit-row .kit-kicker',
+              ),
+            ].map((e) => (e.textContent ?? '').replace(' \u00b7 ', ':')),
+          ) === JSON.stringify(w),
+        want,
+        8000,
+      );
+    const matching = (match) =>
+      served(`match=${encodeURIComponent(JSON.stringify(match))}&group=false`);
+
+    // A second condition, last activity: the name and the chips stay where
+    // they were, the conditions grow below them.
+    await pg.click(`${ED} .cb-cond-menu-row[data-field="updated"]`);
+    {
+      const two = await geo();
+      t.check(
+        `with two conditions the name and the field chips are where they were, the conditions below them (${JSON.stringify(shut)} → ${JSON.stringify(two)})`,
+        Math.abs(two.name - shut.name) <= 1 &&
+          Math.abs(two.chips - shut.chips) <= 1 &&
+          two.rowsTop >= two.chipsBottom - 1 &&
+          two.rowsH > shut.rowsH,
+      );
+    }
     {
       const got = await pg.evaluate((ed) => {
-        const k = document.querySelector(
-          `${ed} .cb-cond-menu-row[data-field="kind"]`,
-        );
+        const chip = (n) =>
+          document.querySelector(`${ed} .cb-cond-menu-row[data-field="${n}"]`);
+        const s = (n) => ({
+          off: chip(n)?.getAttribute('aria-disabled'),
+          title: chip(n)?.getAttribute('title') ?? '',
+        });
         return {
-          kind: k?.getAttribute('aria-disabled'),
-          hint: k?.querySelector('.cb-cond-menu-help')?.textContent ?? '',
-          unpushed: !!document.querySelector(
-            `${ed} .cb-cond-menu-row[data-field="unpushed"]`,
-          ),
-          author: !!document.querySelector(
-            `${ed} .cb-cond-menu-row[data-field="author"]`,
-          ),
+          kind: s('kind'),
+          unpushed: s('unpushed'),
+          author: s('author'),
         };
       }, ED);
       t.check(
-        `with type set, + condition shows type as already used and doesn't offer unpushed commits (${JSON.stringify(got)})`,
-        got.kind === 'true' &&
-          got.hint === 'already used, change it above' &&
-          !got.unpushed &&
-          got.author,
+        `with type set, its chip is greyed "already used, change it below", unpushed commits greyed "doesn't apply to the chosen type", author offered (${JSON.stringify(got)})`,
+        got.kind.off === 'true' &&
+          got.kind.title === 'already used, change it below' &&
+          got.unpushed.off === 'true' &&
+          got.unpushed.title === "doesn't apply to the chosen type" &&
+          got.author.off === 'false',
       );
     }
-    // A text field's example is real: no "a, b, c" anywhere.
-    await pg.click(`${ED} .cb-cond-menu-row[data-field="repo"]`);
+    // Last activity: a number and a unit, or a date.
+    const dur = () =>
+      pg.evaluate((c) => {
+        const r = document.querySelector(c);
+        const ago = r?.querySelector('.cb-cond-ago');
+        return {
+          ops: [...(r?.querySelectorAll('select.cb-cond-o option') ?? [])].map(
+            (o) => o.textContent,
+          ),
+          value: r?.querySelector('.cb-cond-dur')?.dataset.value,
+          num: !!r?.querySelector('input.cb-cond-num'),
+          unit: r?.querySelector('select.cb-cond-unit')?.selectedOptions[0]
+            ?.textContent,
+          ago:
+            ago && ago.getBoundingClientRect().width > 0 ? ago.textContent : '',
+          date: !!r?.querySelector('input.cb-cond-date'),
+        };
+      }, c1);
+    await pg.fill(`${c1} input.cb-cond-num`, '3');
+    await pg.selectOption(`${c1} select.cb-cond-unit`, 'w');
     {
-      const got = await pg.evaluate(
-        (ed) => ({
-          ph:
-            document.querySelector(
-              `${ed} .cb-cond[data-index="1"] input.cb-cond-v`,
-            )?.placeholder ?? '',
-          abc: document.body.innerHTML.includes('a, b, c'),
-        }),
-        ED,
+      const got = await dur();
+      t.check(
+        `last activity "more than" 3 weeks is stored 3w, "ago" after it; its operators are more than, within the last, before, on or after (${JSON.stringify(got)})`,
+        JSON.stringify(got.ops) ===
+          JSON.stringify([
+            'more than',
+            'within the last',
+            'before',
+            'on or after',
+          ]) &&
+          got.value === '3w' &&
+          got.num &&
+          got.unit === 'weeks' &&
+          got.ago === 'ago' &&
+          !got.date,
+      );
+    }
+    await pg.selectOption(`${c1} select.cb-cond-o`, 'before');
+    {
+      const got = await dur();
+      t.check(
+        `switching to "before" clears the value and asks for a date (${JSON.stringify(got)})`,
+        got.value === '' && got.date && !got.num && got.ago === '',
+      );
+    }
+    await pg.fill(`${c1} input.cb-cond-date`, '2026-08-04');
+    {
+      const got = await dur();
+      t.check(
+        `a date picked is stored 2026-08-04 (${JSON.stringify(got)})`,
+        got.value === '2026-08-04',
+      );
+      const want = await matching([
+        { field: 'kind', op: 'in', value: 'issue,pr' },
+        { field: 'updated', op: 'before', value: '2026-08-04' },
+      ]);
+      await rowsAre(want);
+      t.check(
+        `serve lists the issues quiet since before then, not those active after (${JSON.stringify(want)})`,
+        want.includes(FISSUE(1)) &&
+          want.includes(FISSUE(2)) &&
+          !want.includes(FISSUE(4)) &&
+          !want.includes(FISSUE(5)) &&
+          want.length < draftKeys.length,
+      );
+      t.checkList(
+        "and the list is serve's GET /api/items?match= for type is issue or pull request, last activity before 2026-08-04",
+        await rowKeys(pg),
+        want,
+      );
+    }
+    // Repository: what casebook has seen, or a * pattern.
+    await pg.click(`${c1} .cb-cond-rm`);
+    await pg.click(`${c0} .cb-cond-rm`);
+    await pg.click(`${ED} .cb-cond-menu-row[data-field="repo"]`);
+    const typed = `${c0} .cb-cond-typed`;
+    const seenRepos = (
+      (await api('GET', '/api/rules/values?field=repo')).values ?? []
+    ).map((v) => v.value);
+    const sugg = () =>
+      pg.evaluate(
+        ([c, ed]) => {
+          const l = document.querySelector(`${c} .cb-cond-sugg`);
+          const lr = l?.getBoundingClientRect();
+          const tr = document
+            .querySelector(`${ed} .cb-conds`)
+            ?.getBoundingClientRect();
+          return {
+            shown: !!l && !l.hidden && (lr?.height ?? 0) > 0,
+            head: l?.querySelector('.cb-cond-sugg-head')?.textContent ?? '',
+            pats: [...(l?.querySelectorAll('.cb-cond-sugg-pat') ?? [])].map(
+              (e) => e.dataset.value,
+            ),
+            first: l?.querySelector('.cb-cond-sugg-row')?.dataset.value ?? '',
+            firstPat: !!l
+              ?.querySelector('.cb-cond-sugg-row')
+              ?.classList.contains('cb-cond-sugg-pat'),
+            rows: [
+              ...(l?.querySelectorAll(
+                '.cb-cond-sugg-row:not(.cb-cond-sugg-pat)',
+              ) ?? []),
+            ].map((e) => e.dataset.value),
+            inside:
+              !!lr &&
+              !!tr &&
+              lr.left >= tr.left - 0.5 &&
+              lr.right <= tr.right + 0.5,
+            box: lr && tr ? [lr.left, lr.right, tr.left, tr.right] : null,
+          };
+        },
+        [c0, ED],
+      );
+    await pg.click(`${typed} input.cb-cond-typed-in`);
+    await t.until(
+      pg,
+      (c) => !document.querySelector(`${c} .cb-cond-sugg`)?.hidden,
+      c0,
+    );
+    {
+      const got = await sugg();
+      t.check(
+        `focusing a repository shows its list: "${seenRepos.length} repositories" and every repo casebook has seen (${JSON.stringify(got)})`,
+        got.shown &&
+          got.head === `${seenRepos.length} repositories` &&
+          JSON.stringify(got.rows) === JSON.stringify(seenRepos) &&
+          [
+            'schuettc/filt',
+            'schuettc/filt-a',
+            'schuettc/filt-b',
+            'other/filt',
+          ].every((r) => got.rows.includes(r)),
       );
       t.check(
-        `a repository condition's example is "subaud-tools/hail", and "a, b, c" is nowhere (${JSON.stringify(got)})`,
-        got.ph === 'subaud-tools/hail' && !got.abc,
+        `the suggestion list stays inside the conditions table, side to side (${JSON.stringify(got.box)})`,
+        got.inside,
       );
     }
-    await pg.click(`${ED} .cb-cond[data-index="1"] .cb-cond-rm`);
+    await pg.keyboard.type('schuettc');
+    await t.until(
+      pg,
+      (c) =>
+        document.querySelector(`${c} .cb-cond-sugg-row`)?.dataset.value ===
+        'schuettc/*',
+      c0,
+    );
+    {
+      const got = await sugg();
+      t.check(
+        `typing the owner "schuettc" offers schuettc/* first, a pattern (${JSON.stringify(got)})`,
+        got.shown && got.first === 'schuettc/*' && got.firstPat && got.inside,
+      );
+    }
+    await pg.click(`${c0} .cb-cond-sugg-row[data-value="schuettc/*"]`);
+    {
+      const got = await pg.evaluate(
+        (t) => ({
+          value: document.querySelector(t)?.dataset.value,
+          chips: [...document.querySelectorAll(`${t} .cb-cond-typed-chip`)].map(
+            (e) => e.dataset.value,
+          ),
+          ph:
+            document.querySelector(`${t} input.cb-cond-typed-in`)
+              ?.placeholder ?? '',
+          abc: document.body.innerHTML.includes('a, b, c'),
+        }),
+        typed,
+      );
+      t.check(
+        `picking it stores the pattern schuettc/*, shown as a chip; the box reads "search or type", "a, b, c" nowhere (${JSON.stringify(got)})`,
+        got.value === 'schuettc/*' &&
+          JSON.stringify(got.chips) === JSON.stringify(['schuettc/*']) &&
+          got.ph === 'search or type' &&
+          !got.abc,
+      );
+      const want = await matching([
+        { field: 'repo', op: 'is', value: 'schuettc/*' },
+      ]);
+      await rowsAre(want);
+      t.checkList(
+        "and the list is serve's GET /api/items?match= for repository is schuettc/*",
+        await rowKeys(pg),
+        want,
+      );
+      t.check(
+        `which is every schuettc repo's items and none of other/filt (${want.length})`,
+        want.length > 0 &&
+          want.includes('repo:schuettc/filt-a') &&
+          !want.some((k) => k.includes('other/filt')),
+      );
+    }
+    await pg.click(
+      `${typed} .cb-cond-typed-chip[data-value="schuettc/*"] .cb-cond-typed-x`,
+    );
+    await t.until(
+      pg,
+      () =>
+        document.querySelector('.cb-preview-line')?.textContent ===
+        'add a condition to preview',
+    );
+    {
+      const got = await pg.evaluate(
+        (t) => ({
+          value: document.querySelector(t)?.dataset.value,
+          chips: document.querySelectorAll(`${t} .cb-cond-typed-chip`).length,
+        }),
+        typed,
+      );
+      t.check(
+        `× removes it: no chip, no value, and the list reads "add a condition to preview" (${JSON.stringify(got)})`,
+        got.value === '' &&
+          got.chips === 0 &&
+          (await line()) === 'add a condition to preview',
+      );
+    }
+    await pg.click(`${c0} .cb-cond-rm`);
     // Cancel: the list as it was.
     await pg.click(`${ED} .cb-filter-cancel`);
     await t.until(
@@ -630,11 +901,9 @@ async function savedFilters(context, t, s) {
     // Again, and save.
     await pg.click('.cb-filter-add');
     await pg.waitForSelector(`${ED} .cb-conds[data-ready="true"]`);
-    await pg.click(`${ED} .cb-cond-add`);
     await pg.click(`${ED} .cb-cond-menu-row[data-field="kind"]`);
     await pg.click(`${c0} .cb-cond-pick[data-value="issue"]`);
     await pg.click(`${c0} .cb-cond-pick[data-value="pr"]`);
-    await pg.click(`${c0} .cb-cond-pick[data-value="repo"]`);
     await pg.fill(`${ED} .cb-filter-name`, 'Open issues');
     await pg.click(`${ED} .cb-filter-save`);
     await t.until(
@@ -833,9 +1102,9 @@ async function invalidFilter(context, t, s) {
 
   // 15: replaced with kind is repo and saved, it validates.
   await pg.click('.cb-filter-edit .cb-cond .cb-cond-rm');
-  await pg.click('.cb-filter-edit .cb-cond-add');
   await pg.click('.cb-filter-edit .cb-cond-menu-row[data-field="kind"]');
-  // A new type condition ticks its first value, repository.
+  // A new type condition has nothing ticked: tick repository.
+  await pg.click('.cb-filter-edit .cb-cond .cb-cond-pick[data-value="repo"]');
   await pg.click('.cb-filter-save');
   await t.until(
     pg,
