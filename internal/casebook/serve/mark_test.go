@@ -93,7 +93,7 @@ func extractShapeElems(data []byte) ([]shapeElem, error) {
 //   - 64×64 viewBox
 //   - has an ink tile rect rx=14 fill=#14161d
 //   - contains no <animate> (must be static)
-//   - has at least one path stroked in the signal colour #d98f66
+//   - has at least one path stroked in the signal colour #d98a9e
 func TestFaviconIsAStaticTileAndGlyph(t *testing.T) {
 	data, err := assets.ReadFile("assets/favicon.svg")
 	if err != nil {
@@ -113,8 +113,8 @@ func TestFaviconIsAStaticTileAndGlyph(t *testing.T) {
 	if strings.Contains(s, "<animate") {
 		t.Error("favicon.svg must be static (no <animate> elements)")
 	}
-	if !strings.Contains(s, `stroke="#d98f66"`) {
-		t.Error("favicon.svg: no signal-coloured path found (stroke=\"#d98f66\")")
+	if !strings.Contains(s, `stroke="#d98a9e"`) {
+		t.Error("favicon.svg: no signal-coloured path found (stroke=\"#d98a9e\")")
 	}
 }
 

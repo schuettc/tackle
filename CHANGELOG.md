@@ -4,6 +4,11 @@ All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull`, `sift` an
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.8.1] - 2026-10-17
+
+### Fixed
+- The page's tab icon and animated mark are drawn in casebook's rose, matching casebook.tools, instead of tackle's rust.
+
 ## [casebook 0.8.0] - 2026-10-17
 
 ### Added
