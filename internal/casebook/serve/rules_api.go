@@ -514,6 +514,45 @@ func (s *Server) getRulesVocabulary(w http.ResponseWriter, r *http.Request) {
 	reply(w, VocabularyView{Fields: rules.Vocabulary(), NoteTokens: rules.NoteTokens(), Operators: rules.Operators()}, nil)
 }
 
+// valueFields are the pick-or-type fields GET /api/rules/values lists.
+var valueFields = map[string]func(engine.Fields) []string{
+	"repo":   func(f engine.Fields) []string { return []string{f.Repo} },
+	"owner":  func(f engine.Fields) []string { return []string{f.Owner} },
+	"author": func(f engine.Fields) []string { return []string{f.Author} },
+	"label":  func(f engine.Fields) []string { return f.Labels },
+}
+
+// getRulesValues handles GET /api/rules/values?field=: the values every item
+// has for a pick-or-type field, with how many items have each, most first.
+func (s *Server) getRulesValues(w http.ResponseWriter, r *http.Request) {
+	field := r.URL.Query().Get("field")
+	of, ok := valueFields[field]
+	if !ok {
+		reply(w, nil, bad("field %q has no values to pick (repo, owner, author or label)", field))
+		return
+	}
+	now := time.Now()
+	counts := map[string]int{}
+	for _, it := range s.Index.Result().Items {
+		for _, v := range of(it.Fields(now)) {
+			if v != "" {
+				counts[v]++
+			}
+		}
+	}
+	out := make([]ValueCount, 0, len(counts))
+	for v, n := range counts {
+		out = append(out, ValueCount{Value: v, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Value < out[j].Value
+	})
+	reply(w, ValuesView{Values: out}, nil)
+}
+
 // agentRuleDraft handles POST /api/agent/rule-draft.
 // Creates or updates a DRAFT rule from an agent session. Refuses status="active".
 // Sets created_by = "<harness>:<session>".

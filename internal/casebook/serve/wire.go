@@ -409,6 +409,18 @@ type MatchRow struct {
 	Status string `json:"status"`
 }
 
+// ValuesView is the response body of GET /api/rules/values: a field's values
+// as items have them, most items first.
+type ValuesView struct {
+	Values []ValueCount `json:"values"`
+}
+
+// ValueCount is one value and how many items have it.
+type ValueCount struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
 // VocabularyView is the response body of GET /api/rules/vocabulary.
 type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`

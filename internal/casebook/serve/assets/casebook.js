@@ -1403,10 +1403,10 @@ function stepMark(s, next) {
 }
 function nextSteps(steps) {
   const out = /* @__PURE__ */ new Set();
-  const seen = /* @__PURE__ */ new Set();
+  const seen2 = /* @__PURE__ */ new Set();
   for (const s of steps) {
-    if (s.state !== "pending" || seen.has(s.lane)) continue;
-    seen.add(s.lane);
+    if (s.state !== "pending" || seen2.has(s.lane)) continue;
+    seen2.add(s.lane);
     out.add(s.id);
   }
   return out;
@@ -3353,9 +3353,71 @@ function picks(f) {
 function choices(f) {
   return f.type === BOOL ? ["true", "false"] : f.values ?? [];
 }
+var TYPED = /* @__PURE__ */ new Set(["repo", "owner", "author", "label"]);
+function typed(f) {
+  return TYPED.has(f.name);
+}
+var NOUNS = {
+  repo: "repositories",
+  owner: "owners",
+  author: "authors",
+  label: "labels"
+};
+function globRe(p) {
+  const body = p.split("*").map((s) => s.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("[^/]*");
+  return new RegExp(`^${body}$`);
+}
+function patternSuggestions(field, all, typedQ) {
+  const out = [];
+  const sum = (xs) => xs.reduce((n, x) => n + x.count, 0);
+  if (typedQ.includes("*")) {
+    const re = globRe(typedQ);
+    const m = all.filter((x) => re.test(x.value));
+    out.push({ value: typedQ, count: sum(m), hint: `${m.length} match` });
+    return out;
+  }
+  if (field !== "repo" || !typedQ) return out;
+  const q = typedQ.toLowerCase();
+  const by = (part) => {
+    const g = /* @__PURE__ */ new Map();
+    for (const x of all) {
+      const k = x.value.split("/")[part] ?? "";
+      const xs = g.get(k) ?? [];
+      xs.push(x);
+      g.set(k, xs);
+    }
+    return g;
+  };
+  for (const [owner, xs] of by(0)) {
+    if (xs.length > 1 && owner.toLowerCase().includes(q))
+      out.push({
+        value: `${owner}/*`,
+        count: sum(xs),
+        hint: `all ${xs.length} repos`
+      });
+  }
+  for (const [name, xs] of by(1)) {
+    if (xs.length > 1 && name.toLowerCase().includes(q))
+      out.push({
+        value: `*/${name}`,
+        count: sum(xs),
+        hint: `under ${xs.length} owners`
+      });
+  }
+  return out.sort((a, b) => b.count - a.count);
+}
+var seen = /* @__PURE__ */ new Map();
+function seenValues(ctx, field) {
+  let p = seen.get(field);
+  if (!p) {
+    p = ctx.api.get(`/rules/values?field=${encodeURIComponent(field)}`).then((v) => v.values ?? []).catch(() => []);
+    seen.set(field, p);
+  }
+  return p;
+}
 function shownOps(f) {
   if (f.type === BOOL) return ["is"];
-  if (picks(f)) return ["is", "is-not"];
+  if (picks(f) || typed(f)) return ["is", "is-not"];
   return (f.ops ?? []).filter((o) => o !== "in" && o !== "not-in");
 }
 function placeholder(f, op) {
@@ -3366,7 +3428,8 @@ function placeholder(f, op) {
 }
 function newCondition(f) {
   const op = shownOps(f)[0] ?? f.ops?.[0] ?? "is";
-  return { field: f.name, op, value: picks(f) ? choices(f)[0] ?? "" : "" };
+  const first = picks(f) && f.type !== ENUM ? choices(f)[0] ?? "" : "";
+  return { field: f.name, op, value: first };
 }
 function select(cls, label, options, labelOf, value, onPick) {
   const el = h7(
@@ -3394,7 +3457,10 @@ function conditionEditor(ctx, rule, onChange) {
   const rowsEl = h7("div", { class: "cb-cond-rows" });
   const general = h7("div", { class: "cb-cond-err", hidden: true });
   el.append(rowsEl, general);
-  const changed = () => onChange(conds.map((c) => ({ ...c })));
+  const changed = () => {
+    if (editable && fields.length) fillMenu();
+    onChange(conds.map((c) => ({ ...c })));
+  };
   function pickControl(c, f) {
     const multi = f.type === ENUM;
     const wrap = h7("div", {
@@ -3446,6 +3512,8 @@ function conditionEditor(ctx, rule, onChange) {
       return h7("span", { class: "cb-cond-v", "data-value": c.value }, shown);
     }
     if (picks(f)) return pickControl(c, f);
+    if (typed(f)) return typedControl(c, f);
+    if (f.type === DURATION) return durationControl(c);
     const input = h7("input", {
       class: "cb-cond-v",
       type: "text",
@@ -3460,6 +3528,209 @@ function conditionEditor(ctx, rule, onChange) {
     });
     return input;
   }
+  function typedControl(c, f) {
+    const chips = h7("span", { class: "cb-cond-typed-chips" });
+    const input = h7("input", {
+      class: "cb-cond-typed-in",
+      type: "text",
+      placeholder: "search or type",
+      spellcheck: false,
+      autocomplete: "off",
+      "aria-label": `${fieldLabel(f)} value`
+    });
+    const list4 = h7("div", {
+      class: "cb-cond-sugg",
+      hidden: true,
+      role: "listbox"
+    });
+    const wrap = h7(
+      "div",
+      { class: "cb-cond-v cb-cond-typed", "data-value": c.value },
+      chips,
+      h7("span", { class: "cb-cond-typed-box" }, input, list4)
+    );
+    let at2 = 0;
+    let shown = [];
+    const values = () => pickedValues(c);
+    const set = (next) => {
+      Object.assign(c, pickedCondition(c.field, values().not, next));
+      wrap.dataset.value = c.value;
+      paint();
+      changed();
+    };
+    const add2 = (v) => {
+      const t = v.trim();
+      if (!t || values().values.includes(t)) return;
+      set([...values().values, t]);
+      input.value = "";
+      void suggest();
+    };
+    function paint() {
+      chips.replaceChildren(
+        ...values().values.map(
+          (v) => h7(
+            "span",
+            {
+              class: "kit-chip cb-cond-pick on cb-cond-typed-chip",
+              "data-value": v
+            },
+            v,
+            h7(
+              "button",
+              {
+                type: "button",
+                class: "cb-cond-typed-x",
+                "aria-label": `remove ${v}`,
+                onclick() {
+                  set(values().values.filter((x) => x !== v));
+                }
+              },
+              "×"
+            )
+          )
+        )
+      );
+    }
+    function mark() {
+      list4.querySelectorAll(".cb-cond-sugg-row").forEach((r, i) => {
+        r.classList.toggle("on", i === at2);
+      });
+    }
+    const option = (value, count, hint, pat) => h7(
+      "div",
+      {
+        class: pat ? "cb-cond-sugg-row cb-cond-sugg-pat" : "cb-cond-sugg-row",
+        role: "option",
+        "data-value": value,
+        onpointerdown(e) {
+          e.preventDefault();
+        },
+        onclick() {
+          add2(value);
+        }
+      },
+      h7(
+        "span",
+        { class: "cb-cond-sugg-v" },
+        value,
+        hint ? h7("span", { class: "cb-cond-sugg-hint" }, ` · ${hint}`) : null
+      ),
+      h7("span", { class: "cb-cond-sugg-n" }, String(count))
+    );
+    async function suggest() {
+      const typedQ = input.value.trim();
+      const q = typedQ.toLowerCase();
+      const have = new Set(values().values);
+      const all = await seenValues(ctx, f.name);
+      const re = typedQ.includes("*") ? globRe(typedQ) : null;
+      const hits = all.filter(
+        (x) => !have.has(x.value) && (re ? re.test(x.value) : !q || x.value.toLowerCase().includes(q))
+      );
+      const pats = patternSuggestions(f.name, all, typedQ).filter(
+        (p) => !have.has(p.value)
+      );
+      shown = [...pats.map((p) => p.value), ...hits.map((x) => x.value)];
+      at2 = 0;
+      const noun = NOUNS[f.name] ?? "values";
+      list4.replaceChildren(
+        h7(
+          "div",
+          { class: "cb-cond-sugg-head" },
+          `${hits.length} ${noun}${q ? ` matching “${typedQ}”` : ""}`
+        ),
+        ...pats.map((p) => option(p.value, p.count, p.hint, true)),
+        ...hits.map((x) => option(x.value, x.count, "", false))
+      );
+      list4.hidden = document.activeElement !== input || shown.length === 0;
+      mark();
+    }
+    input.addEventListener("focus", () => void suggest());
+    input.addEventListener("input", () => void suggest());
+    input.addEventListener("blur", () => {
+      list4.hidden = true;
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.isComposing) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        if (!shown.length) return;
+        at2 = (at2 + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length;
+        mark();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const q = input.value.trim();
+        add2(
+          !list4.hidden && shown[at2] && shown[at2] !== q && !shown.includes(q) ? shown[at2] : q
+        );
+      } else if (e.key === "Escape" && !list4.hidden) {
+        e.preventDefault();
+        e.stopPropagation();
+        list4.hidden = true;
+      } else if (e.key === "Backspace" && input.value === "" && values().values.length) {
+        set(values().values.slice(0, -1));
+      }
+    });
+    paint();
+    return wrap;
+  }
+  function durationControl(c) {
+    if (c.op === "before" || c.op === "on-or-after") return dateControl(c);
+    const m = /^(\d+)([hdw])$/.exec(c.value.trim());
+    const num = h7("input", {
+      class: "cb-cond-num",
+      type: "number",
+      min: "1",
+      step: "1",
+      value: m ? m[1] : "",
+      placeholder: "2",
+      "aria-label": "how many"
+    });
+    const unit = h7(
+      "select",
+      { class: "cb-cond-unit", "aria-label": "unit" },
+      ...[
+        ["h", "hours"],
+        ["d", "days"],
+        ["w", "weeks"]
+      ].map(([v, l]) => h7("option", { value: v }, l))
+    );
+    unit.value = m ? m[2] : "d";
+    const set = () => {
+      const n = num.value.trim();
+      c.value = /^\d+$/.test(n) && Number(n) > 0 ? `${Number(n)}${unit.value}` : "";
+      wrap.dataset.value = c.value;
+      changed();
+    };
+    num.addEventListener("input", set);
+    unit.addEventListener("change", set);
+    const wrap = h7(
+      "span",
+      { class: "cb-cond-v cb-cond-dur", "data-value": c.value },
+      num,
+      unit,
+      c.op === "older-than" ? h7("span", { class: "cb-cond-ago" }, "ago") : null
+    );
+    return wrap;
+  }
+  function dateControl(c) {
+    const day = h7("input", {
+      class: "cb-cond-date",
+      type: "date",
+      value: /^\d{4}-\d{2}-\d{2}$/.test(c.value) ? c.value : "",
+      "aria-label": "date"
+    });
+    const wrap = h7(
+      "span",
+      { class: "cb-cond-v cb-cond-dur", "data-value": c.value },
+      day
+    );
+    day.addEventListener("input", () => {
+      c.value = day.value;
+      wrap.dataset.value = c.value;
+      changed();
+    });
+    return wrap;
+  }
   function opControl(c, f) {
     const readOp = c.op === "in" ? "is" : c.op === "not-in" ? "is-not" : c.op;
     if (!editable || !f) {
@@ -3469,7 +3740,7 @@ function conditionEditor(ctx, rule, onChange) {
         opLabel(ops, readOp)
       );
     }
-    if (picks(f)) {
+    if (picks(f) || typed(f)) {
       return select(
         "cb-cond-o",
         `${fieldLabel(f)} operator`,
@@ -3483,7 +3754,7 @@ function conditionEditor(ctx, rule, onChange) {
             Object.assign(c, pickedCondition(c.field, v === "is-not", values));
           }
           rowsEl.querySelector(
-            `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks`
+            `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks, .cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-typed`
           )?.setAttribute("data-value", c.value);
           changed();
         }
@@ -3496,11 +3767,17 @@ function conditionEditor(ctx, rule, onChange) {
       (v) => opLabel(ops, v),
       c.op,
       (v) => {
+        const isDay = (o) => o === "before" || o === "on-or-after";
+        if (isDay(v) !== isDay(c.op)) c.value = "";
         c.op = v;
         const input = rowsEl.querySelector(
           `.cb-cond[data-index="${conds.indexOf(c)}"] input.cb-cond-v`
         );
         if (input) input.placeholder = placeholder(f, v);
+        const ago = rowsEl.querySelector(
+          `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-dur`
+        );
+        if (ago) ago.replaceWith(durationControl(c));
         changed();
       }
     );
@@ -3597,6 +3874,7 @@ function conditionEditor(ctx, rule, onChange) {
     if (!el.isConnected || !addWrap.contains(e.target)) setMenu(false);
   }
   function setMenu(open) {
+    if (editable) return;
     menu.hidden = !open;
     add.setAttribute("aria-expanded", String(open));
     if (open) {
@@ -3612,7 +3890,6 @@ function conditionEditor(ctx, rule, onChange) {
   }
   function addCondition(f) {
     conds.push(newCondition(f));
-    setMenu(false);
     render();
     changed();
     const last = rowsEl.lastElementChild;
@@ -3637,32 +3914,39 @@ function conditionEditor(ctx, rule, onChange) {
     const kind = fieldOf("kind");
     const types = typesOf(conds, kind?.values ?? []);
     const used = new Set(conds.map((c) => c.field));
+    const groups = /* @__PURE__ */ new Map();
+    for (const f of fields) {
+      if (!fieldFound(f, search.value)) continue;
+      const applies = fieldApplies(f, types);
+      const taken = used.has(f.name) || !applies;
+      const where = fieldTypes(f, kind) || "any type";
+      const chip = h7(
+        "button",
+        {
+          type: "button",
+          class: "cb-cond-menu-row",
+          "data-field": f.name,
+          "aria-disabled": String(taken),
+          title: used.has(f.name) ? "already used, change it below" : !applies ? `doesn't apply to the chosen type` : f.help ?? "",
+          onclick() {
+            if (!taken) addCondition(f);
+          }
+        },
+        fieldLabel(f)
+      );
+      if (!groups.has(where)) groups.set(where, []);
+      groups.get(where).push(chip);
+    }
     options.replaceChildren(
-      ...fields.filter((f) => fieldApplies(f, types) && fieldFound(f, search.value)).map((f) => {
-        const taken = used.has(f.name);
-        const where = types ? "" : fieldTypes(f, kind);
-        const hint = taken ? "already used, change it above" : [f.help, where].filter((x) => x).join(" · ");
-        return h7(
+      ...[...groups].map(
+        ([where, chips]) => h7(
           "div",
-          {
-            class: "cb-cond-menu-row",
-            role: "option",
-            "data-field": f.name,
-            "aria-disabled": String(taken),
-            "aria-selected": "false",
-            onpointerdown(e) {
-              e.preventDefault();
-            },
-            onclick() {
-              if (!taken) addCondition(f);
-            }
-          },
-          h7("span", { class: "cb-cond-menu-f" }, fieldLabel(f)),
-          hint ? h7("span", { class: "cb-cond-menu-help" }, hint) : null
-        );
-      })
+          { class: "cb-cond-group" },
+          h7("span", { class: "cb-cond-group-l" }, where),
+          h7("span", { class: "cb-cond-group-c" }, ...chips)
+        )
+      )
     );
-    setActive(offered()[0]);
   }
   search.addEventListener("input", () => fillMenu());
   search.addEventListener("keydown", (e) => {
@@ -3681,11 +3965,16 @@ function conditionEditor(ctx, rule, onChange) {
     }
   });
   render();
-  if (editable) el.append(addWrap);
+  if (editable) {
+    menu.hidden = false;
+    add.hidden = true;
+    el.prepend(addWrap);
+  }
   void Promise.all([ruleVocabulary(ctx), ruleOperators(ctx)]).then(([fs, os]) => {
     fields = fs;
     ops = os;
     render();
+    if (editable) fillMenu();
     el.dataset.ready = "true";
   }).catch((err) => {
     if (!editable) {
@@ -5650,7 +5939,7 @@ function makeAttention(ctx) {
     draftHash = location.hash;
     editor = filterEditor(ctx, row, {
       onDraft(match) {
-        draft = match;
+        draft = match.filter((c) => c.value.trim() !== "");
         if (draftTimer !== null) clearTimeout(draftTimer);
         draftTimer = setTimeout(() => {
           draftTimer = null;
@@ -5836,7 +6125,7 @@ function makeAttention(ctx) {
       loadedItems = [];
       const data = await ctx.api.get("/items", buildQuery(0));
       const items = data.items ?? [];
-      const seen = new Set(items.map((it) => it.key));
+      const seen2 = new Set(items.map((it) => it.key));
       let at2 = items.length;
       while (at2 < want && at2 < data.total && queryKey() === asked2) {
         const q = buildQuery(at2);
@@ -5845,8 +6134,8 @@ function makeAttention(ctx) {
         if (page.length === 0) break;
         at2 += page.length;
         for (const it of page) {
-          if (seen.has(it.key)) continue;
-          seen.add(it.key);
+          if (seen2.has(it.key)) continue;
+          seen2.add(it.key);
           items.push(it);
         }
       }
@@ -6625,8 +6914,8 @@ function makeAttention(ctx) {
   }
   function midInput() {
     const comment = readEl.querySelector(".cb-close-comment");
-    const typed = comment?.querySelector("input")?.value ?? "";
-    if (comment && !comment.hidden && typed !== "") return true;
+    const typed2 = comment?.querySelector("input")?.value ?? "";
+    if (comment && !comment.hidden && typed2 !== "") return true;
     const notNow = readEl.querySelector(".cb-notnow");
     return !!notNow && !notNow.hidden;
   }
@@ -7232,8 +7521,8 @@ function makeComposer(ctx, dock) {
     return t.id;
   }
   function restoreSent(sent) {
-    const typed = input.value.replace(/^\s+/, "");
-    input.value = typed ? `${sent.replace(/\s+$/, "")} ${typed}` : sent;
+    const typed2 = input.value.replace(/^\s+/, "");
+    input.value = typed2 ? `${sent.replace(/\s+$/, "")} ${typed2}` : sent;
     fit();
   }
   async function send(batch) {

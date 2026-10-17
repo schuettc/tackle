@@ -2,10 +2,12 @@ package rules
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
@@ -49,7 +51,9 @@ var operators = []Operator{
 	{"in", "is one of"},
 	{"not-in", "is none of"},
 	{"matches", "matches pattern"},
-	{"older-than", "more than … ago"},
+	{"older-than", "more than"},
+	{"before", "before"},
+	{"on-or-after", "on or after"},
 	{"newer-than", "within the last"},
 	{"gt", "more than"},
 	{"gte", "at least"},
@@ -65,7 +69,7 @@ var (
 	enumOps  = []string{"is", "is-not", "in", "not-in"}
 	textOps  = []string{"is", "is-not", "in", "not-in"}
 	titleOps = []string{"is", "is-not", "in", "not-in", "matches"}
-	durOps   = []string{"older-than", "newer-than"}
+	durOps   = []string{"older-than", "newer-than", "before", "on-or-after"}
 	boolOps  = []string{"is", "is-not"}
 	countOps = []string{"is", "is-not", "gt", "gte", "lt", "lte"}
 )
@@ -156,6 +160,15 @@ func Vocabulary() []Field {
 	return vocab
 }
 
+// ParseDay parses a calendar day, YYYY-MM-DD, as its start in local time.
+func ParseDay(s string) (time.Time, error) {
+	d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q is not a date (YYYY-MM-DD)", s)
+	}
+	return d, nil
+}
+
 // parseDur validates casebook's duration syntax (item.ParseDuration).
 func parseDur(s string) error {
 	_, err := item.ParseDuration(strings.TrimSpace(s))
@@ -213,10 +226,24 @@ func ValidateCondition(c Condition) error {
 		if err := parseDur(c.Value); err != nil {
 			return fmt.Errorf("field %q op %q: %w", c.Field, c.Op, err)
 		}
+	case "before", "on-or-after":
+		if _, err := ParseDay(c.Value); err != nil {
+			return fmt.Errorf("field %q op %q: %w", c.Field, c.Op, err)
+		}
 	case "matches":
 		if _, err := regexp.Compile(c.Value); err != nil {
 			return fmt.Errorf("field %q op %q: bad regex %q: %w", c.Field, c.Op, c.Value, err)
 		}
+	case "is", "is-not", "in", "not-in":
+		if PatternFields[c.Field] {
+			for _, v := range splitIn(c.Value) {
+				if _, err := path.Match(v, ""); err != nil {
+					return fmt.Errorf("field %q: %q is not a pattern (* matches within a /)", c.Field, v)
+				}
+			}
+		}
+	}
+	switch c.Op {
 	case "is", "is-not":
 		if f.Type == FieldTypeEnum && len(f.Values) > 0 {
 			if !slices.Contains(f.Values, c.Value) {

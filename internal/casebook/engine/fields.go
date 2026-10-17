@@ -25,6 +25,10 @@ type Fields struct {
 	// Age / activity (durations from now; 0 when the underlying time is zero)
 	Age     time.Duration // now - CreatedAt
 	Updated time.Duration // now - UpdatedAt (repo: pushedAt; branch: tipAt)
+	// The times Age and Updated measure from, for before / on-or-after a
+	// day (zero when unknown).
+	CreatedAt time.Time
+	UpdatedAt time.Time
 
 	// Landing / branch
 	Landed       string   // "all-machines" | "some-machines" | "none" | "unknown"
@@ -109,6 +113,8 @@ func (it Item) Fields(now time.Time) Fields {
 		Labels:       it.Labels,
 		Age:          age,
 		Updated:      updated,
+		CreatedAt:    it.CreatedAt,
+		UpdatedAt:    it.UpdatedAt,
 		Landed:       it.Landed,
 		LandedHow:    it.LandedVia,
 		Tip:          tip,

@@ -27,6 +27,8 @@ import type {
   Field,
   NoteToken,
   Operator,
+  ValueCount,
+  ValuesView,
   VocabularyView,
 } from './wire.d.ts';
 import type { Ctx } from './app.ts';
@@ -89,12 +91,99 @@ function choices(f: Field): string[] {
   return f.type === BOOL ? ['true', 'false'] : (f.values ?? []);
 }
 
+// TYPED are the fields whose values are picked from what casebook has seen,
+// or typed (serve's GET /api/rules/values).
+const TYPED = new Set(['repo', 'owner', 'author', 'label']);
+function typed(f: Field): boolean {
+  return TYPED.has(f.name);
+}
+
+const NOUNS: Record<string, string> = {
+  repo: 'repositories',
+  owner: 'owners',
+  author: 'authors',
+  label: 'labels',
+};
+
+// globRe is a value pattern as a regular expression: * matches within one
+// path segment (it never crosses a /), as serve's path.Match does.
+export function globRe(p: string): RegExp {
+  const body = p
+    .split('*')
+    .map((s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]*');
+  return new RegExp(`^${body}$`);
+}
+
+/**
+ * patternSuggestions are the * patterns offered above a field's values: a
+ * typed pattern with what it matches; for repositories, owner/* for an
+ * owner the text finds and * /name for a name under several owners.
+ */
+export function patternSuggestions(
+  field: string,
+  all: ValueCount[],
+  typedQ: string,
+): { value: string; count: number; hint: string }[] {
+  const out: { value: string; count: number; hint: string }[] = [];
+  const sum = (xs: ValueCount[]) => xs.reduce((n, x) => n + x.count, 0);
+  if (typedQ.includes('*')) {
+    const re = globRe(typedQ);
+    const m = all.filter((x) => re.test(x.value));
+    out.push({ value: typedQ, count: sum(m), hint: `${m.length} match` });
+    return out;
+  }
+  if (field !== 'repo' || !typedQ) return out;
+  const q = typedQ.toLowerCase();
+  const by = (part: 0 | 1) => {
+    const g = new Map<string, ValueCount[]>();
+    for (const x of all) {
+      const k = x.value.split('/')[part] ?? '';
+      const xs = g.get(k) ?? [];
+      xs.push(x);
+      g.set(k, xs);
+    }
+    return g;
+  };
+  for (const [owner, xs] of by(0)) {
+    if (xs.length > 1 && owner.toLowerCase().includes(q))
+      out.push({
+        value: `${owner}/*`,
+        count: sum(xs),
+        hint: `all ${xs.length} repos`,
+      });
+  }
+  for (const [name, xs] of by(1)) {
+    if (xs.length > 1 && name.toLowerCase().includes(q))
+      out.push({
+        value: `*/${name}`,
+        count: sum(xs),
+        hint: `under ${xs.length} owners`,
+      });
+  }
+  return out.sort((a, b) => b.count - a.count);
+}
+
+const seen = new Map<string, Promise<ValueCount[]>>();
+// seenValues fetches a field's values once per page load.
+function seenValues(ctx: Ctx, field: string): Promise<ValueCount[]> {
+  let p = seen.get(field);
+  if (!p) {
+    p = ctx.api
+      .get<ValuesView>(`/rules/values?field=${encodeURIComponent(field)}`)
+      .then((v) => v.values ?? [])
+      .catch(() => []);
+    seen.set(field, p);
+  }
+  return p;
+}
+
 // shownOps are the operators a row offers: is / is not for a fixed-value
 // field (a bool, is alone), a text field's without the lists; in and
 // not-in are ticked, never chosen.
 function shownOps(f: Field): string[] {
   if (f.type === BOOL) return ['is'];
-  if (picks(f)) return ['is', 'is-not'];
+  if (picks(f) || typed(f)) return ['is', 'is-not'];
   return (f.ops ?? []).filter((o) => o !== 'in' && o !== 'not-in');
 }
 
@@ -109,7 +198,10 @@ function placeholder(f: Field, op: string): string {
 // A new condition: the field's first operator and, ticked, its first value.
 function newCondition(f: Field): Condition {
   const op = shownOps(f)[0] ?? f.ops?.[0] ?? 'is';
-  return { field: f.name, op, value: picks(f) ? (choices(f)[0] ?? '') : '' };
+  // A fixed-value field starts with nothing ticked (a yes/no field with its
+  // first value): ticking is the choice.
+  const first = picks(f) && f.type !== ENUM ? (choices(f)[0] ?? '') : '';
+  return { field: f.name, op, value: first };
 }
 
 // select is a picker of options' values, each shown by its label.
@@ -158,7 +250,10 @@ export function conditionEditor(
   const general = h('div', { class: 'cb-cond-err', hidden: true });
   el.append(rowsEl, general);
 
-  const changed = () => onChange(conds.map((c) => ({ ...c })));
+  const changed = () => {
+    if (editable && fields.length) fillMenu();
+    onChange(conds.map((c) => ({ ...c })));
+  };
 
   // pickControl ticks a fixed-value field's values: several for an enum
   // (one in or not-in condition), one for a bool.
@@ -222,6 +317,8 @@ export function conditionEditor(
       return h('span', { class: 'cb-cond-v', 'data-value': c.value }, shown);
     }
     if (picks(f)) return pickControl(c, f);
+    if (typed(f)) return typedControl(c, f);
+    if (f.type === DURATION) return durationControl(c);
     const input = h('input', {
       class: 'cb-cond-v',
       type: 'text',
@@ -237,6 +334,241 @@ export function conditionEditor(
     return input;
   }
 
+  // typedControl is a pick-or-type field's values: a chip per value (× takes
+  // it off) and a box that suggests the values casebook has seen, most items
+  // first, floating under it (it moves nothing); Enter adds the suggestion
+  // or, with none, the text as typed. Several values are "or".
+  function typedControl(c: Condition, f: Field): HTMLElement {
+    const chips = h('span', { class: 'cb-cond-typed-chips' });
+    const input = h('input', {
+      class: 'cb-cond-typed-in',
+      type: 'text',
+      placeholder: 'search or type',
+      spellcheck: false,
+      autocomplete: 'off',
+      'aria-label': `${fieldLabel(f)} value`,
+    }) as HTMLInputElement;
+    const list = h('div', {
+      class: 'cb-cond-sugg',
+      hidden: true,
+      role: 'listbox',
+    });
+    const wrap = h(
+      'div',
+      { class: 'cb-cond-v cb-cond-typed', 'data-value': c.value },
+      chips,
+      h('span', { class: 'cb-cond-typed-box' }, input, list),
+    );
+    let at = 0;
+    let shown: string[] = [];
+    const values = () => pickedValues(c);
+    const set = (next: string[]) => {
+      Object.assign(c, pickedCondition(c.field, values().not, next));
+      wrap.dataset.value = c.value;
+      paint();
+      changed();
+    };
+    const add = (v: string) => {
+      const t = v.trim();
+      if (!t || values().values.includes(t)) return;
+      set([...values().values, t]);
+      input.value = '';
+      void suggest();
+    };
+    function paint(): void {
+      chips.replaceChildren(
+        ...values().values.map((v) =>
+          h(
+            'span',
+            {
+              class: 'kit-chip cb-cond-pick on cb-cond-typed-chip',
+              'data-value': v,
+            },
+            v,
+            h(
+              'button',
+              {
+                type: 'button',
+                class: 'cb-cond-typed-x',
+                'aria-label': `remove ${v}`,
+                onclick() {
+                  set(values().values.filter((x) => x !== v));
+                },
+              },
+              '\u00d7',
+            ),
+          ),
+        ),
+      );
+    }
+    function mark(): void {
+      list
+        .querySelectorAll<HTMLElement>('.cb-cond-sugg-row')
+        .forEach((r, i) => {
+          r.classList.toggle('on', i === at);
+        });
+    }
+    const option = (value: string, count: number, hint: string, pat: boolean) =>
+      h(
+        'div',
+        {
+          class: pat ? 'cb-cond-sugg-row cb-cond-sugg-pat' : 'cb-cond-sugg-row',
+          role: 'option',
+          'data-value': value,
+          onpointerdown(e: PointerEvent) {
+            e.preventDefault(); // keep focus in the box
+          },
+          onclick() {
+            add(value);
+          },
+        },
+        h(
+          'span',
+          { class: 'cb-cond-sugg-v' },
+          value,
+          hint
+            ? h('span', { class: 'cb-cond-sugg-hint' }, ` \u00b7 ${hint}`)
+            : null,
+        ),
+        h('span', { class: 'cb-cond-sugg-n' }, String(count)),
+      );
+    async function suggest(): Promise<void> {
+      const typedQ = input.value.trim();
+      const q = typedQ.toLowerCase();
+      const have = new Set(values().values);
+      const all = await seenValues(ctx, f.name);
+      // Text with a * lists what the pattern matches; other text, what
+      // contains it.
+      const re = typedQ.includes('*') ? globRe(typedQ) : null;
+      const hits = all.filter(
+        (x) =>
+          !have.has(x.value) &&
+          (re ? re.test(x.value) : !q || x.value.toLowerCase().includes(q)),
+      );
+      const pats = patternSuggestions(f.name, all, typedQ).filter(
+        (p) => !have.has(p.value),
+      );
+      shown = [...pats.map((p) => p.value), ...hits.map((x) => x.value)];
+      at = 0;
+      const noun = NOUNS[f.name] ?? 'values';
+      list.replaceChildren(
+        h(
+          'div',
+          { class: 'cb-cond-sugg-head' },
+          `${hits.length} ${noun}${q ? ` matching \u201c${typedQ}\u201d` : ''}`,
+        ),
+        ...pats.map((p) => option(p.value, p.count, p.hint, true)),
+        ...hits.map((x) => option(x.value, x.count, '', false)),
+      );
+      list.hidden = document.activeElement !== input || shown.length === 0;
+      mark();
+    }
+    input.addEventListener('focus', () => void suggest());
+    input.addEventListener('input', () => void suggest());
+    input.addEventListener('blur', () => {
+      list.hidden = true;
+    });
+    input.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!shown.length) return;
+        at =
+          (at + (e.key === 'ArrowDown' ? 1 : -1) + shown.length) % shown.length;
+        mark();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = input.value.trim();
+        // A typed value exactly as written wins over a suggestion that
+        // only contains it.
+        add(
+          !list.hidden && shown[at] && shown[at] !== q && !shown.includes(q)
+            ? shown[at]
+            : q,
+        );
+      } else if (e.key === 'Escape' && !list.hidden) {
+        e.preventDefault();
+        e.stopPropagation();
+        list.hidden = true;
+      } else if (
+        e.key === 'Backspace' &&
+        input.value === '' &&
+        values().values.length
+      ) {
+        set(values().values.slice(0, -1));
+      }
+    });
+    paint();
+    return wrap;
+  }
+
+  // durationControl is a duration as a number and a unit ("2" "days"),
+  // stored as casebook's <n>h / <n>d / <n>w; "ago" follows "more than".
+  function durationControl(c: Condition): HTMLElement {
+    if (c.op === 'before' || c.op === 'on-or-after') return dateControl(c);
+    const m = /^(\d+)([hdw])$/.exec(c.value.trim());
+    const num = h('input', {
+      class: 'cb-cond-num',
+      type: 'number',
+      min: '1',
+      step: '1',
+      value: m ? m[1] : '',
+      placeholder: '2',
+      'aria-label': 'how many',
+    }) as HTMLInputElement;
+    const unit = h(
+      'select',
+      { class: 'cb-cond-unit', 'aria-label': 'unit' },
+      ...(
+        [
+          ['h', 'hours'],
+          ['d', 'days'],
+          ['w', 'weeks'],
+        ] as const
+      ).map(([v, l]) => h('option', { value: v }, l)),
+    ) as HTMLSelectElement;
+    unit.value = m ? m[2] : 'd';
+    const set = () => {
+      const n = num.value.trim();
+      c.value =
+        /^\d+$/.test(n) && Number(n) > 0 ? `${Number(n)}${unit.value}` : '';
+      wrap.dataset.value = c.value;
+      changed();
+    };
+    num.addEventListener('input', set);
+    unit.addEventListener('change', set);
+    const wrap = h(
+      'span',
+      { class: 'cb-cond-v cb-cond-dur', 'data-value': c.value },
+      num,
+      unit,
+      c.op === 'older-than' ? h('span', { class: 'cb-cond-ago' }, 'ago') : null,
+    );
+    return wrap;
+  }
+
+  // dateControl is a calendar day (the browser's date picker), stored as
+  // YYYY-MM-DD.
+  function dateControl(c: Condition): HTMLElement {
+    const day = h('input', {
+      class: 'cb-cond-date',
+      type: 'date',
+      value: /^\d{4}-\d{2}-\d{2}$/.test(c.value) ? c.value : '',
+      'aria-label': 'date',
+    }) as HTMLInputElement;
+    const wrap = h(
+      'span',
+      { class: 'cb-cond-v cb-cond-dur', 'data-value': c.value },
+      day,
+    );
+    day.addEventListener('input', () => {
+      c.value = day.value;
+      wrap.dataset.value = c.value;
+      changed();
+    });
+    return wrap;
+  }
+
   // opControl is the row's operator: a picked field's is / is not stands
   // for in / not-in too (several values ticked).
   function opControl(c: Condition, f: Field | undefined): HTMLElement {
@@ -249,7 +581,7 @@ export function conditionEditor(
         opLabel(ops, readOp),
       );
     }
-    if (picks(f)) {
+    if (picks(f) || typed(f)) {
       return select(
         'cb-cond-o',
         `${fieldLabel(f)} operator`,
@@ -264,7 +596,7 @@ export function conditionEditor(
           }
           rowsEl
             .querySelector<HTMLElement>(
-              `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks`,
+              `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks, .cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-typed`,
             )
             ?.setAttribute('data-value', c.value);
           changed();
@@ -278,11 +610,19 @@ export function conditionEditor(
       (v) => opLabel(ops, v),
       c.op,
       (v) => {
+        // A date and a duration don't share a value: switching clears it.
+        const isDay = (o: string) => o === 'before' || o === 'on-or-after';
+        if (isDay(v) !== isDay(c.op)) c.value = '';
         c.op = v;
         const input = rowsEl.querySelector<HTMLInputElement>(
           `.cb-cond[data-index="${conds.indexOf(c)}"] input.cb-cond-v`,
         );
         if (input) input.placeholder = placeholder(f, v);
+        // A duration's "ago" follows "more than" only.
+        const ago = rowsEl.querySelector<HTMLElement>(
+          `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-dur`,
+        );
+        if (ago) ago.replaceWith(durationControl(c));
         changed();
       },
     );
@@ -394,6 +734,8 @@ export function conditionEditor(
   }
 
   function setMenu(open: boolean): void {
+    // The chips are always shown in an editable table: nothing closes them.
+    if (editable) return;
     menu.hidden = !open;
     add.setAttribute('aria-expanded', String(open));
     if (open) {
@@ -410,7 +752,6 @@ export function conditionEditor(
 
   function addCondition(f: Field): void {
     conds.push(newCondition(f));
-    setMenu(false);
     render();
     changed();
     const last = rowsEl.lastElementChild;
@@ -437,40 +778,52 @@ export function conditionEditor(
   // fillMenu lists the fields that apply to every type the type condition
   // leaves (with none, every field, a field that applies to some types
   // naming them), narrowed by the search; a used field shows, not offered.
+  // fillMenu shows every field that applies, as chips grouped by the types
+  // it applies to (Court, 2026-10-17: the whole list at once, short); a
+  // chip's hint is its tooltip; a used field is greyed.
   function fillMenu(): void {
     const kind = fieldOf('kind');
     const types = typesOf(conds, kind?.values ?? []);
     const used = new Set(conds.map((c) => c.field));
+    const groups = new Map<string, HTMLElement[]>();
+    for (const f of fields) {
+      if (!fieldFound(f, search.value)) continue;
+      // A chip never disappears (the block keeps its height): a used field
+      // or one the chosen types don't have is greyed.
+      const applies = fieldApplies(f, types);
+      const taken = used.has(f.name) || !applies;
+      const where = fieldTypes(f, kind) || 'any type';
+      const chip = h(
+        'button',
+        {
+          type: 'button',
+          class: 'cb-cond-menu-row',
+          'data-field': f.name,
+          'aria-disabled': String(taken),
+          title: used.has(f.name)
+            ? 'already used, change it below'
+            : !applies
+              ? `doesn't apply to the chosen type`
+              : (f.help ?? ''),
+          onclick() {
+            if (!taken) addCondition(f);
+          },
+        },
+        fieldLabel(f),
+      );
+      if (!groups.has(where)) groups.set(where, []);
+      groups.get(where)!.push(chip);
+    }
     options.replaceChildren(
-      ...fields
-        .filter((f) => fieldApplies(f, types) && fieldFound(f, search.value))
-        .map((f) => {
-          const taken = used.has(f.name);
-          const where = types ? '' : fieldTypes(f, kind);
-          const hint = taken
-            ? 'already used, change it above'
-            : [f.help, where].filter((x) => x).join(' \u00b7 ');
-          return h(
-            'div',
-            {
-              class: 'cb-cond-menu-row',
-              role: 'option',
-              'data-field': f.name,
-              'aria-disabled': String(taken),
-              'aria-selected': 'false',
-              onpointerdown(e: PointerEvent) {
-                e.preventDefault(); // keep focus in the search box
-              },
-              onclick() {
-                if (!taken) addCondition(f);
-              },
-            },
-            h('span', { class: 'cb-cond-menu-f' }, fieldLabel(f)),
-            hint ? h('span', { class: 'cb-cond-menu-help' }, hint) : null,
-          );
-        }),
+      ...[...groups].map(([where, chips]) =>
+        h(
+          'div',
+          { class: 'cb-cond-group' },
+          h('span', { class: 'cb-cond-group-l' }, where),
+          h('span', { class: 'cb-cond-group-c' }, ...chips),
+        ),
+      ),
     );
-    setActive(offered()[0]);
   }
 
   search.addEventListener('input', () => fillMenu());
@@ -491,7 +844,13 @@ export function conditionEditor(
   });
 
   render();
-  if (editable) el.append(addWrap);
+  if (editable) {
+    // The field chips go first and keep their height; conditions are added
+    // under them, so the editor only grows downward (Court, 2026-10-17).
+    menu.hidden = false;
+    add.hidden = true;
+    el.prepend(addWrap);
+  }
   // The vocabulary labels the rows, makes a draft's editable and fills its
   // dropdown. A read-only table without it still reads, in raw names.
   void Promise.all([ruleVocabulary(ctx), ruleOperators(ctx)])
@@ -499,6 +858,7 @@ export function conditionEditor(
       fields = fs;
       ops = os;
       render();
+      if (editable) fillMenu();
       el.dataset.ready = 'true';
     })
     .catch((err: unknown) => {

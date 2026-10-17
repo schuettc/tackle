@@ -3,6 +3,7 @@ package rules
 import (
 	"context"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -52,15 +53,15 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 	case "kind":
 		return evalString(c.Op, f.Kind, c.Value)
 	case "repo":
-		return evalString(c.Op, f.Repo, c.Value)
+		return evalPatterns(c.Op, []string{f.Repo}, c.Value)
 	case "owner":
-		return evalString(c.Op, f.Owner, c.Value)
+		return evalPatterns(c.Op, []string{f.Owner}, c.Value)
 	case "relation":
 		return evalString(c.Op, f.Relation, c.Value)
 	case "status":
 		return evalString(c.Op, f.Status, c.Value)
 	case "author":
-		return evalString(c.Op, f.Author, c.Value)
+		return evalPatterns(c.Op, []string{f.Author}, c.Value)
 	case "bot":
 		return evalBool(c.Op, f.Bot, c.Value)
 	case "title":
@@ -73,11 +74,11 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		}
 		return evalString(c.Op, f.Title, c.Value)
 	case "label":
-		return evalMultiString(c.Op, f.Labels, c.Value)
+		return evalPatterns(c.Op, f.Labels, c.Value)
 	case "age":
-		return evalDuration(c.Op, f.Age, c.Value)
+		return evalTime(c.Op, f.Age, f.CreatedAt, c.Value)
 	case "updated":
-		return evalDuration(c.Op, f.Updated, c.Value)
+		return evalTime(c.Op, f.Updated, f.UpdatedAt, c.Value)
 	case "landed":
 		return evalString(c.Op, f.Landed, c.Value)
 	case "landed-how":
@@ -99,6 +100,45 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 	default:
 		return false, fmt.Errorf("unknown field %q", c.Field)
 	}
+}
+
+// PatternFields are the pick-or-type fields whose values may use *, which
+// matches within one path segment (it never crosses a /).
+var PatternFields = map[string]bool{"repo": true, "owner": true, "author": true, "label": true}
+
+// matchValue reports whether v is want, or matches it when want holds a *.
+func matchValue(want, v string) bool {
+	if !strings.Contains(want, "*") {
+		return v == want
+	}
+	ok, _ := path.Match(want, v)
+	return ok
+}
+
+// evalPatterns handles is / is-not / in / not-in on a pick-or-type field:
+// true when any of vals matches any wanted value (none, for the nots).
+func evalPatterns(op string, vals []string, cval string) (bool, error) {
+	var wants []string
+	switch op {
+	case "is", "is-not":
+		wants = []string{cval}
+	case "in", "not-in":
+		wants = splitIn(cval)
+	default:
+		return false, fmt.Errorf("unsupported string op %q", op)
+	}
+	hit := false
+	for _, want := range wants {
+		for _, v := range vals {
+			if matchValue(want, v) {
+				hit = true
+			}
+		}
+	}
+	if op == "is-not" || op == "not-in" {
+		return !hit, nil
+	}
+	return hit, nil
 }
 
 // evalString handles is / is-not / in / not-in on a single string value.
@@ -142,6 +182,27 @@ func evalDuration(op string, dur time.Duration, cval string) (bool, error) {
 		return dur < threshold, nil
 	}
 	return false, fmt.Errorf("unsupported duration op %q", op)
+}
+
+// evalTime handles a duration field: older-than / newer-than on dur, and
+// before / on-or-after a calendar day (local time) on at, the time dur
+// measures from. An unknown time (zero) is before nothing and after nothing.
+func evalTime(op string, dur time.Duration, at time.Time, cval string) (bool, error) {
+	switch op {
+	case "before", "on-or-after":
+		day, err := ParseDay(cval)
+		if err != nil {
+			return false, err
+		}
+		if at.IsZero() {
+			return false, nil
+		}
+		if op == "before" {
+			return at.Before(day), nil
+		}
+		return !at.Before(day), nil
+	}
+	return evalDuration(op, dur, cval)
 }
 
 // evalCount handles is / is-not / gt / gte / lt / lte on an int value.

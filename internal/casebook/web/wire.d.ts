@@ -16,6 +16,10 @@
 //     `null`. The type says so rather than promising an array.
 //   - a `time.Time` is a string (RFC3339). It is not a shape on the wire.
 
+export interface ValuesView {
+  values: ValueCount[] | null;
+}
+
 export interface SummaryView {
   machine: string;
   user: string;
@@ -313,6 +317,11 @@ export interface PushEvent {
 export interface SessionProgressView {
   progress: Progress | null;
   now: string;
+}
+
+export interface ValueCount {
+  value: string;
+  count: number;
 }
 
 export interface ItemView {

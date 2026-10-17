@@ -493,7 +493,8 @@ export function makeAttention(ctx: Ctx): Section {
     draftHash = location.hash;
     editor = filterEditor(ctx, row, {
       onDraft(match) {
-        draft = match;
+        // An unfinished condition (no value yet) waits: it isn't previewed.
+        draft = match.filter((c) => c.value.trim() !== '');
         if (draftTimer !== null) clearTimeout(draftTimer);
         draftTimer = setTimeout(() => {
           draftTimer = null;

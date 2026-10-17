@@ -396,3 +396,69 @@ func TestRelationNeverMatchesARepo(t *testing.T) {
 		t.Errorf("a clean worktree matched worktree is dirty: %v", ms)
 	}
 }
+
+// TestDateOps: before / on-or-after a calendar day, on the times the
+// duration fields measure from; an item with no time matches neither.
+func TestDateOps(t *testing.T) {
+	at := time.Date(2026, 10, 1, 15, 0, 0, 0, time.Local)
+	f := engine.Fields{Kind: "pr", CreatedAt: at, UpdatedAt: at}
+	cases := []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "updated", Op: "before", Value: "2026-10-02"}, true},
+		{Condition{Field: "updated", Op: "before", Value: "2026-10-01"}, false},
+		{Condition{Field: "updated", Op: "on-or-after", Value: "2026-10-01"}, true},
+		{Condition{Field: "updated", Op: "on-or-after", Value: "2026-10-02"}, false},
+		{Condition{Field: "age", Op: "before", Value: "2026-10-02"}, true},
+	}
+	for _, tc := range cases {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(f); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
+	}
+	none := engine.Fields{Kind: "branch"}
+	for _, op := range []string{"before", "on-or-after"} {
+		if got, _ := (Condition{Field: "updated", Op: op, Value: "2026-10-01"}).Eval(none); got {
+			t.Errorf("no time matched %s", op)
+		}
+	}
+	if err := ValidateCondition(Condition{Field: "updated", Op: "before", Value: "3d"}); err == nil {
+		t.Error("before 3d validated; want a date error")
+	}
+}
+
+// TestPatterns: a pick-or-type field's value may use *, which never crosses
+// a /; other string fields stay exact.
+func TestPatterns(t *testing.T) {
+	f := engine.Fields{Kind: "pr", Repo: "subaud-tools/tackle", Owner: "subaud-tools", Author: "dependabot[bot]", Labels: []string{"deps-go"}, Title: "a*b"}
+	cases := []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "repo", Op: "is", Value: "subaud-tools/*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "*/tackle"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "*"}, false}, // * never crosses /
+		{Condition{Field: "repo", Op: "in", Value: "schuettc/*,*/tackle"}, true},
+		{Condition{Field: "repo", Op: "not-in", Value: "schuettc/*,*/tackle"}, false},
+		{Condition{Field: "repo", Op: "is-not", Value: "schuettc/*"}, true},
+		{Condition{Field: "owner", Op: "is", Value: "subaud-*"}, true},
+		{Condition{Field: "author", Op: "is", Value: "dependabot*"}, true},
+		{Condition{Field: "label", Op: "is", Value: "deps-*"}, true},
+		{Condition{Field: "title", Op: "is", Value: "a*"}, false}, // title stays exact
+	}
+	for _, tc := range cases {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(f); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
+	}
+	if err := ValidateCondition(Condition{Field: "repo", Op: "is", Value: "subaud-tools/[*"}); err == nil {
+		t.Error("a bad pattern validated")
+	}
+}

@@ -186,7 +186,7 @@ func TestVocabularyLabels(t *testing.T) {
 	for _, o := range Operators() {
 		ops[o.Name] = o.Label
 	}
-	if len(ops) != 11 || ops["older-than"] != "more than \u2026 ago" || ops["not-in"] != "is none of" || ops["lte"] != "at most" {
+	if len(ops) != 13 || ops["before"] != "before" || ops["older-than"] != "more than" || ops["not-in"] != "is none of" || ops["lte"] != "at most" {
 		t.Errorf("operators %v", ops)
 	}
 	for _, f := range Vocabulary() {

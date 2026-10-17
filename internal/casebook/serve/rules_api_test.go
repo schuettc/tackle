@@ -201,7 +201,7 @@ func TestVocabularyEndpointListsFields(t *testing.T) {
 		t.Errorf("note tokens %q", got)
 	}
 	// The page's words: each field's label, and every operator's.
-	if vocab.Fields[0].Label != "type" || len(vocab.Operators) != 11 || vocab.Operators[1].Label != "is not" {
+	if vocab.Fields[0].Label != "type" || len(vocab.Operators) != 13 || vocab.Operators[1].Label != "is not" {
 		t.Errorf("labels: field %+v operators %+v", vocab.Fields[0], vocab.Operators)
 	}
 }
@@ -627,5 +627,26 @@ func TestPreviewPageIsNewestFirst(t *testing.T) {
 	}
 	if got := strings.Join(keys, " "); p.Total != 4 || got != "issue:a/b#2 issue:a/b#4 issue:a/b#1" {
 		t.Errorf("total %d page %q, want 4 and #2 #4 #1", p.Total, got)
+	}
+}
+
+// TestValuesEndpoint: the values casebook has seen for a pick-or-type field,
+// most items first; a field that isn't one is refused.
+func TestValuesEndpoint(t *testing.T) {
+	r := newRig(t)
+	var v ValuesView
+	if code := r.do(t, "GET", "/api/rules/values?field=repo", nil, &v); code != 200 {
+		t.Fatalf("values %d", code)
+	}
+	if len(v.Values) == 0 || v.Values[0].Value != "schuettc/hail" || v.Values[0].Count == 0 {
+		t.Fatalf("repo values %+v, want schuettc/hail first", v.Values)
+	}
+	for i := 1; i < len(v.Values); i++ {
+		if v.Values[i].Count > v.Values[i-1].Count {
+			t.Fatalf("values not most items first: %+v", v.Values)
+		}
+	}
+	if code := r.do(t, "GET", "/api/rules/values?field=kind", nil, nil); code != 400 {
+		t.Fatalf("values?field=kind %d, want 400", code)
 	}
 }

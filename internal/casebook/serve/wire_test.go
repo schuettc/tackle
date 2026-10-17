@@ -39,6 +39,7 @@ var updateWire = flag.Bool("update", false, "rewrite internal/casebook/web/wire.
 // The order is the order they are emitted in: summary first (the page's first
 // read), then list/item views, then mutation results, then agent views.
 var wireRoots = []any{
+	ValuesView{},
 	SummaryView{},
 	ItemsView{},
 	GroupView{},
