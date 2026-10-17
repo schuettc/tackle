@@ -1,23 +1,47 @@
-// conditions.ts — a rule's conditions table and its `+ condition` editor
-// (spec §4.1, §4.3).
+// conditions.ts — a rule's or a filter's conditions table and its
+// `+ condition` dropdown (spec §4.1, §4.3).
 //
-// conditionEditor(ctx, rule, onChange) draws the rule's [[match]] list as the
+// conditionEditor(ctx, rule, onChange) draws the [[match]] list as the
 // reading column's hairline table: field · operator · value. A draft's table
-// is editable: each value is a field (a picker for an enum or bool with
-// is / is-not), each operator a picker of the field's operators, each row
-// has a remove button, and `+ condition` opens a menu of the vocabulary's
-// fields with their operators (GET /api/rules/vocabulary); choosing an
-// operator adds the condition. An active rule's table is read-only: serve
-// only edits drafts.
+// is editable, one row per field (OR within a field, AND between fields):
+// a fixed-value field (enum, bool) ticks its values (several are one in or
+// not-in condition) with "is" / "is not", never free text; a text field
+// takes a value with "is" / "is not" (title also "matches pattern"); a
+// duration or count field keeps its operators. Each row has a remove
+// button. `+ condition` opens a dropdown over the editor (it moves
+// nothing): a search box, then the fields that apply to every type the type
+// condition leaves, a field already used shown but not offered. An active
+// rule's table is read-only: serve only edits drafts.
+//
+// Fields, operators and values show serve's plain labels (GET
+// /api/rules/vocabulary); the conditions and the files keep the raw names:
+// data-name / data-value carry them.
 //
 // Every edit calls onChange with the new list at once; re-previewing (and its
-// 300 ms debounce) is the page's job (rules.ts). Validation is serve's:
+// 300 ms debounce) is the page's job. Validation is serve's:
 // setConditionError shows its message under the condition it names.
 
 import { h } from '/_kit/kit.js';
-import type { Condition, Field, NoteToken, VocabularyView } from './wire.d.ts';
+import type {
+  Condition,
+  Field,
+  NoteToken,
+  Operator,
+  VocabularyView,
+} from './wire.d.ts';
 import type { Ctx } from './app.ts';
-import { menuNav } from './menu-nav.ts';
+import {
+  conditionText,
+  fieldApplies,
+  fieldFound,
+  fieldLabel,
+  fieldTypes,
+  opLabel,
+  pickedCondition,
+  pickedValues,
+  typesOf,
+  valueLabel,
+} from './rules-text.ts';
 
 // Field types, as serve's rules.FieldType numbers them.
 const ENUM = 0;
@@ -46,48 +70,64 @@ export function ruleVocabulary(ctx: Ctx): Promise<Field[]> {
   return ruleVocabularyView(ctx).then((v) => v.fields ?? []);
 }
 
+/** ruleOperators are every operator with its label (fetched once). */
+function ruleOperators(ctx: Ctx): Promise<Operator[]> {
+  return ruleVocabularyView(ctx).then((v) => v.operators ?? []);
+}
+
 /** noteTokens are the placeholders a rule's note may use (serve's). */
 export function noteTokens(ctx: Ctx): Promise<NoteToken[]> {
   return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
 }
 
-// picks reports whether a condition's value is chosen from a list.
-function picks(f: Field, op: string): boolean {
-  if (f.type === BOOL) return true;
-  return f.type === ENUM && (f.values?.length ?? 0) > 0 && /^is/.test(op);
+// picks reports whether a field's values are ticked from a fixed list.
+function picks(f: Field): boolean {
+  return f.type === BOOL || (f.type === ENUM && (f.values?.length ?? 0) > 0);
 }
 
 function choices(f: Field): string[] {
   return f.type === BOOL ? ['true', 'false'] : (f.values ?? []);
 }
 
+// shownOps are the operators a row offers: is / is not for a fixed-value
+// field (a bool, is alone), a text field's without the lists; in and
+// not-in are ticked, never chosen.
+function shownOps(f: Field): string[] {
+  if (f.type === BOOL) return ['is'];
+  if (picks(f)) return ['is', 'is-not'];
+  return (f.ops ?? []).filter((o) => o !== 'in' && o !== 'not-in');
+}
+
+// placeholder is a real example: the field's help's "e.g. …".
 function placeholder(f: Field, op: string): string {
   if (f.type === DURATION) return '<n>h, <n>d or <n>w';
   if (f.type === COUNT) return 'a count, e.g. 0';
-  if (op === 'in' || op === 'not-in') return 'a, b, c';
   if (op === 'matches') return 'a regular expression';
-  return '';
+  return /e\.g\. ([^\s,;]+)/.exec(f.help ?? '')?.[1] ?? '';
 }
 
-// A new condition's first value: a picker's first choice, else empty.
-function firstValue(f: Field, op: string): string {
-  return picks(f, op) ? (choices(f)[0] ?? '') : '';
+// A new condition: the field's first operator and, ticked, its first value.
+function newCondition(f: Field): Condition {
+  const op = shownOps(f)[0] ?? f.ops?.[0] ?? 'is';
+  return { field: f.name, op, value: picks(f) ? (choices(f)[0] ?? '') : '' };
 }
 
+// select is a picker of options' values, each shown by its label.
 function select(
   cls: string,
   label: string,
   options: string[],
+  labelOf: (v: string) => string,
   value: string,
   onPick: (v: string) => void,
 ): HTMLSelectElement {
   const el = h(
     'select',
     { class: cls, 'aria-label': label },
-    ...options.map((o) => h('option', { value: o }, o)),
+    ...options.map((o) => h('option', { value: o }, labelOf(o))),
   ) as HTMLSelectElement;
   if (!options.includes(value)) {
-    el.prepend(h('option', { value }, value));
+    el.prepend(h('option', { value }, labelOf(value)));
   }
   el.value = value;
   el.addEventListener('change', () => onPick(el.value));
@@ -107,6 +147,7 @@ export function conditionEditor(
   const editable = rule.editable ?? rule.status === 'draft';
   const conds: Condition[] = (rule.match ?? []).map((c) => ({ ...c }));
   let fields: Field[] = [];
+  let ops: Operator[] = [];
   const fieldOf = (name: string) => fields.find((f) => f.name === name);
 
   const el = h('div', {
@@ -119,30 +160,75 @@ export function conditionEditor(
 
   const changed = () => onChange(conds.map((c) => ({ ...c })));
 
+  // pickControl ticks a fixed-value field's values: several for an enum
+  // (one in or not-in condition), one for a bool.
+  function pickControl(c: Condition, f: Field): HTMLElement {
+    const multi = f.type === ENUM;
+    const wrap = h('div', {
+      class: 'cb-cond-v cb-cond-picks',
+      role: 'group',
+      'aria-label': `${fieldLabel(f)} value`,
+      'data-value': c.value,
+    });
+    const paint = () => {
+      const { values } = pickedValues(c);
+      wrap.dataset.value = c.value;
+      for (const b of wrap.querySelectorAll<HTMLElement>('.cb-cond-pick')) {
+        const on = values.includes(b.dataset.value ?? '');
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-pressed', String(on));
+      }
+    };
+    for (const v of choices(f)) {
+      wrap.append(
+        h(
+          'button',
+          {
+            type: 'button',
+            class: 'kit-chip cb-cond-pick',
+            'data-value': v,
+            onclick() {
+              const { not, values } = pickedValues(c);
+              if (multi) {
+                // Kept in the order ticked: "type is issue or pull request".
+                const next = values.includes(v)
+                  ? values.filter((x) => x !== v)
+                  : [...values, v];
+                Object.assign(c, pickedCondition(c.field, not, next));
+              } else {
+                c.value = v;
+              }
+              paint();
+              changed();
+            },
+          },
+          valueLabel(f, v),
+        ),
+      );
+    }
+    paint();
+    return wrap;
+  }
+
   function valueControl(i: number, f: Field | undefined): HTMLElement {
     const c = conds[i];
     if (!editable || !f) {
-      return h('span', { class: 'cb-cond-v' }, c.value);
+      const shown =
+        c.op === 'in' || c.op === 'not-in'
+          ? pickedValues(c)
+              .values.map((v) => valueLabel(f, v))
+              .join(' or ')
+          : valueLabel(f, c.value);
+      return h('span', { class: 'cb-cond-v', 'data-value': c.value }, shown);
     }
-    if (picks(f, c.op)) {
-      return select(
-        'cb-cond-v',
-        `${c.field} value`,
-        choices(f),
-        c.value,
-        (v) => {
-          c.value = v;
-          changed();
-        },
-      );
-    }
+    if (picks(f)) return pickControl(c, f);
     const input = h('input', {
       class: 'cb-cond-v',
       type: 'text',
       value: c.value,
       placeholder: placeholder(f, c.op),
       spellcheck: false,
-      'aria-label': `${c.field} value`,
+      'aria-label': `${fieldLabel(f)} value`,
     }) as HTMLInputElement;
     input.addEventListener('input', () => {
       c.value = input.value;
@@ -151,28 +237,67 @@ export function conditionEditor(
     return input;
   }
 
+  // opControl is the row's operator: a picked field's is / is not stands
+  // for in / not-in too (several values ticked).
+  function opControl(c: Condition, f: Field | undefined): HTMLElement {
+    // A list reads as is / is not ("type is issue or pull request").
+    const readOp = c.op === 'in' ? 'is' : c.op === 'not-in' ? 'is-not' : c.op;
+    if (!editable || !f) {
+      return h(
+        'span',
+        { class: 'cb-cond-o', 'data-value': c.op },
+        opLabel(ops, readOp),
+      );
+    }
+    if (picks(f)) {
+      return select(
+        'cb-cond-o',
+        `${fieldLabel(f)} operator`,
+        shownOps(f),
+        (v) => opLabel(ops, v),
+        f.type === BOOL ? c.op : readOp,
+        (v) => {
+          if (f.type === BOOL) c.op = v;
+          else {
+            const { values } = pickedValues(c);
+            Object.assign(c, pickedCondition(c.field, v === 'is-not', values));
+          }
+          rowsEl
+            .querySelector<HTMLElement>(
+              `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks`,
+            )
+            ?.setAttribute('data-value', c.value);
+          changed();
+        },
+      );
+    }
+    return select(
+      'cb-cond-o',
+      `${fieldLabel(f)} operator`,
+      shownOps(f),
+      (v) => opLabel(ops, v),
+      c.op,
+      (v) => {
+        c.op = v;
+        const input = rowsEl.querySelector<HTMLInputElement>(
+          `.cb-cond[data-index="${conds.indexOf(c)}"] input.cb-cond-v`,
+        );
+        if (input) input.placeholder = placeholder(f, v);
+        changed();
+      },
+    );
+  }
+
   function row(i: number): HTMLElement {
     const c = conds[i];
     const f = fieldOf(c.field);
-    const op =
-      editable && f
-        ? select('cb-cond-o', `${c.field} operator`, f.ops ?? [], c.op, (v) => {
-            const wasPick = picks(f, c.op);
-            c.op = v;
-            if (picks(f, v) !== wasPick) {
-              c.value = firstValue(f, v);
-              render();
-            }
-            changed();
-          })
-        : h('span', { class: 'cb-cond-o' }, c.op);
     const remove = editable
       ? h(
           'button',
           {
             type: 'button',
             class: 'cb-cond-rm',
-            'aria-label': `remove ${c.field} ${c.op}`,
+            'aria-label': `remove ${conditionText(c, fields, ops)}`,
             onclick() {
               conds.splice(i, 1);
               render();
@@ -188,8 +313,12 @@ export function conditionEditor(
       h(
         'div',
         { class: 'kit-tr cb-cond-row' + (editable ? ' cb-cond-edit' : '') },
-        h('span', { class: 'cb-cond-f' }, c.field),
-        op,
+        h(
+          'span',
+          { class: 'cb-cond-f', 'data-name': c.field },
+          f ? fieldLabel(f) : c.field,
+        ),
+        opControl(c, f),
         valueControl(i, f),
         remove,
       ),
@@ -205,29 +334,49 @@ export function conditionEditor(
     if (e) setConditionError(el, e.index, e.message);
   }
 
-  // ---- + condition ---------------------------------------------------------
+  // ---- + condition: a dropdown over the editor -----------------------------
 
-  const menu = h('div', {
-    class: 'cb-cond-menu',
-    role: 'menu',
-    'aria-label': 'add a condition',
-    hidden: true,
+  const search = h('input', {
+    class: 'cb-cond-search',
+    type: 'text',
+    placeholder: 'find a field',
+    spellcheck: false,
+    'aria-label': 'find a field',
+    autocomplete: 'off',
+  }) as HTMLInputElement;
+  const options = h('div', {
+    class: 'cb-cond-menu-list',
+    role: 'listbox',
+    'aria-label': 'fields',
   });
+  const menu = h(
+    'div',
+    { class: 'cb-cond-menu', hidden: true },
+    search,
+    options,
+  );
   const add = h(
     'button',
     {
       type: 'button',
       class: 'cb-cond-add',
       'aria-expanded': 'false',
+      'aria-haspopup': 'listbox',
       onclick() {
         setMenu(menu.hidden);
       },
     },
     '+ condition',
   );
+  const addWrap = h('div', { class: 'cb-cond-add-wrap' }, add, menu);
+  // Focus leaving it (Tab) closes it.
+  addWrap.addEventListener('focusout', (e: FocusEvent) => {
+    if (!menu.hidden && !addWrap.contains(e.relatedTarget as Node | null))
+      setMenu(false);
+  });
 
-  // Esc closes the open menu wherever focus is (the page's keys are not
-  // suspended for it: it is part of the document, not a sheet).
+  // Esc closes the open dropdown wherever focus is (it is part of the
+  // document, not a sheet: the page's keys are not suspended for it).
   function onEsc(e: KeyboardEvent): void {
     if (e.key !== 'Escape' || e.isComposing) return;
     if (!el.isConnected) {
@@ -239,79 +388,128 @@ export function conditionEditor(
     setMenu(false);
     add.focus();
   }
+  // A click outside closes it.
+  function onDown(e: PointerEvent): void {
+    if (!el.isConnected || !addWrap.contains(e.target as Node)) setMenu(false);
+  }
 
   function setMenu(open: boolean): void {
     menu.hidden = !open;
     add.setAttribute('aria-expanded', String(open));
     if (open) {
+      search.value = '';
+      fillMenu();
       document.addEventListener('keydown', onEsc, true);
-      menu.querySelector<HTMLElement>('.cb-cond-menu-op')?.focus();
+      document.addEventListener('pointerdown', onDown, true);
+      search.focus();
     } else {
       document.removeEventListener('keydown', onEsc, true);
+      document.removeEventListener('pointerdown', onDown, true);
     }
   }
 
-  menuNav(menu, '.cb-cond-menu-op', add, () => setMenu(false));
-
-  function addCondition(f: Field, op: string): void {
-    conds.push({ field: f.name, op, value: firstValue(f, op) });
+  function addCondition(f: Field): void {
+    conds.push(newCondition(f));
     setMenu(false);
     render();
     changed();
     const last = rowsEl.lastElementChild;
-    last?.querySelector<HTMLElement>('.cb-cond-v')?.focus();
+    last?.querySelector<HTMLElement>('.cb-cond-v, .cb-cond-pick')?.focus();
   }
 
-  function fillMenu(): void {
-    menu.replaceChildren(
-      ...fields.map((f) =>
-        h(
-          'div',
-          { class: 'cb-cond-menu-row', 'data-field': f.name },
-          h('span', { class: 'cb-cond-menu-f' }, f.name),
-          h(
-            'span',
-            { class: 'cb-cond-menu-ops' },
-            ...(f.ops ?? []).map((op) =>
-              h(
-                'button',
-                {
-                  type: 'button',
-                  role: 'menuitem',
-                  class: 'kit-chip cb-cond-menu-op',
-                  'data-op': op,
-                  onclick() {
-                    addCondition(f, op);
-                  },
-                },
-                op,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
+  // offered are the dropdown's rows a pick may choose (not a used field).
+  const offered = () => [
+    ...options.querySelectorAll<HTMLElement>(
+      '.cb-cond-menu-row:not([aria-disabled="true"])',
+    ),
+  ];
+  function setActive(to: HTMLElement | undefined): void {
+    for (const r of options.querySelectorAll<HTMLElement>(
+      '.cb-cond-menu-row',
+    )) {
+      const on = r === to;
+      r.classList.toggle('on', on);
+      r.setAttribute('aria-selected', String(on));
+    }
+    to?.scrollIntoView({ block: 'nearest' });
   }
+
+  // fillMenu lists the fields that apply to every type the type condition
+  // leaves (with none, every field, a field that applies to some types
+  // naming them), narrowed by the search; a used field shows, not offered.
+  function fillMenu(): void {
+    const kind = fieldOf('kind');
+    const types = typesOf(conds, kind?.values ?? []);
+    const used = new Set(conds.map((c) => c.field));
+    options.replaceChildren(
+      ...fields
+        .filter((f) => fieldApplies(f, types) && fieldFound(f, search.value))
+        .map((f) => {
+          const taken = used.has(f.name);
+          const where = types ? '' : fieldTypes(f, kind);
+          const hint = taken
+            ? 'already used, change it above'
+            : [f.help, where].filter((x) => x).join(' \u00b7 ');
+          return h(
+            'div',
+            {
+              class: 'cb-cond-menu-row',
+              role: 'option',
+              'data-field': f.name,
+              'aria-disabled': String(taken),
+              'aria-selected': 'false',
+              onpointerdown(e: PointerEvent) {
+                e.preventDefault(); // keep focus in the search box
+              },
+              onclick() {
+                if (!taken) addCondition(f);
+              },
+            },
+            h('span', { class: 'cb-cond-menu-f' }, fieldLabel(f)),
+            hint ? h('span', { class: 'cb-cond-menu-help' }, hint) : null,
+          );
+        }),
+    );
+    setActive(offered()[0]);
+  }
+
+  search.addEventListener('input', () => fillMenu());
+  search.addEventListener('keydown', (e: KeyboardEvent) => {
+    if (e.isComposing) return;
+    const list = offered();
+    const at = list.findIndex((r) => r.classList.contains('on'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!list.length) return;
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      setActive(list[(at + step + list.length) % list.length]);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const f = fieldOf(list[at]?.dataset.field ?? '');
+      if (f) addCondition(f);
+    }
+  });
 
   render();
-  if (editable) {
-    el.append(add, menu);
-    // The vocabulary makes the rows editable and fills the menu.
-    void ruleVocabulary(ctx)
-      .then((fs) => {
-        fields = fs;
-        fillMenu();
-        render();
+  if (editable) el.append(addWrap);
+  // The vocabulary labels the rows, makes a draft's editable and fills its
+  // dropdown. A read-only table without it still reads, in raw names.
+  void Promise.all([ruleVocabulary(ctx), ruleOperators(ctx)])
+    .then(([fs, os]) => {
+      fields = fs;
+      ops = os;
+      render();
+      el.dataset.ready = 'true';
+    })
+    .catch((err: unknown) => {
+      if (!editable) {
         el.dataset.ready = 'true';
-      })
-      .catch((err: unknown) => {
-        general.textContent =
-          err instanceof Error ? err.message : 'the vocabulary did not load';
-        general.hidden = false;
-      });
-  } else {
-    el.dataset.ready = 'true';
-  }
+        return;
+      }
+      general.textContent =
+        err instanceof Error ? err.message : 'the vocabulary did not load';
+      general.hidden = false;
+    });
   return el;
 }
 

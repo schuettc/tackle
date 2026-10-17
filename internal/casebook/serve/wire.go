@@ -8,6 +8,7 @@ import (
 	"github.com/subaud-tools/tackle/internal/casebook/apply"
 	"github.com/subaud-tools/tackle/internal/casebook/deliver"
 	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/filters"
 	"github.com/subaud-tools/tackle/internal/casebook/item"
 	"github.com/subaud-tools/tackle/internal/casebook/journal"
 	"github.com/subaud-tools/tackle/internal/casebook/propose"
@@ -324,6 +325,22 @@ type SettledResult struct {
 	Delivery *int64 `json:"delivery,omitempty"`
 }
 
+// FiltersView is the response body of GET /api/filters, POST
+// /api/filters/save and POST /api/filters/delete: every saved filter, in
+// id order.
+type FiltersView struct {
+	Filters []FilterRow `json:"filters"`
+}
+
+// FilterRow is one saved filter. Invalid is why it is not valid (serve's
+// validation message, naming the condition), or why its file can't be read
+// (the filter is then its id alone, with no conditions); "" when valid. A
+// filter that isn't valid can be edited or deleted, not selected.
+type FilterRow struct {
+	Filter  filters.Filter `json:"filter"`
+	Invalid string         `json:"invalid,omitempty"`
+}
+
 // RulesView is the response body of GET /api/rules.
 type RulesView struct {
 	Rules []RuleRow `json:"rules"`
@@ -397,6 +414,8 @@ type VocabularyView struct {
 	Fields []rules.Field `json:"fields"`
 	// NoteTokens are the placeholders a rule's note may use.
 	NoteTokens []rules.NoteToken `json:"note_tokens"`
+	// Operators are every operator with the page's label for it.
+	Operators []rules.Operator `json:"operators"`
 }
 
 // DecisionVocabView is the response body of GET /api/decisions/vocabulary.

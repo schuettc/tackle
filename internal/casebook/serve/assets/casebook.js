@@ -36,7 +36,10 @@ function parse(hash) {
   return { section, sub, query };
 }
 function attentionQuery(o) {
-  return o.flat ? "flat" : "";
+  const parts = [];
+  if (o.filters.length) parts.push(`filters=${o.filters.join(",")}`);
+  if (o.flat) parts.push("flat");
+  return parts.join("&");
 }
 function flatFor(explicit, query, stored) {
   return explicit ? new URLSearchParams(query).has("flat") : stored;
@@ -837,11 +840,11 @@ var PICK_EXAMPLE = {
   "pr-or-issue": "tackle#58, a title, or https://github.com/owner/repo/pull/58",
   repo: "tackle, a name, or https://github.com/owner/repo"
 };
-function showChoiceError(root, message3) {
+function showChoiceError(root, message4) {
   const err = root.querySelector(".cb-choice-err");
   if (!err) return;
-  err.textContent = message3;
-  err.hidden = !message3;
+  err.textContent = message4;
+  err.hidden = !message4;
 }
 function renderChoices(ctx, kind, opts) {
   const grid = h2("div", { class: "cb-choices" });
@@ -1435,26 +1438,26 @@ function outwardGo(n) {
 }
 function plannedKeys(jobs) {
   const m = /* @__PURE__ */ new Map();
-  const rank = (h13) => h13.planned ? 0 : 1;
+  const rank = (h14) => h14.planned ? 0 : 1;
   for (const j of jobs) {
     if (!["planned", "approved", "running", "paused"].includes(j.state))
       continue;
-    const h13 = { id: j.id, planned: j.state === "planned" };
+    const h14 = { id: j.id, planned: j.state === "planned" };
     for (const s of j.steps ?? []) {
       const was = m.get(s.key);
-      if (!was || rank(h13) > rank(was) || rank(h13) === rank(was) && h13.id > was.id)
-        m.set(s.key, h13);
+      if (!was || rank(h14) > rank(was) || rank(h14) === rank(was) && h14.id > was.id)
+        m.set(s.key, h14);
     }
   }
   return m;
 }
-function heldLabel(h13) {
-  return `${h13.planned ? "in plan" : "in job"} #${h13.id}`;
+function heldLabel(h14) {
+  return `${h14.planned ? "in plan" : "in job"} #${h14.id}`;
 }
 function heldWhere(held) {
   const vs = [...held.values()];
-  const plans = vs.some((h13) => h13.planned);
-  const jobs = vs.some((h13) => !h13.planned);
+  const plans = vs.some((h14) => h14.planned);
+  const jobs = vs.some((h14) => !h14.planned);
   if (plans && jobs) return "in a plan or a job";
   return jobs ? "in a job" : "in a plan";
 }
@@ -1471,9 +1474,9 @@ function ageText(ms) {
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
-  const h13 = Math.floor(m / 60);
-  if (h13 < 24) return `${h13}h`;
-  return `${Math.floor(h13 / 24)}d`;
+  const h14 = Math.floor(m / 60);
+  if (h14 < 24) return `${h14}h`;
+  return `${Math.floor(h14 / 24)}d`;
 }
 function observations(builtAt, intervalMs, now) {
   const age = now - builtAt;
@@ -1492,9 +1495,9 @@ function fmtAge(ts) {
   if (s < 60) return "now";
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m`;
-  const h13 = Math.floor(m / 60);
-  if (h13 < 24) return `${h13}h`;
-  const d = Math.floor(h13 / 24);
+  const h14 = Math.floor(m / 60);
+  if (h14 < 24) return `${h14}h`;
+  const d = Math.floor(h14 / 24);
   if (d < 30) return `${d}d`;
   const mo = Math.floor(d / 30);
   if (mo < 12) return `${mo}mo`;
@@ -2826,9 +2829,10 @@ function needsCard(c, step, j, agent, hooks) {
 
 // attention.ts
 import {
-  list as list2,
+  list as list3,
   createSelection,
-  h as h7
+  h as h10,
+  ApiError as ApiError4
 } from "/_kit/kit.js";
 
 // item.ts
@@ -3193,17 +3197,2185 @@ function renderItem(ctx, detail, hooks = {}) {
   return h6("div", { class: "kit-doc cb-item-doc" }, hooks.nav ?? null, el);
 }
 
+// filters.ts
+import { h as h8, ApiError as ApiError2 } from "/_kit/kit.js";
+
+// conditions.ts
+import { h as h7 } from "/_kit/kit.js";
+
+// rules-text.ts
+function trackRecord(r) {
+  const parts = [];
+  if (r.accepted) parts.push(`${r.accepted} accepted`);
+  if (r.rejected) parts.push(`${r.rejected} rejected`);
+  if (r.pending) parts.push(`${r.pending} pending`);
+  return parts.join(" · ");
+}
+function rowKicker(row) {
+  const rec = trackRecord(row.record);
+  const head = row.invalid ? "not valid" : `${row.matches} match · ${row.excluded} excluded`;
+  return rec ? `${head} · ${rec}` : head;
+}
+function sameAction(a, b) {
+  return a.disposition === b.disposition && (a.until ?? "") === (b.until ?? "") && (a.note ?? "") === (b.note ?? "");
+}
+function authorOf(createdBy) {
+  const i = createdBy.indexOf(":");
+  if (i > 0) return { agent: true, name: createdBy.slice(0, i) };
+  return { agent: false, name: "you" };
+}
+function reasonSummary(by) {
+  const rs = by ?? [];
+  if (rs.length === 1 && rs[0].reason === "matched") return "";
+  return rs.map((r) => `${r.count} ${r.reason.toLowerCase()}`).join(" · ");
+}
+function matchesHeading(total, by) {
+  const why = reasonSummary(by);
+  return `matches now · ${total}` + (why ? ` · ${why}` : "");
+}
+function conditionErrorIndex(message4) {
+  const m = /^condition (\d+): /.exec(message4);
+  const n = m ? Number(m[1]) : 0;
+  return n >= 1 ? n - 1 : -1;
+}
+function viewCounts(rules) {
+  let active = 0;
+  for (const r of rules) if (r.status === "active") active++;
+  return { all: rules.length, active, drafts: rules.length - active };
+}
+function sameConditions(a, b) {
+  if (a.length !== b.length) return false;
+  return a.every(
+    (c, i) => c.field === b[i].field && c.op === b[i].op && c.value === b[i].value
+  );
+}
+function sameRule(a, b) {
+  const ex = (r) => (r.exclude ?? []).map((x) => `${x.key}\0${x.reason ?? ""}`).join("\n");
+  return a.id === b.id && a.name === b.name && a.status === b.status && a.created_by === b.created_by && a.edited_at === b.edited_at && sameConditions(a.match ?? [], b.match ?? []) && sameAction(a.propose, b.propose) && ex(a) === ex(b);
+}
+function hasKindCondition(conds) {
+  return conds.some((c) => c.field === "kind");
+}
+function orList(words) {
+  if (words.length <= 1) return words.join("");
+  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+}
+function kindHint(conds, allowed, all) {
+  if (hasKindCondition(conds) || !allowed.length) return "";
+  const missing = [...new Set(all)].filter((d) => !allowed.includes(d)).sort();
+  return missing.length ? `add a kind condition to propose ${orList(missing)}` : "";
+}
+function refusedDisposition(d, conds, allowed) {
+  const what = hasKindCondition(conds) ? "what this rule matches" : "every kind of item (the rule has no kind condition)";
+  return `${d} can’t be proposed for ${what} (allowed: ${allowed.join(", ")})`;
+}
+function slug(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
+}
+function fieldLabel(f) {
+  return f.label || f.name;
+}
+function opLabel(ops, op) {
+  return ops.find((o) => o.name === op)?.label || op;
+}
+function valueLabel(f, v) {
+  return f?.value_labels?.[v] || v;
+}
+function conditionText(c, fields, ops) {
+  const f = fields.find((x) => x.name === c.field);
+  const name = f ? fieldLabel(f) : c.field;
+  if (c.op === "in" || c.op === "not-in") {
+    const { values } = pickedValues(c);
+    const words = orList(values.map((v) => valueLabel(f, v)));
+    return `${name} ${opLabel(ops, c.op === "in" ? "is" : "is-not")} ${words}`;
+  }
+  return `${name} ${opLabel(ops, c.op)} ${valueLabel(f, c.value)}`;
+}
+function pickedValues(c) {
+  const not = c.op === "is-not" || c.op === "not-in";
+  const values = c.op === "in" || c.op === "not-in" ? c.value.split(",").map((v) => v.trim()).filter((v) => v !== "") : c.value === "" ? [] : [c.value];
+  return { not, values };
+}
+function pickedCondition(field, not, values) {
+  if (values.length > 1) {
+    return { field, op: not ? "not-in" : "in", value: values.join(",") };
+  }
+  return { field, op: not ? "is-not" : "is", value: values[0] ?? "" };
+}
+function typesOf(conds, all) {
+  const c = conds.find((x) => x.field === "kind");
+  if (!c) return null;
+  const { not, values } = pickedValues(c);
+  return all.filter((k) => values.includes(k) !== not);
+}
+function fieldApplies(f, types) {
+  const ks = f.kinds ?? [];
+  if (!types || ks.length === 0) return true;
+  return types.every((t) => ks.includes(t));
+}
+function fieldTypes(f, kind) {
+  return (f.kinds ?? []).map((k) => valueLabel(kind, k)).join(", ");
+}
+function fieldFound(f, q) {
+  const s = q.trim().toLowerCase();
+  if (!s) return true;
+  return fieldLabel(f).toLowerCase().includes(s) || (f.help ?? "").toLowerCase().includes(s);
+}
+
+// conditions.ts
+var ENUM = 0;
+var DURATION = 2;
+var BOOL = 3;
+var COUNT = 4;
+var vocab = null;
+var errors = /* @__PURE__ */ new WeakMap();
+function ruleVocabularyView(ctx) {
+  if (!vocab) {
+    vocab = ctx.api.get("/rules/vocabulary");
+    vocab.catch(() => {
+      vocab = null;
+    });
+  }
+  return vocab;
+}
+function ruleVocabulary(ctx) {
+  return ruleVocabularyView(ctx).then((v) => v.fields ?? []);
+}
+function ruleOperators(ctx) {
+  return ruleVocabularyView(ctx).then((v) => v.operators ?? []);
+}
+function noteTokens(ctx) {
+  return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
+}
+function picks(f) {
+  return f.type === BOOL || f.type === ENUM && (f.values?.length ?? 0) > 0;
+}
+function choices(f) {
+  return f.type === BOOL ? ["true", "false"] : f.values ?? [];
+}
+function shownOps(f) {
+  if (f.type === BOOL) return ["is"];
+  if (picks(f)) return ["is", "is-not"];
+  return (f.ops ?? []).filter((o) => o !== "in" && o !== "not-in");
+}
+function placeholder(f, op) {
+  if (f.type === DURATION) return "<n>h, <n>d or <n>w";
+  if (f.type === COUNT) return "a count, e.g. 0";
+  if (op === "matches") return "a regular expression";
+  return /e\.g\. ([^\s,;]+)/.exec(f.help ?? "")?.[1] ?? "";
+}
+function newCondition(f) {
+  const op = shownOps(f)[0] ?? f.ops?.[0] ?? "is";
+  return { field: f.name, op, value: picks(f) ? choices(f)[0] ?? "" : "" };
+}
+function select(cls, label, options, labelOf, value, onPick) {
+  const el = h7(
+    "select",
+    { class: cls, "aria-label": label },
+    ...options.map((o) => h7("option", { value: o }, labelOf(o)))
+  );
+  if (!options.includes(value)) {
+    el.prepend(h7("option", { value }, labelOf(value)));
+  }
+  el.value = value;
+  el.addEventListener("change", () => onPick(el.value));
+  return el;
+}
+function conditionEditor(ctx, rule, onChange) {
+  const editable = rule.editable ?? rule.status === "draft";
+  const conds = (rule.match ?? []).map((c) => ({ ...c }));
+  let fields = [];
+  let ops = [];
+  const fieldOf = (name) => fields.find((f) => f.name === name);
+  const el = h7("div", {
+    class: "kit-table cb-conds",
+    "data-testid": "conditions"
+  });
+  const rowsEl = h7("div", { class: "cb-cond-rows" });
+  const general = h7("div", { class: "cb-cond-err", hidden: true });
+  el.append(rowsEl, general);
+  const changed = () => onChange(conds.map((c) => ({ ...c })));
+  function pickControl(c, f) {
+    const multi = f.type === ENUM;
+    const wrap = h7("div", {
+      class: "cb-cond-v cb-cond-picks",
+      role: "group",
+      "aria-label": `${fieldLabel(f)} value`,
+      "data-value": c.value
+    });
+    const paint = () => {
+      const { values } = pickedValues(c);
+      wrap.dataset.value = c.value;
+      for (const b of wrap.querySelectorAll(".cb-cond-pick")) {
+        const on = values.includes(b.dataset.value ?? "");
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", String(on));
+      }
+    };
+    for (const v of choices(f)) {
+      wrap.append(
+        h7(
+          "button",
+          {
+            type: "button",
+            class: "kit-chip cb-cond-pick",
+            "data-value": v,
+            onclick() {
+              const { not, values } = pickedValues(c);
+              if (multi) {
+                const next = values.includes(v) ? values.filter((x) => x !== v) : [...values, v];
+                Object.assign(c, pickedCondition(c.field, not, next));
+              } else {
+                c.value = v;
+              }
+              paint();
+              changed();
+            }
+          },
+          valueLabel(f, v)
+        )
+      );
+    }
+    paint();
+    return wrap;
+  }
+  function valueControl(i, f) {
+    const c = conds[i];
+    if (!editable || !f) {
+      const shown = c.op === "in" || c.op === "not-in" ? pickedValues(c).values.map((v) => valueLabel(f, v)).join(" or ") : valueLabel(f, c.value);
+      return h7("span", { class: "cb-cond-v", "data-value": c.value }, shown);
+    }
+    if (picks(f)) return pickControl(c, f);
+    const input = h7("input", {
+      class: "cb-cond-v",
+      type: "text",
+      value: c.value,
+      placeholder: placeholder(f, c.op),
+      spellcheck: false,
+      "aria-label": `${fieldLabel(f)} value`
+    });
+    input.addEventListener("input", () => {
+      c.value = input.value;
+      changed();
+    });
+    return input;
+  }
+  function opControl(c, f) {
+    const readOp = c.op === "in" ? "is" : c.op === "not-in" ? "is-not" : c.op;
+    if (!editable || !f) {
+      return h7(
+        "span",
+        { class: "cb-cond-o", "data-value": c.op },
+        opLabel(ops, readOp)
+      );
+    }
+    if (picks(f)) {
+      return select(
+        "cb-cond-o",
+        `${fieldLabel(f)} operator`,
+        shownOps(f),
+        (v) => opLabel(ops, v),
+        f.type === BOOL ? c.op : readOp,
+        (v) => {
+          if (f.type === BOOL) c.op = v;
+          else {
+            const { values } = pickedValues(c);
+            Object.assign(c, pickedCondition(c.field, v === "is-not", values));
+          }
+          rowsEl.querySelector(
+            `.cb-cond[data-index="${conds.indexOf(c)}"] .cb-cond-picks`
+          )?.setAttribute("data-value", c.value);
+          changed();
+        }
+      );
+    }
+    return select(
+      "cb-cond-o",
+      `${fieldLabel(f)} operator`,
+      shownOps(f),
+      (v) => opLabel(ops, v),
+      c.op,
+      (v) => {
+        c.op = v;
+        const input = rowsEl.querySelector(
+          `.cb-cond[data-index="${conds.indexOf(c)}"] input.cb-cond-v`
+        );
+        if (input) input.placeholder = placeholder(f, v);
+        changed();
+      }
+    );
+  }
+  function row(i) {
+    const c = conds[i];
+    const f = fieldOf(c.field);
+    const remove = editable ? h7(
+      "button",
+      {
+        type: "button",
+        class: "cb-cond-rm",
+        "aria-label": `remove ${conditionText(c, fields, ops)}`,
+        onclick() {
+          conds.splice(i, 1);
+          render();
+          changed();
+        }
+      },
+      "×"
+    ) : null;
+    return h7(
+      "div",
+      { class: "cb-cond", "data-index": i },
+      h7(
+        "div",
+        { class: "kit-tr cb-cond-row" + (editable ? " cb-cond-edit" : "") },
+        h7(
+          "span",
+          { class: "cb-cond-f", "data-name": c.field },
+          f ? fieldLabel(f) : c.field
+        ),
+        opControl(c, f),
+        valueControl(i, f),
+        remove
+      ),
+      h7("div", { class: "cb-cond-err", hidden: true })
+    );
+  }
+  function render() {
+    rowsEl.replaceChildren(...conds.map((_, i) => row(i)));
+    const e = errors.get(el);
+    if (e) setConditionError(el, e.index, e.message);
+  }
+  const search = h7("input", {
+    class: "cb-cond-search",
+    type: "text",
+    placeholder: "find a field",
+    spellcheck: false,
+    "aria-label": "find a field",
+    autocomplete: "off"
+  });
+  const options = h7("div", {
+    class: "cb-cond-menu-list",
+    role: "listbox",
+    "aria-label": "fields"
+  });
+  const menu = h7(
+    "div",
+    { class: "cb-cond-menu", hidden: true },
+    search,
+    options
+  );
+  const add = h7(
+    "button",
+    {
+      type: "button",
+      class: "cb-cond-add",
+      "aria-expanded": "false",
+      "aria-haspopup": "listbox",
+      onclick() {
+        setMenu(menu.hidden);
+      }
+    },
+    "+ condition"
+  );
+  const addWrap = h7("div", { class: "cb-cond-add-wrap" }, add, menu);
+  addWrap.addEventListener("focusout", (e) => {
+    if (!menu.hidden && !addWrap.contains(e.relatedTarget))
+      setMenu(false);
+  });
+  function onEsc(e) {
+    if (e.key !== "Escape" || e.isComposing) return;
+    if (!el.isConnected) {
+      document.removeEventListener("keydown", onEsc, true);
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu(false);
+    add.focus();
+  }
+  function onDown(e) {
+    if (!el.isConnected || !addWrap.contains(e.target)) setMenu(false);
+  }
+  function setMenu(open) {
+    menu.hidden = !open;
+    add.setAttribute("aria-expanded", String(open));
+    if (open) {
+      search.value = "";
+      fillMenu();
+      document.addEventListener("keydown", onEsc, true);
+      document.addEventListener("pointerdown", onDown, true);
+      search.focus();
+    } else {
+      document.removeEventListener("keydown", onEsc, true);
+      document.removeEventListener("pointerdown", onDown, true);
+    }
+  }
+  function addCondition(f) {
+    conds.push(newCondition(f));
+    setMenu(false);
+    render();
+    changed();
+    const last = rowsEl.lastElementChild;
+    last?.querySelector(".cb-cond-v, .cb-cond-pick")?.focus();
+  }
+  const offered = () => [
+    ...options.querySelectorAll(
+      '.cb-cond-menu-row:not([aria-disabled="true"])'
+    )
+  ];
+  function setActive(to) {
+    for (const r of options.querySelectorAll(
+      ".cb-cond-menu-row"
+    )) {
+      const on = r === to;
+      r.classList.toggle("on", on);
+      r.setAttribute("aria-selected", String(on));
+    }
+    to?.scrollIntoView({ block: "nearest" });
+  }
+  function fillMenu() {
+    const kind = fieldOf("kind");
+    const types = typesOf(conds, kind?.values ?? []);
+    const used = new Set(conds.map((c) => c.field));
+    options.replaceChildren(
+      ...fields.filter((f) => fieldApplies(f, types) && fieldFound(f, search.value)).map((f) => {
+        const taken = used.has(f.name);
+        const where = types ? "" : fieldTypes(f, kind);
+        const hint = taken ? "already used, change it above" : [f.help, where].filter((x) => x).join(" · ");
+        return h7(
+          "div",
+          {
+            class: "cb-cond-menu-row",
+            role: "option",
+            "data-field": f.name,
+            "aria-disabled": String(taken),
+            "aria-selected": "false",
+            onpointerdown(e) {
+              e.preventDefault();
+            },
+            onclick() {
+              if (!taken) addCondition(f);
+            }
+          },
+          h7("span", { class: "cb-cond-menu-f" }, fieldLabel(f)),
+          hint ? h7("span", { class: "cb-cond-menu-help" }, hint) : null
+        );
+      })
+    );
+    setActive(offered()[0]);
+  }
+  search.addEventListener("input", () => fillMenu());
+  search.addEventListener("keydown", (e) => {
+    if (e.isComposing) return;
+    const list4 = offered();
+    const at2 = list4.findIndex((r) => r.classList.contains("on"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!list4.length) return;
+      const step = e.key === "ArrowDown" ? 1 : -1;
+      setActive(list4[(at2 + step + list4.length) % list4.length]);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const f = fieldOf(list4[at2]?.dataset.field ?? "");
+      if (f) addCondition(f);
+    }
+  });
+  render();
+  if (editable) el.append(addWrap);
+  void Promise.all([ruleVocabulary(ctx), ruleOperators(ctx)]).then(([fs, os]) => {
+    fields = fs;
+    ops = os;
+    render();
+    el.dataset.ready = "true";
+  }).catch((err) => {
+    if (!editable) {
+      el.dataset.ready = "true";
+      return;
+    }
+    general.textContent = err instanceof Error ? err.message : "the vocabulary did not load";
+    general.hidden = false;
+  });
+  return el;
+}
+function setConditionError(editor, index, message4) {
+  if (message4 === null) errors.delete(editor);
+  else errors.set(editor, { index, message: message4 });
+  for (const e of editor.querySelectorAll(".cb-cond-err")) {
+    e.hidden = true;
+    e.textContent = "";
+  }
+  for (const r2 of editor.querySelectorAll(".cb-cond[data-invalid]")) {
+    r2.removeAttribute("data-invalid");
+  }
+  if (message4 === null) return;
+  const r = editor.querySelector(
+    `.cb-cond[data-index="${index}"]`
+  );
+  const slot = r ? r.querySelector(".cb-cond-err") : editor.querySelector(":scope > .cb-cond-err");
+  r?.setAttribute("data-invalid", "");
+  if (slot) {
+    slot.textContent = message4;
+    slot.hidden = false;
+  }
+}
+
+// menu-nav.ts
+function menuNav(menu, selector, opener, close) {
+  const items = () => [...menu.querySelectorAll(selector)];
+  const rove = (to) => {
+    for (const it of items()) it.tabIndex = it === to ? 0 : -1;
+  };
+  menu.addEventListener("focusin", (e) => {
+    const t = e.target;
+    if (t.matches(selector)) rove(t);
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+    const list4 = items();
+    if (!list4.length) return;
+    const at2 = list4.indexOf(document.activeElement);
+    let next = -1;
+    switch (e.key) {
+      case "ArrowDown":
+      case "ArrowRight":
+        next = at2 < 0 ? 0 : (at2 + 1) % list4.length;
+        break;
+      case "ArrowUp":
+      case "ArrowLeft":
+        next = at2 < 0 ? list4.length - 1 : (at2 - 1 + list4.length) % list4.length;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = list4.length - 1;
+        break;
+      default:
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    rove(list4[next]);
+    list4[next].focus();
+  });
+  menu.addEventListener("focusout", (e) => {
+    if (menu.hidden) return;
+    const to = e.relatedTarget;
+    if (to && (menu.contains(to) || to === opener)) return;
+    close();
+  });
+}
+
+// filters-text.ts
+function parseFilterIds(s) {
+  const out = [];
+  for (const part of (s ?? "").split(",")) {
+    const id = part.trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+function toggleFilter(rows, selected, id) {
+  if (selected.includes(id)) return selected.filter((x) => x !== id);
+  const row = rows.find((r) => r.filter.id === id);
+  if (!row || row.invalid) return selected;
+  return [...selected, id];
+}
+function filterLabel(rows, ids) {
+  return ids.map((id) => rows.find((r) => r.filter.id === id)?.filter.name ?? id).join(" + ");
+}
+
+// filters.ts
+function message2(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function makeFilterBar(ctx, hooks) {
+  let rows = [];
+  let selected = [];
+  const chipsEl = h8("div", {
+    class: "kit-chips cb-filter-chips",
+    "data-group": "filters"
+  });
+  const addBtn = h8(
+    "button",
+    {
+      type: "button",
+      class: "kit-chip cb-filter-add",
+      onclick() {
+        hooks.onEdit(null);
+      }
+    },
+    "+ filter"
+  );
+  const errEl = h8("p", { class: "cb-filter-err", hidden: true });
+  const el = h8(
+    "div",
+    { class: "cb-filters", "aria-label": "saved filters" },
+    chipsEl,
+    errEl
+  );
+  let closeMenu = null;
+  function chip(row) {
+    const id = row.filter.id;
+    const on = selected.includes(id);
+    const b = h8(
+      "button",
+      {
+        type: "button",
+        class: "kit-chip cb-filter" + (on ? " on" : ""),
+        "data-id": id,
+        "aria-pressed": String(on),
+        onclick() {
+          const next = toggleFilter(rows, selected, id);
+          if (next !== selected) hooks.onSelect(next);
+        }
+      },
+      row.filter.name || id
+    );
+    if (row.invalid) {
+      b.setAttribute("data-invalid", "");
+      b.setAttribute("aria-disabled", "true");
+      b.title = row.invalid;
+    }
+    const more = h8("button", {
+      type: "button",
+      class: "cb-filter-more",
+      "aria-label": `${row.filter.name || id}: edit or delete`,
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      onclick() {
+        setMenu(menu.hidden);
+      }
+    });
+    more.textContent = "⋯";
+    const item = (label, run) => h8(
+      "button",
+      {
+        type: "button",
+        class: "cb-filter-menu-item",
+        role: "menuitem",
+        "data-act": label,
+        onclick() {
+          setMenu(false);
+          run();
+        }
+      },
+      label
+    );
+    const menu = h8(
+      "div",
+      { class: "cb-filter-menu", role: "menu", hidden: true },
+      item("edit", () => hooks.onEdit(row)),
+      item("delete", () => void remove(id))
+    );
+    const onEsc = (e) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      more.focus();
+    };
+    function setMenu(open) {
+      if (open) closeMenu?.();
+      menu.hidden = !open;
+      more.setAttribute("aria-expanded", String(open));
+      if (open) {
+        closeMenu = () => setMenu(false);
+        document.addEventListener("keydown", onEsc, true);
+        menu.querySelector(".cb-filter-menu-item")?.focus();
+      } else {
+        if (closeMenu) closeMenu = null;
+        document.removeEventListener("keydown", onEsc, true);
+      }
+    }
+    menuNav(menu, ".cb-filter-menu-item", more, () => setMenu(false));
+    return h8("span", { class: "cb-filter-item", "data-id": id }, b, more, menu);
+  }
+  function paint(r, sel) {
+    rows = r;
+    selected = sel;
+    closeMenu?.();
+    chipsEl.replaceChildren(...rows.map(chip), addBtn);
+  }
+  function setError(msg) {
+    errEl.hidden = msg === null;
+    errEl.textContent = msg ?? "";
+  }
+  async function remove(id) {
+    try {
+      await ctx.api.post("/filters/delete", { id });
+      hooks.onDeleted(id);
+      hooks.onChanged();
+    } catch (err) {
+      setError(message2(err));
+    }
+  }
+  paint([], []);
+  return { el, paint, setError };
+}
+function filterEditor(ctx, row, hooks) {
+  let match = (row?.filter.match ?? []).map((c) => ({ ...c }));
+  const editor = conditionEditor(
+    ctx,
+    { match, status: "draft" },
+    (m) => {
+      match = m;
+      hooks.onDraft(match);
+    }
+  );
+  if (row?.invalid) {
+    setConditionError(editor, conditionErrorIndex(row.invalid), row.invalid);
+  }
+  const name = h8("input", {
+    class: "cb-filter-name",
+    type: "text",
+    placeholder: "name",
+    "aria-label": "filter name",
+    onkeydown(e) {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        void save();
+      }
+    }
+  });
+  if (row) name.value = row.filter.name;
+  const nameErr = h8("p", { class: "cb-filter-name-err", hidden: true });
+  function showNameError(msg) {
+    nameErr.hidden = msg === null;
+    nameErr.textContent = msg ?? "";
+  }
+  function showError(err) {
+    if (err === null) {
+      if (!row?.invalid || match.length) setConditionError(editor, -1, null);
+      return;
+    }
+    const msg = message2(err);
+    setConditionError(editor, conditionErrorIndex(msg), msg);
+  }
+  async function save() {
+    const n = name.value.trim();
+    const id = row ? row.filter.id : slug(n);
+    showNameError(null);
+    try {
+      await ctx.api.post(
+        row ? "/filters/save" : "/filters/save?create=1",
+        { id, name: n, match }
+      );
+      hooks.onSaved(id);
+    } catch (err) {
+      const msg = message2(err);
+      if (err instanceof ApiError2 && err.status === 409) {
+        showNameError(msg);
+        return;
+      }
+      const i = conditionErrorIndex(msg);
+      if (i < 0 && /name|filter id/.test(msg)) {
+        showNameError(msg);
+        return;
+      }
+      setConditionError(editor, i, msg);
+    }
+  }
+  const el = h8(
+    "div",
+    { class: "kit-doc" },
+    h8(
+      "article",
+      { class: "cb-filter-edit", "data-testid": "filter-editor" },
+      h8(
+        "h1",
+        { class: "kit-h1 cb-filter-title" },
+        row ? `edit ${row.filter.name || row.filter.id}` : "new filter"
+      ),
+      h8(
+        "div",
+        { class: "cb-filter-acts" },
+        name,
+        h8(
+          "button",
+          {
+            type: "button",
+            class: "kit-btn fill cb-filter-save",
+            onclick() {
+              void save();
+            }
+          },
+          "save"
+        ),
+        h8(
+          "button",
+          {
+            type: "button",
+            class: "kit-btn cb-filter-cancel",
+            onclick() {
+              hooks.onCancel();
+            }
+          },
+          "cancel"
+        )
+      ),
+      nameErr,
+      editor
+    )
+  );
+  return { el, showError };
+}
+
+// rules.ts
+import {
+  list as list2,
+  h as h9,
+  facts as facts3,
+  buttons as buttons3,
+  card as card3,
+  sheet as sheet3,
+  ApiError as ApiError3
+} from "/_kit/kit.js";
+var HINT_SEP = " · ";
+var PREVIEW_DEBOUNCE_MS = 300;
+var PAGE2 = 200;
+var VIEWS2 = [
+  { id: "all", label: "all" },
+  { id: "active", label: "active" },
+  { id: "drafts", label: "drafts" }
+];
+function message3(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+var isConflict = (err) => err instanceof ApiError3 && err.status === 409;
+function renderRule(ctx, detail, hooks) {
+  const id = detail.rule.id;
+  let saved = detail;
+  let base = detail.rule;
+  let work = [...base.match ?? []];
+  let workPropose = { ...base.propose };
+  let exclude = base.exclude ?? [];
+  let preview = detail.matches;
+  let dispositions = detail.matches.dispositions ?? [];
+  let shown = preview.page ?? [];
+  let invalid = null;
+  let conflict = null;
+  let grouped = false;
+  let seq = 0;
+  let timer = null;
+  let opened = PAGE2;
+  let queue = Promise.resolve();
+  const inTurn = (task) => {
+    const run = queue.then(task);
+    queue = run.catch(() => {
+    });
+    return run;
+  };
+  const doc = h9("article", { class: "cb-rule", "data-rule": id });
+  const el = h9("div", { class: "kit-doc" }, doc);
+  const dirty = () => !sameConditions(work, base.match ?? []) || !sameAction(workPropose, base.propose);
+  const isDraft = () => base.status !== "active";
+  const editable = () => isDraft() || !!saved.invalid;
+  const body = () => ({
+    ...base,
+    match: work,
+    propose: workPropose,
+    exclude
+  });
+  let factsEl = h9("div");
+  let editor = h9("div");
+  const titleEl = h9("h1", { class: "kit-h1" });
+  const kickEl = h9("p", { class: "kit-kick" });
+  const proseEl = h9("p");
+  const invalidEl = h9("div", { "data-testid": "rule-invalid" });
+  const conflictEl = h9("div", { "data-testid": "rule-conflict" });
+  const proposeEl = h9("div");
+  const proposeErrEl = h9("p", {
+    class: "cb-cond-err cb-propose-err",
+    "data-testid": "propose-err",
+    hidden: true
+  });
+  const heading = h9("h3", { class: "kit-label cb-matches-label" });
+  const groupChips = h9("span", { class: "cb-matches-view" });
+  const matchesEl = h9("div", {
+    class: "kit-table cb-matches",
+    "data-testid": "matches"
+  });
+  const actionsEl = h9("div", { class: "cb-rule-actions" });
+  const note = h9("p", { class: "cb-rule-note", role: "status" });
+  function drawFacts() {
+    const who = authorOf(base.created_by);
+    const byEl = h9("b", who.agent ? { class: "cb-by-agent" } : null, who.name);
+    const next = facts3([
+      ["status", saved.invalid ? `${base.status} · not valid` : base.status],
+      ["matches", invalid ? "—" : String(preview.total)],
+      ["excluded", String(exclude.length)],
+      ["by", byEl]
+    ]);
+    factsEl.replaceWith(next);
+    factsEl = next;
+  }
+  function drawProse() {
+    const who = authorOf(base.created_by);
+    const lifecycle2 = "Once active, casebook proposes new matches after every sync, and never overrides an item that’s already decided.";
+    if (!isDraft()) {
+      proseEl.replaceChildren(
+        "Active: casebook proposes new matches after every sync, and never overrides an item that’s already decided."
+      );
+    } else if (who.agent) {
+      proseEl.replaceChildren(
+        h9("span", { class: "cb-by-agent" }, who.name),
+        " drafted this rule. It proposes nothing until you activate it, and only you can. ",
+        lifecycle2
+      );
+    } else {
+      proseEl.replaceChildren(
+        "A draft proposes nothing until you activate it. ",
+        lifecycle2
+      );
+    }
+  }
+  function drawInvalid() {
+    if (!saved.invalid) {
+      invalidEl.replaceChildren();
+      return;
+    }
+    const skipped = base.status === "active";
+    invalidEl.replaceChildren(
+      card3({
+        edge: "signal",
+        head: skipped ? "not valid · active, but skipped at every sync" : "not valid",
+        body: h9(
+          "div",
+          null,
+          h9("p", { class: "cb-invalid-msg" }, saved.invalid),
+          h9(
+            "p",
+            { class: "cb-invalid-help" },
+            skipped ? "casebook proposes nothing from this rule until it is valid. Fix it and save it (it becomes a draft), or deactivate it." : "It can’t be activated or propose anything until it is valid."
+          )
+        )
+      })
+    );
+  }
+  function drawPropose() {
+    const p = workPropose;
+    if (editable() && refreshPropose) {
+      refreshPropose();
+      return;
+    }
+    refreshPropose = null;
+    const tr = (label, value) => h9(
+      "div",
+      { class: "kit-tr" },
+      h9("span", { class: "cb-cond-f" }, label),
+      h9("span"),
+      value
+    );
+    if (!editable()) {
+      drawChoices = () => {
+      };
+      proposeEl.replaceChildren(
+        h9(
+          "div",
+          { class: "kit-table cb-propose", "data-testid": "propose" },
+          tr(
+            "disposition",
+            h9(
+              "span",
+              {
+                class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : "")
+              },
+              p.disposition
+            )
+          ),
+          p.until ? tr("until", h9("span", { class: "cb-cond-v" }, p.until)) : null,
+          p.note ? tr("note", h9("span", { class: "cb-cond-v" }, p.note)) : null
+        )
+      );
+      return;
+    }
+    const pick = h9("button", {
+      type: "button",
+      class: "cb-cond-v cb-disp",
+      "aria-label": "disposition",
+      "aria-haspopup": "menu",
+      "aria-expanded": "false",
+      onclick() {
+        setMenu(menu.hidden);
+      }
+    });
+    const menu = h9("div", {
+      class: "cb-disp-menu",
+      role: "menu",
+      "aria-label": "dispositions",
+      hidden: true
+    });
+    const menuChips = h9("span", { class: "cb-disp-opts" });
+    const whyEl = h9("span", {
+      class: "cb-disp-why",
+      "data-testid": "disp-why"
+    });
+    menu.append(
+      h9("span"),
+      h9("span"),
+      h9("span", { class: "cb-disp-col" }, menuChips, whyEl)
+    );
+    menuNav(menu, ".cb-disp-opt", pick, () => {
+      if (!redrawing) setMenu(false);
+    });
+    const onEsc = (e) => {
+      if (e.key !== "Escape" || e.isComposing) return;
+      if (!menu.isConnected) {
+        document.removeEventListener("keydown", onEsc, true);
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      setMenu(false);
+      pick.focus();
+    };
+    function setMenu(open) {
+      menu.hidden = !open;
+      pick.setAttribute("aria-expanded", String(open));
+      if (open) {
+        document.addEventListener("keydown", onEsc, true);
+        (menu.querySelector(".cb-disp-opt.on") ?? menu.querySelector(".cb-disp-opt"))?.focus();
+      } else {
+        document.removeEventListener("keydown", onEsc, true);
+      }
+    }
+    const needsUntil = () => !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
+    const choose = (d) => {
+      workPropose = { ...workPropose, disposition: d };
+      setMenu(false);
+      drawChoices();
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      edited();
+      pick.focus();
+    };
+    let chipsFor = "";
+    drawChoices = () => {
+      const cur = workPropose.disposition;
+      pick.textContent = cur || "choose…";
+      pick.dataset.value = cur;
+      pick.classList.toggle("cb-danger", DANGER_DISPS.has(cur));
+      whyEl.textContent = kindHint(work, dispositions, allDispositions);
+      drawProposeErr();
+      const sig = `${cur}
+${dispositions.join(" ")}`;
+      if (sig === chipsFor) return;
+      chipsFor = sig;
+      const have = new Map(
+        [...menuChips.querySelectorAll(".cb-disp-opt")].map(
+          (e) => [e.dataset.disp ?? "", e]
+        )
+      );
+      const chips = dispositions.map((d) => {
+        const chip = have.get(d) ?? h9(
+          "button",
+          {
+            type: "button",
+            role: "menuitemradio",
+            "data-disp": d,
+            onclick() {
+              choose(d);
+            }
+          },
+          d
+        );
+        chip.setAttribute("aria-checked", String(d === cur));
+        chip.className = "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : "");
+        return chip;
+      });
+      const focused = document.activeElement;
+      if (focused instanceof HTMLElement && menuChips.contains(focused) && !chips.includes(focused)) {
+        (chips.find((c) => c.classList.contains("on")) ?? chips[0] ?? pick).focus();
+      }
+      keepFocus(() => {
+        for (const [d, chip] of have) {
+          if (!chips.includes(chip)) {
+            have.delete(d);
+            chip.remove();
+          }
+        }
+        chips.forEach((chip, i) => {
+          const at2 = menuChips.children[i];
+          if (at2 !== chip) menuChips.insertBefore(chip, at2 ?? null);
+        });
+      });
+    };
+    const text = (field, placeholder2) => {
+      const input = h9("input", {
+        class: "cb-cond-v",
+        type: "text",
+        value: p[field] ?? "",
+        placeholder: placeholder2,
+        spellcheck: false,
+        "aria-label": field
+      });
+      input.addEventListener("input", () => {
+        const v = input.value;
+        workPropose = { ...workPropose, [field]: v || void 0 };
+        drawProposeErr();
+        edited();
+      });
+      return input;
+    };
+    const hint = (testid) => h9(
+      "div",
+      { class: "cb-prop-hint", "data-testid": testid },
+      h9("span"),
+      h9("span"),
+      h9("span", { class: "cb-prop-hint-t" })
+    );
+    const untilIn = text("until", "");
+    const untilRow = tr("until", untilIn);
+    const untilHint = hint("until-hint");
+    untilRow.hidden = untilHint.hidden = !needsUntil();
+    const noteIn = text("note", "optional");
+    const noteHint = hint("note-hint");
+    const items = (el2, lead, words) => {
+      const out = [];
+      words.forEach((w, i) => {
+        if (i) out.push(HINT_SEP);
+        out.push(h9("span", { class: "cb-prop-hint-i" }, w));
+      });
+      el2.lastElementChild.replaceChildren(
+        ...words.length ? [lead, ...out] : []
+      );
+    };
+    void getVocab(ctx).then((v) => {
+      allDispositions = (v.kinds ?? []).flatMap((k) => k.allowed ?? []);
+      drawChoices();
+      const forms = v.until_forms ?? [];
+      if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
+      items(
+        untilHint,
+        "",
+        forms.map((f) => f.syntax)
+      );
+    }).catch(() => {
+    });
+    void noteTokens(ctx).then((ts) => {
+      items(
+        noteHint,
+        "may use ",
+        ts.map((t) => `${t.token} ${t.meaning}`)
+      );
+    }).catch(() => {
+    });
+    refreshPropose = () => {
+      untilIn.value = workPropose.until ?? "";
+      noteIn.value = workPropose.note ?? "";
+      untilRow.hidden = untilHint.hidden = !needsUntil();
+      drawChoices();
+    };
+    proposeEl.replaceChildren(
+      h9(
+        "div",
+        { class: "kit-table cb-propose", "data-testid": "propose" },
+        tr("disposition", pick),
+        menu,
+        untilRow,
+        untilHint,
+        tr("note", noteIn),
+        noteHint
+      ),
+      proposeErrEl
+    );
+    drawChoices();
+  }
+  let drawChoices = () => {
+  };
+  let refreshPropose = null;
+  let redrawing = false;
+  function keepFocus(redraw) {
+    const focused = document.activeElement;
+    redrawing = true;
+    try {
+      redraw();
+    } finally {
+      redrawing = false;
+    }
+    if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) {
+      focused.focus();
+    }
+  }
+  let allDispositions = [];
+  function drawProposeErr() {
+    let msg = "";
+    const d = workPropose.disposition;
+    if (saved.invalid?.startsWith("propose:") && sameAction(workPropose, base.propose) && sameConditions(work, base.match ?? [])) {
+      msg = saved.invalid;
+    } else if (d && dispositions.length && !dispositions.includes(d)) {
+      msg = refusedDisposition(d, work, dispositions);
+    }
+    proposeErrEl.textContent = msg;
+    proposeErrEl.hidden = !msg;
+  }
+  function box(on, label, run) {
+    return h9("span", {
+      class: "kit-box",
+      role: "checkbox",
+      tabindex: 0,
+      "aria-checked": String(on),
+      "aria-label": label,
+      onclick(e) {
+        e.stopPropagation();
+        run();
+      },
+      onkeydown(e) {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          run();
+        }
+      }
+    });
+  }
+  function matchRow(m) {
+    const why = m.reason === "matched" ? m.title || m.status : m.reason.toLowerCase();
+    return h9(
+      "div",
+      { class: "cb-mr on", "data-key": m.key, title: m.title || m.key },
+      box(true, `exclude ${m.key}`, () => untick(m.key)),
+      h9("span", { class: "cb-mr-k" }, keyWithoutKind(m.key)),
+      h9("span", { class: "cb-mr-w" }, why)
+    );
+  }
+  function excludedRow(x) {
+    return h9(
+      "div",
+      { class: "cb-mr x", "data-key": x.key },
+      box(false, `include ${x.key}`, () => void include(x.key)),
+      h9("span", { class: "cb-mr-k" }, keyWithoutKind(x.key)),
+      h9(
+        "span",
+        { class: "cb-mr-w" },
+        x.reason ? `excluded · ${x.reason}` : "excluded"
+      )
+    );
+  }
+  function waitRow(text) {
+    return h9(
+      "div",
+      { class: "cb-mr cb-mr-wait" },
+      h9("span"),
+      h9("span", { class: "cb-mr-k" }, text),
+      h9("span")
+    );
+  }
+  function drawMatches() {
+    matchesEl.removeAttribute("data-invalid");
+    if (invalid) {
+      heading.textContent = "matches now";
+      matchesEl.setAttribute("data-invalid", "");
+      matchesEl.replaceChildren(
+        waitRow("not previewed: the conditions aren’t valid")
+      );
+      groupChips.hidden = true;
+      return;
+    }
+    heading.textContent = matchesHeading(preview.total, preview.by_reason);
+    groupChips.hidden = false;
+    const out = [];
+    if (grouped) {
+      const rest = [...shown];
+      for (const g of preview.groups ?? []) {
+        const mine = rest.filter((m) => (m.repo || m.key) === g.repo);
+        for (const m of mine) rest.splice(rest.indexOf(m), 1);
+        const why = reasonSummary(g.reasons);
+        out.push(
+          h9(
+            "div",
+            { class: "cb-mgroup", "data-repo": g.repo },
+            h9("span", { class: "cb-mgroup-repo" }, g.repo),
+            h9(
+              "span",
+              { class: "cb-mr-w" },
+              String(g.count) + (why ? ` · ${why}` : "")
+            )
+          ),
+          ...mine.map(matchRow)
+        );
+      }
+      out.push(...rest.map(matchRow));
+    } else {
+      out.push(...shown.map(matchRow));
+    }
+    out.push(...exclude.map(excludedRow));
+    const more = preview.total - shown.length;
+    if (more > 0) {
+      out.push(
+        h9(
+          "div",
+          { class: "cb-mr cb-mr-more" },
+          h9("span"),
+          h9("span", { class: "cb-mr-k" }, `… ${more} more`),
+          h9(
+            "button",
+            {
+              type: "button",
+              class: "cb-link",
+              onclick() {
+                void loadMore();
+              }
+            },
+            `show ${Math.min(PAGE2, more)} more`
+          )
+        )
+      );
+    }
+    if (out.length === 0) out.push(waitRow("nothing matches now"));
+    matchesEl.replaceChildren(...out);
+  }
+  function drawGroupChips() {
+    const chip = (label, on) => h9(
+      "button",
+      {
+        type: "button",
+        class: "kit-chip" + (on ? " on" : ""),
+        "aria-pressed": String(on),
+        onclick() {
+          grouped = label === "by repo";
+          drawGroupChips();
+          drawMatches();
+        }
+      },
+      label
+    );
+    groupChips.replaceChildren(
+      chip("list", !grouped),
+      chip("by repo", grouped)
+    );
+  }
+  function setPreview(p) {
+    invalid = null;
+    setConditionError(editor, -1, null);
+    preview = p;
+    shown = p.page ?? [];
+    if (p.dispositions) dispositions = p.dispositions;
+    drawChoices();
+    drawMatches();
+    drawFacts();
+  }
+  function setInvalid(msg) {
+    invalid = msg;
+    setConditionError(editor, conditionErrorIndex(msg), msg);
+    drawMatches();
+    drawFacts();
+  }
+  async function previewNow(depth = PAGE2) {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    const mine = ++seq;
+    opened = depth;
+    try {
+      const b = body();
+      const p = await ctx.api.post("/rules/preview", b);
+      let rows = p.page ?? [];
+      while (rows.length < Math.min(Math.max(depth, opened), p.total)) {
+        const next = await ctx.api.post(
+          `/rules/preview?offset=${rows.length}&limit=${PAGE2}`,
+          b
+        );
+        if (mine !== seq || !(next.page ?? []).length) break;
+        rows = [...rows, ...next.page ?? []];
+      }
+      if (mine === seq) setPreview({ ...p, page: rows });
+    } catch (err) {
+      if (mine !== seq) return;
+      if (err instanceof ApiError3 && err.status === 400)
+        setInvalid(err.message);
+      else note.textContent = `preview failed: ${message3(err)}`;
+    }
+  }
+  function schedule(keepDepth = false) {
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void previewNow(keepDepth ? Math.max(PAGE2, opened, shown.length) : PAGE2);
+    }, PREVIEW_DEBOUNCE_MS);
+  }
+  async function loadMore() {
+    const from = shown.length;
+    const q = `?offset=${from}&limit=${PAGE2}`;
+    opened = Math.max(opened, from + PAGE2);
+    const mine = seq;
+    try {
+      const p = await ctx.api.post(`/rules/preview${q}`, body());
+      if (mine !== seq || shown.length !== from) return;
+      shown = [...shown, ...p.page ?? []];
+      preview = { ...p, page: shown };
+      drawMatches();
+    } catch (err) {
+      note.textContent = `more matches failed: ${message3(err)}`;
+    }
+  }
+  function applyExclusions(d) {
+    exclude = d.rule.exclude ?? [];
+    base = { ...base, exclude };
+    if (dirty() || invalid) {
+      void previewNow(Math.max(PAGE2, opened, shown.length));
+    } else {
+      seq++;
+      opened = PAGE2;
+      setPreview(d.matches);
+    }
+    drawFacts();
+  }
+  function untick(key) {
+    const reason = h9("input", {
+      class: "kit-note",
+      type: "text",
+      placeholder: "reason (optional)",
+      "aria-label": "reason"
+    });
+    const err = h9("p", { class: "cb-sheet-err", hidden: true });
+    let sending = false;
+    const go2 = async () => {
+      if (sending) return;
+      sending = true;
+      try {
+        const d = await ctx.api.post("/rules/exclude", {
+          id,
+          key,
+          reason: reason.value.trim()
+        });
+        sh.close();
+        applyExclusions(d);
+        hooks.saved();
+      } catch (e) {
+        err.textContent = message3(e);
+        err.hidden = false;
+        sending = false;
+      }
+    };
+    reason.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.isComposing) {
+        e.preventDefault();
+        void go2();
+      }
+    });
+    const sh = sheet3({
+      title: `exclude ${keyWithoutKind(key)}`,
+      body: h9(
+        "div",
+        { class: "cb-sheet-body" },
+        h9(
+          "p",
+          { class: "cb-sheet-preview" },
+          "This rule skips it from now on. It stays listed here, unticked."
+        ),
+        h9(
+          "div",
+          { class: "cb-sheet-row" },
+          h9("label", { class: "cb-sheet-label" }, "reason"),
+          reason
+        ),
+        err
+      ),
+      actions: [
+        { label: "exclude", fill: true, run: () => void go2() },
+        { label: "cancel", run: () => sh.close() }
+      ]
+    });
+    sh.el.dataset.testid = "exclude-sheet";
+    reason.focus();
+  }
+  async function include(key) {
+    try {
+      const d = await ctx.api.post("/rules/include", {
+        id,
+        key
+      });
+      applyExclusions(d);
+      hooks.saved();
+    } catch (err) {
+      note.textContent = `not included: ${message3(err)}`;
+    }
+  }
+  function drawConflict() {
+    if (!conflict) {
+      conflictEl.replaceChildren();
+      return;
+    }
+    const theirs = conflict.detail.rule;
+    const who = conflict.by ? authorOf(conflict.by).name : "";
+    const p = theirs.propose;
+    const theirsBody = h9(
+      "div",
+      null,
+      h9(
+        "p",
+        { class: "cb-conflict-help" },
+        "Your edits are kept below and not saved. Serve’s copy now:"
+      ),
+      theirs.name !== base.name ? h9("p", { class: "cb-conflict-name" }, theirs.name) : null,
+      conditionEditor(
+        ctx,
+        { match: theirs.match, status: "active", editable: false },
+        () => {
+        }
+      ),
+      h9(
+        "div",
+        { class: "kit-table cb-propose" },
+        h9(
+          "div",
+          { class: "kit-tr" },
+          h9("span", { class: "cb-cond-f" }, "disposition"),
+          h9("span"),
+          h9(
+            "span",
+            {
+              class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : ""),
+              "data-testid": "conflict-disposition"
+            },
+            p.disposition
+          )
+        ),
+        p.until ? h9(
+          "div",
+          { class: "kit-tr" },
+          h9("span", { class: "cb-cond-f" }, "until"),
+          h9("span"),
+          h9("span", { class: "cb-cond-v" }, p.until)
+        ) : null,
+        p.note ? h9(
+          "div",
+          { class: "kit-tr" },
+          h9("span", { class: "cb-cond-f" }, "note"),
+          h9("span"),
+          h9("span", { class: "cb-cond-v" }, p.note)
+        ) : null
+      ),
+      h9("p", { class: "cb-conflict-note", role: "status" })
+    );
+    conflictEl.replaceChildren(
+      card3({
+        edge: "signal",
+        head: who ? `changed while you were editing · by ${who}` : "changed while you were editing",
+        body: theirsBody,
+        actions: [
+          {
+            label: "reload theirs",
+            run() {
+              const d = conflict.detail;
+              conflict = null;
+              draw(d);
+            }
+          },
+          {
+            label: "keep mine",
+            run() {
+              const d = conflict.detail;
+              conflict = null;
+              draw(d, { match: work, propose: workPropose });
+            }
+          }
+        ]
+      })
+    );
+  }
+  function refuseActivate() {
+    const n = conflictEl.querySelector(".cb-conflict-note");
+    if (n) {
+      n.textContent = "Activate waits: reload their copy, or keep yours over it, first.";
+    }
+    conflictEl.scrollIntoView?.({ block: "nearest" });
+  }
+  function refuseInvalid() {
+    note.textContent = "not activated: fix what’s marked above";
+    invalidEl.scrollIntoView?.({ block: "nearest" });
+  }
+  async function afterConflict(what) {
+    try {
+      const d = await ctx.api.get("/rule", { id });
+      if (dirty()) {
+        conflict = { detail: d, by: "" };
+        drawConflict();
+        drawActions();
+        hooks.primaryChanged();
+      } else {
+        draw(d);
+        note.textContent = `It changed before you ${what} it; nothing was ${what}. Here is serve’s copy.`;
+      }
+    } catch (err) {
+      note.textContent = message3(err);
+    }
+  }
+  function saysWhatHeEdited(r) {
+    return sameConditions(r.match ?? [], work) && sameAction(r.propose, workPropose);
+  }
+  function settle(d) {
+    conflict = null;
+    if (d) {
+      draw(d);
+      return;
+    }
+    drawConflict();
+    drawActions();
+    hooks.primaryChanged();
+  }
+  async function save() {
+    if (conflict) {
+      refuseActivate();
+      return false;
+    }
+    const sentMatch = work.map((c) => ({ ...c }));
+    const sentPropose = { ...workPropose };
+    try {
+      const d = await ctx.api.post(
+        `/rules/draft?version=${encodeURIComponent(saved.version)}`,
+        { ...body(), match: sentMatch, propose: sentPropose }
+      );
+      const later = !sameConditions(work, sentMatch) || !sameAction(workPropose, sentPropose);
+      draw(d, later ? { match: work, propose: workPropose } : void 0);
+      hooks.saved();
+      if (conflict) {
+        const { detail: newer, by } = conflict;
+        settle(newer);
+        const who = by ? authorOf(by).name : "someone";
+        note.textContent = `Saved; then ${who} changed it. Here is serve’s copy; nothing else was done.`;
+        return false;
+      }
+      return true;
+    } catch (err) {
+      if (isConflict(err)) void afterConflict("saved");
+      else if (err instanceof ApiError3 && err.status === 400) {
+        if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
+        else note.textContent = err.message;
+      } else note.textContent = `not saved: ${message3(err)}`;
+      return false;
+    }
+  }
+  function lifecycle(verb) {
+    return inTurn(() => lifecycleNow(verb));
+  }
+  async function lifecycleNow(verb) {
+    if (verb === "deactivate" && isDraft()) return;
+    if (verb === "activate" && !isDraft() && !dirty()) return;
+    if (verb === "activate" && conflict) {
+      refuseActivate();
+      return;
+    }
+    if (verb === "activate" && saved.invalid && !dirty()) {
+      refuseInvalid();
+      return;
+    }
+    try {
+      if (verb === "activate" && dirty() && !await save()) return;
+      if (verb === "activate" && saved.invalid) {
+        refuseInvalid();
+        return;
+      }
+      const d = await ctx.api.post(
+        `/rules/${verb}`,
+        verb === "activate" ? { id, version: saved.version } : { id }
+      );
+      draw(d);
+      hooks.saved();
+    } catch (err) {
+      if (isConflict(err)) void afterConflict(`${verb}d`);
+      else note.textContent = `not ${verb}d: ${message3(err)}`;
+    }
+  }
+  function proposeOnce() {
+    return inTurn(proposeOnceNow);
+  }
+  async function proposeOnceNow() {
+    try {
+      if (dirty() && !await save()) return;
+      const r = await ctx.api.post("/rules/propose-once", {
+        id
+      });
+      note.replaceChildren(
+        `${pluralize(r.proposed, "match", "matches")} proposed · `,
+        h9(
+          "button",
+          {
+            type: "button",
+            class: "cb-link",
+            onclick() {
+              ctx.route.go("attention", "proposed");
+            }
+          },
+          "see them in attention"
+        )
+      );
+      hooks.saved();
+    } catch (err) {
+      note.textContent = `not proposed: ${message3(err)}`;
+    }
+  }
+  function drawActions() {
+    const bs = [];
+    if (editable() && dirty()) {
+      bs.push({
+        label: isDraft() ? "save draft" : "save as draft",
+        run: () => void save()
+      });
+    }
+    if (isDraft() && !saved.invalid) {
+      bs.push({ label: "propose once", run: () => void proposeOnce() });
+    }
+    actionsEl.replaceChildren(bs.length ? buttons3(bs) : "", note);
+  }
+  function edited() {
+    note.textContent = "";
+    if (conflict && (!dirty() || saysWhatHeEdited(conflict.detail.rule))) {
+      settle(conflict.detail);
+      return;
+    }
+    drawActions();
+    hooks.primaryChanged();
+  }
+  function onEdit(m) {
+    work = m;
+    schedule();
+    edited();
+  }
+  function draw(d, keep) {
+    if (timer !== null) clearTimeout(timer);
+    timer = null;
+    seq++;
+    opened = PAGE2;
+    saved = d;
+    base = d.rule;
+    if (conflict && conflict.detail.version === d.version) conflict = null;
+    work = keep ? keep.match : [...base.match ?? []];
+    workPropose = keep ? keep.propose : { ...base.propose };
+    exclude = base.exclude ?? [];
+    preview = d.matches;
+    shown = preview.page ?? [];
+    dispositions = d.matches.dispositions ?? [];
+    invalid = d.invalid && !keep && (conditionErrorIndex(d.invalid) >= 0 || d.invalid.startsWith("rules/")) ? d.invalid : null;
+    doc.dataset.status = base.status;
+    doc.toggleAttribute("data-invalid", !!d.invalid);
+    kickEl.textContent = `rule · ${base.status} · rules/${id}.toml`;
+    titleEl.textContent = base.name || id;
+    editor = conditionEditor(
+      ctx,
+      { match: work, status: base.status, editable: editable() },
+      onEdit
+    );
+    factsEl = h9("div");
+    keepFocus(
+      () => doc.replaceChildren(
+        kickEl,
+        titleEl,
+        factsEl,
+        proseEl,
+        invalidEl,
+        conflictEl,
+        h9(
+          "h3",
+          { class: "kit-label" },
+          "when an undecided item matches all of"
+        ),
+        editor,
+        h9("h3", { class: "kit-label" }, "propose"),
+        proposeEl,
+        h9("div", { class: "cb-matches-head" }, heading, groupChips),
+        matchesEl,
+        actionsEl
+      )
+    );
+    note.textContent = "";
+    drawProse();
+    drawInvalid();
+    drawConflict();
+    drawPropose();
+    drawFacts();
+    drawGroupChips();
+    drawMatches();
+    if (invalid) setInvalid(invalid);
+    drawActions();
+    if (keep) schedule();
+    hooks.primaryChanged();
+  }
+  draw(detail);
+  return {
+    el,
+    id,
+    dirty,
+    primary() {
+      if (!isDraft()) {
+        return { label: "Deactivate", run: () => void lifecycle("deactivate") };
+      }
+      return { label: "Activate", run: () => void lifecycle("activate") };
+    },
+    update(d, by) {
+      if (d.version === saved.version) {
+        if (conflict) settle(null);
+        const was = (saved.rule.exclude ?? []).map((x) => x.key).join("\n");
+        const now = (d.rule.exclude ?? []).map((x) => x.key).join("\n");
+        saved = { ...saved, record: d.record, invalid: d.invalid };
+        if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
+        return;
+      }
+      if (!dirty() || saysWhatHeEdited(d.rule)) {
+        conflict = null;
+        draw(d);
+        return;
+      }
+      conflict = { detail: d, by };
+      drawConflict();
+      drawActions();
+      hooks.primaryChanged();
+    },
+    refresh() {
+      if (!invalid || dirty()) schedule(true);
+    }
+  };
+}
+function makeRules(ctx) {
+  const readEl = h9("div", { class: "kit-read cb-rules-read" });
+  let rows = [];
+  let view = "all";
+  let active = false;
+  let openId = null;
+  let doc = null;
+  let asking = false;
+  let opening = 0;
+  let painting = false;
+  let listSeq = 0;
+  let liveSeq = 0;
+  const statusOf = (r) => r.rule.status;
+  const inView = (r) => view === "all" || (view === "active" ? statusOf(r) === "active" : statusOf(r) !== "active");
+  const askEl = h9(
+    "button",
+    {
+      type: "button",
+      class: "cb-link cb-rules-ask",
+      onclick() {
+        asking = true;
+        feed();
+        ctx.focusComposer();
+      }
+    },
+    ""
+  );
+  const nameAgent = () => {
+    askEl.textContent = `or ask ${ctx.agentName() || "the agent"} to draft one`;
+  };
+  nameAgent();
+  ctx.onAgentName(nameAgent);
+  const foot = h9(
+    "div",
+    { class: "cb-rules-foot" },
+    h9(
+      "button",
+      {
+        type: "button",
+        class: "kit-btn",
+        "data-testid": "new-rule",
+        onclick() {
+          newRule();
+        }
+      },
+      "new rule"
+    ),
+    askEl
+  );
+  function newRule() {
+    const name = h9("input", {
+      class: "kit-note",
+      type: "text",
+      placeholder: "e.g. Landed branches → delete",
+      "aria-label": "name"
+    });
+    const idIn = h9("input", {
+      class: "kit-note",
+      type: "text",
+      placeholder: "e.g. landed-branches",
+      spellcheck: false,
+      "aria-label": "id"
+    });
+    let idTyped = false;
+    name.addEventListener("input", () => {
+      if (!idTyped) idIn.value = slug(name.value);
+    });
+    idIn.addEventListener("input", () => {
+      idTyped = true;
+    });
+    const err = h9("p", { class: "cb-sheet-err", hidden: true });
+    let sending = false;
+    const create = async () => {
+      if (sending) return;
+      const id = idIn.value.trim();
+      const title = name.value.trim();
+      if (!id || !title) {
+        err.textContent = "A rule needs a name and an id.";
+        err.hidden = false;
+        return;
+      }
+      sending = true;
+      try {
+        await ctx.api.post("/rules/draft?create=1", {
+          id,
+          name: title,
+          status: "draft",
+          match: [],
+          propose: { disposition: "" }
+        });
+        sh.close();
+        await loadList();
+        ctx.route.go("rules", id);
+      } catch (e) {
+        err.textContent = message3(e);
+        err.hidden = false;
+        sending = false;
+      }
+    };
+    for (const input of [name, idIn]) {
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.isComposing) {
+          e.preventDefault();
+          void create();
+        }
+      });
+    }
+    const sh = sheet3({
+      title: "new rule",
+      body: h9(
+        "div",
+        { class: "cb-sheet-body" },
+        h9(
+          "div",
+          { class: "cb-sheet-row" },
+          h9("label", { class: "cb-sheet-label" }, "name"),
+          name
+        ),
+        h9(
+          "div",
+          { class: "cb-sheet-row" },
+          h9("label", { class: "cb-sheet-label" }, "id"),
+          idIn
+        ),
+        h9(
+          "p",
+          { class: "cb-sheet-preview" },
+          "A draft: it proposes nothing until you activate it."
+        ),
+        err
+      ),
+      actions: [
+        { label: "create", fill: true, run: () => void create() },
+        { label: "cancel", run: () => sh.close() }
+      ]
+    });
+    sh.el.dataset.testid = "new-rule-sheet";
+    name.focus();
+  }
+  const handle = list2({
+    label: "rules",
+    views: VIEWS2.map((v) => ({ ...v, on: v.id === view })),
+    openOnMove: false,
+    row(r) {
+      const who = authorOf(r.rule.created_by);
+      const draft = r.rule.status !== "active";
+      return {
+        id: r.rule.id,
+        key: rowKicker(r),
+        title: r.rule.name || r.rule.id,
+        sub: who.agent && draft ? `drafted by ${who.name} · awaiting your review` : void 0,
+        meta: r.invalid ? "not valid" : r.rule.status
+      };
+    },
+    onChip(group, id) {
+      if (group !== "view") return;
+      view = id;
+      paintList();
+    },
+    onOpen(r) {
+      if (painting) return;
+      ctx.route.go("rules", r.rule.id);
+    },
+    foot
+  });
+  handle.el.classList.add("cb-rules-list");
+  function paintList() {
+    const c = viewCounts(rows.map((r) => r.rule));
+    const shown = rows.filter(inView);
+    handle.setChips(
+      "view",
+      VIEWS2.map((v) => ({ ...v, on: v.id === view, count: c[v.id] }))
+    );
+    handle.setItems(shown);
+    const els = handle.el.querySelectorAll(".kit-row");
+    els.forEach((rowEl, i) => {
+      const r = shown[i];
+      if (!r) return;
+      rowEl.dataset.rule = r.rule.id;
+      if (r.invalid) rowEl.title = r.invalid;
+      rowEl.querySelector(".kit-meta")?.classList.add(
+        "kit-pill",
+        r.invalid ? "cb-pill-invalid" : r.rule.status === "active" ? "ok" : "wait"
+      );
+    });
+    const openAt = shown.findIndex((r) => r.rule.id === openId);
+    if (openAt >= 0) {
+      painting = true;
+      try {
+        handle.open(openAt);
+      } finally {
+        painting = false;
+      }
+    }
+    ctx.bar.setCount("rules", c.all);
+    nameAgent();
+    if (!doc && !openId) drawEmpty();
+  }
+  async function loadList() {
+    const mine = ++listSeq;
+    try {
+      const v = await ctx.api.get("/rules");
+      if (mine !== listSeq) return;
+      rows = v.rules ?? [];
+      paintList();
+    } catch {
+    }
+  }
+  function drawEmpty() {
+    readEl.replaceChildren(
+      h9(
+        "div",
+        { class: "cb-read-empty" },
+        h9("p", { class: "cb-read-empty-section kit-label" }, "rules"),
+        h9(
+          "p",
+          { class: "cb-read-empty-count" },
+          pluralize(rows.length, "rule")
+        ),
+        h9(
+          "p",
+          { class: "cb-read-empty-prompt" },
+          "Select a rule to see it here."
+        )
+      )
+    );
+  }
+  function feed() {
+    if (!active) return;
+    ctx.setAttached(
+      doc ? { rule: doc.id } : asking ? { section: "rules" } : {}
+    );
+    ctx.setPrimary(doc ? doc.primary() : null);
+  }
+  const hooks = {
+    primaryChanged() {
+      if (active) ctx.setPrimary(doc ? doc.primary() : null);
+    },
+    saved() {
+      void loadList();
+    }
+  };
+  async function open(id) {
+    const mine = ++opening;
+    try {
+      const d = await ctx.api.get("/rule", { id });
+      if (mine !== opening || openId !== id) return;
+      doc = renderRule(ctx, d, hooks);
+      asking = false;
+      readEl.replaceChildren(doc.el);
+      readEl.scrollTop = 0;
+      feed();
+    } catch (err) {
+      if (mine !== opening) return;
+      doc = null;
+      readEl.replaceChildren(
+        h9(
+          "div",
+          { class: "cb-read-empty" },
+          h9("p", { class: "cb-read-empty-section kit-label" }, "rules"),
+          h9("p", { class: "cb-read-empty-prompt" }, message3(err))
+        )
+      );
+      feed();
+    }
+  }
+  function close() {
+    opening++;
+    openId = null;
+    doc = null;
+    drawEmpty();
+    feed();
+  }
+  const activateKey = {
+    keys: "a",
+    label: "activate the open draft",
+    group: "page",
+    run() {
+      if (!doc) return;
+      const p = doc.primary();
+      if (p?.label === "Activate") p.run();
+    }
+  };
+  const ruleKeys = [activateKey];
+  void loadList();
+  return {
+    id: "rules",
+    list: handle.el,
+    read: readEl,
+    // Rule rows can't be selected: the list keys here move and open.
+    listKeys: () => ({ nav: handle, selects: false }),
+    keys: () => ruleKeys,
+    show(sub) {
+      active = true;
+      const id = sub;
+      if (!id) {
+        if (openId) close();
+        else feed();
+      } else if (id !== openId) {
+        openId = id;
+        doc = null;
+        feed();
+        void open(id);
+      } else {
+        feed();
+      }
+      paintList();
+    },
+    hide() {
+      active = false;
+      asking = false;
+    },
+    onLive(type, data) {
+      if (type === "rules" || type === "gap") {
+        if (type === "gap") doc?.refresh();
+        void loadList();
+        const ev = data;
+        if (doc && openId && (!ev?.id || ev.id === openId)) {
+          const d = doc;
+          const mine = ++liveSeq;
+          void ctx.api.get("/rule", { id: openId }).then((detail) => {
+            if (mine === liveSeq && doc === d) d.update(detail, ev?.by ?? "");
+          }).catch(() => {
+          });
+        }
+      } else if (type === "index" || type === "decided") {
+        doc?.refresh();
+        if (type === "index") void loadList();
+      } else if (type === "proposals") {
+        void loadList();
+      }
+    },
+    primary() {
+      return doc ? doc.primary() : null;
+    }
+  };
+}
+
 // attention.ts
 var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.";
 var PAGE_SIZE = 200;
 var selection = createSelection();
-var VIEWS2 = [
+var VIEWS3 = [
   { id: "new", label: "new" },
   { id: "due", label: "due" },
   { id: "proposed", label: "proposed" }
 ];
 function emptyFilters() {
-  return { view: "due", q: "" };
+  return { view: "due", filters: [], q: "" };
 }
 var LEFT_OPEN = "left-open";
 var SIDEBAR = "casebook.sidebar";
@@ -3247,7 +5419,7 @@ function isLeftOpen(it) {
   return it.status === "left-open";
 }
 function makeAttention(ctx) {
-  const readEl = h7("div", { class: "kit-read" });
+  const readEl = h10("div", { class: "kit-read" });
   let offset = 0;
   let totalItems = 0;
   let loadedItems = [];
@@ -3276,22 +5448,22 @@ function makeAttention(ctx) {
   let vocab2 = null;
   let syncingOpen = false;
   function renderReadEmpty() {
-    const nameEl = h7(
+    const nameEl = h10(
       "p",
       { class: "cb-read-empty-section kit-label" },
       "attention"
     );
-    const countEl = h7(
+    const countEl = h10(
       "p",
       { class: "cb-read-empty-count" },
       pluralize(totalItemsForView, "item")
     );
-    const promptEl = h7(
+    const promptEl = h10(
       "p",
       { class: "cb-read-empty-prompt" },
       "Select an item to see it here."
     );
-    return h7("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
+    return h10("div", { class: "cb-read-empty" }, nameEl, countEl, promptEl);
   }
   function updateReadEmptyCount() {
     const countEl = readEl.querySelector(".cb-read-empty-count");
@@ -3314,8 +5486,8 @@ function makeAttention(ctx) {
     feedAttached();
   }
   showReadEmpty();
-  const summaryEl = h7("span", { class: "cb-summary" });
-  const discardAllBtn = h7("button", {
+  const summaryEl = h10("span", { class: "cb-summary" });
+  const discardAllBtn = h10("button", {
     class: "kit-btn cb-discard-all",
     type: "button",
     hidden: true,
@@ -3324,11 +5496,11 @@ function makeAttention(ctx) {
     }
   });
   function buildFoot() {
-    const footRight = h7(
+    const footRight = h10(
       "div",
       { class: "cb-foot-right" },
       discardAllBtn,
-      h7(
+      h10(
         "button",
         {
           class: "cb-foot-more",
@@ -3341,12 +5513,12 @@ function makeAttention(ctx) {
         `show ${PAGE_SIZE} more`
       )
     );
-    footEl = h7("div", { class: "cb-foot" }, summaryEl, footRight);
+    footEl = h10("div", { class: "cb-foot" }, summaryEl, footRight);
     return footEl;
   }
-  const handle = list2({
+  const handle = list3({
     label: "attention",
-    views: VIEWS2.map((v) => ({ ...v, on: v.id === filters.view })),
+    views: VIEWS3.map((v) => ({ ...v, on: v.id === filters.view })),
     filters: [],
     selection,
     openOnMove: false,
@@ -3378,25 +5550,30 @@ function makeAttention(ctx) {
         // you left it open"), before any recommendation's reason; the flat
         // list, with no group heads, names the recommendation too.
         sub: rowSub(vocab2, it, flat),
-        selectable: true
+        // A draft filter's preview is only to look at.
+        selectable: draft === null
       };
     },
     onChip(group, id) {
       if (group === "view") {
         filters.view = id;
-        ctx.route.go("attention", id, attentionQuery({ flat }));
+        filters.filters = [];
+        filterBar.setError(null);
+        paintFilters();
+        handle.setChips("view", viewChips(id));
+        ctx.route.go("attention", id, attentionQuery({ flat, filters: [] }));
         void reload();
       }
     },
     onOpen(it) {
-      if (syncingOpen) return;
+      if (syncingOpen || draft !== null) return;
       ctx.route.go("item", it.key);
       void openDetail(it.key);
     },
     foot: buildFoot()
   });
   handle.el.classList.add("cb-attention");
-  const groupSwitch = h7(
+  const groupSwitch = h10(
     "button",
     {
       type: "button",
@@ -3406,7 +5583,7 @@ function makeAttention(ctx) {
         flat = !flat;
         storeFlat(flat);
         paintSwitch();
-        ctx.route.go("attention", filters.view, attentionQuery({ flat }));
+        goList();
         void reload();
       }
     },
@@ -3417,8 +5594,175 @@ function makeAttention(ctx) {
     groupSwitch.classList.toggle("on", !flat);
   }
   paintSwitch();
-  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(h7("div", { class: "cb-list-tools" }, groupSwitch));
-  const hideBtn = h7(
+  let filterRows = [];
+  const filterBar = makeFilterBar(ctx, {
+    onSelect(ids) {
+      selectFilters(ids);
+    },
+    onChanged() {
+      void loadFilters().then(() => {
+        if (filtered()) void reload();
+      });
+    },
+    onDeleted(id) {
+      if (editingId === id) closeFilterEditor(true);
+      if (filters.filters.includes(id))
+        selectFilters(filters.filters.filter((x) => x !== id));
+    },
+    onEdit(row) {
+      openFilterEditor(row);
+    }
+  });
+  let draft = null;
+  let editor = null;
+  let editingId = null;
+  let draftHash = "";
+  let draftTimer = null;
+  let before = null;
+  const previewLine = h10("span", { class: "cb-preview-line", hidden: true });
+  const rowsScroller = () => handle.el.querySelector(".kit-rows");
+  function paintPreviewLine(text) {
+    previewLine.hidden = text === null;
+    previewLine.textContent = text ?? "";
+  }
+  function openFilterEditor(row) {
+    if (draftTimer !== null) clearTimeout(draftTimer);
+    if (!before) {
+      before = {
+        view: filters.view,
+        filters: [...filters.filters],
+        scroll: rowsScroller()?.scrollTop ?? 0,
+        offset,
+        totalItems,
+        loadedItems,
+        leftOpen,
+        leftOpenTotal,
+        groups,
+        viewRecs,
+        lastOrder,
+        paintedQuery
+      };
+    }
+    if (currentOpenKey) goList();
+    showReadEmpty();
+    editingId = row ? row.filter.id : "";
+    draft = (row?.filter.match ?? []).map((c) => ({ ...c }));
+    draftHash = location.hash;
+    editor = filterEditor(ctx, row, {
+      onDraft(match) {
+        draft = match;
+        if (draftTimer !== null) clearTimeout(draftTimer);
+        draftTimer = setTimeout(() => {
+          draftTimer = null;
+          void reload();
+        }, PREVIEW_DEBOUNCE_MS);
+      },
+      onSaved(id) {
+        closeFilterEditor(false);
+        filters.filters = [id];
+        void loadFilters();
+        handle.setChips("view", viewChips(""));
+        goList();
+        void reload();
+      },
+      onCancel() {
+        closeFilterEditor(true);
+      }
+    });
+    readEl.replaceChildren(editor.el);
+    document.addEventListener("keydown", onEditorEsc);
+    handle.el.classList.add("cb-previewing");
+    handle.setChips("view", viewChips(""));
+    filterBar.paint(filterRows, []);
+    filterBar.setError(null);
+    paintAll();
+    void reload();
+    editor.el.querySelector(".cb-filter-name")?.focus();
+  }
+  function onEditorEsc(e) {
+    if (e.key !== "Escape" || e.isComposing || e.defaultPrevented) return;
+    if (draft === null) return;
+    e.preventDefault();
+    closeFilterEditor(true);
+  }
+  function closeFilterEditor(restore) {
+    if (draft === null) return;
+    if (draftTimer !== null) clearTimeout(draftTimer);
+    draftTimer = null;
+    draft = null;
+    editor = null;
+    editingId = null;
+    document.removeEventListener("keydown", onEditorEsc);
+    handle.el.classList.remove("cb-previewing");
+    paintPreviewLine(null);
+    showReadEmpty();
+    const b = before;
+    before = null;
+    if (!restore || !b) {
+      paintAll();
+      return;
+    }
+    filters.view = b.view;
+    filters.filters = b.filters;
+    paintFilters();
+    handle.setChips("view", viewChips(activeView()));
+    offset = b.offset;
+    totalItems = b.totalItems;
+    totalItemsForView = b.totalItems;
+    loadedItems = b.loadedItems;
+    leftOpen = b.leftOpen;
+    leftOpenTotal = b.leftOpenTotal;
+    groups = b.groups;
+    viewRecs = b.viewRecs;
+    lastOrder = b.lastOrder;
+    paintedQuery = b.paintedQuery;
+    setRows();
+    updateFoot();
+    updateReadEmptyCount();
+    const sc = rowsScroller();
+    if (sc) sc.scrollTop = b.scroll;
+    if (location.hash !== draftHash) goList();
+    void reload();
+  }
+  function filtered() {
+    return filters.filters.length > 0;
+  }
+  function activeView() {
+    return filtered() ? "" : filters.view;
+  }
+  function paintFilters() {
+    filterBar.paint(filterRows, filters.filters);
+  }
+  async function loadFilters() {
+    try {
+      const v = await ctx.api.get("/filters");
+      filterRows = v.filters ?? [];
+      paintFilters();
+      paintRail();
+    } catch {
+    }
+  }
+  function goList() {
+    ctx.route.go(
+      "attention",
+      filtered() ? "" : filters.view,
+      attentionQuery({ flat, filters: filters.filters })
+    );
+  }
+  function selectFilters(ids) {
+    filters.filters = ids;
+    filterBar.setError(null);
+    paintFilters();
+    handle.setChips("view", viewChips(activeView()));
+    goList();
+    void reload();
+  }
+  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(
+    filterBar.el,
+    h10("div", { class: "cb-list-tools" }, groupSwitch, previewLine)
+  );
+  void loadFilters();
+  const hideBtn = h10(
     "button",
     {
       type: "button",
@@ -3429,13 +5773,13 @@ function makeAttention(ctx) {
     },
     "«"
   );
-  const showBtn = h7(
+  const showBtn = h10(
     "button",
     { type: "button", class: "cb-list-show" },
     "»"
   );
-  const railLabel = h7("span", { class: "cb-list-rail-label" });
-  const rail = h7(
+  const railLabel = h10("span", { class: "cb-list-rail-label" });
+  const rail = h10(
     "div",
     {
       class: "cb-list-rail",
@@ -3470,11 +5814,9 @@ function makeAttention(ctx) {
     }
   }
   function buildQuery(pageOffset) {
-    const p = {
-      view: filters.view,
-      offset: String(pageOffset),
-      limit: String(PAGE_SIZE)
-    };
+    const p = draft !== null ? { match: JSON.stringify(draft) } : filtered() ? { filters: filters.filters.join(",") } : { view: filters.view };
+    p["offset"] = String(pageOffset);
+    p["limit"] = String(PAGE_SIZE);
     if (filters.q) p["q"] = filters.q;
     if (flat) p["group"] = "false";
     return p;
@@ -3523,11 +5865,40 @@ function makeAttention(ctx) {
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       paintedQuery = asked2;
+      filterBar.setError(null);
+      if (draft !== null) {
+        editor?.showError(null);
+        paintPreviewLine(
+          draft.length ? `previewing a draft filter · ${pluralize(data.total, "item")}` : "add a condition to preview"
+        );
+      }
       setRows();
       markOpenRow();
       updateFoot();
       updateReadEmptyCount();
-    } catch {
+    } catch (err) {
+      const refused = err instanceof ApiError4 && err.status === 400;
+      if (draft !== null && refused) {
+        editor?.showError(err);
+        paintPreviewLine("previewing a draft filter · not valid yet");
+      } else if (filtered() && refused) {
+        filterBar.setError(err.message);
+      }
+      if ((draft !== null || filtered()) && refused) {
+        totalItems = 0;
+        totalItemsForView = 0;
+        loadedItems = [];
+        leftOpen = [];
+        leftOpenTotal = 0;
+        groups = [];
+        viewRecs = 0;
+        lastOrder = [];
+        offset = 0;
+        paintedQuery = asked2;
+        setRows();
+        updateFoot();
+        updateReadEmptyCount();
+      }
     } finally {
       reloading = false;
     }
@@ -3579,7 +5950,7 @@ function makeAttention(ctx) {
       if (!col) return;
       col.querySelector(".cb-row-looking")?.remove();
       const says = lookingLine(it.looking);
-      if (says) col.append(h7("div", { class: "cb-row-looking" }, says));
+      if (says) col.append(h10("div", { class: "cb-row-looking" }, says));
     });
     handle.el.classList.toggle("cb-flat", flat);
     if (flat) heads = [];
@@ -3640,7 +6011,7 @@ function makeAttention(ctx) {
       const g = navOrder().find((r) => r.key === k)?.group ?? "";
       return navGroups().find((x) => x.id === g)?.label ?? "";
     };
-    const button = (which, glyph, tip, target2, name, later) => h7(
+    const button = (which, glyph, tip, target2, name, later) => h10(
       "button",
       {
         type: "button",
@@ -3660,7 +6031,7 @@ function makeAttention(ctx) {
       glyph
     );
     const pos = words.position.replaceAll("{pos}", String(n.pos)).replaceAll("{total}", String(n.total)).replaceAll("{group}", n.label);
-    return h7(
+    return h10(
       "nav",
       { class: "cb-nav" },
       button(
@@ -3672,7 +6043,7 @@ function makeAttention(ctx) {
         false
       ),
       button("prev", "‹", words.prev_item, n.prev, shortKey, false),
-      h7("span", { class: "cb-nav-pos" }, pos),
+      h10("span", { class: "cb-nav-pos" }, pos),
       button("next", "›", words.next_item, n.next, shortKey, more),
       button(
         "nextGroup",
@@ -3700,12 +6071,12 @@ function makeAttention(ctx) {
     let target2 = navTargets(navOrder(), navGroups(), key)[which];
     const ahead = which === "next" || which === "nextGroup";
     while (!target2 && ahead && offset < totalItems) {
-      const before = offset;
+      const before2 = offset;
       if (reloading) await reload();
       else await loadMore();
       if (currentOpenKey !== key) return;
       target2 = navTargets(navOrder(), navGroups(), key)[which];
-      if (!target2 && offset === before && !reloading) break;
+      if (!target2 && offset === before2 && !reloading) break;
     }
     if (!target2 || currentOpenKey !== key) return;
     const group = navOrder().find((r) => r.key === target2)?.group ?? "";
@@ -3759,10 +6130,10 @@ function makeAttention(ctx) {
       setRows();
       markOpenRow();
     };
-    const top = h7(
+    const top = h10(
       "div",
       { class: "cb-group-top" },
-      h7(
+      h10(
         "button",
         {
           type: "button",
@@ -3773,17 +6144,17 @@ function makeAttention(ctx) {
         },
         isOpen ? "▼" : "▶"
       ),
-      box ?? h7("span", { class: "cb-group-nobox" }),
-      h7(
+      box ?? h10("span", { class: "cb-group-nobox" }),
+      h10(
         "span",
         { class: "cb-group-name", onclick: toggleOpen },
-        h7("span", { class: "cb-group-label" }, label),
+        h10("span", { class: "cb-group-label" }, label),
         hint
       ),
-      h7("span", { class: "cb-group-n" }, String(n))
+      h10("span", { class: "cb-group-n" }, String(n))
     );
-    const acts = h7("div", { class: "cb-group-acts" });
-    const el = h7(
+    const acts = h10("div", { class: "cb-group-acts" });
+    const el = h10(
       "div",
       {
         class: "cb-group" + (isOpen ? "" : " collapsed"),
@@ -3796,12 +6167,12 @@ function makeAttention(ctx) {
     return { el, acts };
   }
   function groupButton(id, cls, label, run, off = false) {
-    return h7(
+    return h10(
       "button",
       {
         type: "button",
         class: "kit-btn " + cls,
-        disabled: off || busyGroups.has(id),
+        disabled: off || busyGroups.has(id) || draft !== null,
         onclick() {
           if (busyGroups.has(id)) return;
           busyGroups.add(id);
@@ -3816,16 +6187,16 @@ function makeAttention(ctx) {
     );
   }
   function groupHead(g) {
-    const box = h7("span", {
+    const box = h10("span", {
       class: "cb-group-box",
       role: "checkbox",
       "aria-checked": "false",
       "aria-label": g.label,
       onclick() {
-        void tickGroup(g);
+        if (draft === null) void tickGroup(g);
       }
     });
-    const hint = g.outward && vocab2?.to_apply_hint ? h7("span", { class: "cb-group-where" }, vocab2.to_apply_hint) : null;
+    const hint = g.outward && vocab2?.to_apply_hint ? h10("span", { class: "cb-group-where" }, vocab2.to_apply_hint) : null;
     const { el, acts } = headShell(g.id, g.label, g.total, box, hint, {
       group: g.id,
       d: g.disposition
@@ -3844,12 +6215,12 @@ function makeAttention(ctx) {
         return;
       }
       if (g.id === "none") {
-        const ask = t && asked !== t.id ? button(
+        const ask = t && asked !== t.id && !filtered() ? button(
           "fill cb-group-ask",
           vocab2.recommend_these.replaceAll("{session}", t.name).replaceAll("{n}", countWord(g.total, 0, vocab2.count_words)),
           askTheRest
         ) : null;
-        const note = t && asked === t.id ? h7(
+        const note = t && asked === t.id ? h10(
           "span",
           { class: "cb-group-note" },
           vocab2.asked.replaceAll("{session}", t.name)
@@ -3866,7 +6237,7 @@ function makeAttention(ctx) {
           button("fill cb-group-act", w.act, () => actGroup(g)),
           t ? button("cb-group-look", w.look, () => lookGroup(g), looked) : null,
           g.source.startsWith("rule:") ? null : button("cb-group-discard", w.discard, () => discardGroup(g)),
-          n > 0 ? h7(
+          n > 0 ? h10(
             "button",
             {
               type: "button",
@@ -4021,11 +6392,11 @@ function makeAttention(ctx) {
     if (!ctx.dockTarget() || !vocab2) return;
     try {
       if (!keys.length) return;
-      const message3 = vocab2.look_into.message_many.replaceAll(
+      const message4 = vocab2.look_into.message_many.replaceAll(
         "{keys}",
         keys.join(", ")
       );
-      const why = await ctx.askSession(message3, { keys }, "look-into");
+      const why = await ctx.askSession(message4, { keys }, "look-into");
       if (why) {
         showReadError(why);
         return;
@@ -4068,7 +6439,7 @@ function makeAttention(ctx) {
     footEl.hidden = false;
   }
   function renderSummary() {
-    discardAllBtn.hidden = viewRecs === 0 || !vocab2;
+    discardAllBtn.hidden = viewRecs === 0 || !vocab2 || draft !== null;
     if (vocab2)
       discardAllBtn.textContent = vocab2.discard_all.replaceAll(
         "{n}",
@@ -4089,10 +6460,10 @@ function makeAttention(ctx) {
       );
       return;
     }
-    const [before, after = ""] = vocab2.summary.one_session.replaceAll("{n}", n).split("{session}");
+    const [before2, after = ""] = vocab2.summary.one_session.replaceAll("{n}", n).split("{session}");
     summaryEl.replaceChildren(
-      before,
-      h7(
+      before2,
+      h10(
         "span",
         { class: "cb-summary-who" },
         sessionName(recs[0].by, recs[0].source)
@@ -4189,7 +6560,7 @@ function makeAttention(ctx) {
     const w = lookIntoCard(words, t.name, key);
     const looking = lookingLine(shownDetail.item.looking);
     const n = Number(grid.dataset.cards) + 1;
-    const card6 = h7(
+    const card6 = h10(
       "button",
       {
         type: "button",
@@ -4214,9 +6585,9 @@ function makeAttention(ctx) {
           } else void refreshLooking(key);
         }
       },
-      h7("span", { class: "cb-choice-k" }, String(n)),
-      h7("span", { class: "cb-choice-label" }, w.label),
-      h7("span", { class: "cb-choice-says" }, looking || w.says)
+      h10("span", { class: "cb-choice-k" }, String(n)),
+      h10("span", { class: "cb-choice-label" }, w.label),
+      h10("span", { class: "cb-choice-says" }, looking || w.says)
     );
     if (old) old.replaceWith(card6);
     else grid.append(card6);
@@ -4281,7 +6652,7 @@ function makeAttention(ctx) {
       p.source,
       p.disposition
     ) : "the recommendation changed";
-    const show2 = h7(
+    const show2 = h10(
       "button",
       {
         type: "button",
@@ -4290,10 +6661,10 @@ function makeAttention(ctx) {
       },
       "show"
     );
-    const line = h7(
+    const line = h10(
       "p",
       { class: "cb-rec-fresh" },
-      h7("span", { class: "cb-rec-fresh-says" }, says),
+      h10("span", { class: "cb-rec-fresh-says" }, says),
       " · ",
       show2
     );
@@ -4302,34 +6673,35 @@ function makeAttention(ctx) {
     else readEl.querySelector(".cb-question")?.after(line);
   }
   function viewLabel() {
-    return VIEWS2.find((v) => v.id === filters.view)?.label ?? filters.view;
+    if (filtered()) return filterLabel(filterRows, filters.filters);
+    return VIEWS3.find((v) => v.id === filters.view)?.label ?? filters.view;
   }
-  function showReadError(message3) {
+  function showReadError(message4) {
     if (readEl.querySelector(".cb-choice-err")) {
-      showChoiceError(readEl, message3);
+      showChoiceError(readEl, message4);
       return;
     }
     readEl.firstElementChild?.append(
-      h7("p", { class: "cb-choice-err" }, message3)
+      h10("p", { class: "cb-choice-err" }, message4)
     );
   }
   function showDone() {
     currentOpenKey = null;
     shownDetail = null;
     readEl.replaceChildren(
-      h7(
+      h10(
         "div",
         { class: "cb-read-empty" },
-        h7("p", { class: "cb-read-empty-section kit-label" }, "attention"),
-        h7("p", { class: "cb-read-done" }, `Nothing left in ${viewLabel()}.`)
+        h10("p", { class: "cb-read-empty-section kit-label" }, "attention"),
+        h10("p", { class: "cb-read-done" }, `Nothing left in ${viewLabel()}.`)
       )
     );
     feedAttached();
   }
   function openKey(key) {
-    const before = location.hash;
+    const before2 = location.hash;
     ctx.route.go("item", key);
-    if (location.hash === before) {
+    if (location.hash === before2) {
       void openDetail(key);
       void reload();
     }
@@ -4456,7 +6828,7 @@ function makeAttention(ctx) {
     }
   }
   function viewChips(activeId) {
-    return VIEWS2.map((v) => ({
+    return VIEWS3.map((v) => ({
       ...v,
       on: v.id === activeId,
       count: viewCounts2[v.id]
@@ -4464,9 +6836,9 @@ function makeAttention(ctx) {
   }
   function applyCounts(counts) {
     if (!counts) return;
-    for (const v of VIEWS2) viewCounts2[v.id] = 0;
+    for (const v of VIEWS3) viewCounts2[v.id] = 0;
     Object.assign(viewCounts2, counts);
-    handle.setChips("view", viewChips(filters.view));
+    handle.setChips("view", viewChips(activeView()));
   }
   {
     const urlQ = getUrlQ();
@@ -4550,6 +6922,10 @@ function makeAttention(ctx) {
   }).catch(() => {
   });
   function show(sub, query) {
+    if (draft !== null) {
+      if (location.hash === draftHash) return;
+      closeFilterEditor(false);
+    }
     const wasActive = active;
     active = true;
     feedAttached();
@@ -4559,16 +6935,31 @@ function makeAttention(ctx) {
       handle.setSearch(urlQ);
     }
     const view = sub || "due";
-    if (VIEWS2.some((v) => v.id === view)) {
+    const ids = sub ? [] : parseFilterIds(new URLSearchParams(query).get("filters"));
+    if (ids.length) {
+      flat = flatFor(true, query, storedFlat());
+      storeFlat(flat);
+      paintSwitch();
+      filters.filters = ids;
+      paintFilters();
+      handle.setChips("view", viewChips(""));
+      showReadEmpty();
+      void reload();
+    } else if (VIEWS3.some((v) => v.id === view)) {
       flat = flatFor(sub !== "", query, storedFlat());
       storeFlat(flat);
       paintSwitch();
       filters.view = view;
+      if (filtered()) {
+        filters.filters = [];
+        filterBar.setError(null);
+        paintFilters();
+      }
       handle.setChips("view", viewChips(filters.view));
       showReadEmpty();
       void reload();
     } else if (sub) {
-      handle.setChips("view", viewChips(filters.view));
+      handle.setChips("view", viewChips(activeView()));
       if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
@@ -4620,6 +7011,10 @@ function makeAttention(ctx) {
         }
         refreshSummary();
         void reload();
+      } else if (type === "filters") {
+        void loadFilters().then(() => {
+          if (filtered()) void reload();
+        });
       } else if (type === "evidence") {
         const key = data?.key ?? "";
         if (currentOpenKey && currentOpenKey !== deciding && key === currentOpenKey)
@@ -4641,7 +7036,7 @@ function makeAttention(ctx) {
 }
 
 // dock.ts
-import { h as h10, card as card4 } from "/_kit/kit.js";
+import { h as h13, card as card5 } from "/_kit/kit.js";
 
 // thread.ts
 function at(m) {
@@ -4655,7 +7050,7 @@ function threadOrder(ms) {
 }
 
 // composer.ts
-import { h as h8, ApiError as ApiError2 } from "/_kit/kit.js";
+import { h as h11, ApiError as ApiError5 } from "/_kit/kit.js";
 
 // attached.ts
 var KIND_PLURAL = { branch: "branches" };
@@ -4723,7 +7118,7 @@ function sameAttached(a, b) {
 
 // composer.ts
 function movedNote(err) {
-  return err instanceof ApiError2 && err.status === 409 ? "that thread moved to another session; not sent" : "";
+  return err instanceof ApiError5 && err.status === 409 ? "that thread moved to another session; not sent" : "";
 }
 function threadName(body) {
   const words = body.split(/\s+/).filter(Boolean).slice(0, 5).join(" ");
@@ -4735,7 +7130,7 @@ function makeComposer(ctx, dock) {
   let override = null;
   let sending = false;
   const effective = () => override ?? context;
-  const value = h8("span", {
+  const value = h11("span", {
     class: "cb-comp-attached-value",
     contenteditable: "true",
     role: "textbox",
@@ -4743,10 +7138,10 @@ function makeComposer(ctx, dock) {
     spellcheck: false,
     "data-testid": "composer-attached"
   });
-  const line = h8(
+  const line = h11(
     "div",
     { class: "cb-comp-attached" },
-    h8("span", { class: "cb-comp-attached-prefix" }, "attached: "),
+    h11("span", { class: "cb-comp-attached-prefix" }, "attached: "),
     value
   );
   let editing = false;
@@ -4792,7 +7187,7 @@ function makeComposer(ctx, dock) {
       value.blur();
     }
   });
-  const input = h8("textarea", {
+  const input = h11("textarea", {
     class: "cb-comp-input",
     rows: 1,
     placeholder: "Message the agent…",
@@ -4810,14 +7205,14 @@ function makeComposer(ctx, dock) {
     e.preventDefault();
     void send(false);
   });
-  const note = h8("span", { class: "cb-comp-note", role: "status" });
-  const footer = h8(
+  const note = h11("span", { class: "cb-comp-note", role: "status" });
+  const footer = h11(
     "div",
     { class: "cb-comp-foot" },
-    h8("span", {}, "↵ send · ⌘↵ add to batch"),
+    h11("span", {}, "↵ send · ⌘↵ add to batch"),
     note
   );
-  const el = h8(
+  const el = h11(
     "div",
     { class: "cb-comp", "data-testid": "composer" },
     line,
@@ -4935,26 +7330,26 @@ function makeComposer(ctx, dock) {
 }
 
 // progress.ts
-import { h as h9, card as card3, fold as fold2, noteField as noteField4 } from "/_kit/kit.js";
+import { h as h12, card as card4, fold as fold2, noteField as noteField4 } from "/_kit/kit.js";
 function makeBatchTray(ctx, dock) {
   let thread = 0;
   let batch = 0;
   let drafts = [];
   let loadSeq = 0;
-  const label = h9("span", { class: "kit-card-head cb-batch-label" });
-  const sendBtn = h9("button", {
+  const label = h12("span", { class: "kit-card-head cb-batch-label" });
+  const sendBtn = h12("button", {
     class: "kit-btn fill cb-batch-send",
     "data-testid": "batch-send",
     onclick() {
       void sendBatch();
     }
   });
-  const list4 = h9("div", { class: "cb-batch-drafts" });
-  const el = card3({
-    body: h9(
+  const list4 = h12("div", { class: "cb-batch-drafts" });
+  const el = card4({
+    body: h12(
       "div",
       {},
-      h9("div", { class: "cb-batch-head" }, label, sendBtn),
+      h12("div", { class: "cb-batch-head" }, label, sendBtn),
       list4
     )
   });
@@ -4975,7 +7370,7 @@ function makeBatchTray(ctx, dock) {
     list4.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
   }
   function actionBtn(text, action, aria, run, disabled = false) {
-    return h9(
+    return h12(
       "button",
       {
         class: "cb-batch-act",
@@ -4988,12 +7383,12 @@ function makeBatchTray(ctx, dock) {
     );
   }
   function draftRow(d, i) {
-    const text = h9("span", { class: "cb-batch-text" }, d.body);
-    const row = h9(
+    const text = h12("span", { class: "cb-batch-text" }, d.body);
+    const row = h12(
       "div",
       { class: "cb-batch-draft", "data-draft-id": String(d.id) },
       text,
-      h9(
+      h12(
         "span",
         { class: "cb-batch-acts" },
         actionBtn(
@@ -5152,17 +7547,17 @@ function countText(n, total) {
 function makeProgressLine() {
   let prog = null;
   let at2 = 0;
-  const text = h9("span", { class: "cb-prog-text" });
-  const age = h9("span", { class: "cb-prog-age" });
-  const fill = h9("span", { class: "cb-prog-fill" });
-  const bar2 = h9("div", { class: "cb-prog-bar", role: "progressbar" }, fill);
-  const el = h9(
+  const text = h12("span", { class: "cb-prog-text" });
+  const age = h12("span", { class: "cb-prog-age" });
+  const fill = h12("span", { class: "cb-prog-fill" });
+  const bar2 = h12("div", { class: "cb-prog-bar", role: "progressbar" }, fill);
+  const el = h12(
     "div",
     { class: "cb-prog", "data-testid": "progress-line" },
-    h9(
+    h12(
       "div",
       { class: "cb-prog-row" },
-      h9("span", { class: "cb-prog-dot" }),
+      h12("span", { class: "cb-prog-dot" }),
       text,
       age
     ),
@@ -5201,11 +7596,11 @@ function makeProgressLine() {
   };
 }
 function makeWaitingStrip() {
-  const count = h9("span", {});
-  const el = h9(
+  const count = h12("span", {});
+  const el = h12(
     "div",
     { class: "cb-wait", "data-testid": "waiting-strip" },
-    h9("span", { class: "cb-wait-word" }, "waiting"),
+    h12("span", { class: "cb-wait-word" }, "waiting"),
     count
   );
   el.hidden = true;
@@ -5227,15 +7622,15 @@ function clock(ts) {
 }
 function workedFold(msg) {
   const lines = msg.worked?.lines ?? [];
-  const history2 = h9(
+  const history2 = h12(
     "ol",
     { class: "cb-worked-lines" },
     ...lines.map(
-      (l) => h9(
+      (l) => h12(
         "li",
         { class: "cb-worked-line" },
-        h9("span", { class: "cb-worked-at" }, clock(l.at)),
-        h9("span", {}, l.text + countText(l.n, l.total))
+        h12("span", { class: "cb-worked-at" }, clock(l.at)),
+        h12("span", {}, l.text + countText(l.n, l.total))
       )
     )
   );
@@ -5269,19 +7664,19 @@ function stateLabel(msg) {
   return base;
 }
 function sessionItem(s, extra = "") {
-  const el = h10(
+  const el = h13(
     "button",
     { class: "cb-dock-pick-item", "data-session": s.id },
-    h10("span", { class: "cb-dock-dot" }),
-    h10("span", { class: "cb-dock-pick-title" }, sessionTitle(s))
+    h13("span", { class: "cb-dock-dot" }),
+    h13("span", { class: "cb-dock-pick-title" }, sessionTitle(s))
   );
   const meta = [sessionMeta(s), extra].filter(Boolean).join(" · ");
-  if (meta) el.append(h10("span", { class: "cb-dock-pick-meta" }, meta));
+  if (meta) el.append(h13("span", { class: "cb-dock-pick-meta" }, meta));
   return el;
 }
 function renderAgentBody(msg) {
-  const wrap = h10("div", { class: "cb-dock-body" });
-  const bodyP = h10("p", { class: "cb-dock-bodytext" });
+  const wrap = h13("div", { class: "cb-dock-body" });
+  const bodyP = h13("p", { class: "cb-dock-bodytext" });
   bodyP.textContent = msg.body;
   wrap.append(bodyP);
   const { attached } = msg;
@@ -5290,7 +7685,7 @@ function renderAgentBody(msg) {
     if (attached.keys && attached.keys.length > 0) {
       const shown = attached.keys.slice(0, 5);
       for (const k of shown) {
-        const a = h10("a", {
+        const a = h13("a", {
           class: "cb-dock-link",
           href: "#",
           onclick(e) {
@@ -5303,7 +7698,7 @@ function renderAgentBody(msg) {
       }
       if (attached.keys.length > 5) {
         links.push(
-          h10(
+          h13(
             "span",
             { class: "cb-dock-link-more" },
             `+${attached.keys.length - 5} more`
@@ -5313,7 +7708,7 @@ function renderAgentBody(msg) {
     }
     if (attached.open) {
       const k = attached.open;
-      const a = h10("a", {
+      const a = h13("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -5326,7 +7721,7 @@ function renderAgentBody(msg) {
     }
     if (attached.rule) {
       const id = attached.rule;
-      const a = h10("a", {
+      const a = h13("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -5339,7 +7734,7 @@ function renderAgentBody(msg) {
     }
     if (attached.job) {
       const id = attached.job;
-      const a = h10("a", {
+      const a = h13("a", {
         class: "cb-dock-link",
         href: "#",
         onclick(e) {
@@ -5351,7 +7746,7 @@ function renderAgentBody(msg) {
       links.push(a);
     }
     if (links.length > 0) {
-      const linkRow = h10("div", { class: "cb-dock-links" }, ...links);
+      const linkRow = h13("div", { class: "cb-dock-links" }, ...links);
       wrap.append(linkRow);
     }
   }
@@ -5362,24 +7757,24 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
   const isAgent = msg.author !== "court";
   const authorLabel = isAgent ? agentName.toUpperCase() : "YOU";
   const age = fmtAge(msg.created_at);
-  const headEl = h10(
+  const headEl = h13(
     "div",
     { class: "cb-dock-ch" },
-    h10(
+    h13(
       "span",
       {
         class: isAgent ? "cb-dock-ch-name cb-dock-ch-agent" : "cb-dock-ch-name"
       },
       authorLabel
     ),
-    h10("span", { class: "cb-dock-ch-age" }, age)
+    h13("span", { class: "cb-dock-ch-age" }, age)
   );
   let bodyContent;
   if (isAgent) {
     bodyContent = renderAgentBody(msg);
   } else {
-    const bodyEl = h10("div", { class: "cb-dock-body" });
-    const bodyP = h10("p", { class: "cb-dock-bodytext" });
+    const bodyEl = h13("div", { class: "cb-dock-body" });
+    const bodyP = h13("p", { class: "cb-dock-bodytext" });
     bodyP.textContent = msg.body;
     bodyEl.append(bodyP);
     bodyContent = bodyEl;
@@ -5398,7 +7793,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       "interrupted"
     ];
     if (validStates.includes(msg.state)) {
-      stateEl = h10("div", {
+      stateEl = h13("div", {
         class: "cb-dock-state",
         "data-state": msg.state,
         style: `color:${stateColor(msg.state)}`
@@ -5406,7 +7801,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       stateEl.textContent = stateLabel(msg);
     }
   }
-  const fullBody = h10(
+  const fullBody = h13(
     "div",
     { class: "cb-dock-card-body" },
     headEl,
@@ -5420,12 +7815,12 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       const ageStr = ageText2 === "now" ? "just now" : `${ageText2} ago`;
       stateEl.textContent = "";
       stateEl.setAttribute("data-state", "stuck");
-      const stuckBold = h10("strong", { style: "font-weight:600" });
+      const stuckBold = h13("strong", { style: "font-weight:600" });
       stuckBold.textContent = "stuck";
       stateEl.append(`delivered ${ageStr} · `, stuckBold);
     }
     const d = delivery;
-    const releaseBtn = h10("button", {
+    const releaseBtn = h13("button", {
       class: "kit-btn",
       "data-action": "release",
       onclick() {
@@ -5436,7 +7831,7 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
     const otherSessions = pickable(sessions).filter(
       (s) => s.id !== d.session_id
     );
-    const moveBtn = h10("button", {
+    const moveBtn = h13("button", {
       class: "kit-btn",
       "data-action": "move",
       onclick() {
@@ -5444,9 +7839,9 @@ function renderMsgCard(msg, delivery, sessions, ctx, agentName) {
       }
     });
     moveBtn.textContent = "move to another session";
-    fullBody.append(h10("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
+    fullBody.append(h13("div", { class: "cb-dock-stuck" }, releaseBtn, moveBtn));
   }
-  const el = card4({
+  const el = card5({
     edge: isAgent ? "agent" : "signal",
     body: fullBody
   });
@@ -5479,16 +7874,16 @@ function openMoveSheet(ctx, delivery, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h10(
+    const noOther = h13(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h10("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h13("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet4 = {
-    el: h10("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h13("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -5523,16 +7918,16 @@ function openSessionMoveSheet(ctx, fromSession, targets) {
     return el;
   });
   if (items.length === 0) {
-    const noOther = h10(
+    const noOther = h13(
       "p",
       { class: "cb-dock-pick-empty" },
       "no other sessions"
     );
     items.push(noOther);
   }
-  const content = h10("div", { class: "cb-dock-pick-list" }, ...items);
+  const content = h13("div", { class: "cb-dock-pick-list" }, ...items);
   const sheet4 = {
-    el: h10("div", { class: "cb-dock-pick-sheet" }, content),
+    el: h13("div", { class: "cb-dock-pick-sheet" }, content),
     close() {
       this.el.remove();
     }
@@ -5559,10 +7954,10 @@ function buildSessionPicker(sessions, currentId, onSelect) {
   });
   if (items.length === 0) {
     items.push(
-      h10("p", { class: "cb-dock-pick-empty" }, "no agent sessions are here")
+      h13("p", { class: "cb-dock-pick-empty" }, "no agent sessions are here")
     );
   }
-  const picker = h10(
+  const picker = h13(
     "div",
     { class: "cb-dock-picker", role: "listbox" },
     ...items
@@ -5592,16 +7987,16 @@ function makeDock(ctx) {
   let currentDelivery = null;
   let urlRead = false;
   let auto = false;
-  const sessionDot = h10("span", { class: "cb-dock-dot" });
-  const sessionLabelEl = h10("span", {
+  const sessionDot = h13("span", { class: "cb-dock-dot" });
+  const sessionLabelEl = h13("span", {
     class: "cb-dock-session-label",
     "data-testid": "dock-session-name"
   });
-  const sessionMetaEl = h10("div", {
+  const sessionMetaEl = h13("div", {
     class: "cb-dock-meta-row",
     "data-testid": "dock-session-meta"
   });
-  const sessionPickerBtn = h10("button", {
+  const sessionPickerBtn = h13("button", {
     class: "cb-dock-agent-btn",
     "aria-label": "pick agent session",
     onclick(e) {
@@ -5617,27 +8012,27 @@ function makeDock(ctx) {
     }
   });
   sessionPickerBtn.textContent = "AGENT ▾";
-  const leftStatusRow = h10("div", { class: "cb-dock-left-row" });
+  const leftStatusRow = h13("div", { class: "cb-dock-left-row" });
   leftStatusRow.hidden = true;
-  const sessionHeader = h10(
+  const sessionHeader = h13(
     "div",
     { class: "cb-dock-header" },
-    h10(
+    h13(
       "div",
       { class: "cb-dock-header-row" },
-      h10("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
+      h13("span", { class: "cb-dock-who" }, sessionDot, sessionLabelEl),
       sessionPickerBtn
     ),
     sessionMetaEl,
     leftStatusRow
   );
-  const chooser = h10("div", {
+  const chooser = h13("div", {
     class: "cb-dock-chooser",
     "data-testid": "dock-chooser"
   });
   chooser.hidden = true;
-  const threadChips = h10("div", { class: "cb-dock-threads" });
-  const messageArea = h10("div", {
+  const threadChips = h13("div", { class: "cb-dock-threads" });
+  const messageArea = h13("div", {
     class: "cb-dock-messages",
     "data-testid": "dock-messages"
   });
@@ -5671,7 +8066,7 @@ function makeDock(ctx) {
       void batchTray.load(t.id);
     }
   });
-  const rail = h10("div", { class: "cb-dock-inner" });
+  const rail = h13("div", { class: "cb-dock-inner" });
   rail.append(
     sessionHeader,
     chooser,
@@ -5709,7 +8104,7 @@ function makeDock(ctx) {
     sessionHeader.title = sess.id;
     if (stale) {
       leftStatusRow.textContent = "";
-      const moveLink = h10("button", {
+      const moveLink = h13("button", {
         class: "cb-dock-move-link",
         "data-testid": "dock-move-link",
         onclick(e) {
@@ -5719,12 +8114,12 @@ function makeDock(ctx) {
         }
       });
       moveLink.textContent = "move to…";
-      const parts = [h10("span", {}, "left")];
+      const parts = [h13("span", {}, "left")];
       if (sess.queued > 0) {
-        parts.push(h10("span", { class: "cb-dock-sep" }, "·"));
-        parts.push(h10("span", {}, `${sess.queued} queued`));
+        parts.push(h13("span", { class: "cb-dock-sep" }, "·"));
+        parts.push(h13("span", {}, `${sess.queued} queued`));
       }
-      parts.push(h10("span", { class: "cb-dock-sep" }, "·"));
+      parts.push(h13("span", { class: "cb-dock-sep" }, "·"));
       parts.push(moveLink);
       leftStatusRow.append(...parts);
       leftStatusRow.hidden = false;
@@ -5748,7 +8143,7 @@ function makeDock(ctx) {
     chooser.hidden = false;
     chooser.setAttribute("data-state", state);
     const offered = pickable(sessions).filter((s) => s.id !== currentSessionId);
-    const lead = h10("p", {
+    const lead = h13("p", {
       class: "cb-dock-chooser-lead",
       "data-testid": "dock-chooser-lead"
     });
@@ -5770,7 +8165,7 @@ function makeDock(ctx) {
   function renderThreadChips() {
     threadChips.innerHTML = "";
     for (const t of threads) {
-      const chip = h10("button", {
+      const chip = h13("button", {
         class: "kit-chip" + (t.id === currentThreadId ? " on" : ""),
         "data-thread": String(t.id),
         onclick() {
@@ -5780,7 +8175,7 @@ function makeDock(ctx) {
       chip.textContent = t.name;
       threadChips.append(chip);
     }
-    const addChip = h10("button", {
+    const addChip = h13("button", {
       class: "kit-chip cb-dock-add",
       "data-testid": "dock-add-thread",
       onclick() {
@@ -5799,7 +8194,7 @@ function makeDock(ctx) {
     }
     const cards = [];
     if (messages.length === 0) {
-      cards.push(h10("p", { class: "cb-dock-empty" }, "no messages"));
+      cards.push(h13("p", { class: "cb-dock-empty" }, "no messages"));
     }
     const name = agentName();
     for (const msg of messages) {
@@ -6091,1730 +8486,6 @@ function makeDock(ctx) {
     },
     sendText(body, attached, purpose) {
       return composer.sendText(body, attached, purpose);
-    }
-  };
-}
-
-// rules.ts
-import {
-  list as list3,
-  h as h12,
-  facts as facts3,
-  buttons as buttons3,
-  card as card5,
-  sheet as sheet3,
-  ApiError as ApiError3
-} from "/_kit/kit.js";
-
-// conditions.ts
-import { h as h11 } from "/_kit/kit.js";
-
-// menu-nav.ts
-function menuNav(menu, selector, opener, close) {
-  const items = () => [...menu.querySelectorAll(selector)];
-  const rove = (to) => {
-    for (const it of items()) it.tabIndex = it === to ? 0 : -1;
-  };
-  menu.addEventListener("focusin", (e) => {
-    const t = e.target;
-    if (t.matches(selector)) rove(t);
-  });
-  menu.addEventListener("keydown", (e) => {
-    if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
-    const list4 = items();
-    if (!list4.length) return;
-    const at2 = list4.indexOf(document.activeElement);
-    let next = -1;
-    switch (e.key) {
-      case "ArrowDown":
-      case "ArrowRight":
-        next = at2 < 0 ? 0 : (at2 + 1) % list4.length;
-        break;
-      case "ArrowUp":
-      case "ArrowLeft":
-        next = at2 < 0 ? list4.length - 1 : (at2 - 1 + list4.length) % list4.length;
-        break;
-      case "Home":
-        next = 0;
-        break;
-      case "End":
-        next = list4.length - 1;
-        break;
-      default:
-        return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    rove(list4[next]);
-    list4[next].focus();
-  });
-  menu.addEventListener("focusout", (e) => {
-    if (menu.hidden) return;
-    const to = e.relatedTarget;
-    if (to && (menu.contains(to) || to === opener)) return;
-    close();
-  });
-}
-
-// conditions.ts
-var ENUM = 0;
-var DURATION = 2;
-var BOOL = 3;
-var COUNT = 4;
-var vocab = null;
-var errors = /* @__PURE__ */ new WeakMap();
-function ruleVocabularyView(ctx) {
-  if (!vocab) {
-    vocab = ctx.api.get("/rules/vocabulary");
-    vocab.catch(() => {
-      vocab = null;
-    });
-  }
-  return vocab;
-}
-function ruleVocabulary(ctx) {
-  return ruleVocabularyView(ctx).then((v) => v.fields ?? []);
-}
-function noteTokens(ctx) {
-  return ruleVocabularyView(ctx).then((v) => v.note_tokens ?? []);
-}
-function picks(f, op) {
-  if (f.type === BOOL) return true;
-  return f.type === ENUM && (f.values?.length ?? 0) > 0 && /^is/.test(op);
-}
-function choices(f) {
-  return f.type === BOOL ? ["true", "false"] : f.values ?? [];
-}
-function placeholder(f, op) {
-  if (f.type === DURATION) return "<n>h, <n>d or <n>w";
-  if (f.type === COUNT) return "a count, e.g. 0";
-  if (op === "in" || op === "not-in") return "a, b, c";
-  if (op === "matches") return "a regular expression";
-  return "";
-}
-function firstValue(f, op) {
-  return picks(f, op) ? choices(f)[0] ?? "" : "";
-}
-function select(cls, label, options, value, onPick) {
-  const el = h11(
-    "select",
-    { class: cls, "aria-label": label },
-    ...options.map((o) => h11("option", { value: o }, o))
-  );
-  if (!options.includes(value)) {
-    el.prepend(h11("option", { value }, value));
-  }
-  el.value = value;
-  el.addEventListener("change", () => onPick(el.value));
-  return el;
-}
-function conditionEditor(ctx, rule, onChange) {
-  const editable = rule.editable ?? rule.status === "draft";
-  const conds = (rule.match ?? []).map((c) => ({ ...c }));
-  let fields = [];
-  const fieldOf = (name) => fields.find((f) => f.name === name);
-  const el = h11("div", {
-    class: "kit-table cb-conds",
-    "data-testid": "conditions"
-  });
-  const rowsEl = h11("div", { class: "cb-cond-rows" });
-  const general = h11("div", { class: "cb-cond-err", hidden: true });
-  el.append(rowsEl, general);
-  const changed = () => onChange(conds.map((c) => ({ ...c })));
-  function valueControl(i, f) {
-    const c = conds[i];
-    if (!editable || !f) {
-      return h11("span", { class: "cb-cond-v" }, c.value);
-    }
-    if (picks(f, c.op)) {
-      return select(
-        "cb-cond-v",
-        `${c.field} value`,
-        choices(f),
-        c.value,
-        (v) => {
-          c.value = v;
-          changed();
-        }
-      );
-    }
-    const input = h11("input", {
-      class: "cb-cond-v",
-      type: "text",
-      value: c.value,
-      placeholder: placeholder(f, c.op),
-      spellcheck: false,
-      "aria-label": `${c.field} value`
-    });
-    input.addEventListener("input", () => {
-      c.value = input.value;
-      changed();
-    });
-    return input;
-  }
-  function row(i) {
-    const c = conds[i];
-    const f = fieldOf(c.field);
-    const op = editable && f ? select("cb-cond-o", `${c.field} operator`, f.ops ?? [], c.op, (v) => {
-      const wasPick = picks(f, c.op);
-      c.op = v;
-      if (picks(f, v) !== wasPick) {
-        c.value = firstValue(f, v);
-        render();
-      }
-      changed();
-    }) : h11("span", { class: "cb-cond-o" }, c.op);
-    const remove = editable ? h11(
-      "button",
-      {
-        type: "button",
-        class: "cb-cond-rm",
-        "aria-label": `remove ${c.field} ${c.op}`,
-        onclick() {
-          conds.splice(i, 1);
-          render();
-          changed();
-        }
-      },
-      "×"
-    ) : null;
-    return h11(
-      "div",
-      { class: "cb-cond", "data-index": i },
-      h11(
-        "div",
-        { class: "kit-tr cb-cond-row" + (editable ? " cb-cond-edit" : "") },
-        h11("span", { class: "cb-cond-f" }, c.field),
-        op,
-        valueControl(i, f),
-        remove
-      ),
-      h11("div", { class: "cb-cond-err", hidden: true })
-    );
-  }
-  function render() {
-    rowsEl.replaceChildren(...conds.map((_, i) => row(i)));
-    const e = errors.get(el);
-    if (e) setConditionError(el, e.index, e.message);
-  }
-  const menu = h11("div", {
-    class: "cb-cond-menu",
-    role: "menu",
-    "aria-label": "add a condition",
-    hidden: true
-  });
-  const add = h11(
-    "button",
-    {
-      type: "button",
-      class: "cb-cond-add",
-      "aria-expanded": "false",
-      onclick() {
-        setMenu(menu.hidden);
-      }
-    },
-    "+ condition"
-  );
-  function onEsc(e) {
-    if (e.key !== "Escape" || e.isComposing) return;
-    if (!el.isConnected) {
-      document.removeEventListener("keydown", onEsc, true);
-      return;
-    }
-    e.preventDefault();
-    e.stopPropagation();
-    setMenu(false);
-    add.focus();
-  }
-  function setMenu(open) {
-    menu.hidden = !open;
-    add.setAttribute("aria-expanded", String(open));
-    if (open) {
-      document.addEventListener("keydown", onEsc, true);
-      menu.querySelector(".cb-cond-menu-op")?.focus();
-    } else {
-      document.removeEventListener("keydown", onEsc, true);
-    }
-  }
-  menuNav(menu, ".cb-cond-menu-op", add, () => setMenu(false));
-  function addCondition(f, op) {
-    conds.push({ field: f.name, op, value: firstValue(f, op) });
-    setMenu(false);
-    render();
-    changed();
-    const last = rowsEl.lastElementChild;
-    last?.querySelector(".cb-cond-v")?.focus();
-  }
-  function fillMenu() {
-    menu.replaceChildren(
-      ...fields.map(
-        (f) => h11(
-          "div",
-          { class: "cb-cond-menu-row", "data-field": f.name },
-          h11("span", { class: "cb-cond-menu-f" }, f.name),
-          h11(
-            "span",
-            { class: "cb-cond-menu-ops" },
-            ...(f.ops ?? []).map(
-              (op) => h11(
-                "button",
-                {
-                  type: "button",
-                  role: "menuitem",
-                  class: "kit-chip cb-cond-menu-op",
-                  "data-op": op,
-                  onclick() {
-                    addCondition(f, op);
-                  }
-                },
-                op
-              )
-            )
-          )
-        )
-      )
-    );
-  }
-  render();
-  if (editable) {
-    el.append(add, menu);
-    void ruleVocabulary(ctx).then((fs) => {
-      fields = fs;
-      fillMenu();
-      render();
-      el.dataset.ready = "true";
-    }).catch((err) => {
-      general.textContent = err instanceof Error ? err.message : "the vocabulary did not load";
-      general.hidden = false;
-    });
-  } else {
-    el.dataset.ready = "true";
-  }
-  return el;
-}
-function setConditionError(editor, index, message3) {
-  if (message3 === null) errors.delete(editor);
-  else errors.set(editor, { index, message: message3 });
-  for (const e of editor.querySelectorAll(".cb-cond-err")) {
-    e.hidden = true;
-    e.textContent = "";
-  }
-  for (const r2 of editor.querySelectorAll(".cb-cond[data-invalid]")) {
-    r2.removeAttribute("data-invalid");
-  }
-  if (message3 === null) return;
-  const r = editor.querySelector(
-    `.cb-cond[data-index="${index}"]`
-  );
-  const slot = r ? r.querySelector(".cb-cond-err") : editor.querySelector(":scope > .cb-cond-err");
-  r?.setAttribute("data-invalid", "");
-  if (slot) {
-    slot.textContent = message3;
-    slot.hidden = false;
-  }
-}
-
-// rules-text.ts
-function trackRecord(r) {
-  const parts = [];
-  if (r.accepted) parts.push(`${r.accepted} accepted`);
-  if (r.rejected) parts.push(`${r.rejected} rejected`);
-  if (r.pending) parts.push(`${r.pending} pending`);
-  return parts.join(" · ");
-}
-function rowKicker(row) {
-  const rec = trackRecord(row.record);
-  const head = row.invalid ? "not valid" : `${row.matches} match · ${row.excluded} excluded`;
-  return rec ? `${head} · ${rec}` : head;
-}
-function sameAction(a, b) {
-  return a.disposition === b.disposition && (a.until ?? "") === (b.until ?? "") && (a.note ?? "") === (b.note ?? "");
-}
-function authorOf(createdBy) {
-  const i = createdBy.indexOf(":");
-  if (i > 0) return { agent: true, name: createdBy.slice(0, i) };
-  return { agent: false, name: "you" };
-}
-function reasonSummary(by) {
-  const rs = by ?? [];
-  if (rs.length === 1 && rs[0].reason === "matched") return "";
-  return rs.map((r) => `${r.count} ${r.reason.toLowerCase()}`).join(" · ");
-}
-function matchesHeading(total, by) {
-  const why = reasonSummary(by);
-  return `matches now · ${total}` + (why ? ` · ${why}` : "");
-}
-function conditionErrorIndex(message3) {
-  const m = /^condition (\d+): /.exec(message3);
-  const n = m ? Number(m[1]) : 0;
-  return n >= 1 ? n - 1 : -1;
-}
-function viewCounts(rules) {
-  let active = 0;
-  for (const r of rules) if (r.status === "active") active++;
-  return { all: rules.length, active, drafts: rules.length - active };
-}
-function sameConditions(a, b) {
-  if (a.length !== b.length) return false;
-  return a.every(
-    (c, i) => c.field === b[i].field && c.op === b[i].op && c.value === b[i].value
-  );
-}
-function sameRule(a, b) {
-  const ex = (r) => (r.exclude ?? []).map((x) => `${x.key}\0${x.reason ?? ""}`).join("\n");
-  return a.id === b.id && a.name === b.name && a.status === b.status && a.created_by === b.created_by && a.edited_at === b.edited_at && sameConditions(a.match ?? [], b.match ?? []) && sameAction(a.propose, b.propose) && ex(a) === ex(b);
-}
-function hasKindCondition(conds) {
-  return conds.some((c) => c.field === "kind");
-}
-function orList(words) {
-  if (words.length <= 1) return words.join("");
-  return `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
-}
-function kindHint(conds, allowed, all) {
-  if (hasKindCondition(conds) || !allowed.length) return "";
-  const missing = [...new Set(all)].filter((d) => !allowed.includes(d)).sort();
-  return missing.length ? `add a kind condition to propose ${orList(missing)}` : "";
-}
-function refusedDisposition(d, conds, allowed) {
-  const what = hasKindCondition(conds) ? "what this rule matches" : "every kind of item (the rule has no kind condition)";
-  return `${d} can’t be proposed for ${what} (allowed: ${allowed.join(", ")})`;
-}
-
-// rules.ts
-var HINT_SEP = " · ";
-var PREVIEW_DEBOUNCE_MS = 300;
-var PAGE2 = 200;
-var VIEWS3 = [
-  { id: "all", label: "all" },
-  { id: "active", label: "active" },
-  { id: "drafts", label: "drafts" }
-];
-function message2(err) {
-  return err instanceof Error ? err.message : String(err);
-}
-var isConflict = (err) => err instanceof ApiError3 && err.status === 409;
-function slug(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60);
-}
-function renderRule(ctx, detail, hooks) {
-  const id = detail.rule.id;
-  let saved = detail;
-  let base = detail.rule;
-  let work = [...base.match ?? []];
-  let workPropose = { ...base.propose };
-  let exclude = base.exclude ?? [];
-  let preview = detail.matches;
-  let dispositions = detail.matches.dispositions ?? [];
-  let shown = preview.page ?? [];
-  let invalid = null;
-  let conflict = null;
-  let grouped = false;
-  let seq = 0;
-  let timer = null;
-  let opened = PAGE2;
-  let queue = Promise.resolve();
-  const inTurn = (task) => {
-    const run = queue.then(task);
-    queue = run.catch(() => {
-    });
-    return run;
-  };
-  const doc = h12("article", { class: "cb-rule", "data-rule": id });
-  const el = h12("div", { class: "kit-doc" }, doc);
-  const dirty = () => !sameConditions(work, base.match ?? []) || !sameAction(workPropose, base.propose);
-  const isDraft = () => base.status !== "active";
-  const editable = () => isDraft() || !!saved.invalid;
-  const body = () => ({
-    ...base,
-    match: work,
-    propose: workPropose,
-    exclude
-  });
-  let factsEl = h12("div");
-  let editor = h12("div");
-  const titleEl = h12("h1", { class: "kit-h1" });
-  const kickEl = h12("p", { class: "kit-kick" });
-  const proseEl = h12("p");
-  const invalidEl = h12("div", { "data-testid": "rule-invalid" });
-  const conflictEl = h12("div", { "data-testid": "rule-conflict" });
-  const proposeEl = h12("div");
-  const proposeErrEl = h12("p", {
-    class: "cb-cond-err cb-propose-err",
-    "data-testid": "propose-err",
-    hidden: true
-  });
-  const heading = h12("h3", { class: "kit-label cb-matches-label" });
-  const groupChips = h12("span", { class: "cb-matches-view" });
-  const matchesEl = h12("div", {
-    class: "kit-table cb-matches",
-    "data-testid": "matches"
-  });
-  const actionsEl = h12("div", { class: "cb-rule-actions" });
-  const note = h12("p", { class: "cb-rule-note", role: "status" });
-  function drawFacts() {
-    const who = authorOf(base.created_by);
-    const byEl = h12("b", who.agent ? { class: "cb-by-agent" } : null, who.name);
-    const next = facts3([
-      ["status", saved.invalid ? `${base.status} · not valid` : base.status],
-      ["matches", invalid ? "—" : String(preview.total)],
-      ["excluded", String(exclude.length)],
-      ["by", byEl]
-    ]);
-    factsEl.replaceWith(next);
-    factsEl = next;
-  }
-  function drawProse() {
-    const who = authorOf(base.created_by);
-    const lifecycle2 = "Once active, casebook proposes new matches after every sync, and never overrides an item that’s already decided.";
-    if (!isDraft()) {
-      proseEl.replaceChildren(
-        "Active: casebook proposes new matches after every sync, and never overrides an item that’s already decided."
-      );
-    } else if (who.agent) {
-      proseEl.replaceChildren(
-        h12("span", { class: "cb-by-agent" }, who.name),
-        " drafted this rule. It proposes nothing until you activate it, and only you can. ",
-        lifecycle2
-      );
-    } else {
-      proseEl.replaceChildren(
-        "A draft proposes nothing until you activate it. ",
-        lifecycle2
-      );
-    }
-  }
-  function drawInvalid() {
-    if (!saved.invalid) {
-      invalidEl.replaceChildren();
-      return;
-    }
-    const skipped = base.status === "active";
-    invalidEl.replaceChildren(
-      card5({
-        edge: "signal",
-        head: skipped ? "not valid · active, but skipped at every sync" : "not valid",
-        body: h12(
-          "div",
-          null,
-          h12("p", { class: "cb-invalid-msg" }, saved.invalid),
-          h12(
-            "p",
-            { class: "cb-invalid-help" },
-            skipped ? "casebook proposes nothing from this rule until it is valid. Fix it and save it (it becomes a draft), or deactivate it." : "It can’t be activated or propose anything until it is valid."
-          )
-        )
-      })
-    );
-  }
-  function drawPropose() {
-    const p = workPropose;
-    if (editable() && refreshPropose) {
-      refreshPropose();
-      return;
-    }
-    refreshPropose = null;
-    const tr = (label, value) => h12(
-      "div",
-      { class: "kit-tr" },
-      h12("span", { class: "cb-cond-f" }, label),
-      h12("span"),
-      value
-    );
-    if (!editable()) {
-      drawChoices = () => {
-      };
-      proposeEl.replaceChildren(
-        h12(
-          "div",
-          { class: "kit-table cb-propose", "data-testid": "propose" },
-          tr(
-            "disposition",
-            h12(
-              "span",
-              {
-                class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : "")
-              },
-              p.disposition
-            )
-          ),
-          p.until ? tr("until", h12("span", { class: "cb-cond-v" }, p.until)) : null,
-          p.note ? tr("note", h12("span", { class: "cb-cond-v" }, p.note)) : null
-        )
-      );
-      return;
-    }
-    const pick = h12("button", {
-      type: "button",
-      class: "cb-cond-v cb-disp",
-      "aria-label": "disposition",
-      "aria-haspopup": "menu",
-      "aria-expanded": "false",
-      onclick() {
-        setMenu(menu.hidden);
-      }
-    });
-    const menu = h12("div", {
-      class: "cb-disp-menu",
-      role: "menu",
-      "aria-label": "dispositions",
-      hidden: true
-    });
-    const menuChips = h12("span", { class: "cb-disp-opts" });
-    const whyEl = h12("span", {
-      class: "cb-disp-why",
-      "data-testid": "disp-why"
-    });
-    menu.append(
-      h12("span"),
-      h12("span"),
-      h12("span", { class: "cb-disp-col" }, menuChips, whyEl)
-    );
-    menuNav(menu, ".cb-disp-opt", pick, () => {
-      if (!redrawing) setMenu(false);
-    });
-    const onEsc = (e) => {
-      if (e.key !== "Escape" || e.isComposing) return;
-      if (!menu.isConnected) {
-        document.removeEventListener("keydown", onEsc, true);
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      setMenu(false);
-      pick.focus();
-    };
-    function setMenu(open) {
-      menu.hidden = !open;
-      pick.setAttribute("aria-expanded", String(open));
-      if (open) {
-        document.addEventListener("keydown", onEsc, true);
-        (menu.querySelector(".cb-disp-opt.on") ?? menu.querySelector(".cb-disp-opt"))?.focus();
-      } else {
-        document.removeEventListener("keydown", onEsc, true);
-      }
-    }
-    const needsUntil = () => !!workPropose.until || /^(wait|watch)$/.test(workPropose.disposition);
-    const choose = (d) => {
-      workPropose = { ...workPropose, disposition: d };
-      setMenu(false);
-      drawChoices();
-      untilRow.hidden = untilHint.hidden = !needsUntil();
-      edited();
-      pick.focus();
-    };
-    let chipsFor = "";
-    drawChoices = () => {
-      const cur = workPropose.disposition;
-      pick.textContent = cur || "choose…";
-      pick.dataset.value = cur;
-      pick.classList.toggle("cb-danger", DANGER_DISPS.has(cur));
-      whyEl.textContent = kindHint(work, dispositions, allDispositions);
-      drawProposeErr();
-      const sig = `${cur}
-${dispositions.join(" ")}`;
-      if (sig === chipsFor) return;
-      chipsFor = sig;
-      const have = new Map(
-        [...menuChips.querySelectorAll(".cb-disp-opt")].map(
-          (e) => [e.dataset.disp ?? "", e]
-        )
-      );
-      const chips = dispositions.map((d) => {
-        const chip = have.get(d) ?? h12(
-          "button",
-          {
-            type: "button",
-            role: "menuitemradio",
-            "data-disp": d,
-            onclick() {
-              choose(d);
-            }
-          },
-          d
-        );
-        chip.setAttribute("aria-checked", String(d === cur));
-        chip.className = "kit-chip cb-disp-opt" + (d === cur ? " on" : "") + (DANGER_DISPS.has(d) ? " cb-danger" : "");
-        return chip;
-      });
-      const focused = document.activeElement;
-      if (focused instanceof HTMLElement && menuChips.contains(focused) && !chips.includes(focused)) {
-        (chips.find((c) => c.classList.contains("on")) ?? chips[0] ?? pick).focus();
-      }
-      keepFocus(() => {
-        for (const [d, chip] of have) {
-          if (!chips.includes(chip)) {
-            have.delete(d);
-            chip.remove();
-          }
-        }
-        chips.forEach((chip, i) => {
-          const at2 = menuChips.children[i];
-          if (at2 !== chip) menuChips.insertBefore(chip, at2 ?? null);
-        });
-      });
-    };
-    const text = (field, placeholder2) => {
-      const input = h12("input", {
-        class: "cb-cond-v",
-        type: "text",
-        value: p[field] ?? "",
-        placeholder: placeholder2,
-        spellcheck: false,
-        "aria-label": field
-      });
-      input.addEventListener("input", () => {
-        const v = input.value;
-        workPropose = { ...workPropose, [field]: v || void 0 };
-        drawProposeErr();
-        edited();
-      });
-      return input;
-    };
-    const hint = (testid) => h12(
-      "div",
-      { class: "cb-prop-hint", "data-testid": testid },
-      h12("span"),
-      h12("span"),
-      h12("span", { class: "cb-prop-hint-t" })
-    );
-    const untilIn = text("until", "");
-    const untilRow = tr("until", untilIn);
-    const untilHint = hint("until-hint");
-    untilRow.hidden = untilHint.hidden = !needsUntil();
-    const noteIn = text("note", "optional");
-    const noteHint = hint("note-hint");
-    const items = (el2, lead, words) => {
-      const out = [];
-      words.forEach((w, i) => {
-        if (i) out.push(HINT_SEP);
-        out.push(h12("span", { class: "cb-prop-hint-i" }, w));
-      });
-      el2.lastElementChild.replaceChildren(
-        ...words.length ? [lead, ...out] : []
-      );
-    };
-    void getVocab(ctx).then((v) => {
-      allDispositions = (v.kinds ?? []).flatMap((k) => k.allowed ?? []);
-      drawChoices();
-      const forms = v.until_forms ?? [];
-      if (forms[0]) untilIn.placeholder = `e.g. ${forms[0].example}`;
-      items(
-        untilHint,
-        "",
-        forms.map((f) => f.syntax)
-      );
-    }).catch(() => {
-    });
-    void noteTokens(ctx).then((ts) => {
-      items(
-        noteHint,
-        "may use ",
-        ts.map((t) => `${t.token} ${t.meaning}`)
-      );
-    }).catch(() => {
-    });
-    refreshPropose = () => {
-      untilIn.value = workPropose.until ?? "";
-      noteIn.value = workPropose.note ?? "";
-      untilRow.hidden = untilHint.hidden = !needsUntil();
-      drawChoices();
-    };
-    proposeEl.replaceChildren(
-      h12(
-        "div",
-        { class: "kit-table cb-propose", "data-testid": "propose" },
-        tr("disposition", pick),
-        menu,
-        untilRow,
-        untilHint,
-        tr("note", noteIn),
-        noteHint
-      ),
-      proposeErrEl
-    );
-    drawChoices();
-  }
-  let drawChoices = () => {
-  };
-  let refreshPropose = null;
-  let redrawing = false;
-  function keepFocus(redraw) {
-    const focused = document.activeElement;
-    redrawing = true;
-    try {
-      redraw();
-    } finally {
-      redrawing = false;
-    }
-    if (focused instanceof HTMLElement && focused !== document.activeElement && focused.isConnected) {
-      focused.focus();
-    }
-  }
-  let allDispositions = [];
-  function drawProposeErr() {
-    let msg = "";
-    const d = workPropose.disposition;
-    if (saved.invalid?.startsWith("propose:") && sameAction(workPropose, base.propose) && sameConditions(work, base.match ?? [])) {
-      msg = saved.invalid;
-    } else if (d && dispositions.length && !dispositions.includes(d)) {
-      msg = refusedDisposition(d, work, dispositions);
-    }
-    proposeErrEl.textContent = msg;
-    proposeErrEl.hidden = !msg;
-  }
-  function box(on, label, run) {
-    return h12("span", {
-      class: "kit-box",
-      role: "checkbox",
-      tabindex: 0,
-      "aria-checked": String(on),
-      "aria-label": label,
-      onclick(e) {
-        e.stopPropagation();
-        run();
-      },
-      onkeydown(e) {
-        if (e.key === " " || e.key === "Enter") {
-          e.preventDefault();
-          run();
-        }
-      }
-    });
-  }
-  function matchRow(m) {
-    const why = m.reason === "matched" ? m.title || m.status : m.reason.toLowerCase();
-    return h12(
-      "div",
-      { class: "cb-mr on", "data-key": m.key, title: m.title || m.key },
-      box(true, `exclude ${m.key}`, () => untick(m.key)),
-      h12("span", { class: "cb-mr-k" }, keyWithoutKind(m.key)),
-      h12("span", { class: "cb-mr-w" }, why)
-    );
-  }
-  function excludedRow(x) {
-    return h12(
-      "div",
-      { class: "cb-mr x", "data-key": x.key },
-      box(false, `include ${x.key}`, () => void include(x.key)),
-      h12("span", { class: "cb-mr-k" }, keyWithoutKind(x.key)),
-      h12(
-        "span",
-        { class: "cb-mr-w" },
-        x.reason ? `excluded · ${x.reason}` : "excluded"
-      )
-    );
-  }
-  function waitRow(text) {
-    return h12(
-      "div",
-      { class: "cb-mr cb-mr-wait" },
-      h12("span"),
-      h12("span", { class: "cb-mr-k" }, text),
-      h12("span")
-    );
-  }
-  function drawMatches() {
-    matchesEl.removeAttribute("data-invalid");
-    if (invalid) {
-      heading.textContent = "matches now";
-      matchesEl.setAttribute("data-invalid", "");
-      matchesEl.replaceChildren(
-        waitRow("not previewed: the conditions aren’t valid")
-      );
-      groupChips.hidden = true;
-      return;
-    }
-    heading.textContent = matchesHeading(preview.total, preview.by_reason);
-    groupChips.hidden = false;
-    const out = [];
-    if (grouped) {
-      const rest = [...shown];
-      for (const g of preview.groups ?? []) {
-        const mine = rest.filter((m) => (m.repo || m.key) === g.repo);
-        for (const m of mine) rest.splice(rest.indexOf(m), 1);
-        const why = reasonSummary(g.reasons);
-        out.push(
-          h12(
-            "div",
-            { class: "cb-mgroup", "data-repo": g.repo },
-            h12("span", { class: "cb-mgroup-repo" }, g.repo),
-            h12(
-              "span",
-              { class: "cb-mr-w" },
-              String(g.count) + (why ? ` · ${why}` : "")
-            )
-          ),
-          ...mine.map(matchRow)
-        );
-      }
-      out.push(...rest.map(matchRow));
-    } else {
-      out.push(...shown.map(matchRow));
-    }
-    out.push(...exclude.map(excludedRow));
-    const more = preview.total - shown.length;
-    if (more > 0) {
-      out.push(
-        h12(
-          "div",
-          { class: "cb-mr cb-mr-more" },
-          h12("span"),
-          h12("span", { class: "cb-mr-k" }, `… ${more} more`),
-          h12(
-            "button",
-            {
-              type: "button",
-              class: "cb-link",
-              onclick() {
-                void loadMore();
-              }
-            },
-            `show ${Math.min(PAGE2, more)} more`
-          )
-        )
-      );
-    }
-    if (out.length === 0) out.push(waitRow("nothing matches now"));
-    matchesEl.replaceChildren(...out);
-  }
-  function drawGroupChips() {
-    const chip = (label, on) => h12(
-      "button",
-      {
-        type: "button",
-        class: "kit-chip" + (on ? " on" : ""),
-        "aria-pressed": String(on),
-        onclick() {
-          grouped = label === "by repo";
-          drawGroupChips();
-          drawMatches();
-        }
-      },
-      label
-    );
-    groupChips.replaceChildren(
-      chip("list", !grouped),
-      chip("by repo", grouped)
-    );
-  }
-  function setPreview(p) {
-    invalid = null;
-    setConditionError(editor, -1, null);
-    preview = p;
-    shown = p.page ?? [];
-    if (p.dispositions) dispositions = p.dispositions;
-    drawChoices();
-    drawMatches();
-    drawFacts();
-  }
-  function setInvalid(msg) {
-    invalid = msg;
-    setConditionError(editor, conditionErrorIndex(msg), msg);
-    drawMatches();
-    drawFacts();
-  }
-  async function previewNow(depth = PAGE2) {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    const mine = ++seq;
-    opened = depth;
-    try {
-      const b = body();
-      const p = await ctx.api.post("/rules/preview", b);
-      let rows = p.page ?? [];
-      while (rows.length < Math.min(Math.max(depth, opened), p.total)) {
-        const next = await ctx.api.post(
-          `/rules/preview?offset=${rows.length}&limit=${PAGE2}`,
-          b
-        );
-        if (mine !== seq || !(next.page ?? []).length) break;
-        rows = [...rows, ...next.page ?? []];
-      }
-      if (mine === seq) setPreview({ ...p, page: rows });
-    } catch (err) {
-      if (mine !== seq) return;
-      if (err instanceof ApiError3 && err.status === 400)
-        setInvalid(err.message);
-      else note.textContent = `preview failed: ${message2(err)}`;
-    }
-  }
-  function schedule(keepDepth = false) {
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      void previewNow(keepDepth ? Math.max(PAGE2, opened, shown.length) : PAGE2);
-    }, PREVIEW_DEBOUNCE_MS);
-  }
-  async function loadMore() {
-    const from = shown.length;
-    const q = `?offset=${from}&limit=${PAGE2}`;
-    opened = Math.max(opened, from + PAGE2);
-    const mine = seq;
-    try {
-      const p = await ctx.api.post(`/rules/preview${q}`, body());
-      if (mine !== seq || shown.length !== from) return;
-      shown = [...shown, ...p.page ?? []];
-      preview = { ...p, page: shown };
-      drawMatches();
-    } catch (err) {
-      note.textContent = `more matches failed: ${message2(err)}`;
-    }
-  }
-  function applyExclusions(d) {
-    exclude = d.rule.exclude ?? [];
-    base = { ...base, exclude };
-    if (dirty() || invalid) {
-      void previewNow(Math.max(PAGE2, opened, shown.length));
-    } else {
-      seq++;
-      opened = PAGE2;
-      setPreview(d.matches);
-    }
-    drawFacts();
-  }
-  function untick(key) {
-    const reason = h12("input", {
-      class: "kit-note",
-      type: "text",
-      placeholder: "reason (optional)",
-      "aria-label": "reason"
-    });
-    const err = h12("p", { class: "cb-sheet-err", hidden: true });
-    let sending = false;
-    const go2 = async () => {
-      if (sending) return;
-      sending = true;
-      try {
-        const d = await ctx.api.post("/rules/exclude", {
-          id,
-          key,
-          reason: reason.value.trim()
-        });
-        sh.close();
-        applyExclusions(d);
-        hooks.saved();
-      } catch (e) {
-        err.textContent = message2(e);
-        err.hidden = false;
-        sending = false;
-      }
-    };
-    reason.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.isComposing) {
-        e.preventDefault();
-        void go2();
-      }
-    });
-    const sh = sheet3({
-      title: `exclude ${keyWithoutKind(key)}`,
-      body: h12(
-        "div",
-        { class: "cb-sheet-body" },
-        h12(
-          "p",
-          { class: "cb-sheet-preview" },
-          "This rule skips it from now on. It stays listed here, unticked."
-        ),
-        h12(
-          "div",
-          { class: "cb-sheet-row" },
-          h12("label", { class: "cb-sheet-label" }, "reason"),
-          reason
-        ),
-        err
-      ),
-      actions: [
-        { label: "exclude", fill: true, run: () => void go2() },
-        { label: "cancel", run: () => sh.close() }
-      ]
-    });
-    sh.el.dataset.testid = "exclude-sheet";
-    reason.focus();
-  }
-  async function include(key) {
-    try {
-      const d = await ctx.api.post("/rules/include", {
-        id,
-        key
-      });
-      applyExclusions(d);
-      hooks.saved();
-    } catch (err) {
-      note.textContent = `not included: ${message2(err)}`;
-    }
-  }
-  function drawConflict() {
-    if (!conflict) {
-      conflictEl.replaceChildren();
-      return;
-    }
-    const theirs = conflict.detail.rule;
-    const who = conflict.by ? authorOf(conflict.by).name : "";
-    const p = theirs.propose;
-    const theirsBody = h12(
-      "div",
-      null,
-      h12(
-        "p",
-        { class: "cb-conflict-help" },
-        "Your edits are kept below and not saved. Serve’s copy now:"
-      ),
-      theirs.name !== base.name ? h12("p", { class: "cb-conflict-name" }, theirs.name) : null,
-      conditionEditor(
-        ctx,
-        { match: theirs.match, status: "active", editable: false },
-        () => {
-        }
-      ),
-      h12(
-        "div",
-        { class: "kit-table cb-propose" },
-        h12(
-          "div",
-          { class: "kit-tr" },
-          h12("span", { class: "cb-cond-f" }, "disposition"),
-          h12("span"),
-          h12(
-            "span",
-            {
-              class: "cb-cond-v" + (DANGER_DISPS.has(p.disposition) ? " cb-danger" : ""),
-              "data-testid": "conflict-disposition"
-            },
-            p.disposition
-          )
-        ),
-        p.until ? h12(
-          "div",
-          { class: "kit-tr" },
-          h12("span", { class: "cb-cond-f" }, "until"),
-          h12("span"),
-          h12("span", { class: "cb-cond-v" }, p.until)
-        ) : null,
-        p.note ? h12(
-          "div",
-          { class: "kit-tr" },
-          h12("span", { class: "cb-cond-f" }, "note"),
-          h12("span"),
-          h12("span", { class: "cb-cond-v" }, p.note)
-        ) : null
-      ),
-      h12("p", { class: "cb-conflict-note", role: "status" })
-    );
-    conflictEl.replaceChildren(
-      card5({
-        edge: "signal",
-        head: who ? `changed while you were editing · by ${who}` : "changed while you were editing",
-        body: theirsBody,
-        actions: [
-          {
-            label: "reload theirs",
-            run() {
-              const d = conflict.detail;
-              conflict = null;
-              draw(d);
-            }
-          },
-          {
-            label: "keep mine",
-            run() {
-              const d = conflict.detail;
-              conflict = null;
-              draw(d, { match: work, propose: workPropose });
-            }
-          }
-        ]
-      })
-    );
-  }
-  function refuseActivate() {
-    const n = conflictEl.querySelector(".cb-conflict-note");
-    if (n) {
-      n.textContent = "Activate waits: reload their copy, or keep yours over it, first.";
-    }
-    conflictEl.scrollIntoView?.({ block: "nearest" });
-  }
-  function refuseInvalid() {
-    note.textContent = "not activated: fix what’s marked above";
-    invalidEl.scrollIntoView?.({ block: "nearest" });
-  }
-  async function afterConflict(what) {
-    try {
-      const d = await ctx.api.get("/rule", { id });
-      if (dirty()) {
-        conflict = { detail: d, by: "" };
-        drawConflict();
-        drawActions();
-        hooks.primaryChanged();
-      } else {
-        draw(d);
-        note.textContent = `It changed before you ${what} it; nothing was ${what}. Here is serve’s copy.`;
-      }
-    } catch (err) {
-      note.textContent = message2(err);
-    }
-  }
-  function saysWhatHeEdited(r) {
-    return sameConditions(r.match ?? [], work) && sameAction(r.propose, workPropose);
-  }
-  function settle(d) {
-    conflict = null;
-    if (d) {
-      draw(d);
-      return;
-    }
-    drawConflict();
-    drawActions();
-    hooks.primaryChanged();
-  }
-  async function save() {
-    if (conflict) {
-      refuseActivate();
-      return false;
-    }
-    const sentMatch = work.map((c) => ({ ...c }));
-    const sentPropose = { ...workPropose };
-    try {
-      const d = await ctx.api.post(
-        `/rules/draft?version=${encodeURIComponent(saved.version)}`,
-        { ...body(), match: sentMatch, propose: sentPropose }
-      );
-      const later = !sameConditions(work, sentMatch) || !sameAction(workPropose, sentPropose);
-      draw(d, later ? { match: work, propose: workPropose } : void 0);
-      hooks.saved();
-      if (conflict) {
-        const { detail: newer, by } = conflict;
-        settle(newer);
-        const who = by ? authorOf(by).name : "someone";
-        note.textContent = `Saved; then ${who} changed it. Here is serve’s copy; nothing else was done.`;
-        return false;
-      }
-      return true;
-    } catch (err) {
-      if (isConflict(err)) void afterConflict("saved");
-      else if (err instanceof ApiError3 && err.status === 400) {
-        if (conditionErrorIndex(err.message) >= 0) setInvalid(err.message);
-        else note.textContent = err.message;
-      } else note.textContent = `not saved: ${message2(err)}`;
-      return false;
-    }
-  }
-  function lifecycle(verb) {
-    return inTurn(() => lifecycleNow(verb));
-  }
-  async function lifecycleNow(verb) {
-    if (verb === "deactivate" && isDraft()) return;
-    if (verb === "activate" && !isDraft() && !dirty()) return;
-    if (verb === "activate" && conflict) {
-      refuseActivate();
-      return;
-    }
-    if (verb === "activate" && saved.invalid && !dirty()) {
-      refuseInvalid();
-      return;
-    }
-    try {
-      if (verb === "activate" && dirty() && !await save()) return;
-      if (verb === "activate" && saved.invalid) {
-        refuseInvalid();
-        return;
-      }
-      const d = await ctx.api.post(
-        `/rules/${verb}`,
-        verb === "activate" ? { id, version: saved.version } : { id }
-      );
-      draw(d);
-      hooks.saved();
-    } catch (err) {
-      if (isConflict(err)) void afterConflict(`${verb}d`);
-      else note.textContent = `not ${verb}d: ${message2(err)}`;
-    }
-  }
-  function proposeOnce() {
-    return inTurn(proposeOnceNow);
-  }
-  async function proposeOnceNow() {
-    try {
-      if (dirty() && !await save()) return;
-      const r = await ctx.api.post("/rules/propose-once", {
-        id
-      });
-      note.replaceChildren(
-        `${pluralize(r.proposed, "match", "matches")} proposed · `,
-        h12(
-          "button",
-          {
-            type: "button",
-            class: "cb-link",
-            onclick() {
-              ctx.route.go("attention", "proposed");
-            }
-          },
-          "see them in attention"
-        )
-      );
-      hooks.saved();
-    } catch (err) {
-      note.textContent = `not proposed: ${message2(err)}`;
-    }
-  }
-  function drawActions() {
-    const bs = [];
-    if (editable() && dirty()) {
-      bs.push({
-        label: isDraft() ? "save draft" : "save as draft",
-        run: () => void save()
-      });
-    }
-    if (isDraft() && !saved.invalid) {
-      bs.push({ label: "propose once", run: () => void proposeOnce() });
-    }
-    actionsEl.replaceChildren(bs.length ? buttons3(bs) : "", note);
-  }
-  function edited() {
-    note.textContent = "";
-    if (conflict && (!dirty() || saysWhatHeEdited(conflict.detail.rule))) {
-      settle(conflict.detail);
-      return;
-    }
-    drawActions();
-    hooks.primaryChanged();
-  }
-  function onEdit(m) {
-    work = m;
-    schedule();
-    edited();
-  }
-  function draw(d, keep) {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-    seq++;
-    opened = PAGE2;
-    saved = d;
-    base = d.rule;
-    if (conflict && conflict.detail.version === d.version) conflict = null;
-    work = keep ? keep.match : [...base.match ?? []];
-    workPropose = keep ? keep.propose : { ...base.propose };
-    exclude = base.exclude ?? [];
-    preview = d.matches;
-    shown = preview.page ?? [];
-    dispositions = d.matches.dispositions ?? [];
-    invalid = d.invalid && !keep && (conditionErrorIndex(d.invalid) >= 0 || d.invalid.startsWith("rules/")) ? d.invalid : null;
-    doc.dataset.status = base.status;
-    doc.toggleAttribute("data-invalid", !!d.invalid);
-    kickEl.textContent = `rule · ${base.status} · rules/${id}.toml`;
-    titleEl.textContent = base.name || id;
-    editor = conditionEditor(
-      ctx,
-      { match: work, status: base.status, editable: editable() },
-      onEdit
-    );
-    factsEl = h12("div");
-    keepFocus(
-      () => doc.replaceChildren(
-        kickEl,
-        titleEl,
-        factsEl,
-        proseEl,
-        invalidEl,
-        conflictEl,
-        h12(
-          "h3",
-          { class: "kit-label" },
-          "when an undecided item matches all of"
-        ),
-        editor,
-        h12("h3", { class: "kit-label" }, "propose"),
-        proposeEl,
-        h12("div", { class: "cb-matches-head" }, heading, groupChips),
-        matchesEl,
-        actionsEl
-      )
-    );
-    note.textContent = "";
-    drawProse();
-    drawInvalid();
-    drawConflict();
-    drawPropose();
-    drawFacts();
-    drawGroupChips();
-    drawMatches();
-    if (invalid) setInvalid(invalid);
-    drawActions();
-    if (keep) schedule();
-    hooks.primaryChanged();
-  }
-  draw(detail);
-  return {
-    el,
-    id,
-    dirty,
-    primary() {
-      if (!isDraft()) {
-        return { label: "Deactivate", run: () => void lifecycle("deactivate") };
-      }
-      return { label: "Activate", run: () => void lifecycle("activate") };
-    },
-    update(d, by) {
-      if (d.version === saved.version) {
-        if (conflict) settle(null);
-        const was = (saved.rule.exclude ?? []).map((x) => x.key).join("\n");
-        const now = (d.rule.exclude ?? []).map((x) => x.key).join("\n");
-        saved = { ...saved, record: d.record, invalid: d.invalid };
-        if (was !== now || !sameRule(d.rule, base)) applyExclusions(d);
-        return;
-      }
-      if (!dirty() || saysWhatHeEdited(d.rule)) {
-        conflict = null;
-        draw(d);
-        return;
-      }
-      conflict = { detail: d, by };
-      drawConflict();
-      drawActions();
-      hooks.primaryChanged();
-    },
-    refresh() {
-      if (!invalid || dirty()) schedule(true);
-    }
-  };
-}
-function makeRules(ctx) {
-  const readEl = h12("div", { class: "kit-read cb-rules-read" });
-  let rows = [];
-  let view = "all";
-  let active = false;
-  let openId = null;
-  let doc = null;
-  let asking = false;
-  let opening = 0;
-  let painting = false;
-  let listSeq = 0;
-  let liveSeq = 0;
-  const statusOf = (r) => r.rule.status;
-  const inView = (r) => view === "all" || (view === "active" ? statusOf(r) === "active" : statusOf(r) !== "active");
-  const askEl = h12(
-    "button",
-    {
-      type: "button",
-      class: "cb-link cb-rules-ask",
-      onclick() {
-        asking = true;
-        feed();
-        ctx.focusComposer();
-      }
-    },
-    ""
-  );
-  const nameAgent = () => {
-    askEl.textContent = `or ask ${ctx.agentName() || "the agent"} to draft one`;
-  };
-  nameAgent();
-  ctx.onAgentName(nameAgent);
-  const foot = h12(
-    "div",
-    { class: "cb-rules-foot" },
-    h12(
-      "button",
-      {
-        type: "button",
-        class: "kit-btn",
-        "data-testid": "new-rule",
-        onclick() {
-          newRule();
-        }
-      },
-      "new rule"
-    ),
-    askEl
-  );
-  function newRule() {
-    const name = h12("input", {
-      class: "kit-note",
-      type: "text",
-      placeholder: "e.g. Landed branches → delete",
-      "aria-label": "name"
-    });
-    const idIn = h12("input", {
-      class: "kit-note",
-      type: "text",
-      placeholder: "e.g. landed-branches",
-      spellcheck: false,
-      "aria-label": "id"
-    });
-    let idTyped = false;
-    name.addEventListener("input", () => {
-      if (!idTyped) idIn.value = slug(name.value);
-    });
-    idIn.addEventListener("input", () => {
-      idTyped = true;
-    });
-    const err = h12("p", { class: "cb-sheet-err", hidden: true });
-    let sending = false;
-    const create = async () => {
-      if (sending) return;
-      const id = idIn.value.trim();
-      const title = name.value.trim();
-      if (!id || !title) {
-        err.textContent = "A rule needs a name and an id.";
-        err.hidden = false;
-        return;
-      }
-      sending = true;
-      try {
-        await ctx.api.post("/rules/draft?create=1", {
-          id,
-          name: title,
-          status: "draft",
-          match: [],
-          propose: { disposition: "" }
-        });
-        sh.close();
-        await loadList();
-        ctx.route.go("rules", id);
-      } catch (e) {
-        err.textContent = message2(e);
-        err.hidden = false;
-        sending = false;
-      }
-    };
-    for (const input of [name, idIn]) {
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.isComposing) {
-          e.preventDefault();
-          void create();
-        }
-      });
-    }
-    const sh = sheet3({
-      title: "new rule",
-      body: h12(
-        "div",
-        { class: "cb-sheet-body" },
-        h12(
-          "div",
-          { class: "cb-sheet-row" },
-          h12("label", { class: "cb-sheet-label" }, "name"),
-          name
-        ),
-        h12(
-          "div",
-          { class: "cb-sheet-row" },
-          h12("label", { class: "cb-sheet-label" }, "id"),
-          idIn
-        ),
-        h12(
-          "p",
-          { class: "cb-sheet-preview" },
-          "A draft: it proposes nothing until you activate it."
-        ),
-        err
-      ),
-      actions: [
-        { label: "create", fill: true, run: () => void create() },
-        { label: "cancel", run: () => sh.close() }
-      ]
-    });
-    sh.el.dataset.testid = "new-rule-sheet";
-    name.focus();
-  }
-  const handle = list3({
-    label: "rules",
-    views: VIEWS3.map((v) => ({ ...v, on: v.id === view })),
-    openOnMove: false,
-    row(r) {
-      const who = authorOf(r.rule.created_by);
-      const draft = r.rule.status !== "active";
-      return {
-        id: r.rule.id,
-        key: rowKicker(r),
-        title: r.rule.name || r.rule.id,
-        sub: who.agent && draft ? `drafted by ${who.name} · awaiting your review` : void 0,
-        meta: r.invalid ? "not valid" : r.rule.status
-      };
-    },
-    onChip(group, id) {
-      if (group !== "view") return;
-      view = id;
-      paintList();
-    },
-    onOpen(r) {
-      if (painting) return;
-      ctx.route.go("rules", r.rule.id);
-    },
-    foot
-  });
-  handle.el.classList.add("cb-rules-list");
-  function paintList() {
-    const c = viewCounts(rows.map((r) => r.rule));
-    const shown = rows.filter(inView);
-    handle.setChips(
-      "view",
-      VIEWS3.map((v) => ({ ...v, on: v.id === view, count: c[v.id] }))
-    );
-    handle.setItems(shown);
-    const els = handle.el.querySelectorAll(".kit-row");
-    els.forEach((rowEl, i) => {
-      const r = shown[i];
-      if (!r) return;
-      rowEl.dataset.rule = r.rule.id;
-      if (r.invalid) rowEl.title = r.invalid;
-      rowEl.querySelector(".kit-meta")?.classList.add(
-        "kit-pill",
-        r.invalid ? "cb-pill-invalid" : r.rule.status === "active" ? "ok" : "wait"
-      );
-    });
-    const openAt = shown.findIndex((r) => r.rule.id === openId);
-    if (openAt >= 0) {
-      painting = true;
-      try {
-        handle.open(openAt);
-      } finally {
-        painting = false;
-      }
-    }
-    ctx.bar.setCount("rules", c.all);
-    nameAgent();
-    if (!doc && !openId) drawEmpty();
-  }
-  async function loadList() {
-    const mine = ++listSeq;
-    try {
-      const v = await ctx.api.get("/rules");
-      if (mine !== listSeq) return;
-      rows = v.rules ?? [];
-      paintList();
-    } catch {
-    }
-  }
-  function drawEmpty() {
-    readEl.replaceChildren(
-      h12(
-        "div",
-        { class: "cb-read-empty" },
-        h12("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-        h12(
-          "p",
-          { class: "cb-read-empty-count" },
-          pluralize(rows.length, "rule")
-        ),
-        h12(
-          "p",
-          { class: "cb-read-empty-prompt" },
-          "Select a rule to see it here."
-        )
-      )
-    );
-  }
-  function feed() {
-    if (!active) return;
-    ctx.setAttached(
-      doc ? { rule: doc.id } : asking ? { section: "rules" } : {}
-    );
-    ctx.setPrimary(doc ? doc.primary() : null);
-  }
-  const hooks = {
-    primaryChanged() {
-      if (active) ctx.setPrimary(doc ? doc.primary() : null);
-    },
-    saved() {
-      void loadList();
-    }
-  };
-  async function open(id) {
-    const mine = ++opening;
-    try {
-      const d = await ctx.api.get("/rule", { id });
-      if (mine !== opening || openId !== id) return;
-      doc = renderRule(ctx, d, hooks);
-      asking = false;
-      readEl.replaceChildren(doc.el);
-      readEl.scrollTop = 0;
-      feed();
-    } catch (err) {
-      if (mine !== opening) return;
-      doc = null;
-      readEl.replaceChildren(
-        h12(
-          "div",
-          { class: "cb-read-empty" },
-          h12("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-          h12("p", { class: "cb-read-empty-prompt" }, message2(err))
-        )
-      );
-      feed();
-    }
-  }
-  function close() {
-    opening++;
-    openId = null;
-    doc = null;
-    drawEmpty();
-    feed();
-  }
-  const activateKey = {
-    keys: "a",
-    label: "activate the open draft",
-    group: "page",
-    run() {
-      if (!doc) return;
-      const p = doc.primary();
-      if (p?.label === "Activate") p.run();
-    }
-  };
-  const ruleKeys = [activateKey];
-  void loadList();
-  return {
-    id: "rules",
-    list: handle.el,
-    read: readEl,
-    // Rule rows can't be selected: the list keys here move and open.
-    listKeys: () => ({ nav: handle, selects: false }),
-    keys: () => ruleKeys,
-    show(sub) {
-      active = true;
-      const id = sub;
-      if (!id) {
-        if (openId) close();
-        else feed();
-      } else if (id !== openId) {
-        openId = id;
-        doc = null;
-        feed();
-        void open(id);
-      } else {
-        feed();
-      }
-      paintList();
-    },
-    hide() {
-      active = false;
-      asking = false;
-    },
-    onLive(type, data) {
-      if (type === "rules" || type === "gap") {
-        if (type === "gap") doc?.refresh();
-        void loadList();
-        const ev = data;
-        if (doc && openId && (!ev?.id || ev.id === openId)) {
-          const d = doc;
-          const mine = ++liveSeq;
-          void ctx.api.get("/rule", { id: openId }).then((detail) => {
-            if (mine === liveSeq && doc === d) d.update(detail, ev?.by ?? "");
-          }).catch(() => {
-          });
-        }
-      } else if (type === "index" || type === "decided") {
-        doc?.refresh();
-        if (type === "index") void loadList();
-      } else if (type === "proposals") {
-        void loadList();
-      }
-    },
-    primary() {
-      return doc ? doc.primary() : null;
     }
   };
 }

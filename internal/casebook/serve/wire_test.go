@@ -63,6 +63,8 @@ var wireRoots = []any{
 	SettledResult{},
 	RulesView{},
 	RuleRow{},
+	FiltersView{},
+	FilterRow{},
 	RuleDetailView{},
 	MatchPreview{},
 	ReasonCount{},

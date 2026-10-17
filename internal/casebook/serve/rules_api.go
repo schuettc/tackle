@@ -511,7 +511,7 @@ func (s *Server) postRulesDeactivate(w http.ResponseWriter, r *http.Request) {
 
 // getRulesVocabulary handles GET /api/rules/vocabulary.
 func (s *Server) getRulesVocabulary(w http.ResponseWriter, r *http.Request) {
-	reply(w, VocabularyView{Fields: rules.Vocabulary(), NoteTokens: rules.NoteTokens()}, nil)
+	reply(w, VocabularyView{Fields: rules.Vocabulary(), NoteTokens: rules.NoteTokens(), Operators: rules.Operators()}, nil)
 }
 
 // agentRuleDraft handles POST /api/agent/rule-draft.
@@ -711,7 +711,12 @@ func buildPreview(r rules.Rule, res engine.Result, now time.Time, offset, limit 
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Repo < groups[j].Repo })
 
-	// Paginate.
+	// Paginate, newest first (the Attention lists' order).
+	sort.SliceStable(matches, func(i, j int) bool {
+		a, _ := res.Find(matches[i].Key)
+		b, _ := res.Find(matches[j].Key)
+		return engine.NewerFirst(a, b)
+	})
 	total := len(matches)
 	if limit <= 0 || limit > 200 {
 		limit = 200

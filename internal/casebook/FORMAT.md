@@ -164,32 +164,71 @@ Commit subjects: `rule <id> → active by <who>`, `rule <id> edited by <who>`, `
 
 The `field` in each `[[match]]` condition must be one of the following. Operators, by field type: text and enum fields take `is`, `is-not`, `in`, `not-in` (and `title` also `matches`, a regex); bool fields `is`, `is-not`; count fields `is`, `is-not`, `gt`, `gte`, `lt`, `lte`; duration fields `older-than`, `newer-than`. `GET /api/rules/vocabulary` lists each field's operators. Duration values use `<n>h`, `<n>d` or `<n>w`; bool values are `true` or `false`; count values are whole numbers, 0 or more. Anything else is a validation error.
 
-| Field | Type | Allowed values / notes |
+A field may appear in one condition only (several values of one field are one `in` or `not-in` condition): `condition 2: type is already used by condition 1`. Each field has a value only on the item types it applies to (the table's "Applies to"; the vocabulary's `kinds`); a condition on a field none of the `kind` conditions' types has can never hold, and is refused: `condition 2: unpushed commits doesn't apply to issues`.
+
+| Field | Type | Applies to | Allowed values / notes |
+|---|---|---|---|
+| `kind` | enum | all | `repo` \| `pr` \| `issue` \| `branch` \| `worktree` |
+| `repo` | text | all | `owner/name` |
+| `owner` | text | all | GitHub login |
+| `relation` | enum | pr, issue | `outgoing` \| `incoming` \| `own`; pull requests and issues only (never matches a repo: use `fork`) |
+| `status` | enum | all | `new` \| `to-apply` \| `waiting` \| `due` \| `done` \| `drift` \| `conflict` |
+| `author` | text | pr, issue | GitHub login |
+| `bot` | bool | pr, issue | `true` \| `false` |
+| `title` | text | pr, issue, worktree | supports `matches` (regex) |
+| `label` | text | pr, issue | label name |
+| `age` | duration | pr, issue | time since created; use `older-than`/`newer-than` |
+| `updated` | duration | all | time since last activity: last comment or update, push (repo), or commit (branch) |
+| `landed` | enum | branch | `all-machines` \| `some-machines` \| `none` \| `unknown` |
+| `landed-how` | text | branch | `default-branch` \| `merged-pr`; multi-valued (`is` = contains; `in`/`not-in` check any element) |
+| `gone-upstream` | bool | branch | branch merged and remote ref gone |
+| `unpushed` | bool | branch, worktree | has local-only commits |
+| `worktree` | enum | branch, worktree | `dirty` \| `clean` \| `none`; a worktree's own state, or a branch's worktree's (`none` when it has none) |
+| `archived` | bool | repo | repo is archived on GitHub |
+| `fork` | bool | repo | repo is a fork |
+| `open-prs` | count | repo | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` with a whole number, 0 or more |
+| `open-issues` | count | repo | number of open issues; same operators and values as `open-prs` |
+
+## Saved filters: `filters/`
+
+One TOML file per saved filter at `filters/<id>.toml`. A filter is a name and one or more conditions; the Attention list lists every item matching all of the filters selected, whatever its status. It never proposes or decides.
+
+```toml
+id = "outgoing-prs"
+name = "Outgoing PRs"
+
+[[match]]
+field = "kind"
+op = "is"
+value = "pr"
+
+[[match]]
+field = "relation"
+op = "is"
+value = "outgoing"
+```
+
+| Key | Content |
+|---|---|
+| `id` | Must match `^[a-z0-9-]+$` and equal the file name. |
+| `name` | Required; what the page's chip says. |
+| `[[match]]` | At least one condition, in the rules' vocabulary (§Field vocabulary): `field`, `op`, `value`. All must hold. |
+
+There is no status, author, timestamp or proposal. Any other key is a validation error; a file that doesn't validate is listed as not valid, with the reason, and can be edited or deleted but not selected.
+
+A repo with no `filters/` directory gets five examples with the next write, in one commit (`add example filters`), and `casebook init` writes them into a new repo:
+
+| id | name | conditions |
 |---|---|---|
-| `kind` | enum | `repo` \| `pr` \| `issue` \| `branch` \| `worktree` |
-| `repo` | text | `owner/name` |
-| `owner` | text | GitHub login |
-| `relation` | enum | `outgoing` \| `incoming` \| `own` |
-| `status` | enum | `new` \| `to-apply` \| `waiting` \| `due` \| `done` \| `drift` \| `conflict` |
-| `direction` | enum | `outgoing` \| `incoming` \| `own` |
-| `author` | text | GitHub login |
-| `bot` | bool | `true` \| `false` |
-| `title` | text | supports `matches` (regex) |
-| `label` | text | label name |
-| `age` | duration | time since created; use `older-than`/`newer-than` |
-| `pushed` | duration | time since last push |
-| `updated` | duration | time since last update |
-| `landed` | enum | `all-machines` \| `some-machines` \| `none` \| `unknown` |
-| `landed-how` | text | `default-branch` \| `merged-pr`; multi-valued (`is` = contains; `in`/`not-in` check any element) |
-| `gone-upstream` | bool | branch merged and remote ref gone |
-| `unpushed` | bool | has local-only commits |
-| `dirty` | bool | has uncommitted changes |
-| `worktree` | enum | `dirty` \| `clean` \| `none` |
-| `archived` | bool | repo is archived on GitHub |
-| `fork` | bool | repo is a fork |
-| `open-prs` | count | number of open PRs; use `is`, `is-not`, `gt`, `gte`, `lt`, `lte` with a whole number, 0 or more |
-| `open-issues` | count | number of open issues; same operators and values as `open-prs` |
-| `has-decision` | bool | item has a recorded decision |
+| `outgoing-prs` | Outgoing PRs | kind is pr; relation is outgoing |
+| `incoming` | Incoming | relation is incoming |
+| `quiet-14d` | Not updated in 14 days | updated older-than 14d |
+| `unpushed` | Unpushed commits | unpushed is true |
+| `dormant-repos` | Repos not pushed in a year | kind is repo; updated older-than 365d |
+
+The same commit adds an empty `filters/.gitkeep`, which marks that the examples were added. casebook never removes it, so a deleted example never comes back.
+
+Commit subjects: `filter <id> saved by <who>`, `filter <id> deleted by <who>`, `add example filters`.
 
 ## Restore records: `restores/`
 
@@ -223,4 +262,4 @@ So is `casebook serve`'s working state, `~/.local/state/casebook/casebook.db` (S
 ## Version history
 
 - **1** (casebook 0.1.x): decisions, journal, snapshots, views.
-- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`. casebook 0.6.0 drops `policy.toml` and the `policy-hit` rule field, still at format 2: an older binary reads a missing `policy.toml` as its defaults.
+- **2** (casebook 0.2.0): decisions gain the optional `proposed_by` and `rule` fields. Standing rules under `rules/` and restore records under `restores/` are new directories (no format bump; older binaries ignore them). Nothing else changes; the upgrade rewrites only `casebook.toml`. casebook 0.6.0 drops `policy.toml` and the `policy-hit` rule field, still at format 2: an older binary reads a missing `policy.toml` as its defaults. casebook 0.7.0 adds saved filters under `filters/`, a new directory with no format bump (older binaries ignore it).

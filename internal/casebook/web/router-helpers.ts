@@ -52,9 +52,18 @@ export function parse(hash: string): {
   return { section, sub, query };
 }
 
-/** attentionQuery is an Attention list's address query: 'flat' or ''. */
-export function attentionQuery(o: { flat: boolean }): string {
-  return o.flat ? 'flat' : '';
+/**
+ * attentionQuery is an Attention list's address query: the selected saved
+ * filters (filters=a,b, the ids joined with a raw comma), then flat.
+ */
+export function attentionQuery(o: {
+  flat: boolean;
+  filters: string[];
+}): string {
+  const parts: string[] = [];
+  if (o.filters.length) parts.push(`filters=${o.filters.join(',')}`);
+  if (o.flat) parts.push('flat');
+  return parts.join('&');
 }
 
 /**

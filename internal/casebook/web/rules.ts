@@ -78,6 +78,7 @@ import {
   rowKicker,
   sameAction,
   sameConditions,
+  slug,
   sameRule,
   viewCounts,
 } from './rules-text.ts';
@@ -104,15 +105,6 @@ function message(err: unknown): string {
 
 const isConflict = (err: unknown) =>
   err instanceof ApiError && err.status === 409;
-
-// A rule id from a name: lower case, a-z 0-9 and hyphens (serve's rule).
-function slug(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60);
-}
 
 // ---- the rule document -----------------------------------------------------
 

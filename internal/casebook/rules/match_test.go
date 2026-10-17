@@ -372,3 +372,27 @@ func TestDeterministicTip(t *testing.T) {
 		t.Errorf("Tip = %q, want %q (lexically first machine is \"air\")", f.Tip, "tip-air")
 	}
 }
+
+// TestRelationNeverMatchesARepo: relation applies to PRs and issues only.
+func TestRelationNeverMatchesARepo(t *testing.T) {
+	repo := engine.Item{ID: "repo:a/b", Kind: item.KindRepo, Repo: "a/b", Relation: "owned"}
+	pr := engine.Item{ID: "pr:a/b#1", Kind: item.KindPR, Repo: "a/b", Relation: "incoming"}
+	res := engine.Result{Items: []engine.Item{repo, pr}}
+	for _, v := range []string{"owned", "incoming", "outgoing", "own"} {
+		r := Rule{ID: "x", Match: []Condition{{Field: "relation", Op: "is", Value: v}}}
+		ms, err := r.MatchAll(res, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range ms {
+			if m.Key == repo.ID {
+				t.Errorf("relation is %s matched the repo", v)
+			}
+		}
+	}
+	r := Rule{ID: "y", Match: []Condition{{Field: "worktree", Op: "is", Value: "dirty"}}}
+	wt := engine.Item{ID: "worktree:m:/w", Kind: item.KindWorktree}
+	if ms, _ := r.MatchAll(engine.Result{Items: []engine.Item{wt}}, testNow); len(ms) != 0 {
+		t.Errorf("a clean worktree matched worktree is dirty: %v", ms)
+	}
+}

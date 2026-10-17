@@ -51,8 +51,8 @@ type meta struct {
 }
 
 // Init prepares dir as a casebook clone of remote. An existing clone at dir is
-// opened. An empty remote is bootstrapped (casebook.toml, README.md, .gitignore)
-// and pushed.
+// opened. An empty remote is bootstrapped (casebook.toml, README.md, .gitignore
+// and the example filters) and pushed.
 func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 	if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 		return Open(dir)
@@ -70,11 +70,14 @@ func Init(ctx context.Context, dir, remote string) (*Repo, error) {
 		return nil, err
 	}
 	r := &Repo{Dir: dir, Version: FormatVersion}
-	for rel, b := range map[string][]byte{
-		"casebook.toml": fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\nformat_version = %d\n", FormatVersion),
-		"README.md":     []byte(readme),
-		".gitignore":    []byte(gitignore),
-	} {
+	files, err := exampleFiles()
+	if err != nil {
+		return nil, err
+	}
+	files["casebook.toml"] = fmt.Appendf(nil, "# casebook data repository. Format: internal/casebook/FORMAT.md in subaud-tools/tackle.\nformat_version = %d\n", FormatVersion)
+	files["README.md"] = []byte(readme)
+	files[".gitignore"] = []byte(gitignore)
+	for rel, b := range files {
 		if _, err := r.WriteFile(rel, b); err != nil {
 			return nil, err
 		}

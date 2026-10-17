@@ -7,9 +7,9 @@ import (
 
 func TestVocabularyHasEveryFieldWithOps(t *testing.T) {
 	fields := Vocabulary()
-	// 24 fields; each must have at least one operator.
-	if len(fields) != 24 {
-		t.Errorf("got %d fields, want 24", len(fields))
+	// 20 fields; each must have at least one operator.
+	if len(fields) != 20 {
+		t.Errorf("got %d fields, want 20", len(fields))
 	}
 	names := make(map[string]bool, len(fields))
 	for _, f := range fields {
@@ -127,5 +127,73 @@ func TestPolicyHitIsGone(t *testing.T) {
 	err := ValidateCondition(Condition{Field: "policy-hit", Op: "is", Value: "dormant"})
 	if err == nil || !strings.Contains(err.Error(), `unknown field "policy-hit"`) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// TestOverlappingFieldsAreGone: one meaning per field. pushed (use updated),
+// direction (use relation), has-decision (use status is-not new) and dirty
+// (use worktree) are unknown fields now.
+func TestOverlappingFieldsAreGone(t *testing.T) {
+	for _, c := range []Condition{
+		{Field: "pushed", Op: "older-than", Value: "365d"},
+		{Field: "direction", Op: "is", Value: "outgoing"},
+		{Field: "has-decision", Op: "is", Value: "true"},
+		{Field: "dirty", Op: "is", Value: "true"},
+	} {
+		err := ValidateCondition(c)
+		if err == nil || !strings.Contains(err.Error(), `unknown field "`+c.Field+`"`) {
+			t.Errorf("%s: got %v, want unknown field", c.Field, err)
+		}
+	}
+}
+
+// TestVocabularyLabels: every field, value and operator has a plain label
+// for the page; the files keep the raw names.
+func TestVocabularyLabels(t *testing.T) {
+	by := map[string]Field{}
+	for _, f := range Vocabulary() {
+		by[f.Name] = f
+		if f.Label == "" {
+			t.Errorf("field %q has no label", f.Name)
+		}
+		if f.Type == FieldTypeBool && (f.ValueLabels["true"] != "yes" || f.ValueLabels["false"] != "no") {
+			t.Errorf("bool field %q: value labels %v, want yes/no", f.Name, f.ValueLabels)
+		}
+	}
+	for _, c := range []struct{ field, label, help string }{
+		{"kind", "type", "repository, pull request, issue, branch or worktree"},
+		{"relation", "opened by", "pull requests and issues: you elsewhere, someone else in yours, or you in yours"},
+		{"updated", "last activity", "last comment or update, push, or commit"},
+		{"gone-upstream", "upstream deleted", "the branch's remote branch was deleted"},
+		{"open-prs", "open PRs", ""},
+	} {
+		if f := by[c.field]; f.Label != c.label || f.Help != c.help {
+			t.Errorf("%s: label %q help %q, want %q %q", c.field, f.Label, f.Help, c.label, c.help)
+		}
+	}
+	for field, want := range map[string]map[string]string{
+		"kind":     {"repo": "repository", "pr": "pull request", "issue": "issue"},
+		"relation": {"outgoing": "you, elsewhere", "incoming": "someone else", "own": "you, in your repo"},
+		"worktree": {"dirty": "uncommitted changes", "clean": "clean", "none": "no worktree"},
+	} {
+		for v, l := range want {
+			if got := by[field].ValueLabels[v]; got != l {
+				t.Errorf("%s %s: label %q, want %q", field, v, got, l)
+			}
+		}
+	}
+	ops := map[string]string{}
+	for _, o := range Operators() {
+		ops[o.Name] = o.Label
+	}
+	if len(ops) != 11 || ops["older-than"] != "more than \u2026 ago" || ops["not-in"] != "is none of" || ops["lte"] != "at most" {
+		t.Errorf("operators %v", ops)
+	}
+	for _, f := range Vocabulary() {
+		for _, op := range f.Ops {
+			if ops[op] == "" {
+				t.Errorf("field %q op %q has no label", f.Name, op)
+			}
+		}
 	}
 }

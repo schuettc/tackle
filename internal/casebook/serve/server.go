@@ -748,6 +748,10 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/rules/activate", s.postRulesActivate)
 	m.HandleFunc("POST /api/rules/deactivate", s.postRulesDeactivate)
 	m.HandleFunc("GET /api/rules/vocabulary", s.getRulesVocabulary)
+	// saved filters
+	m.HandleFunc("GET /api/filters", s.getFilters)
+	m.HandleFunc("POST /api/filters/save", s.postFiltersSave)
+	m.HandleFunc("POST /api/filters/delete", s.postFiltersDelete)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.activity.Store(time.Now().UnixMilli())
 		m.ServeHTTP(w, r)

@@ -4,6 +4,23 @@ All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull` and `sift`
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [casebook 0.8.0] - 2026-10-17
+
+### Added
+- Saved filters on the Attention list: a row of chips under the views. Selecting one or more lists every item that matches all of them, whatever its status, newest first; the address keeps the selection (`#/attention?filters=outgoing-prs,quiet-14d`) and grouping applies as on any list. `+ filter` opens the editor in the middle pane, beside the list: its title, the name with save and cancel, then the conditions; each chip's menu edits or deletes it. While it is open the list is the preview: it shows the draft's matches live, newest first, faded, under "previewing a draft filter · N items" ("add a condition to preview" with none), and cancel or Esc puts the list back as it was. Save selects the new filter (`#/attention?filters=<id>`). A filter that doesn't validate shows as not valid, with serve's reason, and can be edited or deleted but not selected.
+- Filters are files in casebook-data, `filters/<id>.toml`: a name and the rules' conditions. Five examples arrive with the next write: Outgoing PRs, Incoming, Not updated in 14 days, Unpushed commits, and Repos not pushed in a year. A deleted example never comes back.
+- `GET /api/filters`, `POST /api/filters/save`, `POST /api/filters/delete`, and `filters=<id>,<id>` on `GET /api/items`; an unknown or invalid filter is refused by name. Each save or delete is one commit, pushed like a decision. `casebook_attention` takes `filters` and names the saved filters.
+- Conditions read in plain words, in the filter editor and on the Rules page alike: "type is pull request", "opened by is someone else", "last activity within the last 14d", "unpushed commits is yes". One condition per field, OR within a field and AND between fields: a type, status or other fixed-value field ticks its values ("type is issue or pull request", saved as `in`), never free text; a text field's box shows a real example. `+ condition` is a dropdown with a search ("upd" finds last activity) that shows each field's hint, a field already used shown but not offered; with a type chosen it lists only the fields that apply to that type, and with none it names the types a field applies to. Validation, for rules too, refuses a field used twice ("condition 2: type is already used by condition 1") and a field the chosen types never have ("condition 2: unpushed commits doesn't apply to issues"). `GET /api/items` takes `match=` (a draft's conditions, as JSON) and lists what saving them as a filter would. `GET /api/rules/vocabulary` carries each field's `label`, `help` and `value_labels`, and `operators` with their labels, and each field's `kinds` (the item types it applies to). Files keep the raw names.
+
+### Changed
+- `worktree` also matches worktree items: a worktree is `dirty` or `clean`; a branch is its worktree's, or `none`.
+- `relation` is for pull requests and issues only; it never matches a repo (match repos with `fork`).
+- `POST /api/rules/preview` returns its matches newest first, so a rule's match list is newest first too.
+- The example "Repos not pushed in a year" is `kind is repo; updated older-than 365d`.
+
+### Removed
+- Rule and filter conditions that repeated another: `pushed` (use `updated`), `direction` (use `relation`), `has-decision` (use `status is-not new`) and `dirty` (use `worktree is dirty`). A file that names one is not valid ("unknown field"): edit it on the page.
+
 ## [0.6.0] — 2026-10-16
 
 ### Changed

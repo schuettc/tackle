@@ -59,8 +59,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalString(c.Op, f.Relation, c.Value)
 	case "status":
 		return evalString(c.Op, f.Status, c.Value)
-	case "direction":
-		return evalString(c.Op, f.Direction, c.Value)
 	case "author":
 		return evalString(c.Op, f.Author, c.Value)
 	case "bot":
@@ -78,8 +76,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalMultiString(c.Op, f.Labels, c.Value)
 	case "age":
 		return evalDuration(c.Op, f.Age, c.Value)
-	case "pushed":
-		return evalDuration(c.Op, f.Pushed, c.Value)
 	case "updated":
 		return evalDuration(c.Op, f.Updated, c.Value)
 	case "landed":
@@ -90,8 +86,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalBool(c.Op, f.GoneUpstream, c.Value)
 	case "unpushed":
 		return evalBool(c.Op, f.Unpushed, c.Value)
-	case "dirty":
-		return evalBool(c.Op, f.Dirty, c.Value)
 	case "worktree":
 		return evalString(c.Op, f.Worktree, c.Value)
 	case "archived":
@@ -102,8 +96,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalCount(c.Op, f.OpenPRs, c.Value)
 	case "open-issues":
 		return evalCount(c.Op, f.OpenIssues, c.Value)
-	case "has-decision":
-		return evalBool(c.Op, f.HasDecision, c.Value)
 	default:
 		return false, fmt.Errorf("unknown field %q", c.Field)
 	}
@@ -244,8 +236,6 @@ func regexFieldValue(f engine.Fields, field string) string {
 		return f.Author
 	case "relation":
 		return f.Relation
-	case "direction":
-		return f.Direction
 	case "status":
 		return f.Status
 	case "worktree":

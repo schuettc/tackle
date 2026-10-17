@@ -23,6 +23,7 @@ import { shellScenarios, stopShellServes } from './probe-shell.mjs';
 import { ownerScenarios, stopOwnerServes } from './probe-owner.mjs';
 import { decideScenarios, stopDecideServes } from './probe-decide.mjs';
 import { loadScenarios, stopLoadServes } from './probe-load.mjs';
+import { filtersScenarios, stopFiltersServes } from './probe-filters.mjs';
 
 const { chromium } = pkg;
 
@@ -86,6 +87,7 @@ function cleanup() {
   stopOwnerServes();
   stopDecideServes();
   stopLoadServes();
+  stopFiltersServes();
 }
 
 process.on('SIGTERM', () => {
@@ -2263,7 +2265,7 @@ const R8_LANDED = {
     { field: 'repo', op: 'in', value: 'schuettc/r8-landed,schuettc/r8-other' },
     { field: 'landed', op: 'is', value: 'all-machines' },
     { field: 'landed-how', op: 'in', value: 'default-branch,merged-pr' },
-    { field: 'has-decision', op: 'is', value: 'false' },
+    { field: 'status', op: 'is', value: 'new' },
   ],
   propose: { disposition: 'delete', note: 'landed ({how}); restore tip {tip}' },
 };
@@ -2481,15 +2483,19 @@ async function rulesScenariosOn(context, serveHandle) {
         await pg.$$eval('[data-testid="conditions"] .cb-cond', (els) =>
           els.map((e) =>
             [
-              e.querySelector('.cb-cond-f').textContent,
+              e.querySelector('.cb-cond-f').dataset.name,
               e.querySelector('.cb-cond-o').value ??
-                e.querySelector('.cb-cond-o').textContent,
+                e.querySelector('.cb-cond-o').dataset.value,
               e.querySelector('.cb-cond-v').value ??
-                e.querySelector('.cb-cond-v').textContent,
+                e.querySelector('.cb-cond-v').dataset.value,
             ].join(' '),
           ),
         ),
-        R8_LANDED.match.map((c) => `${c.field} ${c.op} ${c.value}`),
+        // A fixed-value field's values are ticked: its in reads "is".
+        R8_LANDED.match.map(
+          (c) =>
+            `${c.field} ${c.field === 'landed-how' && c.op === 'in' ? 'is' : c.op} ${c.value}`,
+        ),
       );
       checkList(
         "the proposal table: a draft's disposition (destructive: red) and note, editable (no until for delete)",
@@ -2793,26 +2799,26 @@ async function rulesScenariosOn(context, serveHandle) {
       });
       await r8Themes(pg, 'rules');
 
-      // The + condition menu offers the vocabulary: every field with its
-      // operators, as serve lists them.
+      // The + condition menu offers the vocabulary's fields that apply to
+      // branches (the rule's type), one condition per field: a used one is
+      // shown, not offered.
       await pg.click('.cb-cond-add');
       await pg.$eval('[data-testid="conditions"]', (e) =>
         e.scrollIntoView({ block: 'start' }),
       );
       const vocab = await agent.api('GET', '/api/rules/vocabulary');
+      const used = new Set(R8_LANDED.match.map((c) => c.field));
       checkList(
-        'the + condition menu lists every field with its operators',
+        'the + condition menu lists the fields that apply to branches, the used ones not offered',
         await pg.$$eval('.cb-cond-menu-row', (els) =>
           els.map(
             (e) =>
-              `${e.dataset.field}: ${[...e.querySelectorAll('.cb-cond-menu-op')]
-                .map((b) => b.dataset.op)
-                .join(' ')}`,
+              `${e.dataset.field}${e.getAttribute('aria-disabled') === 'true' ? ' (used)' : ''}`,
           ),
         ),
-        (vocab.fields ?? []).map(
-          (f) => `${f.name}: ${(f.ops ?? []).join(' ')}`,
-        ),
+        (vocab.fields ?? [])
+          .filter((f) => !f.kinds?.length || f.kinds.includes('branch'))
+          .map((f) => `${f.name}${used.has(f.name) ? ' (used)' : ''}`),
       );
       check(
         'the menu is shown',
@@ -2832,14 +2838,16 @@ async function rulesScenariosOn(context, serveHandle) {
       // page's clock is paused so the debounce is measured, not slept.
       await pg.clock.pauseAt(Date.now() + 2000);
       previews = 0;
-      const how = '.cb-cond[data-index="3"] input.cb-cond-v';
-      await pg.click(how, { clickCount: 3 });
-      await pg.keyboard.type('merged-pr');
+      // landed how's values are ticked: default branch off, on, off leaves
+      // merged-pr, three edits.
+      const howPick = (v) =>
+        pg.click(`.cb-cond[data-index="3"] .cb-cond-pick[data-value="${v}"]`);
+      for (let i = 0; i < 3; i++) await howPick('default-branch');
       // Kept (here and below): with the clock paused nothing may preview;
       // a real-time window for a stray request to show.
       await sleep(400);
       check(
-        `no preview while the clock stands still after typing (${previews})`,
+        `no preview while the clock stands still after the edits (${previews})`,
         previews === 0,
       );
       await pg.clock.runFor(299);
@@ -2857,15 +2865,12 @@ async function rulesScenariosOn(context, serveHandle) {
             'matches now \u00b7 2 \u00b7 2 via merged pr',
         ),
       );
-      check(
-        `the nine keystrokes made one preview (${previews})`,
-        previews === 1,
-      );
+      check(`the three edits made one preview (${previews})`, previews === 1);
       // Each edit restarts the wait.
       previews = 0;
-      await pg.keyboard.type('x');
+      await howPick('default-branch');
       await pg.clock.runFor(200);
-      await pg.keyboard.press('Backspace');
+      await howPick('default-branch');
       await pg.clock.runFor(200);
       await sleep(300); // kept: no preview may come in this window
       check(
@@ -2894,9 +2899,18 @@ async function rulesScenariosOn(context, serveHandle) {
 
       // An older preview that answers late never paints over a newer one.
       {
+        // setHow ticks exactly the values v (comma-separated): ticks
+        // first, so no edit leaves none.
         const setHow = async (v) => {
-          await pg.click(how, { clickCount: 3 });
-          await pg.keyboard.type(v);
+          const want = v.split(',');
+          const all = ['default-branch', 'merged-pr'];
+          for (const x of [...want, ...all.filter((y) => !want.includes(y))]) {
+            const on = await pg.$eval(
+              `.cb-cond[data-index="3"] .cb-cond-pick[data-value="${x}"]`,
+              (b) => b.classList.contains('on'),
+            );
+            if (on !== want.includes(x)) await howPick(x);
+          }
         };
         let release;
         const gate = new Promise((r) => {
@@ -2959,20 +2973,21 @@ async function rulesScenariosOn(context, serveHandle) {
         );
       }
 
-      // Validation is serve's: a bad duration and a bad count show serve's
-      // message under the condition, and the matches wait for a valid rule.
+      // Validation is serve's: a bad duration shows serve's message under
+      // the condition, and the matches wait for a valid rule. (The fields
+      // a branch rule is offered have no count; r8-bad2 is a bad count.)
       const bodyNow = () =>
         pg.evaluate(() =>
           [
             ...document.querySelectorAll('[data-testid="conditions"] .cb-cond'),
           ].map((e) => ({
-            field: e.querySelector('.cb-cond-f').textContent,
+            field: e.querySelector('.cb-cond-f').dataset.name,
             op:
               e.querySelector('.cb-cond-o').value ??
-              e.querySelector('.cb-cond-o').textContent,
+              e.querySelector('.cb-cond-o').dataset.value,
             value:
               e.querySelector('.cb-cond-v').value ??
-              e.querySelector('.cb-cond-v').textContent,
+              e.querySelector('.cb-cond-v').dataset.value,
           })),
         );
       const serveSays = async () => {
@@ -2987,21 +3002,23 @@ async function rulesScenariosOn(context, serveHandle) {
         const j = await r.json();
         return { status: r.status, error: j.error ?? '' };
       };
+      // A new condition takes the field's first operator, its value
+      // focused.
       const addCondition = async (field, op, value) => {
         await pg.click('.cb-cond-add');
-        await pg.click(
-          `.cb-cond-menu-row[data-field="${field}"] .cb-cond-menu-op[data-op="${op}"]`,
+        await pg.click(`.cb-cond-menu-row[data-field="${field}"]`);
+        const o = await pg.$eval(
+          '.cb-cond[data-index="5"] select.cb-cond-o',
+          (e) => e.value,
         );
+        if (o !== op) throw new Error(`${field}'s first operator is ${o}`);
         await pg.keyboard.type(value);
       };
       const errorShown = (i) =>
         pg.$eval(`.cb-cond[data-index="${i}"] .cb-cond-err`, (e) =>
           e.hidden ? '' : e.textContent,
         );
-      for (const [field, op, value] of [
-        ['age', 'older-than', '7x'],
-        ['open-prs', 'gt', 'lots'],
-      ]) {
+      for (const [field, op, value] of [['updated', 'older-than', '7x']]) {
         await addCondition(field, op, value);
         const said = await serveSays();
         check(
@@ -3057,7 +3074,7 @@ async function rulesScenariosOn(context, serveHandle) {
       );
 
       // Live: a decision made elsewhere changes the matches under the open
-      // rule (has-decision is false), without a reload, and leaves the
+      // rule (status is new), without a reload, and leaves the
       // attached line alone.
       await pg.evaluate(() => {
         window.__r8NoReload = true;
@@ -3820,30 +3837,29 @@ async function rulesScenariosOn(context, serveHandle) {
       await pg.waitForSelector('.cb-cond-menu:not([hidden])', {
         timeout: 4000,
       });
-      const opOrder = await pg.$$eval('.cb-cond-menu .cb-cond-menu-op', (els) =>
-        els.map(
-          (e) =>
-            `${e.closest('.cb-cond-menu-row').dataset.field} ${e.dataset.op}`,
-        ),
+      // Its keys are the search box's: ↓ ↑ move the highlighted field
+      // (wrapping), Enter picks it.
+      const fieldOrder = await pg.$$eval(
+        '.cb-cond-menu .cb-cond-menu-row:not([aria-disabled="true"])',
+        (els) => els.map((e) => e.dataset.field),
       );
-      const focusedOp = () =>
-        pg.evaluate(() => {
-          const e = document.activeElement;
-          return e?.classList.contains('cb-cond-menu-op')
-            ? `${e.closest('.cb-cond-menu-row').dataset.field} ${e.dataset.op}`
-            : '';
-        });
-      const opFirst = await focusedOp();
+      const activeField = () =>
+        pg.evaluate(() =>
+          document.activeElement?.classList.contains('cb-cond-search')
+            ? (document.querySelector('.cb-cond-menu-row.on')?.dataset.field ??
+              '')
+            : '',
+        );
+      const fFirst = await activeField();
       await pg.keyboard.press('ArrowDown');
-      const opSecond = await focusedOp();
-      await pg.keyboard.press('End');
-      const opLast = await focusedOp();
-      await pg.keyboard.press('ArrowRight');
-      const opWrapped = await focusedOp();
+      const fSecond = await activeField();
+      await pg.keyboard.press('ArrowUp');
+      await pg.keyboard.press('ArrowUp');
+      const fWrapped = await activeField();
       checkList(
-        'the + condition menu: ↓ End → move through its operators (wrapping)',
-        [opFirst, opSecond, opLast, opWrapped],
-        [opOrder[0], opOrder[1], opOrder[opOrder.length - 1], opOrder[0]],
+        'the + condition menu: its search has focus, ↓ ↑ move through its fields (wrapping)',
+        [fFirst, fSecond, fWrapped],
+        [fieldOrder[0], fieldOrder[1], fieldOrder[fieldOrder.length - 1]],
       );
       await pg.evaluate(() => {
         document.activeElement.dispatchEvent(
@@ -3862,13 +3878,9 @@ async function rulesScenariosOn(context, serveHandle) {
       );
       // Two conditions: kind is repo, fork is true.
       await pg.click('.cb-cond-add');
-      await pg.click(
-        '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
-      );
+      await pg.click('.cb-cond-menu-row[data-field="kind"]');
       await pg.click('.cb-cond-add');
-      await pg.click(
-        '.cb-cond-menu-row[data-field="fork"] .cb-cond-menu-op[data-op="is"]',
-      );
+      await pg.click('.cb-cond-menu-row[data-field="fork"]');
       const forks = {
         match: [
           { field: 'kind', op: 'is', value: 'repo' },
@@ -4078,10 +4090,15 @@ async function rulesScenariosOn(context, serveHandle) {
       );
       // A condition that makes the disposition one the rule can't propose:
       // the page says so before anything is saved.
-      await pg.selectOption(
-        '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
-        'branch',
-      );
+      // Branch ticked beside repo (fork applies to repos only, so a rule
+      // on branches alone and fork is refused).
+      const kindPick = (v) =>
+        pg.click(
+          '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] .cb-cond-pick[data-value="' +
+            v +
+            '"]',
+        );
+      await kindPick('branch');
       const saveReplied = pg.waitForResponse((r) =>
         r.url().includes('/api/rules/draft?'),
       );
@@ -4094,8 +4111,8 @@ async function rulesScenariosOn(context, serveHandle) {
           pg,
           () =>
             document.querySelector(
-              '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
-            )?.value !== 'branch',
+              '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] .cb-cond-picks',
+            )?.dataset.value !== 'repo,branch',
           undefined,
           1500,
         )),
@@ -4103,11 +4120,14 @@ async function rulesScenariosOn(context, serveHandle) {
       const branchDisps = (
         await agent.api('POST', '/api/rules/preview', {
           ...forks,
-          match: [{ field: 'kind', op: 'is', value: 'branch' }, forks.match[1]],
+          match: [
+            { field: 'kind', op: 'in', value: 'repo,branch' },
+            forks.match[1],
+          ],
         })
       ).dispositions;
       check(
-        `kind is branch: "archive can't be proposed", with serve's list (${branchDisps})`,
+        `kind in repo,branch: "archive can't be proposed", with serve's list (${branchDisps})`,
         await until(
           pg,
           (want) =>
@@ -4116,10 +4136,7 @@ async function rulesScenariosOn(context, serveHandle) {
           `archive can\u2019t be proposed for what this rule matches (allowed: ${branchDisps.join(', ')})`,
         ),
       );
-      await pg.selectOption(
-        '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="0"] select.cb-cond-v',
-        'repo',
-      );
+      await kindPick('branch');
       check(
         'back to kind is repo: the message goes',
         await until(
@@ -4889,9 +4906,8 @@ async function invalidRulesScenariosOn(context, serveHandle) {
     check('the invalid rule is light (theme and body)', await r8Light(pg));
 
     // Fix it on the page: bot is true, then save (it becomes a draft).
-    await pg.selectOption(
-      '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] select.cb-cond-v',
-      'true',
+    await pg.click(
+      '.cb-rule > [data-testid="conditions"] .cb-cond[data-index="1"] .cb-cond-pick[data-value="true"]',
     );
     check(
       'the fixed conditions preview',
@@ -4998,9 +5014,7 @@ async function invalidRulesScenariosOn(context, serveHandle) {
     };
     await pg.route('**/api/rules/preview*', holdPreview);
     await pg.click('.cb-cond-add');
-    await pg.click(
-      '.cb-cond-menu-row[data-field="kind"] .cb-cond-menu-op[data-op="is"]',
-    );
+    await pg.click('.cb-cond-menu-row[data-field="kind"]');
     await asked;
     await pg.click('[data-testid="propose"] button.cb-disp');
     const chipsNow = () =>
@@ -5084,7 +5098,7 @@ const applyHelpers = { check, checkList, until, eventually };
 // run() below is the scenario list. A full run (no PROBE_ONLY) must pass at
 // least MIN_CHECKS checks: a scenario that stops early, or is skipped, can't
 // leave the probe green. Raise it whenever checks are added.
-const MIN_CHECKS = 967;
+const MIN_CHECKS = 1000;
 
 // PROBE_ONLY runs one group of scenarios, for working on them: a partial
 // run. It has to say so: under CI (the CI env var) it is refused outright,
@@ -5105,6 +5119,7 @@ const PROBE_GROUPS = [
   'owner',
   'decide',
   'load',
+  'filters',
 ];
 const throttle = Number(process.env.PROBE_THROTTLE ?? '') || 0;
 const progressDelay = Number(process.env.PROBE_PROGRESS_DELAY ?? '') || 0;
@@ -5237,6 +5252,12 @@ async function run() {
     // (probe-load.mjs, its own serve).
     if (process.env.PROBE_ONLY === 'load') {
       await loadScenarios(context, applyHelpers);
+      return;
+    }
+    // PROBE_ONLY=filters runs only the saved filters' scenarios
+    // (probe-filters.mjs, their own serves).
+    if (process.env.PROBE_ONLY === 'filters') {
+      await filtersScenarios(context, applyHelpers);
       return;
     }
     // Navigate to the page with the ?t= token URL.
@@ -8293,6 +8314,9 @@ async function run() {
 
     // ---- the page under load: no replay, no refetch per heartbeat (its own serve)
     await loadScenarios(context, applyHelpers);
+
+    // ---- saved filters: chips, the editor, the address (their own serves)
+    await filtersScenarios(context, applyHelpers);
 
     // ---- scenario: fidelity — geometry and computed style -------------------
     console.log('\nscenario: fidelity — geometry and computed style');
