@@ -54,7 +54,7 @@ import {
   shortKey,
   rowSub,
 } from './decide-math.ts';
-import { attentionQuery, flatFor } from './router-helpers.ts';
+import { decideQuery, flatFor } from './router-helpers.ts';
 import { groupKeys } from './key-layer.ts';
 import { showChoiceError, askClosingComment } from './choices.ts';
 import { lookingLine, sessionName } from './sessions.ts';
@@ -79,11 +79,8 @@ const PAGE_SIZE = 200;
 export const selection: Selection = createSelection();
 
 // View chip ids map to API view= param values.
-const VIEWS: Chip[] = [
-  { id: 'new', label: 'new' },
-  { id: 'due', label: 'due' },
-  { id: 'proposed', label: 'proposed' },
-];
+// decide is one list: no view chips (the list always asks view=all).
+const VIEWS: Chip[] = [];
 
 // The list has no field filter chips (Court, 2026-10-10: search only);
 // serve's filter parameters stay, for agents' tools. Saved filters
@@ -101,7 +98,7 @@ interface Filters {
 }
 
 function emptyFilters(): Filters {
-  return { view: 'due', filters: [], rule: null, q: '' };
+  return { view: 'all', filters: [], rule: null, q: '' };
 }
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
@@ -421,7 +418,7 @@ export function makeAttention(ctx: Ctx): Section {
         paintFilters();
         showReadEmpty();
         handle.setChips('view', viewChips(id));
-        ctx.route.go('attention', id, attentionQuery({ flat, filters: [] }));
+        ctx.route.go('decide', '', decideQuery({ flat, filters: [] }));
         void reload();
       }
     },
@@ -753,9 +750,9 @@ export function makeAttention(ctx: Ctx): Section {
   // selected filters, and flat.
   function goList(): void {
     ctx.route.go(
-      'attention',
-      filtered() ? '' : filters.view,
-      attentionQuery({
+      'decide',
+      '',
+      decideQuery({
         flat,
         filters: filters.filters,
         rule: filters.rule ?? '',
@@ -2384,13 +2381,20 @@ export function makeAttention(ctx: Ctx): Section {
       filters.q = urlQ;
       handle.setSearch(urlQ);
     }
-    const view = sub || 'due';
-    const ids = sub
-      ? []
-      : parseFilterIds(new URLSearchParams(query).get('filters'));
-    const ruleId = sub ? '' : (new URLSearchParams(query).get('rule') ?? '');
-    if (ruleId) {
-      // A rule (#/attention?rule=<id>): the list is its matches.
+    const params = new URLSearchParams(query);
+    const ids = sub ? [] : parseFilterIds(params.get('filters'));
+    const ruleId = sub ? '' : (params.get('rule') ?? '');
+    if (sub) {
+      // An item key from a #/item/<key> link. The list keeps the filters
+      // or rule it shows.
+      // A row click opens its item itself, then moves the hash here: the
+      // item is already open (or loading), so it isn't loaded twice. A
+      // different key (back, forward, a pasted link), or coming back from
+      // another section, loads it.
+      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
+      void reload();
+    } else if (ruleId) {
+      // A rule (#/decide?rule=<id>): the list is its matches.
       flat = flatFor(true, query, storedFlat());
       storeFlat(flat);
       paintSwitch();
@@ -2398,29 +2402,26 @@ export function makeAttention(ctx: Ctx): Section {
       filters.filters = [];
       paintFilters();
       paintRules();
-      handle.setChips('view', viewChips(''));
       showReadEmpty();
       void reload();
     } else if (ids.length) {
       filters.rule = null;
       paintRules();
-      // Saved filters (#/attention?filters=a,b): the address names the
-      // list, so it says whether it is flat. No view is selected.
+      // Saved filters (#/decide?filters=a,b): the address names the list,
+      // so it says whether it is flat.
       flat = flatFor(true, query, storedFlat());
       storeFlat(flat);
       paintSwitch();
       filters.filters = ids;
       paintFilters();
-      handle.setChips('view', viewChips(''));
       showReadEmpty();
       void reload();
-    } else if (VIEWS.some((v) => v.id === view)) {
-      // Known view chip: switch to it. An address naming the view says
-      // whether the list is flat; #/attention keeps the stored choice.
-      flat = flatFor(sub !== '', query, storedFlat());
+    } else {
+      // Everything to decide (#/decide): an address with a query says
+      // whether the list is flat; a bare one keeps the stored choice.
+      flat = flatFor(query !== '', query, storedFlat());
       storeFlat(flat);
       paintSwitch();
-      filters.view = view;
       if (filtered()) {
         filters.filters = [];
         filters.rule = null;
@@ -2428,24 +2429,13 @@ export function makeAttention(ctx: Ctx): Section {
         paintFilters();
         paintRules();
       }
-      handle.setChips('view', viewChips(filters.view));
       showReadEmpty();
-      void reload();
-    } else if (sub) {
-      // Not a view id: an item key from a #/item/<key> link. The list
-      // keeps the view (or the filters) it shows.
-      handle.setChips('view', viewChips(activeView()));
-      // A row click opens its item itself, then moves the hash here: the
-      // item is already open (or loading), so it isn't loaded twice. A
-      // different key (back, forward, a pasted link), or coming back from
-      // another section, loads it.
-      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
   }
 
   return {
-    id: 'attention',
+    id: 'decide',
     list: handle.el,
     read: readEl,
     show,

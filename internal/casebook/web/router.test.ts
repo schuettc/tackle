@@ -12,8 +12,9 @@ import {
   safeDecode,
   pathEscape,
   parse,
-  attentionQuery,
+  decideQuery,
   flatFor,
+  ruleHash,
 } from './router-helpers.ts';
 
 // Build an item hash the same way go('item', key) does.
@@ -24,52 +25,27 @@ function buildItemHash(key: string): string {
 // ---- parse tests -----------------------------------------------------------
 
 describe('parse', () => {
-  test('empty hash → attention with empty sub', () => {
+  test('empty hash → decide with empty sub', () => {
     assert.deepStrictEqual(parse(''), {
-      section: 'attention',
+      section: 'decide',
       sub: '',
       query: '',
     });
   });
 
-  test('#/ → attention with empty sub', () => {
+  test('#/ → decide with empty sub', () => {
     assert.deepStrictEqual(parse('#/'), {
-      section: 'attention',
+      section: 'decide',
       sub: '',
       query: '',
     });
   });
 
-  test('#/attention → attention with empty sub and query', () => {
-    assert.deepStrictEqual(parse('#/attention'), {
-      section: 'attention',
+  test('#/decide?flat → decide, the query apart', () => {
+    assert.deepStrictEqual(parse('#/decide?filters=a&flat'), {
+      section: 'decide',
       sub: '',
-      query: '',
-    });
-  });
-
-  test('#/attention/due → attention / due', () => {
-    assert.deepStrictEqual(parse('#/attention/due'), {
-      section: 'attention',
-      sub: 'due',
-      query: '',
-    });
-  });
-
-  // The board and waiting on you are gone: old links to them land on due.
-  test('#/attention/board → attention / due', () => {
-    assert.strictEqual(parse('#/attention/board').sub, 'due');
-  });
-
-  test('#/attention/waiting → attention / due', () => {
-    assert.strictEqual(parse('#/attention/waiting').sub, 'due');
-  });
-
-  test('#/attention/new?flat → the query apart from the sub', () => {
-    assert.deepStrictEqual(parse('#/attention/new?flat'), {
-      section: 'attention',
-      sub: 'new',
-      query: 'flat',
+      query: 'filters=a&flat',
     });
   });
 
@@ -235,29 +211,21 @@ describe('pathEscape + parse round-trip', () => {
   });
 });
 
-describe('attentionQuery and flatFor', () => {
-  test('attentionQuery: flat or nothing', () => {
-    assert.strictEqual(attentionQuery({ flat: true, filters: [] }), 'flat');
-    assert.strictEqual(attentionQuery({ flat: false, filters: [] }), '');
+describe('decideQuery and flatFor', () => {
+  test('decideQuery: flat or nothing', () => {
+    assert.strictEqual(decideQuery({ flat: true, filters: [] }), 'flat');
+    assert.strictEqual(decideQuery({ flat: false, filters: [] }), '');
   });
 
-  test('attentionQuery: the selected filters, then flat', () => {
+  test('decideQuery: the rule, the selected filters, then flat', () => {
     assert.strictEqual(
-      attentionQuery({ flat: false, filters: ['a', 'b'] }),
+      decideQuery({ flat: false, filters: ['a', 'b'] }),
       'filters=a,b',
     );
     assert.strictEqual(
-      attentionQuery({ flat: true, filters: ['a'] }),
-      'filters=a&flat',
+      decideQuery({ flat: true, filters: ['a'], rule: 'r' }),
+      'rule=r&filters=a&flat',
     );
-  });
-
-  test('parse: a filtered list keeps its query', () => {
-    assert.deepStrictEqual(parse('#/attention?filters=a,b'), {
-      section: 'attention',
-      sub: '',
-      query: 'filters=a,b',
-    });
   });
 
   test('flatFor: an explicit view reads the address, else the stored choice', () => {
@@ -266,4 +234,38 @@ describe('attentionQuery and flatFor', () => {
     assert.strictEqual(flatFor(false, '', true), true);
     assert.strictEqual(flatFor(true, 'filters=a&flat', false), true);
   });
+
+  test('ruleHash: a rule opens on decide, narrowing the list to it', () => {
+    assert.strictEqual(
+      ruleHash('landed-branches'),
+      '#/decide?rule=landed-branches',
+    );
+  });
+});
+
+// Addresses from before decide and apply still circulate (bookmarks,
+// casebook_open links already sent): each lands on decide with the same
+// filters, rule or item, and none is read as an item key.
+describe('old addresses land on decide', () => {
+  const decide = (query = '') => ({ section: 'decide', sub: '', query });
+  for (const [hash, want] of [
+    ['#/attention', decide()],
+    ['#/attention/new', decide()],
+    ['#/attention/due', decide()],
+    ['#/attention/proposed', decide()],
+    ['#/attention/all', decide()],
+    ['#/attention/waiting', decide()],
+    ['#/attention/board', decide()],
+    ['#/attention/new?flat', decide('flat')],
+    ['#/attention?filters=a,b&flat', decide('filters=a,b&flat')],
+    ['#/attention?rule=landed-branches', decide('rule=landed-branches')],
+    ['#/rules', decide()],
+    ['#/rules/landed-branches', decide('rule=landed-branches')],
+    [
+      '#/item/pr:schuettc%2Fhail%233',
+      { section: 'item', sub: 'pr:schuettc/hail#3', query: '' },
+    ],
+  ] as const) {
+    test(hash, () => assert.deepStrictEqual(parse(hash), want));
+  }
 });

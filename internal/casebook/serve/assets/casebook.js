@@ -25,22 +25,29 @@ function parse(hash) {
   const path = q === -1 ? full : full.slice(0, q);
   const query = q === -1 ? "" : full.slice(q + 1);
   const slash = path.indexOf("/");
+  const head = slash === -1 ? path : path.slice(0, slash);
+  if (head === "attention" || head === "rules") {
+    const id = slash === -1 ? "" : safeDecode(path.slice(slash + 1));
+    return {
+      section: "decide",
+      sub: "",
+      query: head === "rules" && id ? `rule=${encodeURIComponent(id)}` : query
+    };
+  }
   if (slash === -1) {
-    return { section: path || "attention", sub: "", query };
+    return { section: path || "decide", sub: "", query };
   }
-  const section = path.slice(0, slash);
-  const sub = safeDecode(path.slice(slash + 1));
-  if (section === "attention" && (sub === "board" || sub === "waiting")) {
-    return { section, sub: "due", query };
-  }
-  return { section, sub, query };
+  return { section: head, sub: safeDecode(path.slice(slash + 1)), query };
 }
-function attentionQuery(o) {
+function decideQuery(o) {
   const parts = [];
   if (o.rule) parts.push(`rule=${o.rule}`);
   if (o.filters.length) parts.push(`filters=${o.filters.join(",")}`);
   if (o.flat) parts.push("flat");
   return parts.join("&");
+}
+function ruleHash(id) {
+  return `#/decide?rule=${encodeURIComponent(id)}`;
 }
 function flatFor(explicit, query, stored) {
   return explicit ? new URLSearchParams(query).has("flat") : stored;
@@ -168,16 +175,16 @@ function registerDock(make) {
 }
 var liveListeners = /* @__PURE__ */ new Map();
 function onLiveEvent(type, cb) {
-  let list4 = liveListeners.get(type);
-  if (!list4) {
-    list4 = [];
-    liveListeners.set(type, list4);
+  let list3 = liveListeners.get(type);
+  if (!list3) {
+    list3 = [];
+    liveListeners.set(type, list3);
   }
-  list4.push(cb);
+  list3.push(cb);
 }
 function emitLive(type, data) {
-  const list4 = liveListeners.get(type);
-  if (list4) for (const cb of list4) cb(data);
+  const list3 = liveListeners.get(type);
+  if (list3) for (const cb of list3) cb(data);
 }
 var booted = false;
 function boot() {
@@ -243,11 +250,10 @@ function start(first) {
   const handle = bar({
     brand: { name: "casebook", mark },
     sections: [
-      { id: "attention", label: "attention" },
-      { id: "rules", label: "rules" },
-      { id: "apply", label: "to apply" }
+      { id: "decide", label: "decide" },
+      { id: "apply", label: "apply" }
     ],
-    active: "attention",
+    active: "decide",
     onSection(id) {
       go(id);
     },
@@ -302,7 +308,7 @@ function start(first) {
   }
   const app = h("div", { class: "kit-app" });
   app.append(handle.el, banner, pushStrip);
-  let currentRoute = { section: "attention", sub: "", query: "" };
+  let currentRoute = { section: "decide", sub: "", query: "" };
   const dockHandles = [];
   let lastAttached = {};
   let lastTitle = "";
@@ -313,7 +319,7 @@ function start(first) {
   let dockTarget = null;
   const dockTargetListeners = [];
   const layer = makeKeyLayer(
-    (list4) => createKeys(list4 ? { list: list4 } : {}),
+    (list3) => createKeys(list3 ? { list: list3 } : {}),
     (m) => console.error(m)
   );
   const ctx = {
@@ -377,9 +383,9 @@ function start(first) {
     app.append(sec.list, sec.read);
   }
   if (sections.size === 0) {
-    const list4 = h("div", { class: "kit-list" });
+    const list3 = h("div", { class: "kit-list" });
     const read = h("div", { class: "kit-read" });
-    app.append(list4, read);
+    app.append(list3, read);
   }
   const rail = h("div", { class: "kit-rail" });
   for (const make of dockMakers) {
@@ -451,15 +457,22 @@ function start(first) {
     first && typeof first.cursor === "number" ? String(first.cursor) : void 0
   );
   for (const [k, id, label] of [
-    ["g a", "attention", "go to attention"],
-    ["g r", "rules", "go to rules"],
-    ["g p", "apply", "go to apply"]
+    ["g d", "decide", "go to decide"],
+    ["g a", "apply", "go to apply"]
   ]) {
     ctx.keys.register({ keys: k, label, run: () => go(id) });
   }
   onRoute((r) => {
     currentRoute = r;
-    const sectionId = r.section === "rules" ? "rules" : r.section === "apply" ? "apply" : "attention";
+    if (/^#\/(attention|rules)(\/|\?|$)/.test(location.hash)) {
+      const hash = r.query ? `#/decide?${r.query}` : "#/decide";
+      history.replaceState(
+        null,
+        "",
+        location.pathname + location.search + hash
+      );
+    }
+    const sectionId = r.section === "apply" ? "apply" : "decide";
     handle.setSection(sectionId);
     for (const [id, sec] of sections) {
       const active = id === sectionId;
@@ -491,7 +504,7 @@ function start(first) {
     summaryShown = mine;
     summary = s;
     const counts = s.counts ?? {};
-    handle.setCount("attention", counts["all"] ?? 0);
+    handle.setCount("decide", counts["all"] ?? 0);
     handle.setCount("apply", counts["to-apply"] ?? 0);
     paintStatus();
   }
@@ -2830,7 +2843,7 @@ function needsCard(c, step, j, agent, hooks) {
 
 // attention.ts
 import {
-  list as list3,
+  list as list2,
   createSelection,
   h as h11,
   ApiError as ApiError5
@@ -3215,18 +3228,6 @@ import { h as h8, ApiError as ApiError2 } from "/_kit/kit.js";
 import { h as h7 } from "/_kit/kit.js";
 
 // rules-text.ts
-function trackRecord(r) {
-  const parts = [];
-  if (r.accepted) parts.push(`${r.accepted} accepted`);
-  if (r.rejected) parts.push(`${r.rejected} rejected`);
-  if (r.pending) parts.push(`${r.pending} pending`);
-  return parts.join(" · ");
-}
-function rowKicker(row) {
-  const rec = trackRecord(row.record);
-  const head = row.invalid ? "not valid" : `${row.matches} match · ${row.excluded} excluded`;
-  return rec ? `${head} · ${rec}` : head;
-}
 function sameAction(a, b) {
   return a.disposition === b.disposition && (a.until ?? "") === (b.until ?? "") && (a.note ?? "") === (b.note ?? "");
 }
@@ -3249,11 +3250,6 @@ function conditionErrorIndex(message5) {
   const m = /^condition (\d+): /.exec(message5);
   const n = m ? Number(m[1]) : 0;
   return n >= 1 ? n - 1 : -1;
-}
-function viewCounts(rules) {
-  let active = 0;
-  for (const r of rules) if (r.status === "active") active++;
-  return { all: rules.length, active, drafts: rules.length - active };
 }
 function sameConditions(a, b) {
   if (a.length !== b.length) return false;
@@ -3558,7 +3554,7 @@ function conditionEditor(ctx, rule, onChange) {
       autocomplete: "off",
       "aria-label": `${fieldLabel(f)} value`
     });
-    const list4 = h7("div", {
+    const list3 = h7("div", {
       class: "cb-cond-sugg",
       hidden: true,
       role: "listbox"
@@ -3567,7 +3563,7 @@ function conditionEditor(ctx, rule, onChange) {
       "div",
       { class: "cb-cond-v cb-cond-typed", "data-value": c.value },
       chips,
-      h7("span", { class: "cb-cond-typed-box" }, input, list4)
+      h7("span", { class: "cb-cond-typed-box" }, input, list3)
     );
     let at2 = 0;
     let shown = [];
@@ -3612,7 +3608,7 @@ function conditionEditor(ctx, rule, onChange) {
       );
     }
     function mark() {
-      list4.querySelectorAll(".cb-cond-sugg-row").forEach((r, i) => {
+      list3.querySelectorAll(".cb-cond-sugg-row").forEach((r, i) => {
         r.classList.toggle("on", i === at2);
       });
     }
@@ -3652,7 +3648,7 @@ function conditionEditor(ctx, rule, onChange) {
       shown = [...pats.map((p) => p.value), ...hits.map((x) => x.value)];
       at2 = 0;
       const noun = NOUNS[f.name] ?? "values";
-      list4.replaceChildren(
+      list3.replaceChildren(
         h7(
           "div",
           { class: "cb-cond-sugg-head" },
@@ -3661,13 +3657,13 @@ function conditionEditor(ctx, rule, onChange) {
         ...pats.map((p) => option(p.value, p.count, p.hint, true)),
         ...hits.map((x) => option(x.value, x.count, "", false))
       );
-      list4.hidden = document.activeElement !== input || shown.length === 0;
+      list3.hidden = document.activeElement !== input || shown.length === 0;
       mark();
     }
     input.addEventListener("focus", () => void suggest());
     input.addEventListener("input", () => void suggest());
     input.addEventListener("blur", () => {
-      list4.hidden = true;
+      list3.hidden = true;
     });
     input.addEventListener("keydown", (e) => {
       if (e.isComposing) return;
@@ -3680,12 +3676,12 @@ function conditionEditor(ctx, rule, onChange) {
         e.preventDefault();
         const q = input.value.trim();
         add2(
-          !list4.hidden && shown[at2] && shown[at2] !== q && !shown.includes(q) ? shown[at2] : q
+          !list3.hidden && shown[at2] && shown[at2] !== q && !shown.includes(q) ? shown[at2] : q
         );
-      } else if (e.key === "Escape" && !list4.hidden) {
+      } else if (e.key === "Escape" && !list3.hidden) {
         e.preventDefault();
         e.stopPropagation();
-        list4.hidden = true;
+        list3.hidden = true;
       } else if (e.key === "Backspace" && input.value === "" && values().values.length) {
         set(values().values.slice(0, -1));
       }
@@ -3971,16 +3967,16 @@ function conditionEditor(ctx, rule, onChange) {
   search.addEventListener("input", () => fillMenu());
   search.addEventListener("keydown", (e) => {
     if (e.isComposing) return;
-    const list4 = offered();
-    const at2 = list4.findIndex((r) => r.classList.contains("on"));
+    const list3 = offered();
+    const at2 = list3.findIndex((r) => r.classList.contains("on"));
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      if (!list4.length) return;
+      if (!list3.length) return;
       const step = e.key === "ArrowDown" ? 1 : -1;
-      setActive(list4[(at2 + step + list4.length) % list4.length]);
+      setActive(list3[(at2 + step + list3.length) % list3.length]);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const f = fieldOf(list4[at2]?.dataset.field ?? "");
+      const f = fieldOf(list3[at2]?.dataset.field ?? "");
       if (f) addCondition(f);
     }
   });
@@ -4040,32 +4036,32 @@ function menuNav(menu, selector, opener, close) {
   });
   menu.addEventListener("keydown", (e) => {
     if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
-    const list4 = items();
-    if (!list4.length) return;
-    const at2 = list4.indexOf(document.activeElement);
+    const list3 = items();
+    if (!list3.length) return;
+    const at2 = list3.indexOf(document.activeElement);
     let next = -1;
     switch (e.key) {
       case "ArrowDown":
       case "ArrowRight":
-        next = at2 < 0 ? 0 : (at2 + 1) % list4.length;
+        next = at2 < 0 ? 0 : (at2 + 1) % list3.length;
         break;
       case "ArrowUp":
       case "ArrowLeft":
-        next = at2 < 0 ? list4.length - 1 : (at2 - 1 + list4.length) % list4.length;
+        next = at2 < 0 ? list3.length - 1 : (at2 - 1 + list3.length) % list3.length;
         break;
       case "Home":
         next = 0;
         break;
       case "End":
-        next = list4.length - 1;
+        next = list3.length - 1;
         break;
       default:
         return;
     }
     e.preventDefault();
     e.stopPropagation();
-    rove(list4[next]);
-    list4[next].focus();
+    rove(list3[next]);
+    list3[next].focus();
   });
   menu.addEventListener("focusout", (e) => {
     if (menu.hidden) return;
@@ -4691,7 +4687,6 @@ function ruleEditor(ctx, row, seed, hooks) {
 
 // rules.ts
 import {
-  list as list2,
   h as h10,
   facts as facts3,
   buttons as buttons3,
@@ -4702,11 +4697,6 @@ import {
 var HINT_SEP = " · ";
 var PREVIEW_DEBOUNCE_MS = 300;
 var PAGE2 = 200;
-var VIEWS2 = [
-  { id: "all", label: "all" },
-  { id: "active", label: "active" },
-  { id: "drafts", label: "drafts" }
-];
 function message4(err) {
   return err instanceof Error ? err.message : String(err);
 }
@@ -5728,355 +5718,14 @@ ${dispositions.join(" ")}`;
     }
   };
 }
-function makeRules(ctx) {
-  const readEl = h10("div", { class: "kit-read cb-rules-read" });
-  let rows = [];
-  let view = "all";
-  let active = false;
-  let openId = null;
-  let doc = null;
-  let asking = false;
-  let opening = 0;
-  let painting = false;
-  let listSeq = 0;
-  let liveSeq = 0;
-  const statusOf = (r) => r.rule.status;
-  const inView = (r) => view === "all" || (view === "active" ? statusOf(r) === "active" : statusOf(r) !== "active");
-  const askEl = h10(
-    "button",
-    {
-      type: "button",
-      class: "cb-link cb-rules-ask",
-      onclick() {
-        asking = true;
-        feed();
-        ctx.focusComposer();
-      }
-    },
-    ""
-  );
-  const nameAgent = () => {
-    askEl.textContent = `or ask ${ctx.agentName() || "the agent"} to draft one`;
-  };
-  nameAgent();
-  ctx.onAgentName(nameAgent);
-  const makeBar = h10(
-    "div",
-    { class: "cb-make-bar" },
-    h10(
-      "button",
-      {
-        type: "button",
-        class: "kit-chip cb-filter-add",
-        "data-testid": "new-rule",
-        onclick() {
-          newRule();
-        }
-      },
-      "+ rule"
-    ),
-    askEl
-  );
-  function newRule() {
-    const name = h10("input", {
-      class: "kit-note",
-      type: "text",
-      placeholder: "e.g. Landed branches → delete",
-      "aria-label": "name"
-    });
-    const idIn = h10("input", {
-      class: "kit-note",
-      type: "text",
-      placeholder: "e.g. landed-branches",
-      spellcheck: false,
-      "aria-label": "id"
-    });
-    let idTyped = false;
-    name.addEventListener("input", () => {
-      if (!idTyped) idIn.value = slug(name.value);
-    });
-    idIn.addEventListener("input", () => {
-      idTyped = true;
-    });
-    const err = h10("p", { class: "cb-sheet-err", hidden: true });
-    let sending = false;
-    const create = async () => {
-      if (sending) return;
-      const id = idIn.value.trim();
-      const title = name.value.trim();
-      if (!id || !title) {
-        err.textContent = "A rule needs a name and an id.";
-        err.hidden = false;
-        return;
-      }
-      sending = true;
-      try {
-        await ctx.api.post("/rules/draft?create=1", {
-          id,
-          name: title,
-          status: "draft",
-          match: [],
-          propose: { disposition: "" }
-        });
-        sh.close();
-        await loadList();
-        ctx.route.go("rules", id);
-      } catch (e) {
-        err.textContent = message4(e);
-        err.hidden = false;
-        sending = false;
-      }
-    };
-    for (const input of [name, idIn]) {
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && !e.isComposing) {
-          e.preventDefault();
-          void create();
-        }
-      });
-    }
-    const sh = sheet3({
-      title: "new rule",
-      body: h10(
-        "div",
-        { class: "cb-sheet-body" },
-        h10(
-          "div",
-          { class: "cb-sheet-row" },
-          h10("label", { class: "cb-sheet-label" }, "name"),
-          name
-        ),
-        h10(
-          "div",
-          { class: "cb-sheet-row" },
-          h10("label", { class: "cb-sheet-label" }, "id"),
-          idIn
-        ),
-        h10(
-          "p",
-          { class: "cb-sheet-preview" },
-          "A draft: it proposes nothing until you activate it."
-        ),
-        err
-      ),
-      actions: [
-        { label: "create", fill: true, run: () => void create() },
-        { label: "cancel", run: () => sh.close() }
-      ]
-    });
-    sh.el.dataset.testid = "new-rule-sheet";
-    name.focus();
-  }
-  const handle = list2({
-    label: "rules",
-    views: VIEWS2.map((v) => ({ ...v, on: v.id === view })),
-    openOnMove: false,
-    row(r) {
-      const who = authorOf(r.rule.created_by);
-      const draft = r.rule.status !== "active";
-      return {
-        id: r.rule.id,
-        key: rowKicker(r),
-        title: r.rule.name || r.rule.id,
-        sub: who.agent && draft ? `drafted by ${who.name} · awaiting your review` : void 0,
-        meta: r.invalid ? "not valid" : r.rule.status
-      };
-    },
-    onChip(group, id) {
-      if (group !== "view") return;
-      view = id;
-      paintList();
-    },
-    onOpen(r) {
-      if (painting) return;
-      ctx.route.go("rules", r.rule.id);
-    }
-  });
-  handle.el.classList.add("cb-rules-list");
-  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(makeBar);
-  function paintList() {
-    const c = viewCounts(rows.map((r) => r.rule));
-    const shown = rows.filter(inView);
-    handle.setChips(
-      "view",
-      VIEWS2.map((v) => ({ ...v, on: v.id === view, count: c[v.id] }))
-    );
-    handle.setItems(shown);
-    const els = handle.el.querySelectorAll(".kit-row");
-    els.forEach((rowEl, i) => {
-      const r = shown[i];
-      if (!r) return;
-      rowEl.dataset.rule = r.rule.id;
-      if (r.invalid) rowEl.title = r.invalid;
-      rowEl.querySelector(".kit-meta")?.classList.add(
-        "kit-pill",
-        r.invalid ? "cb-pill-invalid" : r.rule.status === "active" ? "ok" : "wait"
-      );
-    });
-    const openAt = shown.findIndex((r) => r.rule.id === openId);
-    if (openAt >= 0) {
-      painting = true;
-      try {
-        handle.open(openAt);
-      } finally {
-        painting = false;
-      }
-    }
-    ctx.bar.setCount("rules", c.all);
-    nameAgent();
-    if (!doc && !openId) drawEmpty();
-  }
-  async function loadList() {
-    const mine = ++listSeq;
-    try {
-      const v = await ctx.api.get("/rules");
-      if (mine !== listSeq) return;
-      rows = v.rules ?? [];
-      paintList();
-    } catch {
-    }
-  }
-  function drawEmpty() {
-    readEl.replaceChildren(
-      h10(
-        "div",
-        { class: "cb-read-empty" },
-        h10("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-        h10(
-          "p",
-          { class: "cb-read-empty-count" },
-          pluralize(rows.length, "rule")
-        ),
-        h10(
-          "p",
-          { class: "cb-read-empty-prompt" },
-          "Select a rule to see it here."
-        )
-      )
-    );
-  }
-  function feed() {
-    if (!active) return;
-    ctx.setAttached(
-      doc ? { rule: doc.id } : asking ? { section: "rules" } : {}
-    );
-    ctx.setPrimary(doc ? doc.primary() : null);
-  }
-  const hooks = {
-    primaryChanged() {
-      if (active) ctx.setPrimary(doc ? doc.primary() : null);
-    },
-    saved() {
-      void loadList();
-    }
-  };
-  async function open(id) {
-    const mine = ++opening;
-    try {
-      const d = await ctx.api.get("/rule", { id });
-      if (mine !== opening || openId !== id) return;
-      doc = renderRule(ctx, d, hooks);
-      asking = false;
-      readEl.replaceChildren(doc.el);
-      readEl.scrollTop = 0;
-      feed();
-    } catch (err) {
-      if (mine !== opening) return;
-      doc = null;
-      readEl.replaceChildren(
-        h10(
-          "div",
-          { class: "cb-read-empty" },
-          h10("p", { class: "cb-read-empty-section kit-label" }, "rules"),
-          h10("p", { class: "cb-read-empty-prompt" }, message4(err))
-        )
-      );
-      feed();
-    }
-  }
-  function close() {
-    opening++;
-    openId = null;
-    doc = null;
-    drawEmpty();
-    feed();
-  }
-  const activateKey = {
-    keys: "a",
-    label: "activate the open draft",
-    group: "page",
-    run() {
-      if (!doc) return;
-      const p = doc.primary();
-      if (p?.label === "Activate") p.run();
-    }
-  };
-  const ruleKeys = [activateKey];
-  void loadList();
-  return {
-    id: "rules",
-    list: handle.el,
-    read: readEl,
-    // Rule rows can't be selected: the list keys here move and open.
-    listKeys: () => ({ nav: handle, selects: false }),
-    keys: () => ruleKeys,
-    show(sub) {
-      active = true;
-      const id = sub;
-      if (!id) {
-        if (openId) close();
-        else feed();
-      } else if (id !== openId) {
-        openId = id;
-        doc = null;
-        feed();
-        void open(id);
-      } else {
-        feed();
-      }
-      paintList();
-    },
-    hide() {
-      active = false;
-      asking = false;
-    },
-    onLive(type, data) {
-      if (type === "rules" || type === "gap") {
-        if (type === "gap") doc?.refresh();
-        void loadList();
-        const ev = data;
-        if (doc && openId && (!ev?.id || ev.id === openId)) {
-          const d = doc;
-          const mine = ++liveSeq;
-          void ctx.api.get("/rule", { id: openId }).then((detail) => {
-            if (mine === liveSeq && doc === d) d.update(detail, ev?.by ?? "");
-          }).catch(() => {
-          });
-        }
-      } else if (type === "index" || type === "decided") {
-        doc?.refresh();
-        if (type === "index") void loadList();
-      } else if (type === "proposals") {
-        void loadList();
-      }
-    },
-    primary() {
-      return doc ? doc.primary() : null;
-    }
-  };
-}
 
 // attention.ts
 var RECOMMEND_THE_REST = "Please recommend the items casebook still needs a recommendation for: call casebook_next until it says done.";
 var PAGE_SIZE = 200;
 var selection = createSelection();
-var VIEWS3 = [
-  { id: "new", label: "new" },
-  { id: "due", label: "due" },
-  { id: "proposed", label: "proposed" }
-];
+var VIEWS2 = [];
 function emptyFilters() {
-  return { view: "due", filters: [], rule: null, q: "" };
+  return { view: "all", filters: [], rule: null, q: "" };
 }
 var LEFT_OPEN = "left-open";
 var SIDEBAR = "casebook.sidebar";
@@ -6142,7 +5791,7 @@ function makeAttention(ctx) {
   let shown = [];
   let currentOpenKey = null;
   let shownDetail = null;
-  const viewCounts2 = {};
+  const viewCounts = {};
   let lastOrder = [];
   let deciding = null;
   let lastUndo = null;
@@ -6257,9 +5906,9 @@ function makeAttention(ctx) {
     footEl = h11("div", { class: "cb-foot" }, summaryEl, footRight);
     return footEl;
   }
-  const handle = list3({
+  const handle = list2({
     label: "attention",
-    views: VIEWS3.map((v) => ({ ...v, on: v.id === filters.view })),
+    views: VIEWS2.map((v) => ({ ...v, on: v.id === filters.view })),
     filters: [],
     selection,
     openOnMove: false,
@@ -6304,7 +5953,7 @@ function makeAttention(ctx) {
         paintFilters();
         showReadEmpty();
         handle.setChips("view", viewChips(id));
-        ctx.route.go("attention", id, attentionQuery({ flat, filters: [] }));
+        ctx.route.go("decide", "", decideQuery({ flat, filters: [] }));
         void reload();
       }
     },
@@ -6559,9 +6208,9 @@ function makeAttention(ctx) {
   }
   function goList() {
     ctx.route.go(
-      "attention",
-      filtered() ? "" : filters.view,
-      attentionQuery({
+      "decide",
+      "",
+      decideQuery({
         flat,
         filters: filters.filters,
         rule: filters.rule ?? ""
@@ -7502,7 +7151,7 @@ function makeAttention(ctx) {
       return `rule ${rr?.rule.name || filters.rule}`;
     }
     if (filtered()) return filterLabel(filterRows, filters.filters);
-    return VIEWS3.find((v) => v.id === filters.view)?.label ?? filters.view;
+    return VIEWS2.find((v) => v.id === filters.view)?.label ?? filters.view;
   }
   function showReadError(message5) {
     if (readEl.querySelector(".cb-choice-err")) {
@@ -7656,16 +7305,16 @@ function makeAttention(ctx) {
     }
   }
   function viewChips(activeId) {
-    return VIEWS3.map((v) => ({
+    return VIEWS2.map((v) => ({
       ...v,
       on: v.id === activeId,
-      count: viewCounts2[v.id]
+      count: viewCounts[v.id]
     }));
   }
   function applyCounts(counts) {
     if (!counts) return;
-    for (const v of VIEWS3) viewCounts2[v.id] = 0;
-    Object.assign(viewCounts2, counts);
+    for (const v of VIEWS2) viewCounts[v.id] = 0;
+    Object.assign(viewCounts, counts);
     handle.setChips("view", viewChips(activeView()));
   }
   {
@@ -7762,10 +7411,13 @@ function makeAttention(ctx) {
       filters.q = urlQ;
       handle.setSearch(urlQ);
     }
-    const view = sub || "due";
-    const ids = sub ? [] : parseFilterIds(new URLSearchParams(query).get("filters"));
-    const ruleId = sub ? "" : new URLSearchParams(query).get("rule") ?? "";
-    if (ruleId) {
+    const params = new URLSearchParams(query);
+    const ids = sub ? [] : parseFilterIds(params.get("filters"));
+    const ruleId = sub ? "" : params.get("rule") ?? "";
+    if (sub) {
+      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
+      void reload();
+    } else if (ruleId) {
       flat = flatFor(true, query, storedFlat());
       storeFlat(flat);
       paintSwitch();
@@ -7773,7 +7425,6 @@ function makeAttention(ctx) {
       filters.filters = [];
       paintFilters();
       paintRules();
-      handle.setChips("view", viewChips(""));
       showReadEmpty();
       void reload();
     } else if (ids.length) {
@@ -7784,14 +7435,12 @@ function makeAttention(ctx) {
       paintSwitch();
       filters.filters = ids;
       paintFilters();
-      handle.setChips("view", viewChips(""));
       showReadEmpty();
       void reload();
-    } else if (VIEWS3.some((v) => v.id === view)) {
-      flat = flatFor(sub !== "", query, storedFlat());
+    } else {
+      flat = flatFor(query !== "", query, storedFlat());
       storeFlat(flat);
       paintSwitch();
-      filters.view = view;
       if (filtered()) {
         filters.filters = [];
         filters.rule = null;
@@ -7799,17 +7448,12 @@ function makeAttention(ctx) {
         paintFilters();
         paintRules();
       }
-      handle.setChips("view", viewChips(filters.view));
       showReadEmpty();
-      void reload();
-    } else if (sub) {
-      handle.setChips("view", viewChips(activeView()));
-      if (!wasActive || sub !== currentOpenKey) void openDetail(sub);
       void reload();
     }
   }
   return {
-    id: "attention",
+    id: "decide",
     list: handle.el,
     read: readEl,
     show,
@@ -8188,13 +7832,13 @@ function makeBatchTray(ctx, dock) {
       void sendBatch();
     }
   });
-  const list4 = h13("div", { class: "cb-batch-drafts" });
+  const list3 = h13("div", { class: "cb-batch-drafts" });
   const el = card4({
     body: h13(
       "div",
       {},
       h13("div", { class: "cb-batch-head" }, label, sendBtn),
-      list4
+      list3
     )
   });
   el.classList.add("cb-batch");
@@ -8206,12 +7850,12 @@ function makeBatchTray(ctx, dock) {
     editing = null;
     el.hidden = drafts.length === 0;
     if (!drafts.length) {
-      list4.replaceChildren();
+      list3.replaceChildren();
       return;
     }
     label.textContent = `batch · ${pluralize(drafts.length, "draft")}`;
     sendBtn.textContent = `send ${drafts.length}`;
-    list4.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
+    list3.replaceChildren(...drafts.map((d, i) => draftRow(d, i)));
   }
   function actionBtn(text, action, aria, run, disabled = false) {
     return h13(
@@ -8570,7 +8214,7 @@ function renderAgentBody(msg) {
         href: "#",
         onclick(e) {
           e.preventDefault();
-          go("rules", encodeURIComponent(id));
+          location.hash = ruleHash(id);
         }
       });
       a.textContent = id;
@@ -9336,7 +8980,6 @@ function makeDock(ctx) {
 
 // entry.ts
 registerSection(makeAttention);
-registerSection(makeRules);
 registerSection(makeApply);
 registerDock(makeDock);
 boot();

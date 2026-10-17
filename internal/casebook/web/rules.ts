@@ -34,7 +34,6 @@
 // live events.
 
 import {
-  list,
   h,
   facts,
   buttons,
@@ -42,9 +41,6 @@ import {
   sheet,
   ApiError,
   type Button,
-  type Chip,
-  type KeyBinding,
-  type ListHandle,
   type Primary,
 } from '/_kit/kit.js';
 import type {
@@ -56,10 +52,8 @@ import type {
   Rule,
   RuleAction,
   RuleDetailView,
-  RuleRow,
-  RulesView,
 } from './wire.d.ts';
-import type { Ctx, Section } from './app.ts';
+import type { Ctx } from './app.ts';
 import {
   conditionEditor,
   noteTokens,
@@ -76,12 +70,9 @@ import {
   matchesHeading,
   refusedDisposition,
   reasonSummary,
-  rowKicker,
   sameAction,
   sameConditions,
-  slug,
   sameRule,
-  viewCounts,
 } from './rules-text.ts';
 
 // Between the items of a proposal hint: the dot stays with the item before.
@@ -92,13 +83,6 @@ export const PREVIEW_DEBOUNCE_MS = 300;
 
 // Matches are fetched 200 at a time, like the Attention list (serve's cap).
 const PAGE = 200;
-
-type View = 'all' | 'active' | 'drafts';
-const VIEWS: Array<{ id: View; label: string }> = [
-  { id: 'all', label: 'all' },
-  { id: 'active', label: 'active' },
-  { id: 'drafts', label: 'drafts' },
-];
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -1379,393 +1363,6 @@ export function renderRule(
     },
     refresh() {
       if (!invalid || dirty()) schedule(true);
-    },
-  };
-}
-
-// ---- the section -----------------------------------------------------------
-
-export function makeRules(ctx: Ctx): Section {
-  const readEl = h('div', { class: 'kit-read cb-rules-read' });
-  let rows: RuleRow[] = [];
-  let view: View = 'all';
-  let active = false;
-  let openId: string | null = null;
-  let doc: RuleDoc | null = null;
-  let asking = false; // Court asked the agent from the foot
-  let opening = 0;
-  let painting = false;
-  let listSeq = 0;
-  let liveSeq = 0;
-
-  const statusOf = (r: RuleRow) => r.rule.status;
-  const inView = (r: RuleRow) =>
-    view === 'all' ||
-    (view === 'active' ? statusOf(r) === 'active' : statusOf(r) !== 'active');
-
-  // ---- + rule, or ask the agent: under the views, where + filter is on
-  // Attention (Court, 2026-10-17: one place on every page to make one) ----
-
-  const askEl = h(
-    'button',
-    {
-      type: 'button',
-      class: 'cb-link cb-rules-ask',
-      onclick() {
-        asking = true;
-        feed();
-        ctx.focusComposer();
-      },
-    },
-    '',
-  );
-  const nameAgent = () => {
-    askEl.textContent = `or ask ${ctx.agentName() || 'the agent'} to draft one`;
-  };
-  nameAgent();
-  ctx.onAgentName(nameAgent);
-  const makeBar = h(
-    'div',
-    { class: 'cb-make-bar' },
-    h(
-      'button',
-      {
-        type: 'button',
-        class: 'kit-chip cb-filter-add',
-        'data-testid': 'new-rule',
-        onclick() {
-          newRule();
-        },
-      },
-      '+ rule',
-    ),
-    askEl,
-  );
-
-  function newRule(): void {
-    const name = h('input', {
-      class: 'kit-note',
-      type: 'text',
-      placeholder: 'e.g. Landed branches \u2192 delete',
-      'aria-label': 'name',
-    }) as HTMLInputElement;
-    const idIn = h('input', {
-      class: 'kit-note',
-      type: 'text',
-      placeholder: 'e.g. landed-branches',
-      spellcheck: false,
-      'aria-label': 'id',
-    }) as HTMLInputElement;
-    let idTyped = false;
-    name.addEventListener('input', () => {
-      if (!idTyped) idIn.value = slug(name.value);
-    });
-    idIn.addEventListener('input', () => {
-      idTyped = true;
-    });
-    const err = h('p', { class: 'cb-sheet-err', hidden: true });
-    let sending = false;
-    const create = async () => {
-      if (sending) return;
-      const id = idIn.value.trim();
-      const title = name.value.trim();
-      if (!id || !title) {
-        err.textContent = 'A rule needs a name and an id.';
-        err.hidden = false;
-        return;
-      }
-      sending = true;
-      try {
-        await ctx.api.post<RuleDetailView>('/rules/draft?create=1', {
-          id,
-          name: title,
-          status: 'draft',
-          match: [],
-          propose: { disposition: '' },
-        });
-        sh.close();
-        await loadList();
-        ctx.route.go('rules', id);
-      } catch (e) {
-        err.textContent = message(e);
-        err.hidden = false;
-        sending = false;
-      }
-    };
-    for (const input of [name, idIn]) {
-      input.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.isComposing) {
-          e.preventDefault();
-          void create();
-        }
-      });
-    }
-    const sh = sheet({
-      title: 'new rule',
-      body: h(
-        'div',
-        { class: 'cb-sheet-body' },
-        h(
-          'div',
-          { class: 'cb-sheet-row' },
-          h('label', { class: 'cb-sheet-label' }, 'name'),
-          name,
-        ),
-        h(
-          'div',
-          { class: 'cb-sheet-row' },
-          h('label', { class: 'cb-sheet-label' }, 'id'),
-          idIn,
-        ),
-        h(
-          'p',
-          { class: 'cb-sheet-preview' },
-          'A draft: it proposes nothing until you activate it.',
-        ),
-        err,
-      ),
-      actions: [
-        { label: 'create', fill: true, run: () => void create() },
-        { label: 'cancel', run: () => sh.close() },
-      ],
-    });
-    sh.el.dataset.testid = 'new-rule-sheet';
-    name.focus();
-  }
-
-  const handle: ListHandle<RuleRow> = list<RuleRow>({
-    label: 'rules',
-    views: VIEWS.map((v) => ({ ...v, on: v.id === view })),
-    openOnMove: false,
-    row(r: RuleRow) {
-      const who = authorOf(r.rule.created_by);
-      const draft = r.rule.status !== 'active';
-      return {
-        id: r.rule.id,
-        key: rowKicker(r),
-        title: r.rule.name || r.rule.id,
-        sub:
-          who.agent && draft
-            ? `drafted by ${who.name} \u00b7 awaiting your review`
-            : undefined,
-        meta: r.invalid ? 'not valid' : r.rule.status,
-      };
-    },
-    onChip(group, id) {
-      if (group !== 'view') return;
-      view = id as View;
-      paintList();
-    },
-    onOpen(r: RuleRow) {
-      if (painting) return; // paintList marking the open row
-      ctx.route.go('rules', r.rule.id);
-    },
-  });
-  handle.el.classList.add('cb-rules-list');
-  handle.el.querySelector('.kit-chips[data-group="view"]')?.after(makeBar);
-
-  // paintList draws the list and marks each row's status as a pill (the
-  // kit's row has no pill slot: its meta span takes the pill classes).
-  function paintList(): void {
-    const c = viewCounts(rows.map((r) => r.rule));
-    const shown = rows.filter(inView);
-    handle.setChips(
-      'view',
-      VIEWS.map((v): Chip => ({ ...v, on: v.id === view, count: c[v.id] })),
-    );
-    handle.setItems(shown);
-    const els = handle.el.querySelectorAll<HTMLElement>('.kit-row');
-    els.forEach((rowEl, i) => {
-      const r = shown[i];
-      if (!r) return;
-      rowEl.dataset.rule = r.rule.id;
-      if (r.invalid) rowEl.title = r.invalid;
-      rowEl
-        .querySelector('.kit-meta')
-        ?.classList.add(
-          'kit-pill',
-          r.invalid
-            ? 'cb-pill-invalid'
-            : r.rule.status === 'active'
-              ? 'ok'
-              : 'wait',
-        );
-    });
-    const openAt = shown.findIndex((r) => r.rule.id === openId);
-    if (openAt >= 0) {
-      painting = true;
-      try {
-        handle.open(openAt);
-      } finally {
-        painting = false;
-      }
-    }
-    ctx.bar.setCount('rules', c.all);
-    nameAgent();
-    if (!doc && !openId) drawEmpty();
-  }
-
-  // loadList reloads the list; an older reply never paints over a newer one.
-  async function loadList(): Promise<void> {
-    const mine = ++listSeq;
-    try {
-      const v = await ctx.api.get<RulesView>('/rules');
-      if (mine !== listSeq) return;
-      rows = v.rules ?? [];
-      paintList();
-    } catch {
-      // non-fatal; the list stays as it was
-    }
-  }
-
-  function drawEmpty(): void {
-    readEl.replaceChildren(
-      h(
-        'div',
-        { class: 'cb-read-empty' },
-        h('p', { class: 'cb-read-empty-section kit-label' }, 'rules'),
-        h(
-          'p',
-          { class: 'cb-read-empty-count' },
-          pluralize(rows.length, 'rule'),
-        ),
-        h(
-          'p',
-          { class: 'cb-read-empty-prompt' },
-          'Select a rule to see it here.',
-        ),
-      ),
-    );
-  }
-
-  // feed tells the composer and the bar what Rules shows, only while it is
-  // the active section: the open rule once it has loaded (a rule that
-  // doesn't load attaches nothing), or the section when Court asks the agent.
-  function feed(): void {
-    if (!active) return;
-    ctx.setAttached(
-      doc ? { rule: doc.id } : asking ? { section: 'rules' } : {},
-    );
-    ctx.setPrimary(doc ? doc.primary() : null);
-  }
-
-  const hooks: RuleHooks = {
-    primaryChanged() {
-      if (active) ctx.setPrimary(doc ? doc.primary() : null);
-    },
-    saved() {
-      void loadList();
-    },
-  };
-
-  async function open(id: string): Promise<void> {
-    const mine = ++opening;
-    try {
-      const d = await ctx.api.get<RuleDetailView>('/rule', { id });
-      if (mine !== opening || openId !== id) return;
-      doc = renderRule(ctx, d, hooks);
-      asking = false;
-      readEl.replaceChildren(doc.el);
-      readEl.scrollTop = 0;
-      feed();
-    } catch (err) {
-      if (mine !== opening) return;
-      doc = null;
-      readEl.replaceChildren(
-        h(
-          'div',
-          { class: 'cb-read-empty' },
-          h('p', { class: 'cb-read-empty-section kit-label' }, 'rules'),
-          h('p', { class: 'cb-read-empty-prompt' }, message(err)),
-        ),
-      );
-      feed();
-    }
-  }
-
-  function close(): void {
-    opening++;
-    openId = null;
-    doc = null;
-    drawEmpty();
-    feed();
-  }
-
-  // "a" activates the open draft: the bar's primary, from the keyboard. Like
-  // every section key it is bound only while Rules is shown (Attention's "a"
-  // accepts a proposal). Activation only proposes (m2, accepted).
-  const activateKey: KeyBinding = {
-    keys: 'a',
-    label: 'activate the open draft',
-    group: 'page',
-    run() {
-      if (!doc) return;
-      const p = doc.primary();
-      if (p?.label === 'Activate') p.run();
-    },
-  };
-
-  const ruleKeys: KeyBinding[] = [activateKey];
-
-  void loadList();
-
-  return {
-    id: 'rules',
-    list: handle.el,
-    read: readEl,
-    // Rule rows can't be selected: the list keys here move and open.
-    listKeys: () => ({ nav: handle, selects: false }),
-    keys: () => ruleKeys,
-    show(sub: string) {
-      active = true;
-      const id = sub;
-      if (!id) {
-        if (openId) close();
-        else feed();
-      } else if (id !== openId) {
-        openId = id;
-        doc = null;
-        feed();
-        void open(id);
-      } else {
-        feed();
-      }
-      paintList();
-    },
-    hide() {
-      active = false;
-      asking = false;
-    },
-    onLive(type: string, data: unknown) {
-      if (type === 'rules' || type === 'gap') {
-        // gap: events this page never heard were pruned. It reloads all it
-        // shows, as a "rules" event naming no rule does (the list, the
-        // open rule), and the open rule's matches.
-        if (type === 'gap') doc?.refresh();
-        void loadList();
-        const ev = data as { id?: string; by?: string };
-        if (doc && openId && (!ev?.id || ev.id === openId)) {
-          const d = doc;
-          const mine = ++liveSeq;
-          void ctx.api
-            .get<RuleDetailView>('/rule', { id: openId })
-            .then((detail) => {
-              // Only the newest reply, and only for the same document.
-              if (mine === liveSeq && doc === d) d.update(detail, ev?.by ?? '');
-            })
-            .catch(() => {});
-        }
-      } else if (type === 'index' || type === 'decided') {
-        // The live index moved: the open rule's matches are recomputed
-        // (debounced: a batch of decisions is one preview).
-        doc?.refresh();
-        if (type === 'index') void loadList();
-      } else if (type === 'proposals') {
-        void loadList(); // track records
-      }
-    },
-    primary() {
-      return doc ? doc.primary() : null;
     },
   };
 }

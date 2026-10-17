@@ -95,7 +95,7 @@ export interface Router {
 }
 
 export interface Section {
-  id: 'attention' | 'rules' | 'apply';
+  id: 'decide' | 'apply';
   list: HTMLElement;
   read: HTMLElement;
   /**
@@ -297,11 +297,10 @@ function start(first: SummaryView | null): void {
   const handle = bar({
     brand: { name: 'casebook', mark },
     sections: [
-      { id: 'attention', label: 'attention' },
-      { id: 'rules', label: 'rules' },
-      { id: 'apply', label: 'to apply' },
+      { id: 'decide', label: 'decide' },
+      { id: 'apply', label: 'apply' },
     ],
-    active: 'attention',
+    active: 'decide',
     onSection(id) {
       go(id);
     },
@@ -380,7 +379,7 @@ function start(first: SummaryView | null): void {
   app.append(handle.el, banner, pushStrip);
 
   // Build context for section makers
-  let currentRoute: Route = { section: 'attention', sub: '', query: '' };
+  let currentRoute: Route = { section: 'decide', sub: '', query: '' };
 
   // The docks are made after the sections; a section may set what's attached
   // before then, so the latest value is kept and handed to each dock.
@@ -573,11 +572,10 @@ function start(first: SummaryView | null): void {
 
   // ---- keys -----------------------------------------------------------------
 
-  // g a / g r / g p switch sections (spec §3.6), like the bar's controls.
+  // g d / g a switch places, like the bar's controls.
   for (const [k, id, label] of [
-    ['g a', 'attention', 'go to attention'],
-    ['g r', 'rules', 'go to rules'],
-    ['g p', 'apply', 'go to apply'],
+    ['g d', 'decide', 'go to decide'],
+    ['g a', 'apply', 'go to apply'],
   ] as const) {
     ctx.keys.register({ keys: k, label, run: () => go(id) });
   }
@@ -587,13 +585,19 @@ function start(first: SummaryView | null): void {
   onRoute((r) => {
     currentRoute = r;
 
-    // Map hash sections to valid section ids; default to attention.
-    const sectionId =
-      r.section === 'rules'
-        ? 'rules'
-        : r.section === 'apply'
-          ? 'apply'
-          : 'attention';
+    // An old address (#/attention…, #/rules…) shows as the decide address
+    // it landed on (router-helpers.ts parse), without a new history entry.
+    if (/^#\/(attention|rules)(\/|\?|$)/.test(location.hash)) {
+      const hash = r.query ? `#/decide?${r.query}` : '#/decide';
+      history.replaceState(
+        null,
+        '',
+        location.pathname + location.search + hash,
+      );
+    }
+
+    // apply is apply; everything else (an item too) is decide.
+    const sectionId = r.section === 'apply' ? 'apply' : 'decide';
 
     handle.setSection(sectionId);
 
@@ -646,10 +650,9 @@ function start(first: SummaryView | null): void {
     summaryShown = mine;
     summary = s;
     const counts = s.counts ?? {};
-    // 'all' is the attention total; 'to-apply' the decided items waiting
-    // to be applied. The Rules section counts its rules itself (the
-    // summary has no rules count).
-    handle.setCount('attention', counts['all'] ?? 0);
+    // 'all' is everything to decide; 'to-apply' the decided items waiting
+    // to be applied.
+    handle.setCount('decide', counts['all'] ?? 0);
     handle.setCount('apply', counts['to-apply'] ?? 0);
     paintStatus();
   }

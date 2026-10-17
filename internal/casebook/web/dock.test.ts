@@ -186,14 +186,17 @@ describe('the URL carries the session', () => {
       'http://127.0.0.1:1/?q=nudge&session=a+b#/item/pr%3Ao%2Fr%231',
     );
     assert.equal(
-      urlWithSession('http://127.0.0.1:1/?session=old#/rules', 'new'),
-      'http://127.0.0.1:1/?session=new#/rules',
+      urlWithSession(
+        'http://127.0.0.1:1/?session=old#/decide?rule=landed',
+        'new',
+      ),
+      'http://127.0.0.1:1/?session=new#/decide?rule=landed',
     );
   });
   test('clears it', () => {
     assert.equal(
-      urlWithSession('http://127.0.0.1:1/?session=old#/rules', ''),
-      'http://127.0.0.1:1/#/rules',
+      urlWithSession('http://127.0.0.1:1/?session=old#/decide?rule=landed', ''),
+      'http://127.0.0.1:1/#/decide?rule=landed',
     );
   });
 });

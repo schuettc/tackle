@@ -38,25 +38,32 @@ export function parse(hash: string): {
   const path = q === -1 ? full : full.slice(0, q);
   const query = q === -1 ? '' : full.slice(q + 1);
   const slash = path.indexOf('/');
+  const head = slash === -1 ? path : path.slice(0, slash);
+  // Addresses from before decide and apply: Attention's views and the
+  // Rules tab land on decide (the views are gone; a rule narrows the list
+  // to it), never read as an item key.
+  if (head === 'attention' || head === 'rules') {
+    const id = slash === -1 ? '' : safeDecode(path.slice(slash + 1));
+    return {
+      section: 'decide',
+      sub: '',
+      query: head === 'rules' && id ? `rule=${encodeURIComponent(id)}` : query,
+    };
+  }
   if (slash === -1) {
-    return { section: path || 'attention', sub: '', query };
+    return { section: path || 'decide', sub: '', query };
   }
   // Decode the sub so keys with /, #, @ etc. produced by url.PathEscape
   // (server) or pathEscape (client) are returned as the raw key string.
-  const section = path.slice(0, slash);
-  const sub = safeDecode(path.slice(slash + 1));
-  // The board and waiting on you are gone: old links to them land on due.
-  if (section === 'attention' && (sub === 'board' || sub === 'waiting')) {
-    return { section, sub: 'due', query };
-  }
-  return { section, sub, query };
+  return { section: head, sub: safeDecode(path.slice(slash + 1)), query };
 }
 
 /**
- * attentionQuery is an Attention list's address query: the selected saved
- * filters (filters=a,b, the ids joined with a raw comma), then flat.
+ * decideQuery is the decide list's address query: the rule it is narrowed
+ * to, the selected saved filters (filters=a,b, the ids joined with a raw
+ * comma), then flat.
  */
-export function attentionQuery(o: {
+export function decideQuery(o: {
   flat: boolean;
   filters: string[];
   rule?: string;
@@ -66,6 +73,11 @@ export function attentionQuery(o: {
   if (o.filters.length) parts.push(`filters=${o.filters.join(',')}`);
   if (o.flat) parts.push('flat');
   return parts.join('&');
+}
+
+/** ruleHash is a rule's address: decide, narrowed to what it recommends. */
+export function ruleHash(id: string): string {
+  return `#/decide?rule=${encodeURIComponent(id)}`;
 }
 
 /**

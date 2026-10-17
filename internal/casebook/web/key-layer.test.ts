@@ -106,10 +106,10 @@ describe('makeKeyLayer', () => {
   test('the list keys drive the shown section’s list, and follow it', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    const a = nav('attention', true);
+    const a = nav('decide', true);
     const p = nav('apply');
-    const attention = {
-      id: 'attention',
+    const decideSec = {
+      id: 'decide',
       listKeys: () => ({ nav: a, selects: true }),
       keys: () => [key('d', 'decide')],
     };
@@ -118,14 +118,14 @@ describe('makeKeyLayer', () => {
       listKeys: () => ({ nav: p, selects: true }),
       keys: () => [key('p', 'pause')],
     };
-    layer.bind(attention);
+    layer.bind(decideSec);
     k.press('j');
     k.press('x');
     k.press('/');
     assert.deepEqual(a.log, [
-      'attention move 1',
-      'attention toggle',
-      'attention search',
+      'decide move 1',
+      'decide toggle',
+      'decide search',
     ]);
     layer.bind(apply);
     k.press('j');
@@ -145,13 +145,13 @@ describe('makeKeyLayer', () => {
   test('a list whose rows can’t be selected gets no x or ⇧x', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    const r = nav('rules');
-    layer.bind({ id: 'rules', listKeys: () => ({ nav: r, selects: false }) });
+    const r = nav('apply');
+    layer.bind({ id: 'apply', listKeys: () => ({ nav: r, selects: false }) });
     assert.deepEqual(keysOf(layer), ['?', 'Esc', 'j', 'k', 'o', '↑', '↓', '↵']);
     k.press('j');
     k.press('k');
     k.press('↵');
-    assert.deepEqual(r.log, ['rules move 1', 'rules move -1', 'rules open']);
+    assert.deepEqual(r.log, ['apply move 1', 'apply move -1', 'apply open']);
     assert.ok(
       layer.keys.bindings().every((b) => b.group === 'family'),
       'the list keys are the family’s',
@@ -161,29 +161,29 @@ describe('makeKeyLayer', () => {
   test('a list that can’t select but searches keeps its /', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    const r = nav('rules', true);
-    layer.bind({ id: 'rules', listKeys: () => ({ nav: r, selects: false }) });
+    const r = nav('apply', true);
+    layer.bind({ id: 'apply', listKeys: () => ({ nav: r, selects: false }) });
     assert.ok(keysOf(layer).includes('/'));
     assert.ok(!keysOf(layer).includes('x'));
     k.press('/');
-    assert.deepEqual(r.log, ['rules search']);
+    assert.deepEqual(r.log, ['apply search']);
   });
 
   test('no list shown: no list keys', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    const a = nav('attention', true);
+    const a = nav('decide', true);
     let none = false;
     const decide = [key('d', 'decide')];
-    const attention = {
-      id: 'attention',
+    const decideSec = {
+      id: 'decide',
       listKeys: () => (none ? null : { nav: a, selects: true }),
       keys: () => decide,
     };
-    layer.bind(attention);
+    layer.bind(decideSec);
     assert.ok(keysOf(layer).includes('j'));
     none = true;
-    layer.bind(attention);
+    layer.bind(decideSec);
     assert.deepEqual(keysOf(layer), ['?', 'Esc', 'd']);
   });
 
@@ -192,29 +192,29 @@ describe('makeKeyLayer', () => {
     const layer = makeKeyLayer(k.create, () => {});
     const log: string[] = [];
     const off = layer.keys.register(key('.', 'focus the composer', log));
-    layer.keys.register(key('g r', 'go to rules', log));
+    layer.keys.register(key('g d', 'go to decide', log));
     layer.bind({
-      id: 'attention',
+      id: 'decide',
       listKeys: () => ({ nav: nav('a'), selects: true }),
     });
     layer.bind({
-      id: 'rules',
+      id: 'apply',
       listKeys: () => ({ nav: nav('r'), selects: false }),
     });
     k.press('.');
-    k.press('g r');
-    assert.deepEqual(log, ['focus the composer', 'go to rules']);
+    k.press('g d');
+    assert.deepEqual(log, ['focus the composer', 'go to decide']);
     off();
     assert.ok(!keysOf(layer).includes('.'));
     layer.bind({ id: 'apply' });
     assert.ok(!keysOf(layer).includes('.'));
-    assert.ok(keysOf(layer).includes('g r'));
+    assert.ok(keysOf(layer).includes('g d'));
   });
 
   test('a page-wide key that clashes throws, as the kit’s register does', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    layer.keys.register(key('g a', 'go to attention'));
+    layer.keys.register(key('g a', 'go to apply'));
     assert.throws(() => layer.keys.register(key('g', 'something')), /clash/);
     assert.deepEqual(keysOf(layer), ['?', 'Esc', 'g a']);
   });
@@ -223,25 +223,25 @@ describe('makeKeyLayer', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
     const log: string[] = [];
-    const attention = {
-      id: 'attention',
+    const decideSec = {
+      id: 'decide',
       keys: () => [key('a', 'accept', log)],
     };
-    const rules = { id: 'rules', keys: () => [key('a', 'activate', log)] };
-    layer.bind(attention);
+    const apply = { id: 'apply', keys: () => [key('a', 'approve', log)] };
+    layer.bind(decideSec);
     k.press('a');
-    layer.bind(rules);
+    layer.bind(apply);
     k.press('a');
-    assert.deepEqual(log, ['accept', 'activate']);
+    assert.deepEqual(log, ['accept', 'approve']);
   });
 
   test('the same section, list and keys again is a no-op', () => {
     const k = kit();
     const layer = makeKeyLayer(k.create, () => {});
-    const n = nav('rules');
+    const n = nav('apply');
     const d = key('a', 'activate');
     const s = {
-      id: 'rules',
+      id: 'apply',
       listKeys: () => ({ nav: n, selects: false }),
       keys: () => [d],
     };
@@ -257,12 +257,12 @@ describe('makeKeyLayer', () => {
     layer.keys.register(key('/', 'page-wide search'));
     assert.doesNotThrow(() =>
       layer.bind({
-        id: 'rules',
+        id: 'apply',
         keys: () => [key('/', 'search'), key('a', 'activate')],
       }),
     );
     assert.equal(errors.length, 1);
-    assert.match(errors[0], /key clash in section rules: "\/" \(search\)/);
+    assert.match(errors[0], /key clash in section apply: "\/" \(search\)/);
     assert.ok(keysOf(layer).includes('a'));
   });
 
@@ -279,7 +279,7 @@ describe('makeKeyLayer', () => {
     assert.match(errors[0], /key clash in the page: "x" \(page x\)/);
   });
 
-  test('[ and ] are bound in Attention, listed, and clash with nothing', () => {
+  test('[ and ] are bound in decide, listed, and clash with nothing', () => {
     const k = kit();
     const errors: string[] = [];
     const layer = makeKeyLayer(k.create, (m) => errors.push(m));
@@ -287,12 +287,11 @@ describe('makeKeyLayer', () => {
     for (const [keys, label] of [
       ['.', 'focus the composer'],
       ['\u2318\u21b5', 'send'],
-      ['g a', 'go to attention'],
-      ['g r', 'go to rules'],
-      ['g p', 'go to apply'],
+      ['g d', 'go to decide'],
+      ['g a', 'go to apply'],
     ])
       layer.keys.register(key(keys, label));
-    // Attention's own keys: d, a, r, u, 1..9, then [ and ].
+    // decide's own keys: d, a, r, u, 1..9, then [ and ].
     const jumps: number[] = [];
     const own = [
       key('d', 'decide'),
@@ -303,7 +302,7 @@ describe('makeKeyLayer', () => {
       ...groupKeys((d) => jumps.push(d)),
     ];
     layer.bind({
-      id: 'attention',
+      id: 'decide',
       listKeys: () => ({ nav: nav('att', true), selects: true }),
       keys: () => own,
     });

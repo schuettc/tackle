@@ -41,7 +41,7 @@ import type {
 import type { Ctx, DockHandle } from './app.ts';
 import { keyWithoutKind, pluralize } from './decide-math.ts';
 import { fmtAge } from './time-utils.ts';
-import { go } from './router.ts';
+import { go, ruleHash } from './router.ts';
 import { threadOrder } from './thread.ts';
 import { makeComposer } from './composer.ts';
 import { coalesced } from './coalesce.ts';
@@ -169,7 +169,7 @@ function renderAgentBody(msg: MessageView): Node {
         href: '#',
         onclick(e: Event) {
           e.preventDefault();
-          go('rules', encodeURIComponent(id));
+          location.hash = ruleHash(id);
         },
       });
       a.textContent = id;

@@ -1,5 +1,6 @@
 // Hash-based router for casebook.
-// Routes: #/attention/<view>[?<query>], #/item/<key>, #/rules/<id>, #/apply/<job>
+// Routes: #/decide[?<query>], #/item/<key>, #/apply/<job>; the old
+// #/attention/<view> and #/rules/<id> land on decide (router-helpers.ts).
 //
 // Pure helpers (safeDecode, pathEscape, parse) live in router-helpers.ts so
 // they can be imported by router.test.ts under Node without any window access.
@@ -8,8 +9,9 @@ export {
   safeDecode,
   pathEscape,
   parse,
-  attentionQuery,
+  decideQuery,
   flatFor,
+  ruleHash,
 } from './router-helpers.ts';
 import { parse, pathEscape } from './router-helpers.ts';
 
