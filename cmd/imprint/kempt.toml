@@ -1,0 +1,40 @@
+# kempt manifest for imprint — kept separate from any dotfiles manifest.
+#
+#   kempt apply   -manifest cmd/imprint/kempt.toml -packages imprint
+#   kempt upgrade -manifest cmd/imprint/kempt.toml -packages imprint
+#
+# -packages imprint is required: without it kempt applies the selection saved
+# by your dotfiles `kempt init`, which does not contain "imprint".
+# After the first apply, and after each upgrade: `imprint skills install` (the
+# skill is embedded in the binary, and kempt runs no commands). Launch Claude
+# Code with `claude --dangerously-load-development-channels server:imprint` to
+# hear imprint's progress messages.
+
+[kempt]
+spec = 1
+
+[packages.imprint]
+description = "imprint: guides an agent through npm publishing, trusted publishers and deprecation, with an agent channel"
+only = { os = "darwin" }
+notes = [
+  "Run `imprint skills install` after each apply or upgrade: it installs the imprint skill this binary was built with for each agent harness found.",
+]
+
+  # The binary, from the family download contract (verified against .sha256).
+  [[packages.imprint.download]]
+  site = "tackle.tools"
+  tool = "imprint"
+  bin = "imprint"
+
+  # Claude Code: the imprint channel (progress arrives as channel messages).
+  [[packages.imprint.json-merge]]
+  file = "~/.claude.json"
+  merge = { mcpServers = { imprint = { type = "stdio", command = "imprint", args = ["channel"], env = {} } } }
+
+  # pi: the same channel through channels.tools.
+  [[packages.imprint.json-merge]]
+  file = "~/.pi/agent/channels.json"
+  merge = { channelServers = { imprint = { command = "imprint", args = ["channel"] } } }
+
+  [[packages.imprint.verify]]
+  command-exists = "imprint"
