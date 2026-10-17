@@ -52,7 +52,7 @@ func (o *Ops) Publish(ctx context.Context, tarball string, report Report) error 
 		return fail(report, err)
 	}
 	report(fmt.Sprintf("npm accepted %s and is processing it, usually 3 to 6 minutes; don't work out the next version until I say it's live", key))
-	if _, err := o.watch(ctx, name, ver, report); err != nil {
+	if err := o.watch(ctx, name, ver, report); err != nil {
 		return fail(report, err)
 	}
 	report("live on npm: " + key)

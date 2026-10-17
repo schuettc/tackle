@@ -1,8 +1,16 @@
 # Changelog
 
-All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull` and `sift` are documented here (proj, creel, casebook, cull and sift entries are headed with the tool's name; older proj and casebook releases have none). The format follows
+All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull`, `sift` and `imprint` are documented here (proj, creel, casebook, cull, sift and imprint entries are headed with the tool's name; older proj and casebook releases have none). The format follows
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
+
+## [imprint 0.1.0] - 2026-10-17
+
+### Added
+- imprint, a new tool: its `imprint channel` MCP server guides a coding agent through npm login, publishing a tarball, setting a package's trusted publisher, deprecating a package and confirming a CI release's provenance. npm runs one call at a time in a terminal imprint creates, each approval link opens in the browser, every step is confirmed on the registry, and each npm call's full output is saved under `~/.local/state/imprint/`. `imprint skills install` installs its skill.
+
+### Changed
+- `sift skills install` now uses the skill installer shared by tackle's tools; its behavior is unchanged.
 
 ## [0.6.0] — 2026-10-16
 

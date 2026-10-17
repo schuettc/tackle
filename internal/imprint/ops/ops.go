@@ -113,7 +113,7 @@ var errNotLive = errors.New("not live")
 
 // watch reads name until version is live, telling the agent at Warn and
 // giving up at GiveUp. Registry errors along the way are retried.
-func (o *Ops) watch(ctx context.Context, name, version string, report Report) (registry.Package, error) {
+func (o *Ops) watch(ctx context.Context, name, version string, report Report) error {
 	start := time.Now()
 	warned := false
 	t := time.NewTicker(o.Poll)
@@ -121,11 +121,11 @@ func (o *Ops) watch(ctx context.Context, name, version string, report Report) (r
 	for {
 		p, err := o.Reg.Package(ctx, name)
 		if err == nil && p.Has(version) {
-			return p, nil
+			return nil
 		}
 		since := time.Since(start)
 		if since >= o.GiveUp {
-			return p, fmt.Errorf("gave up: %s@%s still isn't visible on npm after %s; check it later with imprint_show: %w", name, version, human(o.GiveUp), errNotLive)
+			return fmt.Errorf("gave up: %s@%s still isn't visible on npm after %s; check it later with imprint_show: %w", name, version, human(o.GiveUp), errNotLive)
 		}
 		if since >= o.Warn && !warned {
 			warned = true
@@ -133,7 +133,7 @@ func (o *Ops) watch(ctx context.Context, name, version string, report Report) (r
 		}
 		select {
 		case <-ctx.Done():
-			return p, ctx.Err()
+			return ctx.Err()
 		case <-t.C:
 		}
 	}

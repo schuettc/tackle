@@ -9,7 +9,7 @@ import (
 // Expect watches for pkg@version and reports whether CI from repo signed
 // it, or what signed it instead.
 func (o *Ops) Expect(ctx context.Context, pkg, version, repo string, report Report) error {
-	if _, err := o.watch(ctx, pkg, version, report); err != nil {
+	if err := o.watch(ctx, pkg, version, report); err != nil {
 		return fail(report, err)
 	}
 	key := pkg + "@" + version
