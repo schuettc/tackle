@@ -4,6 +4,16 @@ All notable changes to `scratch`, `proj`, `creel`, `casebook`, `cull`, `sift` an
 [Keep a Changelog](https://keepachangelog.com/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [imprint 0.1.1] - 2026-10-17
+
+### Added
+- Each approval message says how long it stays open (5 minutes, measured against npm 11.19.1), and imprint reminds the agent when 1 minute is left.
+
+### Fixed
+- An approval that expires while checking a scoped package's npm org is reported as an expired approval with npm's saved output, not as a missing org.
+- A failed read of a version's provenance shows as "provenance unknown", not "no provenance" or "wasn't published by CI".
+- The skill no longer says `0.0.0-stage` means a publish is processing: npm keeps that entry after a package's first publish.
+
 ## [casebook 0.8.1] - 2026-10-17
 
 ### Fixed

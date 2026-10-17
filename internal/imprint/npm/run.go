@@ -30,7 +30,19 @@ const (
 	// ApprovalGiven: npm moved past the approval (to its next one, or it
 	// exited 0).
 	ApprovalGiven
+	// ApprovalExpiring: the approval is still open with Left of its
+	// window remaining.
+	ApprovalExpiring
 )
+
+// DefaultWindow is how long npm's approval page stays open: an unanswered
+// approval's poll got E404 300.9 s after the link appeared (npm 11.19.1,
+// 2026-10-17). npm itself sets no limit; the registry decides.
+const DefaultWindow = 5 * time.Minute
+
+// DefaultRemind is how much of the window is left when an open approval
+// is announced again.
+const DefaultRemind = time.Minute
 
 func (k EventKind) String() string {
 	switch k {
@@ -38,6 +50,8 @@ func (k EventKind) String() string {
 		return "approval needed"
 	case ApprovalGiven:
 		return "approval given"
+	case ApprovalExpiring:
+		return "approval expiring"
 	}
 	return "unknown"
 }
@@ -46,6 +60,7 @@ func (k EventKind) String() string {
 type Event struct {
 	Kind EventKind
 	URL  string
+	Left time.Duration // ApprovalExpiring: the time left to approve
 }
 
 // Result is how an npm call ended.
@@ -58,12 +73,31 @@ type Result struct {
 
 // Runner runs npm. NPM is the npm binary ("npm" when empty), LogDir where
 // each call's full output is saved, and Open opens an approval link in
-// the user's browser.
+// the user's browser. Window is how long an approval stays open and Remind
+// how much of it is left when an open approval is announced again
+// (DefaultWindow and DefaultRemind when zero).
 type Runner struct {
 	NPM    string
 	LogDir string
 	Open   func(url string) error
+	Window time.Duration
+	Remind time.Duration
 	mu     sync.Mutex
+}
+
+// ApprovalWindow is how long an approval stays open.
+func (r *Runner) ApprovalWindow() time.Duration {
+	if r.Window > 0 {
+		return r.Window
+	}
+	return DefaultWindow
+}
+
+func (r *Runner) remind() time.Duration {
+	if r.Remind > 0 {
+		return r.Remind
+	}
+	return DefaultRemind
 }
 
 // Run runs npm with args plus --browser=false for operation op on package
@@ -77,6 +111,22 @@ func (r *Runner) Run(ctx context.Context, op, pkg string, args []string, events 
 	if events == nil {
 		events = func(Event) {}
 	}
+	// The reminder fires on its own goroutine, so every event goes out
+	// under evMu, and a reminder for an approval already passed is dropped.
+	var evMu sync.Mutex
+	emit := events
+	events = func(e Event) { evMu.Lock(); defer evMu.Unlock(); emit(e) }
+	var timer *time.Timer
+	gen := 0
+	stop := func() {
+		evMu.Lock()
+		gen++
+		evMu.Unlock()
+		if timer != nil {
+			timer.Stop()
+		}
+	}
+	defer stop()
 	logf, err := r.createLog(op, pkg)
 	if err != nil {
 		return Result{}, err
@@ -102,6 +152,7 @@ func (r *Runner) Run(ctx context.Context, op, pkg string, args []string, events 
 		if url == "" || url == pending {
 			return
 		}
+		stop()
 		if pending != "" {
 			events(Event{Kind: ApprovalGiven, URL: pending})
 		}
@@ -110,6 +161,17 @@ func (r *Runner) Run(ctx context.Context, op, pkg string, args []string, events 
 			_ = r.Open(url)
 		}
 		events(Event{Kind: ApprovalNeeded, URL: url})
+		evMu.Lock()
+		mine := gen
+		evMu.Unlock()
+		left := r.remind()
+		timer = time.AfterFunc(r.ApprovalWindow()-left, func() {
+			evMu.Lock()
+			defer evMu.Unlock()
+			if gen == mine {
+				emit(Event{Kind: ApprovalExpiring, URL: url, Left: left})
+			}
+		})
 	}
 	rd := bufio.NewReader(io.TeeReader(tty, logf))
 	for {
@@ -140,6 +202,7 @@ func (r *Runner) Run(ctx context.Context, op, pkg string, args []string, events 
 	}
 	res := Result{Output: out.String(), Log: logf.Name()}
 	werr := cmd.Wait()
+	stop()
 	var ee *exec.ExitError
 	switch {
 	case werr == nil:

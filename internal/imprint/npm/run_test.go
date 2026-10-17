@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fake sets up the fake npm with script and returns a Runner on it, the
@@ -141,5 +142,36 @@ func TestRunOneAtATime(t *testing.T) {
 	b, _ := os.ReadFile(os.Getenv("FAKE_NPM_MARKS"))
 	if got := strings.Fields(string(b)); !reflect.DeepEqual(got, []string{"start", "end", "start", "end"}) {
 		t.Errorf("marks %v", got)
+	}
+}
+
+// An approval still open when Remind is left of its Window is announced
+// once; one approved before that is not.
+func TestRunApprovalExpiring(t *testing.T) {
+	r, _, _ := fake(t, "print Authenticate your account at:\nprint https://www.npmjs.com/auth/cli/u1\nsleep 0.4\nprint + demo-pkg@1.0.0\nexit 0\n")
+	r.Window, r.Remind = 300*time.Millisecond, 200*time.Millisecond
+	var rec recorder
+	if _, err := r.Run(context.Background(), "publish", "demo-pkg", []string{"publish", "/tmp/x.tgz"}, rec.add); err != nil {
+		t.Fatal(err)
+	}
+	u := "https://www.npmjs.com/auth/cli/u1"
+	want := []Event{{Kind: ApprovalNeeded, URL: u}, {Kind: ApprovalExpiring, URL: u, Left: 200 * time.Millisecond}, {Kind: ApprovalGiven, URL: u}}
+	if !reflect.DeepEqual(rec.events, want) {
+		t.Errorf("events %+v", rec.events)
+	}
+
+	r, _, _ = fake(t, "print Authenticate your account at:\nprint https://www.npmjs.com/auth/cli/u2\nprint + demo-pkg@1.0.0\nexit 0\n")
+	r.Window, r.Remind = 300*time.Millisecond, 200*time.Millisecond
+	rec = recorder{}
+	if _, err := r.Run(context.Background(), "publish", "demo-pkg", []string{"publish", "/tmp/x.tgz"}, rec.add); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for _, e := range rec.events {
+		if e.Kind == ApprovalExpiring {
+			t.Errorf("expiring after approval: %+v", rec.events)
+		}
 	}
 }

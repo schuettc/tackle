@@ -10,7 +10,7 @@ You decide every step. imprint does the one npm step you ask for and tells you w
 ## How the tools behave
 
 - `imprint_show` answers at once from the registry: versions, dist-tags, deprecation, and which repo's CI signed each version. Its trusted publisher follows as a message, since reading it may need the user's approval.
-- Every other tool returns at once with what it started. Its progress arrives as messages from imprint: each approval link the user must open, `approved`, `live on npm`, or `failed:` with what npm's error usually means and the file holding npm's full output. Pass each approval link on to the user.
+- Every other tool returns at once with what it started. Its progress arrives as messages from imprint: each approval link the user must open, `approved`, `live on npm`, or `failed:` with what npm's error usually means and the file holding npm's full output. Pass each approval link on to the user at once: an approval lasts 5 minutes, and imprint says so again with 1 minute left.
 - A step is done only when imprint says the registry shows it. npm's own progress lines are not success.
 - After a publish, npm takes 3 to 6 minutes to show the version. Don't work out the next version or publish again until imprint says it's live. A package's first publish shows as still processing in `imprint_show` until its version appears. npm keeps a `0.0.0-stage` entry in the version list for good after that, so beside real versions it means nothing.
 - `imprint_status` lists what waits on the user's approval or on the registry.

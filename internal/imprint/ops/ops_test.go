@@ -297,7 +297,7 @@ func TestPublishWatchesUntilLive(t *testing.T) {
 	r := newReports()
 	done := make(chan error, 1)
 	go func() { done <- e.ops.Publish(context.Background(), filepath.Base(tb), r.add) }()
-	r.waitFor(t, "waiting for your approval: https://www.npmjs.com/auth/cli/p1")
+	r.waitFor(t, "waiting for your approval: https://www.npmjs.com/auth/cli/p1 (opened in the browser; it expires in 5 minutes)")
 	r.waitFor(t, "approved")
 	r.waitFor(t, "npm accepted demo-pkg@1.0.0 and is processing it")
 	e.reg.set("demo-pkg", map[string]string{"0.9.0": "", registry.Stage: ""}, nil)
