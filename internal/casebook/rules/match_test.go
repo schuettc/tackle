@@ -372,3 +372,111 @@ func TestDeterministicTip(t *testing.T) {
 		t.Errorf("Tip = %q, want %q (lexically first machine is \"air\")", f.Tip, "tip-air")
 	}
 }
+
+// TestRelationNeverMatchesARepo: relation applies to PRs and issues only.
+func TestRelationNeverMatchesARepo(t *testing.T) {
+	repo := engine.Item{ID: "repo:a/b", Kind: item.KindRepo, Repo: "a/b", Relation: "owned"}
+	pr := engine.Item{ID: "pr:a/b#1", Kind: item.KindPR, Repo: "a/b", Relation: "incoming"}
+	res := engine.Result{Items: []engine.Item{repo, pr}}
+	for _, v := range []string{"owned", "incoming", "outgoing", "own"} {
+		r := Rule{ID: "x", Match: []Condition{{Field: "relation", Op: "is", Value: v}}}
+		ms, err := r.MatchAll(res, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range ms {
+			if m.Key == repo.ID {
+				t.Errorf("relation is %s matched the repo", v)
+			}
+		}
+	}
+	r := Rule{ID: "y", Match: []Condition{{Field: "worktree", Op: "is", Value: "dirty"}}}
+	wt := engine.Item{ID: "worktree:m:/w", Kind: item.KindWorktree}
+	if ms, _ := r.MatchAll(engine.Result{Items: []engine.Item{wt}}, testNow); len(ms) != 0 {
+		t.Errorf("a clean worktree matched worktree is dirty: %v", ms)
+	}
+}
+
+// TestDateOps: before / on-or-after a calendar day, on the times the
+// duration fields measure from; an item with no time matches neither.
+func TestDateOps(t *testing.T) {
+	at := time.Date(2026, 10, 1, 15, 0, 0, 0, time.Local)
+	f := engine.Fields{Kind: "pr", CreatedAt: at, UpdatedAt: at}
+	cases := []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "updated", Op: "before", Value: "2026-10-02"}, true},
+		{Condition{Field: "updated", Op: "before", Value: "2026-10-01"}, false},
+		{Condition{Field: "updated", Op: "on-or-after", Value: "2026-10-01"}, true},
+		{Condition{Field: "updated", Op: "on-or-after", Value: "2026-10-02"}, false},
+		{Condition{Field: "age", Op: "before", Value: "2026-10-02"}, true},
+	}
+	for _, tc := range cases {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(f); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
+	}
+	none := engine.Fields{Kind: "branch"}
+	for _, op := range []string{"before", "on-or-after"} {
+		if got, _ := (Condition{Field: "updated", Op: op, Value: "2026-10-01"}).Eval(none); got {
+			t.Errorf("no time matched %s", op)
+		}
+	}
+	if err := ValidateCondition(Condition{Field: "updated", Op: "before", Value: "3d"}); err == nil {
+		t.Error("before 3d validated; want a date error")
+	}
+}
+
+// TestPatterns: a pick-or-type field's value may use *, which never crosses
+// a /; other string fields stay exact.
+func TestPatterns(t *testing.T) {
+	f := engine.Fields{Kind: "pr", Repo: "subaud-tools/tackle", Owner: "subaud-tools", Author: "dependabot[bot]", Labels: []string{"deps-go"}, Title: "a*b"}
+	cases := []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "repo", Op: "is", Value: "subaud-tools/*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "*/tackle"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "*"}, false}, // * never crosses /
+		{Condition{Field: "repo", Op: "in", Value: "schuettc/*,*/tackle"}, true},
+		{Condition{Field: "repo", Op: "not-in", Value: "schuettc/*,*/tackle"}, false},
+		{Condition{Field: "repo", Op: "is-not", Value: "schuettc/*"}, true},
+		{Condition{Field: "owner", Op: "is", Value: "subaud-*"}, true},
+		{Condition{Field: "author", Op: "is", Value: "dependabot*"}, true},
+		{Condition{Field: "label", Op: "is", Value: "deps-*"}, true},
+		{Condition{Field: "title", Op: "is", Value: "a*"}, false}, // title stays exact
+	}
+	for _, tc := range cases {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(f); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
+	}
+	// Only * is special: ?, [ ] and \ are literal, with or without a *, as
+	// the page's globRe has them.
+	g := engine.Fields{Kind: "issue", Repo: "o/r?x", Labels: []string{"needs [triage"}, Author: `a\b`}
+	for _, tc := range []struct {
+		c    Condition
+		want bool
+	}{
+		{Condition{Field: "label", Op: "is", Value: "needs [triage"}, true},
+		{Condition{Field: "label", Op: "is", Value: "needs [*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "o/r?*"}, true},
+		{Condition{Field: "repo", Op: "is", Value: "o/r?"}, false},
+		{Condition{Field: "repo", Op: "is", Value: "o/ra*"}, false},
+		{Condition{Field: "author", Op: "is", Value: `a\*`}, true},
+	} {
+		if err := ValidateCondition(tc.c); err != nil {
+			t.Fatalf("%+v: %v", tc.c, err)
+		}
+		if got, err := tc.c.Eval(g); err != nil || got != tc.want {
+			t.Errorf("%+v = %v, %v; want %v", tc.c, got, err, tc.want)
+		}
+	}
+}

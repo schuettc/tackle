@@ -2,6 +2,7 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,8 +15,10 @@ import (
 	"github.com/subaud-tools/tackle/internal/casebook/config"
 	"github.com/subaud-tools/tackle/internal/casebook/deliver"
 	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/filters"
 	"github.com/subaud-tools/tackle/internal/casebook/item"
 	"github.com/subaud-tools/tackle/internal/casebook/propose"
+	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -72,12 +75,16 @@ type itemsFilter struct {
 	Age      string `json:"age"`
 	Rule     string `json:"rule"`
 	Group    string `json:"group"`
+	Filters  string `json:"filters"` // saved filter ids, comma-separated
+	Match    string `json:"match"`   // a draft filter's conditions, as JSON
 }
 
 // query is f's Query (every page: no offset or limit), with a rule
 // filter's matches worked out. group=false is the flat list (Flat), not a
-// group.
-func (s *Server) query(f itemsFilter) Query {
+// group. Saved filters (filters=a,b) list every item matching all of them,
+// whatever its status (Filtered; the view is then all); an unknown or
+// invalid filter is the error, by name.
+func (s *Server) query(f itemsFilter) (Query, error) {
 	view := f.View
 	if view == "" {
 		view = ViewAll
@@ -112,7 +119,68 @@ func (s *Server) query(f itemsFilter) Query {
 			query.MatchSet = map[string]bool{}
 		}
 	}
-	return query
+	if ids := filterIDs(f.Filters); len(ids) > 0 {
+		set, err := s.filterMatchSet(ids)
+		if err != nil {
+			return Query{}, err
+		}
+		if query.MatchSet != nil {
+			for k := range set {
+				if !query.MatchSet[k] {
+					delete(set, k)
+				}
+			}
+		}
+		query.View, query.Filtered, query.MatchSet = ViewAll, true, set
+	}
+	if f.Match != "" {
+		set, err := s.draftMatchSet(f.Match)
+		if err != nil {
+			return Query{}, err
+		}
+		if query.MatchSet != nil {
+			for k := range set {
+				if !query.MatchSet[k] {
+					delete(set, k)
+				}
+			}
+		}
+		query.View, query.Filtered, query.MatchSet = ViewAll, true, set
+	}
+	return query, nil
+}
+
+// draftMatchSet is the keys a draft filter's conditions (match=, JSON)
+// match, as a saved filter with them would (filters.Filter.Keys): the
+// editor's live list. No conditions match nothing; conditions the rules
+// refuse are the error.
+func (s *Server) draftMatchSet(js string) (map[string]bool, error) {
+	var match []rules.Condition
+	if err := json.Unmarshal([]byte(js), &match); err != nil {
+		return nil, bad("match: %v", err)
+	}
+	if len(match) == 0 {
+		return map[string]bool{}, nil
+	}
+	if err := rules.ValidateConditions(match); err != nil {
+		return nil, bad("%v", err)
+	}
+	keys, err := filters.Filter{Match: match}.Keys(s.Index.Result(), s.Now())
+	if err != nil {
+		return nil, bad("%v", err)
+	}
+	return keys, nil
+}
+
+// filterIDs splits a filters= value: comma-separated ids, blanks dropped.
+func filterIDs(s string) []string {
+	var out []string
+	for _, id := range strings.Split(s, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
@@ -128,8 +196,13 @@ func (s *Server) getItems(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	group := s.query(itemsFilter{View: q.Get("view"), Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"),
-		Relation: q.Get("relation"), Bot: q.Get("bot"), Age: q.Get("age"), Rule: q.Get("rule"), Group: q.Get("group")})
+	group, err := s.query(itemsFilter{View: q.Get("view"), Kind: q.Get("kind"), Repo: q.Get("repo"), Text: q.Get("q"),
+		Relation: q.Get("relation"), Bot: q.Get("bot"), Age: q.Get("age"), Rule: q.Get("rule"), Group: q.Get("group"),
+		Filters: q.Get("filters"), Match: q.Get("match")})
+	if err != nil {
+		reply(w, nil, err)
+		return
+	}
 	group.Limit = atoi(q.Get("limit"))
 	query := group
 	query.Offset = atoi(q.Get("offset"))
@@ -691,8 +764,8 @@ func (s *Server) postWithdraw(w http.ResponseWriter, r *http.Request) {
 		reply(w, nil, err)
 		return
 	}
-	if (len(in.IDs) == 0) == (in.View == "") {
-		reply(w, nil, bad("withdraw takes ids or a view, one of them"))
+	if (len(in.IDs) == 0) == (in.View == "" && in.Filters == "") {
+		reply(w, nil, bad("withdraw takes ids or a view (or filters), one of them"))
 		return
 	}
 	ctx := r.Context()
@@ -705,7 +778,10 @@ func (s *Server) postWithdraw(w http.ResponseWriter, r *http.Request) {
 		var agent map[string]bool
 		if pending, err = s.Props.Pending(ctx); err == nil {
 			if agent, err = s.Props.AgentPendingKeys(ctx); err == nil {
-				done, err = s.Props.WithdrawKeys(ctx, agentKeys(s.Index.Keys(s.query(in.itemsFilter), pending), agent))
+				var qy Query
+				if qy, err = s.query(in.itemsFilter); err == nil {
+					done, err = s.Props.WithdrawKeys(ctx, agentKeys(s.Index.Keys(qy, pending), agent))
+				}
 			}
 		}
 	}

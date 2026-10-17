@@ -18,13 +18,42 @@
 
 .cb-list-tools {
   display: flex;
+  align-items: center;
+  gap: 10px;
   margin-top: 8px;
+  min-width: 0;
+}
+
+/* While the filter editor is open the list is its preview: faded, its rows,
+ * ticks and group buttons only to look at, and one line beside the switch
+ * (in the row the switch already takes, so the rows don't move). */
+.cb-preview-line {
+  flex: 0 1 auto;
+  min-width: 0;
+  font: 12.5px var(--kit-sans);
+  color: var(--kit-signal);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cb-preview-line[hidden] {
+  display: none;
+}
+.cb-attention.cb-previewing .kit-rows {
+  opacity: 0.6;
+}
+.cb-attention.cb-previewing .kit-rows > *,
+.cb-attention.cb-previewing .cb-group-acts,
+.cb-attention.cb-previewing .cb-group-box {
+  pointer-events: none;
 }
 
 .cb-group-switch {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
 /* The switch's track and knob: off at the left, muted; on at the right, in
@@ -35,12 +64,130 @@
   height: 12px;
   border: 1px solid var(--kit-line);
   border-radius: 6px;
-  background: radial-gradient(circle at 6px 50%, var(--kit-muted) 3.5px, transparent 4px);
+  background: radial-gradient(
+    circle at 6px 50%,
+    var(--kit-muted) 3.5px,
+    transparent 4px
+  );
 }
 
 .cb-group-switch[aria-checked='true']::before {
   border-color: var(--kit-signal);
-  background: radial-gradient(circle at 16px 50%, var(--kit-signal) 3.5px, transparent 4px);
+  background: radial-gradient(
+    circle at 16px 50%,
+    var(--kit-signal) 3.5px,
+    transparent 4px
+  );
+}
+
+/* ---- saved filters: a chip row under the views, and the editor's sheet -- */
+
+.cb-filter-chips {
+  align-items: center;
+}
+
+.cb-filter-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* A filter that doesn't validate: struck through, never selected; its title
+ * is serve's reason. */
+.cb-filter.kit-chip[data-invalid] {
+  text-decoration: line-through;
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+.cb-filter-more {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.cb-filter-more:hover,
+.cb-filter-more:focus-visible,
+.cb-filter-more[aria-expanded='true'] {
+  color: var(--kit-signal);
+}
+
+.cb-filter-add.kit-chip {
+  border-style: dashed;
+}
+.cb-filter-add.kit-chip:hover,
+.cb-filter-add.kit-chip:focus-visible {
+  color: var(--kit-signal);
+  border-color: var(--kit-signal);
+}
+
+.cb-filter-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 96px;
+  padding: 4px 0;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+}
+.cb-filter-menu[hidden] {
+  display: none;
+}
+.cb-filter-menu-item {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: transparent;
+  border: 0;
+  padding: 4px 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.cb-filter-menu-item:hover,
+.cb-filter-menu-item:focus-visible {
+  background: var(--kit-signal-soft);
+}
+
+.cb-filter-err,
+.cb-filter-name-err {
+  margin: 8px 0 0;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-signal);
+}
+.cb-filter-err[hidden],
+.cb-filter-name-err[hidden] {
+  display: none;
+}
+
+/* The editor, in the middle pane: its title, the name with save and
+ * cancel, then the conditions (which grow below, moving neither). */
+.cb-filter-title {
+  margin-bottom: 14px;
+}
+.cb-filter-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.cb-filter-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+.cb-filter-name:focus-visible {
+  outline: 1px solid var(--kit-signal);
+  border-color: var(--kit-signal);
 }
 
 /* ---- decide sheet -------------------------------------------------------- */
@@ -1430,34 +1577,67 @@ input.cb-cond-v::placeholder {
   border-top: 0;
 }
 
-/* The + condition menu: every field with its operators, in the table. */
+/* A fixed-value field's values: chips to tick (several for an enum). */
+.cb-cond-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.cb-cond-pick.kit-chip {
+  font-size: 12px;
+}
+
+/* + condition: the whole field list, in place under the conditions (Court,
+ * 2026-10-17: see every field at once). */
 .cb-cond-menu {
+  display: flex;
+  flex-direction: column;
+}
+.cb-cond-menu[hidden] {
+  display: none;
+}
+.cb-cond-search {
+  display: none;
+  margin: 8px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 4px 8px;
+  outline: none;
+}
+.cb-cond-search:focus-visible {
+  border-color: var(--kit-signal);
+}
+.cb-cond-menu-list {
+  padding: 0 0 6px;
   border-top: 1px solid var(--kit-line);
-  max-height: 320px;
-  overflow: auto;
-  padding: 6px 0;
 }
 .cb-cond-menu-row {
-  display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
-  padding: 4px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.cb-cond-menu-row.on {
+  background: var(--kit-signal-soft);
+}
+.cb-cond-menu-row[aria-disabled='true'] {
+  cursor: default;
+  opacity: 0.55;
 }
 .cb-cond-menu-f {
   font: 12.5px var(--kit-mono);
   color: var(--kit-fg);
 }
-.cb-cond-menu-ops {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-}
-.cb-cond-menu-op.kit-chip:hover,
-.cb-cond-menu-op.kit-chip:focus-visible {
-  color: var(--kit-fg);
-  background: var(--kit-signal-soft);
-  border-color: transparent;
+.cb-cond-menu-help {
+  font: 11.5px var(--kit-sans);
+  color: var(--kit-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The matches: a heading with list / by repo, and rows with a tick box. */
@@ -2378,4 +2558,194 @@ textarea.cb-needs-edit:focus {
 
 .cb-item .cb-choice.kit-card.cb-look-card {
   padding-left: 10px;
+}
+
+/* The field chips, grouped by the types they apply to. */
+.cb-cond-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.cb-cond-group {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.cb-cond-group-l {
+  flex: 0 0 150px;
+  font: 11.5px var(--kit-sans);
+  color: var(--kit-muted);
+}
+.cb-cond-group-c {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+button.cb-cond-menu-row {
+  display: inline-block;
+  padding: 2px 8px;
+  font: 12px var(--kit-mono);
+  color: var(--kit-fg);
+  background: transparent;
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+button.cb-cond-menu-row:hover {
+  border-color: var(--kit-signal);
+}
+button.cb-cond-menu-row[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+  border-color: var(--kit-line);
+}
+.cb-cond-add[hidden] {
+  display: none;
+}
+.cb-cond-add-wrap {
+  border-bottom: 1px solid var(--kit-line);
+}
+
+/* A duration: a number and a unit. */
+.cb-cond-dur {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.cb-cond-num {
+  width: 48px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.cb-cond-unit {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 3px 4px;
+}
+.cb-cond-ago {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-muted);
+}
+.cb-cond-dur > * {
+  flex-shrink: 0;
+}
+.cb-cond-dur > .cb-cond-num {
+  width: 52px;
+}
+.cb-cond-date {
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  color-scheme: light dark;
+}
+
+/* A pick-or-type field: chips, and a box whose suggestions float under it. */
+.cb-cond-typed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.cb-cond-typed-chips {
+  display: contents;
+}
+.cb-cond-typed-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.cb-cond-typed-x {
+  font: inherit;
+  color: var(--kit-muted);
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  cursor: pointer;
+}
+.cb-cond-typed-x:hover {
+  color: var(--kit-signal);
+}
+.cb-cond-typed-box {
+  position: relative;
+  flex: 1 1 140px;
+  min-width: 140px;
+}
+.cb-cond-typed-in {
+  width: 100%;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  background: var(--kit-bg);
+  border: 1px solid var(--kit-line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  outline: none;
+}
+.cb-cond-typed-in:focus-visible {
+  border-color: var(--kit-signal);
+}
+.cb-cond-sugg {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  width: max(100%, 340px);
+  z-index: 6;
+  background: var(--kit-card);
+  border: 1px solid var(--kit-line);
+  border-radius: 8px;
+  box-shadow: var(--kit-lift);
+  padding: 4px 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.cb-cond-sugg[hidden] {
+  display: none;
+}
+.cb-cond-sugg-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 10px;
+  font: 12.5px var(--kit-mono);
+  color: var(--kit-fg);
+  cursor: pointer;
+}
+.cb-cond-sugg-row.on {
+  background: var(--kit-signal-soft);
+}
+.cb-cond-sugg-v {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cb-cond-sugg-hint {
+  font: 11.5px var(--kit-sans);
+  color: var(--kit-muted);
+}
+.cb-cond-sugg-pat .cb-cond-sugg-v {
+  color: var(--kit-signal);
+}
+.cb-cond-sugg-head {
+  padding: 4px 10px 6px;
+  font: 11.5px var(--kit-sans);
+  color: var(--kit-muted);
+  border-bottom: 1px solid var(--kit-line);
+  margin-bottom: 2px;
+}
+.cb-cond-sugg-n {
+  flex-shrink: 0;
+  color: var(--kit-muted);
+}
+.cb-conds:has(.cb-cond-sugg:not([hidden])) {
+  overflow: visible;
 }

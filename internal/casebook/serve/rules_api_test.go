@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/subaud-tools/tackle/internal/casebook/engine"
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 	"github.com/subaud-tools/tackle/internal/casebook/rules"
 )
 
@@ -197,6 +199,10 @@ func TestVocabularyEndpointListsFields(t *testing.T) {
 	}
 	if got := strings.Join(toks, " "); got != "{how} {tip} {age} {repo} {title}" {
 		t.Errorf("note tokens %q", got)
+	}
+	// The page's words: each field's label, and every operator's.
+	if vocab.Fields[0].Label != "type" || len(vocab.Operators) != 13 || vocab.Operators[1].Label != "is not" {
+		t.Errorf("labels: field %+v operators %+v", vocab.Fields[0], vocab.Operators)
 	}
 }
 
@@ -597,5 +603,50 @@ func TestAgentDraftRejectsInvalidID(t *testing.T) {
 	}
 	if msg, _ := out["error"].(string); !strings.Contains(msg, "invalid rule id") {
 		t.Fatalf("error %q does not say 'invalid rule id'", msg)
+	}
+}
+
+// TestPreviewPageIsNewestFirst: the preview's page holds at most limit rows,
+// newest first (engine.NewerFirst), whatever the index's key order: the
+// filter sheet lists its first rows.
+func TestPreviewPageIsNewestFirst(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	at := func(d int) time.Time { return now.Add(-time.Duration(d) * 24 * time.Hour) }
+	res := engine.Result{Items: []engine.Item{
+		{ID: "issue:a/b#1", Kind: item.KindIssue, UpdatedAt: at(9)},
+		{ID: "issue:a/b#2", Kind: item.KindIssue, UpdatedAt: at(1)},
+		{ID: "issue:a/b#3", Kind: item.KindIssue},
+		{ID: "issue:a/b#4", Kind: item.KindIssue, UpdatedAt: at(4)},
+		{ID: "repo:a/b", Kind: item.KindRepo, UpdatedAt: at(0)},
+	}}
+	ru := rules.Rule{Match: []rules.Condition{{Field: "kind", Op: "is", Value: "issue"}}}
+	p := buildPreview(ru, res, now, 0, 3)
+	var keys []string
+	for _, r := range p.Page {
+		keys = append(keys, r.Key)
+	}
+	if got := strings.Join(keys, " "); p.Total != 4 || got != "issue:a/b#2 issue:a/b#4 issue:a/b#1" {
+		t.Errorf("total %d page %q, want 4 and #2 #4 #1", p.Total, got)
+	}
+}
+
+// TestValuesEndpoint: the values casebook has seen for a pick-or-type field,
+// most items first; a field that isn't one is refused.
+func TestValuesEndpoint(t *testing.T) {
+	r := newRig(t)
+	var v ValuesView
+	if code := r.do(t, "GET", "/api/rules/values?field=repo", nil, &v); code != 200 {
+		t.Fatalf("values %d", code)
+	}
+	if len(v.Values) == 0 || v.Values[0].Value != "schuettc/hail" || v.Values[0].Count == 0 {
+		t.Fatalf("repo values %+v, want schuettc/hail first", v.Values)
+	}
+	for i := 1; i < len(v.Values); i++ {
+		if v.Values[i].Count > v.Values[i-1].Count {
+			t.Fatalf("values not most items first: %+v", v.Values)
+		}
+	}
+	if code := r.do(t, "GET", "/api/rules/values?field=kind", nil, nil); code != 400 {
+		t.Fatalf("values?field=kind %d, want 400", code)
 	}
 }

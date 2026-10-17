@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
@@ -22,66 +23,125 @@ const (
 	FieldTypeCount                     // non-negative integer
 )
 
-// Field describes one field in the vocabulary.
+// Field describes one field in the vocabulary. Label, Help and ValueLabels
+// are the page's words for it; files always use Name and the raw values.
 type Field struct {
-	Name   string    `json:"name"`
-	Type   FieldType `json:"type"`
-	Ops    []string  `json:"ops"`
-	Values []string  `json:"values"`
+	Name        string            `json:"name"`
+	Label       string            `json:"label"`
+	Help        string            `json:"help"`
+	Type        FieldType         `json:"type"`
+	Ops         []string          `json:"ops"`
+	Values      []string          `json:"values"`
+	ValueLabels map[string]string `json:"value_labels"`
+	// Kinds are the item types the field has a value on; empty: every type.
+	Kinds []string `json:"kinds"`
 }
+
+// Operator is one operator and the page's words for it.
+type Operator struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+}
+
+// operators are every operator a field may take, with its label.
+var operators = []Operator{
+	{"is", "is"},
+	{"is-not", "is not"},
+	{"in", "is one of"},
+	{"not-in", "is none of"},
+	{"matches", "matches pattern"},
+	{"older-than", "more than"},
+	{"before", "before"},
+	{"on-or-after", "on or after"},
+	{"newer-than", "within the last"},
+	{"gt", "more than"},
+	{"gte", "at least"},
+	{"lt", "fewer than"},
+	{"lte", "at most"},
+}
+
+// Operators returns every operator with its label.
+func Operators() []Operator { return slices.Clone(operators) }
 
 // Operator sets.
 var (
 	enumOps  = []string{"is", "is-not", "in", "not-in"}
 	textOps  = []string{"is", "is-not", "in", "not-in"}
 	titleOps = []string{"is", "is-not", "in", "not-in", "matches"}
-	durOps   = []string{"older-than", "newer-than"}
+	durOps   = []string{"older-than", "newer-than", "before", "on-or-after"}
 	boolOps  = []string{"is", "is-not"}
 	countOps = []string{"is", "is-not", "gt", "gte", "lt", "lte"}
 )
 
+// The item types fields apply to (Field.Kinds).
+var (
+	prIssue        = []string{"pr", "issue"}
+	branchOnly     = []string{"branch"}
+	branchWorktree = []string{"branch", "worktree"}
+	repoOnly       = []string{"repo"}
+)
+
+// boolLabels are every bool field's value labels.
+var boolLabels = map[string]string{"true": "yes", "false": "no"}
+
 // vocab is the full field vocabulary. It is built once and never mutated.
 var vocab = []Field{
 	// Identity fields
-	{Name: "kind", Type: FieldTypeEnum, Ops: enumOps,
-		Values: []string{"repo", "pr", "issue", "branch", "worktree"}},
-	{Name: "repo", Type: FieldTypeText, Ops: textOps},
-	{Name: "owner", Type: FieldTypeText, Ops: textOps},
-	{Name: "relation", Type: FieldTypeEnum, Ops: enumOps,
-		Values: []string{"outgoing", "incoming", "own"}},
-	{Name: "status", Type: FieldTypeEnum, Ops: enumOps,
+	{Name: "kind", Label: "type", Help: "repository, pull request, issue, branch or worktree",
+		Type: FieldTypeEnum, Ops: enumOps,
+		Values: []string{"repo", "pr", "issue", "branch", "worktree"},
+		ValueLabels: map[string]string{"repo": "repository", "pr": "pull request", "issue": "issue",
+			"branch": "branch", "worktree": "worktree"}},
+	{Name: "repo", Label: "repository", Help: "owner/name, e.g. subaud-tools/hail",
+		Type: FieldTypeText, Ops: textOps},
+	{Name: "owner", Label: "owner", Help: "the account or org, e.g. subaud-tools",
+		Type: FieldTypeText, Ops: textOps},
+	{Name: "relation", Kinds: prIssue, Label: "opened by",
+		Help: "pull requests and issues: you elsewhere, someone else in yours, or you in yours",
+		Type: FieldTypeEnum, Ops: enumOps,
+		Values: []string{"outgoing", "incoming", "own"},
+		ValueLabels: map[string]string{"outgoing": "you, elsewhere", "incoming": "someone else",
+			"own": "you, in your repo"}},
+	{Name: "status", Label: "status", Help: "where it stands in casebook",
+		Type: FieldTypeEnum, Ops: enumOps,
 		Values: []string{"new", "to-apply", "waiting", "due", "done", "drift", "conflict"}},
-	{Name: "direction", Type: FieldTypeEnum, Ops: enumOps,
-		Values: []string{"outgoing", "incoming", "own"}},
-	{Name: "author", Type: FieldTypeText, Ops: textOps},
-	{Name: "bot", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "title", Type: FieldTypeText, Ops: titleOps}, // only field that allows "matches"
-	{Name: "label", Type: FieldTypeText, Ops: textOps},
+	{Name: "author", Kinds: prIssue, Label: "author", Help: "GitHub login of who opened it",
+		Type: FieldTypeText, Ops: textOps},
+	{Name: "bot", Kinds: prIssue, Label: "bot", Help: "opened by a bot account",
+		Type: FieldTypeBool, Ops: boolOps, ValueLabels: boolLabels},
+	{Name: "title", Kinds: []string{"pr", "issue", "worktree"}, Label: "title", Help: "the title; matches takes a regular expression",
+		Type: FieldTypeText, Ops: titleOps}, // only field that allows "matches"
+	{Name: "label", Kinds: prIssue, Label: "label", Help: "a GitHub label on it",
+		Type: FieldTypeText, Ops: textOps},
 
 	// Age / activity fields
-	{Name: "age", Type: FieldTypeDuration, Ops: durOps},
-	{Name: "pushed", Type: FieldTypeDuration, Ops: durOps},
-	{Name: "updated", Type: FieldTypeDuration, Ops: durOps},
+	{Name: "age", Kinds: prIssue, Label: "opened", Help: "when it was opened or created",
+		Type: FieldTypeDuration, Ops: durOps},
+	{Name: "updated", Label: "last activity", Help: "last comment or update, push, or commit",
+		Type: FieldTypeDuration, Ops: durOps},
 
 	// Landing / branch fields
-	{Name: "landed", Type: FieldTypeEnum, Ops: enumOps,
+	{Name: "landed", Kinds: branchOnly, Label: "landed", Help: "a branch's commits are on the default branch or a merged PR",
+		Type: FieldTypeEnum, Ops: enumOps,
 		Values: []string{"all-machines", "some-machines", "none", "unknown"}},
-	{Name: "landed-how", Type: FieldTypeEnum, Ops: enumOps,
+	{Name: "landed-how", Kinds: branchOnly, Label: "landed how", Type: FieldTypeEnum, Ops: enumOps,
 		Values: []string{"default-branch", "merged-pr"}},
-	{Name: "gone-upstream", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "unpushed", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "dirty", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "worktree", Type: FieldTypeEnum, Ops: enumOps,
-		Values: []string{"dirty", "clean", "none"}},
+	{Name: "gone-upstream", Kinds: branchOnly, Label: "upstream deleted", Help: "the branch's remote branch was deleted",
+		Type: FieldTypeBool, Ops: boolOps, ValueLabels: boolLabels},
+	{Name: "unpushed", Kinds: branchWorktree, Label: "unpushed commits", Help: "commits on no remote",
+		Type: FieldTypeBool, Ops: boolOps, ValueLabels: boolLabels},
+	{Name: "worktree", Kinds: branchWorktree, Label: "worktree", Help: "a branch's or worktree's local changes",
+		Type: FieldTypeEnum, Ops: enumOps,
+		Values: []string{"dirty", "clean", "none"},
+		ValueLabels: map[string]string{"dirty": "uncommitted changes", "clean": "clean",
+			"none": "no worktree"}},
 
 	// Repository attributes
-	{Name: "archived", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "fork", Type: FieldTypeBool, Ops: boolOps},
-	{Name: "open-prs", Type: FieldTypeCount, Ops: countOps},
-	{Name: "open-issues", Type: FieldTypeCount, Ops: countOps},
-
-	// Decision fields
-	{Name: "has-decision", Type: FieldTypeBool, Ops: boolOps},
+	{Name: "archived", Kinds: repoOnly, Label: "archived", Type: FieldTypeBool, Ops: boolOps, ValueLabels: boolLabels},
+	{Name: "fork", Kinds: repoOnly, Label: "fork", Help: "the repository is a fork",
+		Type: FieldTypeBool, Ops: boolOps, ValueLabels: boolLabels},
+	{Name: "open-prs", Kinds: repoOnly, Label: "open PRs", Type: FieldTypeCount, Ops: countOps},
+	{Name: "open-issues", Kinds: repoOnly, Label: "open issues", Type: FieldTypeCount, Ops: countOps},
 }
 
 // vocabIndex maps field names to their Field for O(1) lookup.
@@ -97,6 +157,15 @@ var vocabIndex = func() map[string]Field {
 // the returned slice or its elements.
 func Vocabulary() []Field {
 	return vocab
+}
+
+// ParseDay parses a calendar day, YYYY-MM-DD, as its start in local time.
+func ParseDay(s string) (time.Time, error) {
+	d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), time.Local)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%q is not a date (YYYY-MM-DD)", s)
+	}
+	return d, nil
 }
 
 // parseDur validates casebook's duration syntax (item.ParseDuration).
@@ -154,6 +223,10 @@ func ValidateCondition(c Condition) error {
 	switch c.Op {
 	case "older-than", "newer-than":
 		if err := parseDur(c.Value); err != nil {
+			return fmt.Errorf("field %q op %q: %w", c.Field, c.Op, err)
+		}
+	case "before", "on-or-after":
+		if _, err := ParseDay(c.Value); err != nil {
 			return fmt.Errorf("field %q op %q: %w", c.Field, c.Op, err)
 		}
 	case "matches":

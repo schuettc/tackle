@@ -52,17 +52,15 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 	case "kind":
 		return evalString(c.Op, f.Kind, c.Value)
 	case "repo":
-		return evalString(c.Op, f.Repo, c.Value)
+		return evalPatterns(c.Op, []string{f.Repo}, c.Value)
 	case "owner":
-		return evalString(c.Op, f.Owner, c.Value)
+		return evalPatterns(c.Op, []string{f.Owner}, c.Value)
 	case "relation":
 		return evalString(c.Op, f.Relation, c.Value)
 	case "status":
 		return evalString(c.Op, f.Status, c.Value)
-	case "direction":
-		return evalString(c.Op, f.Direction, c.Value)
 	case "author":
-		return evalString(c.Op, f.Author, c.Value)
+		return evalPatterns(c.Op, []string{f.Author}, c.Value)
 	case "bot":
 		return evalBool(c.Op, f.Bot, c.Value)
 	case "title":
@@ -75,13 +73,11 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		}
 		return evalString(c.Op, f.Title, c.Value)
 	case "label":
-		return evalMultiString(c.Op, f.Labels, c.Value)
+		return evalPatterns(c.Op, f.Labels, c.Value)
 	case "age":
-		return evalDuration(c.Op, f.Age, c.Value)
-	case "pushed":
-		return evalDuration(c.Op, f.Pushed, c.Value)
+		return evalTime(c.Op, f.Age, f.CreatedAt, c.Value)
 	case "updated":
-		return evalDuration(c.Op, f.Updated, c.Value)
+		return evalTime(c.Op, f.Updated, f.UpdatedAt, c.Value)
 	case "landed":
 		return evalString(c.Op, f.Landed, c.Value)
 	case "landed-how":
@@ -90,8 +86,6 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalBool(c.Op, f.GoneUpstream, c.Value)
 	case "unpushed":
 		return evalBool(c.Op, f.Unpushed, c.Value)
-	case "dirty":
-		return evalBool(c.Op, f.Dirty, c.Value)
 	case "worktree":
 		return evalString(c.Op, f.Worktree, c.Value)
 	case "archived":
@@ -102,11 +96,60 @@ func (c Condition) Eval(f engine.Fields) (bool, error) {
 		return evalCount(c.Op, f.OpenPRs, c.Value)
 	case "open-issues":
 		return evalCount(c.Op, f.OpenIssues, c.Value)
-	case "has-decision":
-		return evalBool(c.Op, f.HasDecision, c.Value)
 	default:
 		return false, fmt.Errorf("unknown field %q", c.Field)
 	}
+}
+
+// matchValue reports whether v matches want, where * stands for any run of
+// characters other than / and every other character is itself (the page's
+// globRe agrees).
+func matchValue(want, v string) bool {
+	for len(want) > 0 {
+		if want[0] == '*' {
+			rest := want[1:]
+			for i := 0; i <= len(v); i++ {
+				if matchValue(rest, v[i:]) {
+					return true
+				}
+				if i < len(v) && v[i] == '/' {
+					break
+				}
+			}
+			return false
+		}
+		if len(v) == 0 || want[0] != v[0] {
+			return false
+		}
+		want, v = want[1:], v[1:]
+	}
+	return len(v) == 0
+}
+
+// evalPatterns handles is / is-not / in / not-in on a pick-or-type field:
+// true when any of vals matches any wanted value (none, for the nots).
+func evalPatterns(op string, vals []string, cval string) (bool, error) {
+	var wants []string
+	switch op {
+	case "is", "is-not":
+		wants = []string{cval}
+	case "in", "not-in":
+		wants = splitIn(cval)
+	default:
+		return false, fmt.Errorf("unsupported string op %q", op)
+	}
+	hit := false
+	for _, want := range wants {
+		for _, v := range vals {
+			if matchValue(want, v) {
+				hit = true
+			}
+		}
+	}
+	if op == "is-not" || op == "not-in" {
+		return !hit, nil
+	}
+	return hit, nil
 }
 
 // evalString handles is / is-not / in / not-in on a single string value.
@@ -150,6 +193,27 @@ func evalDuration(op string, dur time.Duration, cval string) (bool, error) {
 		return dur < threshold, nil
 	}
 	return false, fmt.Errorf("unsupported duration op %q", op)
+}
+
+// evalTime handles a duration field: older-than / newer-than on dur, and
+// before / on-or-after a calendar day (local time) on at, the time dur
+// measures from. An unknown time (zero) is before nothing and after nothing.
+func evalTime(op string, dur time.Duration, at time.Time, cval string) (bool, error) {
+	switch op {
+	case "before", "on-or-after":
+		day, err := ParseDay(cval)
+		if err != nil {
+			return false, err
+		}
+		if at.IsZero() {
+			return false, nil
+		}
+		if op == "before" {
+			return at.Before(day), nil
+		}
+		return !at.Before(day), nil
+	}
+	return evalDuration(op, dur, cval)
 }
 
 // evalCount handles is / is-not / gt / gte / lt / lte on an int value.
@@ -244,8 +308,6 @@ func regexFieldValue(f engine.Fields, field string) string {
 		return f.Author
 	case "relation":
 		return f.Relation
-	case "direction":
-		return f.Direction
 	case "status":
 		return f.Status
 	case "worktree":

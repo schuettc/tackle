@@ -237,13 +237,33 @@ describe('pathEscape + parse round-trip', () => {
 
 describe('attentionQuery and flatFor', () => {
   test('attentionQuery: flat or nothing', () => {
-    assert.strictEqual(attentionQuery({ flat: true }), 'flat');
-    assert.strictEqual(attentionQuery({ flat: false }), '');
+    assert.strictEqual(attentionQuery({ flat: true, filters: [] }), 'flat');
+    assert.strictEqual(attentionQuery({ flat: false, filters: [] }), '');
+  });
+
+  test('attentionQuery: the selected filters, then flat', () => {
+    assert.strictEqual(
+      attentionQuery({ flat: false, filters: ['a', 'b'] }),
+      'filters=a,b',
+    );
+    assert.strictEqual(
+      attentionQuery({ flat: true, filters: ['a'] }),
+      'filters=a&flat',
+    );
+  });
+
+  test('parse: a filtered list keeps its query', () => {
+    assert.deepStrictEqual(parse('#/attention?filters=a,b'), {
+      section: 'attention',
+      sub: '',
+      query: 'filters=a,b',
+    });
   });
 
   test('flatFor: an explicit view reads the address, else the stored choice', () => {
     assert.strictEqual(flatFor(true, 'flat', false), true);
     assert.strictEqual(flatFor(true, '', true), false);
     assert.strictEqual(flatFor(false, '', true), true);
+    assert.strictEqual(flatFor(true, 'filters=a&flat', false), true);
   });
 });

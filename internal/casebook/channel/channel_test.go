@@ -896,3 +896,28 @@ func TestAgentTextNamesNoOne(t *testing.T) {
 		t.Errorf("the instructions don't say who: %s", Instructions)
 	}
 }
+
+// TestAttentionFilters: casebook_attention's filters list every item
+// matching all of them, the reply names the saved filters, and an unknown
+// filter is an error naming it.
+func TestAttentionFilters(t *testing.T) {
+	r := apptest.New(t)
+	c := NewClient()
+	c.Start = func() (serve.Advert, error) {
+		startServe(t, r)
+		return serve.Running()
+	}
+	ch := New(Identity{Session: "s1", Harness: "pi"}, c, "test")
+	ch.Retry, ch.Poll = 50*time.Millisecond, time.Second
+	m := start(t, ch)
+	if out, isErr := m.tool("casebook_attention", map[string]any{"filters": []string{"incoming"}}); isErr ||
+		!strings.Contains(out, "pr:schuettc/hail#3") || !strings.Contains(out, "saved filters: dormant-repos (Repos not pushed in a year)") {
+		t.Fatalf("incoming %q %v", out, isErr)
+	}
+	if out, isErr := m.tool("casebook_attention", map[string]any{"filters": []string{"incoming", "outgoing-prs"}}); isErr || !strings.Contains(out, "0 item(s)") {
+		t.Fatalf("incoming+outgoing %q %v", out, isErr)
+	}
+	if out, isErr := m.tool("casebook_attention", map[string]any{"filters": []string{"nope"}}); !isErr || !strings.Contains(out, `unknown filter "nope"`) {
+		t.Fatalf("nope %q %v", out, isErr)
+	}
+}

@@ -4,27 +4,31 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/subaud-tools/tackle/internal/casebook/item"
 )
 
 // Fields holds every value that a rule Condition can read from one item.
 // It is computed once per item per rule evaluation via Item.Fields.
 type Fields struct {
 	// Identity
-	Kind      string
-	Repo      string // "owner/name"
-	Owner     string // first segment of Repo
-	Relation  string // PR/issue: "outgoing", "incoming", "own"; repo: "org", "owned", "fork-of:X"
-	Status    string // item.Status string value
-	Direction string // alias for Relation (same vocab field, different name)
-	Author    string
-	Title     string
-	Bot       bool     // author ends "[bot]" (GitHub's convention for bot accounts)
-	Labels    []string // PR/issue labels
+	Kind     string
+	Repo     string // "owner/name"
+	Owner    string // first segment of Repo
+	Relation string // PR/issue: "outgoing", "incoming", "own"; empty on every other kind (repos match with Fork)
+	Status   string // item.Status string value
+	Author   string
+	Title    string
+	Bot      bool     // author ends "[bot]" (GitHub's convention for bot accounts)
+	Labels   []string // PR/issue labels
 
 	// Age / activity (durations from now; 0 when the underlying time is zero)
 	Age     time.Duration // now - CreatedAt
-	Pushed  time.Duration // now - UpdatedAt (repo: pushedAt; branch: tipAt)
-	Updated time.Duration // now - UpdatedAt
+	Updated time.Duration // now - UpdatedAt (repo: pushedAt; branch: tipAt)
+	// The times Age and Updated measure from, for before / on-or-after a
+	// day (zero when unknown).
+	CreatedAt time.Time
+	UpdatedAt time.Time
 
 	// Landing / branch
 	Landed       string   // "all-machines" | "some-machines" | "none" | "unknown"
@@ -32,27 +36,22 @@ type Fields struct {
 	Tip          string   // tip SHA of the lexically first machine that landed (for {tip} template)
 	GoneUpstream bool     // branch upstream was deleted on the remote
 	Unpushed     bool     // has unpushed local-only commits
-	Dirty        bool     // worktree item: has uncommitted changes; branch: has dirty worktree
-	Worktree     string   // branch: "dirty", "clean", or "none"
+	Worktree     string   // worktree: "dirty" or "clean"; branch: its worktree's, or "none"; other kinds: empty
 
 	// Repository attributes (set on repo items)
 	Archived   bool
 	Fork       bool
 	OpenPRs    int
 	OpenIssues int
-
-	// Decision
-	HasDecision bool
 }
 
 // Fields computes the rule-matching field set for it at time now.
 func (it Item) Fields(now time.Time) Fields {
-	var age, pushed, updated time.Duration
+	var age, updated time.Duration
 	if !it.CreatedAt.IsZero() {
 		age = now.Sub(it.CreatedAt)
 	}
 	if !it.UpdatedAt.IsZero() {
-		pushed = now.Sub(it.UpdatedAt)
 		updated = now.Sub(it.UpdatedAt)
 	}
 
@@ -69,15 +68,27 @@ func (it Item) Fields(now time.Time) Fields {
 	// Fork: repo items whose Relation starts with "fork-of:".
 	fork := strings.HasPrefix(it.Relation, "fork-of:")
 
-	// Worktree state for branch items.
-	worktree := "none"
-	if it.worktreeState != "" {
+	// Worktree state: a worktree item's own; a branch's worktree's, or
+	// "none". Other kinds have none to read.
+	worktree := ""
+	switch {
+	case it.Kind == item.KindWorktree && it.dirty:
+		worktree = "dirty"
+	case it.Kind == item.KindWorktree:
+		worktree = "clean"
+	case it.Kind != item.KindBranch:
+	case it.worktreeState != "":
 		worktree = it.worktreeState
+	default:
+		worktree = "none"
 	}
 
-	// dirty: worktree items track dirty directly; branch items have a dirty
-	// worktree when worktreeState == "dirty".
-	dirty := it.dirty || it.worktreeState == "dirty"
+	// Relation is a PR's or issue's; a repo's org/owned/fork-of is not
+	// matchable as relation (repos match with fork).
+	relation := ""
+	if it.Kind == item.KindPR || it.Kind == item.KindIssue {
+		relation = it.Relation
+	}
 
 	// Tip: tip SHA of the lexically first machine in LandedTips (deterministic).
 	var tip string
@@ -94,27 +105,25 @@ func (it Item) Fields(now time.Time) Fields {
 		Kind:         string(it.Kind),
 		Repo:         it.Repo,
 		Owner:        owner,
-		Relation:     it.Relation,
+		Relation:     relation,
 		Status:       string(it.Status),
-		Direction:    it.Relation,
 		Author:       it.Author,
 		Title:        it.Title,
 		Bot:          bot,
 		Labels:       it.Labels,
 		Age:          age,
-		Pushed:       pushed,
 		Updated:      updated,
+		CreatedAt:    it.CreatedAt,
+		UpdatedAt:    it.UpdatedAt,
 		Landed:       it.Landed,
 		LandedHow:    it.LandedVia,
 		Tip:          tip,
 		GoneUpstream: it.goneUpstream,
 		Unpushed:     !it.oldestUnpushed.IsZero(),
-		Dirty:        dirty,
 		Worktree:     worktree,
 		Archived:     it.Observed.Archived,
 		Fork:         fork,
 		OpenPRs:      it.openPRs,
 		OpenIssues:   it.openIssues,
-		HasDecision:  it.Decision != nil,
 	}
 }

@@ -16,6 +16,10 @@
 //     `null`. The type says so rather than promising an array.
 //   - a `time.Time` is a string (RFC3339). It is not a shape on the wire.
 
+export interface ValuesView {
+  values: ValueCount[] | null;
+}
+
 export interface SummaryView {
   machine: string;
   user: string;
@@ -170,6 +174,15 @@ export interface RuleRow {
   excluded: number;
 }
 
+export interface FiltersView {
+  filters: FilterRow[] | null;
+}
+
+export interface FilterRow {
+  filter: Filter;
+  invalid?: string;
+}
+
 export interface RuleDetailView {
   rule: Rule;
   record: TrackRecord;
@@ -208,6 +221,7 @@ export interface MatchRow {
 export interface VocabularyView {
   fields: Field[] | null;
   note_tokens: NoteToken[] | null;
+  operators: Operator[] | null;
 }
 
 export interface DecisionVocabView {
@@ -303,6 +317,11 @@ export interface PushEvent {
 export interface SessionProgressView {
   progress: Progress | null;
   now: string;
+}
+
+export interface ValueCount {
+  value: string;
+  count: number;
 }
 
 export interface ItemView {
@@ -501,16 +520,31 @@ export interface TrackRecord {
   pending: number;
 }
 
+export interface Filter {
+  id: string;
+  name: string;
+  match: Condition[] | null;
+}
+
 export interface Field {
   name: string;
+  label: string;
+  help: string;
   type: number;
   ops: string[] | null;
   values: string[] | null;
+  value_labels: Record<string, string> | null;
+  kinds: string[] | null;
 }
 
 export interface NoteToken {
   token: string;
   meaning: string;
+}
+
+export interface Operator {
+  name: string;
+  label: string;
 }
 
 export interface KindVocab {

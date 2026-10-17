@@ -131,14 +131,61 @@ func (r Rule) ValidateStructure() error {
 }
 
 // ValidateConditions checks every condition, naming the first bad one.
-// Conditions are numbered from 1, as Court and the agent count them.
+// Conditions are numbered from 1, as Court and the agent count them. Each
+// must be valid on its own; a field may appear once (several values of one
+// field are one condition: in, not-in); and every field must apply to some
+// type the type conditions leave (Field.Kinds), or the conditions can never
+// all hold.
 func ValidateConditions(match []Condition) error {
 	for i, c := range match {
 		if err := ValidateCondition(c); err != nil {
 			return fmt.Errorf("condition %d: %w", i+1, err)
 		}
 	}
+	first := map[string]int{}
+	for i, c := range match {
+		if j, ok := first[c.Field]; ok {
+			return fmt.Errorf("condition %d: %s is already used by condition %d", i+1, vocabIndex[c.Field].Label, j+1)
+		}
+		first[c.Field] = i
+	}
+	kinds := Kinds(match)
+	for i, c := range match {
+		f := vocabIndex[c.Field]
+		if len(f.Kinds) == 0 || len(kinds) == 0 {
+			continue
+		}
+		applies := false
+		for _, k := range kinds {
+			if slices.Contains(f.Kinds, string(k)) {
+				applies = true
+				break
+			}
+		}
+		if !applies {
+			return fmt.Errorf("condition %d: %s doesn't apply to %s", i+1, f.Label, kindsPlural(kinds))
+		}
+	}
 	return nil
+}
+
+// kindPlurals are each item type's plural, for a message.
+var kindPlurals = map[item.Kind]string{
+	item.KindRepo: "repositories", item.KindPR: "pull requests", item.KindIssue: "issues",
+	item.KindBranch: "branches", item.KindWorktree: "worktrees",
+}
+
+// kindsPlural names kinds in a message: "issues", "issues or pull
+// requests", "issues, branches or worktrees".
+func kindsPlural(kinds []item.Kind) string {
+	names := make([]string, len(kinds))
+	for i, k := range kinds {
+		names[i] = kindPlurals[k]
+	}
+	if len(names) == 1 {
+		return names[0]
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " or " + names[len(names)-1]
 }
 
 // Validate reports why r can't be activated or evaluated, nil when it can.

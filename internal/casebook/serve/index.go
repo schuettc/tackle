@@ -94,6 +94,7 @@ type Query struct {
 	MatchSet map[string]bool // the keys a rule matched (Rule != ""): only those items; nil: no such filter
 	Group    string          // a group's ID (GroupView.ID): only its items
 	Flat     bool            // group=false: one list, newest first; items keep their Group and Groups still count
+	Filtered bool            // filters=: every item, whatever its status, in MatchSet
 	Now      time.Time       // clock for the age filter; zero falls back to time.Now()
 	Offset   int
 	Limit    int
@@ -240,7 +241,10 @@ func matches(q Query, it engine.Item, group string) bool {
 // newest item; To apply and tracked keep key order. The caller holds x.mu.
 func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView, []GroupView) {
 	src := x.res.Items
-	if grouped(q.View) {
+	if q.Filtered {
+		src = slices.Clone(x.res.Items)
+		sort.SliceStable(src, func(i, j int) bool { return engine.NewerFirst(src[i], src[j]) })
+	} else if grouped(q.View) {
 		src = slices.Clone(x.res.Attention())
 		sort.SliceStable(src, func(i, j int) bool { return engine.NewerFirst(src[i], src[j]) })
 	}
@@ -248,7 +252,7 @@ func (x *Index) listed(q Query, pending map[string]propose.Proposal) ([]ItemView
 	groups := map[string]*GroupView{}
 	var gs []string
 	for _, it := range src {
-		if !inView(q.View, it, pending) {
+		if !q.Filtered && !inView(q.View, it, pending) {
 			continue
 		}
 		g := groupOf(q.View, it, pending)
@@ -313,12 +317,12 @@ func (x *Index) Keys(q Query, pending map[string]propose.Proposal) []string {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	src := x.res.Attention()
-	if q.View == ViewToApply || q.View == ViewTracked {
+	if q.Filtered || q.View == ViewToApply || q.View == ViewTracked {
 		src = x.res.Items
 	}
 	var out []string
 	for _, it := range src {
-		if inView(q.View, it, pending) && matches(q, it, groupOf(q.View, it, pending).ID) {
+		if (q.Filtered || inView(q.View, it, pending)) && matches(q, it, groupOf(q.View, it, pending).ID) {
 			out = append(out, it.ID)
 		}
 	}
@@ -331,7 +335,8 @@ func (x *Index) Keys(q Query, pending map[string]propose.Proposal) []string {
 // total: the kept items still open that the view would list, newest first.
 // They need no decision, so List and Counts leave them out.
 func (x *Index) LeftOpen(q Query, pending map[string]propose.Proposal) ([]ItemView, int) {
-	if q.View == ViewToApply || q.View == ViewTracked {
+	// A filtered list lists its kept items with the rest: no left-open group.
+	if q.Filtered || q.View == ViewToApply || q.View == ViewTracked {
 		return nil, 0
 	}
 	x.mu.RLock()

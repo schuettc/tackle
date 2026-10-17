@@ -63,9 +63,13 @@ func TestValidateDispositionAgainstTheRulesKinds(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "branch") || !strings.Contains(err.Error(), "keep, delete, wait, watch, ignore") {
 		t.Errorf("archive on a branch: %v, want the kind and what it allows", err)
 	}
-	if err := rule("delete", "", kindIs("branch"), kindIs("repo")).Validate(); err == nil ||
+	if err := rule("delete", "", Condition{Field: "kind", Op: "not-in", Value: "repo,pr,issue,branch,worktree"}).Validate(); err == nil ||
 		!strings.Contains(err.Error(), "no kind") {
-		t.Errorf("kind is branch and kind is repo: %v, want 'no kind'", err)
+		t.Errorf("kind not-in every kind: %v, want 'no kind'", err)
+	}
+	if err := rule("delete", "", kindIs("branch"), kindIs("repo")).Validate(); err == nil ||
+		err.Error() != "condition 2: type is already used by condition 1" {
+		t.Errorf("kind is branch and kind is repo: %v, want type already used", err)
 	}
 }
 

@@ -12,11 +12,13 @@ import {
   createSelection,
   type Selection,
   h,
+  ApiError,
   type Chip,
   type ListHandle,
   type KeyBinding,
 } from '/_kit/kit.js';
 import type {
+  Condition,
   SummaryView,
   ItemsView,
   ItemView,
@@ -29,6 +31,8 @@ import type {
   DecisionVocabView,
   GroupView,
   Message,
+  FilterRow,
+  FiltersView,
 } from './wire.d.ts';
 import type { Ctx, Section } from './app.ts';
 import { renderItem } from './item.ts';
@@ -53,6 +57,9 @@ import { showChoiceError, askClosingComment } from './choices.ts';
 import { lookingLine, sessionName } from './sessions.ts';
 import { coalesced } from './coalesce.ts';
 import { openRejectSheet, openDiscardSheet } from './proposals.ts';
+import { makeFilterBar, filterEditor, type FilterEditor } from './filters.ts';
+import { PREVIEW_DEBOUNCE_MS } from './rules.ts';
+import { parseFilterIds, filterLabel } from './filters-text.ts';
 
 // RECOMMEND_THE_REST is what the not-recommended group's "Ask ‹session› to
 // recommend N" sends the dock's session: a normal message, delivered when
@@ -74,17 +81,21 @@ const VIEWS: Chip[] = [
   { id: 'proposed', label: 'proposed' },
 ];
 
-// The list has no filter chips (Court, 2026-10-10: search only). serve's
-// filter parameters stay, for agents' tools.
+// The list has no field filter chips (Court, 2026-10-10: search only);
+// serve's filter parameters stay, for agents' tools. Saved filters
+// (filters.ts) are the chip row under the views.
 
-// State for the current view and the search text.
+// State for the current view, the selected saved filters and the search
+// text. With filters selected the list is every item matching all of them,
+// whatever its status: no view is selected.
 interface Filters {
   view: string;
+  filters: string[];
   q: string;
 }
 
 function emptyFilters(): Filters {
-  return { view: 'due', q: '' };
+  return { view: 'due', filters: [], q: '' };
 }
 
 // LEFT_OPEN is the left-open group's id among the groups' (collapsed).
@@ -344,18 +355,24 @@ export function makeAttention(ctx: Ctx): Section {
         // you left it open"), before any recommendation's reason; the flat
         // list, with no group heads, names the recommendation too.
         sub: rowSub(vocab, it, flat),
-        selectable: true,
+        // A draft filter's preview is only to look at.
+        selectable: draft === null,
       };
     },
     onChip(group, id) {
       if (group === 'view') {
+        // A view clears the saved filters.
         filters.view = id;
-        ctx.route.go('attention', id, attentionQuery({ flat }));
+        filters.filters = [];
+        filterBar.setError(null);
+        paintFilters();
+        handle.setChips('view', viewChips(id));
+        ctx.route.go('attention', id, attentionQuery({ flat, filters: [] }));
         void reload();
       }
     },
     onOpen(it: ItemView) {
-      if (syncingOpen) return;
+      if (syncingOpen || draft !== null) return;
       // Navigate to the item's hash URL and load the detail.
       ctx.route.go('item', it.key);
       void openDetail(it.key);
@@ -380,7 +397,9 @@ export function makeAttention(ctx: Ctx): Section {
         flat = !flat;
         storeFlat(flat);
         paintSwitch();
-        ctx.route.go('attention', filters.view, attentionQuery({ flat }));
+        // While a filter is being built the list is its preview: regroup it
+        // in place (a new address would close the editor and lose the draft).
+        if (draft === null) goList();
         void reload();
       },
     },
@@ -391,9 +410,220 @@ export function makeAttention(ctx: Ctx): Section {
     groupSwitch.classList.toggle('on', !flat);
   }
   paintSwitch();
+
+  // ---- saved filters ---------------------------------------------------------
+
+  // filterRows are serve's saved filters (GET /api/filters); the bar sits
+  // between the view chips and the switch.
+  let filterRows: FilterRow[] = [];
+  const filterBar = makeFilterBar(ctx, {
+    onSelect(ids) {
+      selectFilters(ids);
+    },
+    onChanged() {
+      void loadFilters().then(() => {
+        if (filtered()) void reload();
+      });
+    },
+    onDeleted(id) {
+      if (editingId === id) closeFilterEditor(true);
+      if (filters.filters.includes(id))
+        selectFilters(filters.filters.filter((x) => x !== id));
+    },
+    onEdit(row) {
+      openFilterEditor(row);
+    },
+  });
+
+  // ---- the filter editor beside the list ------------------------------------
+
+  // While the editor is open (the middle pane), the list on the left is its
+  // preview: draft is its conditions (null: no editor), listed faded, newest
+  // first, with "previewing a draft filter · N items" beside the switch; the
+  // view and filter chips show unselected, and rows, ticks and group buttons
+  // wait. before is what the list showed when it opened, for cancel.
+  let draft: Condition[] | null = null;
+  let editor: FilterEditor | null = null;
+  let editingId: string | null = null; // the edited filter's id ('' new)
+  let draftHash = ''; // the address while the editor is open
+  let draftTimer: ReturnType<typeof setTimeout> | null = null;
+  let before: {
+    view: string;
+    filters: string[];
+    scroll: number;
+    offset: number;
+    totalItems: number;
+    loadedItems: ItemView[];
+    leftOpen: ItemView[];
+    leftOpenTotal: number;
+    groups: GroupView[];
+    viewRecs: number;
+    lastOrder: string[];
+    paintedQuery: string;
+  } | null = null;
+  const previewLine = h('span', { class: 'cb-preview-line', hidden: true });
+  const rowsScroller = () => handle.el.querySelector<HTMLElement>('.kit-rows');
+
+  function paintPreviewLine(text: string | null): void {
+    previewLine.hidden = text === null;
+    previewLine.textContent = text ?? '';
+  }
+
+  function openFilterEditor(row: FilterRow | null): void {
+    if (draftTimer !== null) clearTimeout(draftTimer);
+    if (!before) {
+      before = {
+        view: filters.view,
+        filters: [...filters.filters],
+        scroll: rowsScroller()?.scrollTop ?? 0,
+        offset,
+        totalItems,
+        loadedItems,
+        leftOpen,
+        leftOpenTotal,
+        groups,
+        viewRecs,
+        lastOrder,
+        paintedQuery,
+      };
+    }
+    // Opening the editor closes an open item, as clicking away does.
+    if (currentOpenKey) goList();
+    showReadEmpty();
+    editingId = row ? row.filter.id : '';
+    draft = (row?.filter.match ?? []).map((c) => ({ ...c }));
+    draftHash = location.hash;
+    editor = filterEditor(ctx, row, {
+      onDraft(match) {
+        // An unfinished condition (no value yet) waits: it isn't previewed.
+        draft = match.filter((c) => c.value.trim() !== '');
+        if (draftTimer !== null) clearTimeout(draftTimer);
+        draftTimer = setTimeout(() => {
+          draftTimer = null;
+          void reload();
+        }, PREVIEW_DEBOUNCE_MS);
+      },
+      onSaved(id) {
+        closeFilterEditor(false);
+        filters.filters = [id];
+        void loadFilters();
+        handle.setChips('view', viewChips(''));
+        goList();
+        void reload();
+      },
+      onCancel() {
+        closeFilterEditor(true);
+      },
+    });
+    readEl.replaceChildren(editor.el);
+    document.addEventListener('keydown', onEditorEsc);
+    handle.el.classList.add('cb-previewing');
+    handle.setChips('view', viewChips(''));
+    filterBar.paint(filterRows, []);
+    filterBar.setError(null);
+    paintAll();
+    void reload();
+    editor.el.querySelector<HTMLElement>('.cb-filter-name')?.focus();
+  }
+
+  // Esc cancels the editor, unless a menu or the dropdown has it.
+  function onEditorEsc(e: KeyboardEvent): void {
+    if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return;
+    if (draft === null) return;
+    e.preventDefault();
+    closeFilterEditor(true);
+  }
+
+  // closeFilterEditor ends the preview. restore (cancel) puts back the list
+  // as it was, its rows and scroll; otherwise the caller says what the list
+  // shows next.
+  function closeFilterEditor(restore: boolean): void {
+    if (draft === null) return;
+    if (draftTimer !== null) clearTimeout(draftTimer);
+    draftTimer = null;
+    draft = null;
+    editor = null;
+    editingId = null;
+    document.removeEventListener('keydown', onEditorEsc);
+    handle.el.classList.remove('cb-previewing');
+    paintPreviewLine(null);
+    showReadEmpty();
+    const b = before;
+    before = null;
+    if (!restore || !b) {
+      paintAll();
+      return;
+    }
+    filters.view = b.view;
+    filters.filters = b.filters;
+    paintFilters();
+    handle.setChips('view', viewChips(activeView()));
+    offset = b.offset;
+    totalItems = b.totalItems;
+    totalItemsForView = b.totalItems;
+    loadedItems = b.loadedItems;
+    leftOpen = b.leftOpen;
+    leftOpenTotal = b.leftOpenTotal;
+    groups = b.groups;
+    viewRecs = b.viewRecs;
+    lastOrder = b.lastOrder;
+    paintedQuery = b.paintedQuery;
+    setRows();
+    updateFoot();
+    updateReadEmptyCount();
+    const sc = rowsScroller();
+    if (sc) sc.scrollTop = b.scroll;
+    if (location.hash !== draftHash) goList();
+    void reload();
+  }
+  function filtered(): boolean {
+    return filters.filters.length > 0;
+  }
+  // activeView is the view chip that shows selected: none while filtered.
+  // While a draft is previewing, no chip shows selected: the list is the
+  // draft's.
+  function activeView(): string {
+    return filtered() || draft !== null ? '' : filters.view;
+  }
+  function paintFilters(): void {
+    filterBar.paint(filterRows, draft !== null ? [] : filters.filters);
+  }
+  async function loadFilters(): Promise<void> {
+    try {
+      const v = await ctx.api.get<FiltersView>('/filters');
+      filterRows = v.filters ?? [];
+      paintFilters();
+      paintRail();
+    } catch {
+      // non-fatal: the chips stay as they were
+    }
+  }
+  // goList puts the list's state in the address: the view, or the
+  // selected filters, and flat.
+  function goList(): void {
+    ctx.route.go(
+      'attention',
+      filtered() ? '' : filters.view,
+      attentionQuery({ flat, filters: filters.filters }),
+    );
+  }
+  // selectFilters makes ids the selection (none: back to the view).
+  function selectFilters(ids: string[]): void {
+    filters.filters = ids;
+    filterBar.setError(null);
+    paintFilters();
+    handle.setChips('view', viewChips(activeView()));
+    goList();
+    void reload();
+  }
+
   handle.el
     .querySelector('.kit-chips[data-group="view"]')
-    ?.after(h('div', { class: 'cb-list-tools' }, groupSwitch));
+    ?.after(
+      filterBar.el,
+      h('div', { class: 'cb-list-tools' }, groupSwitch, previewLine),
+    );
+  void loadFilters();
 
   // ---- the list collapses to a rail -----------------------------------------
 
@@ -458,11 +688,16 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- API ------------------------------------------------------------------
 
   function buildQuery(pageOffset: number): Record<string, string> {
-    const p: Record<string, string> = {
-      view: filters.view,
-      offset: String(pageOffset),
-      limit: String(PAGE_SIZE),
-    };
+    // A draft filter (the editor's) lists what saving it would; saved
+    // filters list every item matching all of them: no view.
+    const p: Record<string, string> =
+      draft !== null
+        ? { match: JSON.stringify(draft) }
+        : filtered()
+          ? { filters: filters.filters.join(',') }
+          : { view: filters.view };
+    p['offset'] = String(pageOffset);
+    p['limit'] = String(PAGE_SIZE);
     if (filters.q) p['q'] = filters.q;
     if (flat) p['group'] = 'false';
     return p;
@@ -531,12 +766,45 @@ export function makeAttention(ctx: Ctx): Section {
       lastOrder = loadedItems.map((it) => it.key);
       offset = loadedItems.length;
       paintedQuery = asked;
+      filterBar.setError(null);
+      if (draft !== null) {
+        editor?.showError(null);
+        paintPreviewLine(
+          draft.length
+            ? `previewing a draft filter \u00b7 ${pluralize(data.total, 'item')}`
+            : 'add a condition to preview',
+        );
+      }
       setRows();
       markOpenRow();
       updateFoot();
       updateReadEmptyCount();
-    } catch {
-      // non-fatal; leave the list as-is
+    } catch (err) {
+      // A selection serve refuses (a filter deleted elsewhere, or one that
+      // doesn't validate) says why, by name, and lists nothing: never the
+      // list unfiltered. Anything else is non-fatal: the list stays as-is.
+      const refused = err instanceof ApiError && err.status === 400;
+      if (draft !== null && refused) {
+        editor?.showError(err);
+        paintPreviewLine('previewing a draft filter \u00b7 not valid yet');
+      } else if (filtered() && refused) {
+        filterBar.setError(err.message);
+      }
+      if ((draft !== null || filtered()) && refused) {
+        totalItems = 0;
+        totalItemsForView = 0;
+        loadedItems = [];
+        leftOpen = [];
+        leftOpenTotal = 0;
+        groups = [];
+        viewRecs = 0;
+        lastOrder = [];
+        offset = 0;
+        paintedQuery = asked;
+        setRows();
+        updateFoot();
+        updateReadEmptyCount();
+      }
     } finally {
       reloading = false;
     }
@@ -907,7 +1175,7 @@ export function makeAttention(ctx: Ctx): Section {
       {
         type: 'button',
         class: 'kit-btn ' + cls,
-        disabled: off || busyGroups.has(id),
+        disabled: off || busyGroups.has(id) || draft !== null,
         onclick() {
           if (busyGroups.has(id)) return;
           busyGroups.add(id);
@@ -933,7 +1201,7 @@ export function makeAttention(ctx: Ctx): Section {
       'aria-checked': 'false',
       'aria-label': g.label,
       onclick() {
-        void tickGroup(g);
+        if (draft === null) void tickGroup(g);
       },
     });
     const hint =
@@ -964,9 +1232,11 @@ export function makeAttention(ctx: Ctx): Section {
         return;
       }
       if (g.id === 'none') {
-        // The not recommended: only the ask, with a session attached.
+        // The not recommended: only the ask, with a session attached. Not
+        // while filtered: the group then holds decided items too, which
+        // casebook_next never hands out.
         const ask =
-          t && asked !== t.id
+          t && asked !== t.id && !filtered()
             ? button(
                 'fill cb-group-ask',
                 vocab.recommend_these
@@ -1260,7 +1530,7 @@ export function makeAttention(ctx: Ctx): Section {
   // recommended them (serve's summary words; the session in the agent's
   // colour), and "discard all N" while it has agent recommendations.
   function renderSummary(): void {
-    discardAllBtn.hidden = viewRecs === 0 || !vocab;
+    discardAllBtn.hidden = viewRecs === 0 || !vocab || draft !== null;
     if (vocab)
       discardAllBtn.textContent = vocab.discard_all.replaceAll(
         '{n}',
@@ -1586,6 +1856,7 @@ export function makeAttention(ctx: Ctx): Section {
 
   // viewLabel is the view's name in the summary ("due").
   function viewLabel(): string {
+    if (filtered()) return filterLabel(filterRows, filters.filters);
     return VIEWS.find((v) => v.id === filters.view)?.label ?? filters.view;
   }
 
@@ -1818,7 +2089,7 @@ export function makeAttention(ctx: Ctx): Section {
     // Zero every view before merging.
     for (const v of VIEWS) viewCounts[v.id] = 0;
     Object.assign(viewCounts, counts);
-    handle.setChips('view', viewChips(filters.view));
+    handle.setChips('view', viewChips(activeView()));
   }
 
   // Initial load: restore search text from URL if present.
@@ -1931,6 +2202,12 @@ export function makeAttention(ctx: Ctx): Section {
   // ---- show(sub, query) -- router hook -------------------------------------
 
   function show(sub: string, query: string): void {
+    // The filter editor keeps the address it opened on; any other address
+    // closes it (the address names what the list shows).
+    if (draft !== null) {
+      if (location.hash === draftHash) return;
+      closeFilterEditor(false);
+    }
     // Becoming active: the composer shows Attention's selection or open item.
     const wasActive = active;
     active = true;
@@ -1942,20 +2219,39 @@ export function makeAttention(ctx: Ctx): Section {
       handle.setSearch(urlQ);
     }
     const view = sub || 'due';
-    if (VIEWS.some((v) => v.id === view)) {
+    const ids = sub
+      ? []
+      : parseFilterIds(new URLSearchParams(query).get('filters'));
+    if (ids.length) {
+      // Saved filters (#/attention?filters=a,b): the address names the
+      // list, so it says whether it is flat. No view is selected.
+      flat = flatFor(true, query, storedFlat());
+      storeFlat(flat);
+      paintSwitch();
+      filters.filters = ids;
+      paintFilters();
+      handle.setChips('view', viewChips(''));
+      showReadEmpty();
+      void reload();
+    } else if (VIEWS.some((v) => v.id === view)) {
       // Known view chip: switch to it. An address naming the view says
       // whether the list is flat; #/attention keeps the stored choice.
       flat = flatFor(sub !== '', query, storedFlat());
       storeFlat(flat);
       paintSwitch();
       filters.view = view;
+      if (filtered()) {
+        filters.filters = [];
+        filterBar.setError(null);
+        paintFilters();
+      }
       handle.setChips('view', viewChips(filters.view));
       showReadEmpty();
       void reload();
     } else if (sub) {
       // Not a view id: an item key from a #/item/<key> link. The list
-      // keeps the view it shows.
-      handle.setChips('view', viewChips(filters.view));
+      // keeps the view (or the filters) it shows.
+      handle.setChips('view', viewChips(activeView()));
       // A row click opens its item itself, then moves the hash here: the
       // item is already open (or loading), so it isn't loaded twice. A
       // different key (back, forward, a pasted link), or coming back from
@@ -2047,6 +2343,12 @@ export function makeAttention(ctx: Ctx): Section {
         // Re-fetch summary to update view-chip counts (particularly 'proposed').
         refreshSummary();
         void reload();
+      } else if (type === 'filters') {
+        // A filter saved or deleted (this tab or another): the chips, and a
+        // filtered list, follow.
+        void loadFilters().then(() => {
+          if (filtered()) void reload();
+        });
       } else if (type === 'evidence') {
         // New evidence for the open item: shown as a recommendation is.
         const key = (data as { key?: string })?.key ?? '';
